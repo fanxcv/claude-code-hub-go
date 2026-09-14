@@ -1,0 +1,64 @@
+# Dependencies
+node_modules
+.pnp
+.pnp.*
+
+# Build outputs
+.next
+out
+build
+dist
+*.tsbuildinfo
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.bun-debug.log*
+
+# Environment files
+.env*
+!.env.example
+
+# Database migrations (generated)
+drizzle
+
+# External UI components (shadcn - do not format)
+src/components/ui
+
+# Docker volumes
+data
+
+# IDE and tooling
+.cursor
+.claude
+.serena
+.idea
+.specify
+.vscode
+.DS_Store
+
+# Version control
+.git
+.gitignore
+
+# GitHub Actions workflows (YAML formatting conflicts)
+.github/workflows
+
+# Seed data (large auto-generated JSON files)
+public/seed/litellm-prices.json
+
+# Documentation (preserve manual formatting)
+# （CHANGELOG.md 已随上游遗留清理删除）
+
+# Package manager
+bun.lock
+package-lock.json
+yarn.lock
+
+# Other
+coverage
+.vercel
+*.pem

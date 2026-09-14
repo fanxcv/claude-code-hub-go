@@ -1,0 +1,32 @@
+{
+  "constName": "RELEASE_SESSION_DISCOVERY_LEASE",
+  "file": "release-session-discovery-lease.lua",
+  "sha256": "b7a38142879ba429b6679d7c33fcde28febe9a88efd936a5e5e83cb84ea1b410",
+  "calls": [
+    {
+      "id": "released-by-owner",
+      "keys": ["cchgolden:discovery:lease:session-1"],
+      "argv": ["owner-token"],
+      "setup": [["SET", "cchgolden:discovery:lease:session-1", "owner-token"]],
+      "returned": 1,
+      "after": {
+        "cchgolden:discovery:lease:session-1": null
+      }
+    },
+    {
+      "id": "not-owner",
+      "keys": ["cchgolden:discovery:lease:session-1"],
+      "argv": ["owner-token"],
+      "setup": [["SET", "cchgolden:discovery:lease:session-1", "other-token"]],
+      "returned": 0,
+      "after": {
+        "cchgolden:discovery:lease:session-1": {
+          "type": "string",
+          "value": "other-token",
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

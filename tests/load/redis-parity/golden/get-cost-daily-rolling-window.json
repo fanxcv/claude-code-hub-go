@@ -1,0 +1,28 @@
+{
+  "constName": "GET_COST_DAILY_ROLLING_WINDOW",
+  "file": "get-cost-daily-rolling-window.lua",
+  "sha256": "c955231898cb0853e699022fedfb715b0fdf218ba802696bc232f679245f3149",
+  "calls": [
+    {
+      "id": "sums-window",
+      "keys": ["cchgolden:key:1:cost_daily_rolling"],
+      "argv": ["1757000000000", "86400000"],
+      "setup": [
+        ["ZADD", "cchgolden:key:1:cost_daily_rolling", "1756999999000", "1756999999000:1.5"],
+        ["ZADD", "cchgolden:key:1:cost_daily_rolling", "1756999998000", "1756999998000:2.5"]
+      ],
+      "returned": "4",
+      "after": {
+        "cchgolden:key:1:cost_daily_rolling": {
+          "type": "zset",
+          "value": {
+            "1756999998000:2.5": "1756999998000",
+            "1756999999000:1.5": "1756999999000"
+          },
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

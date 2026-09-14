@@ -1,0 +1,71 @@
+export class ApiError extends Error {
+  readonly status: number;
+  readonly errorCode: string;
+  readonly errorParams?: Record<string, unknown>;
+  readonly detail: string;
+
+  constructor(input: {
+    status: number;
+    errorCode: string;
+    detail: string;
+    errorParams?: Record<string, unknown>;
+  }) {
+    super(input.detail);
+    this.name = "ApiError";
+    this.status = input.status;
+    this.errorCode = input.errorCode;
+    this.errorParams = input.errorParams;
+    this.detail = input.detail;
+  }
+}
+
+export function isApiError(error: unknown): error is ApiError {
+  return error instanceof ApiError;
+}
+
+// Admin-only routes reject non-admin sessions with this exact pair; clients
+// use it to decide whether to retry through a read-tier self endpoint.
+export function isAdminForbidden(error: unknown): boolean {
+  return isApiError(error) && error.status === 403 && error.errorCode === "auth.forbidden";
+}
+
+const API_ERROR_MESSAGE_KEYS: Record<string, string> = {
+  "api.error": "INTERNAL_ERROR",
+  "api.malformed_error_body": "INTERNAL_ERROR",
+  "auth.missing": "TOKEN_REQUIRED",
+  "auth.invalid": "INVALID_TOKEN",
+  "auth.forbidden": "PERMISSION_DENIED",
+  "auth.api_key_admin_disabled": "PERMISSION_DENIED",
+  "auth.csrf_invalid": "PERMISSION_DENIED",
+  "request.validation_failed": "INVALID_FORMAT",
+  "dependency.unavailable": "CONNECTION_FAILED",
+  "resource.not_found": "NOT_FOUND",
+  "provider.not_found": "NOT_FOUND",
+  "provider.action_failed": "OPERATION_FAILED",
+  "provider_endpoint.not_found": "NOT_FOUND",
+  "provider_endpoint.action_failed": "OPERATION_FAILED",
+  "provider_vendor.not_found": "NOT_FOUND",
+  "provider_vendor.action_failed": "OPERATION_FAILED",
+  "key.not_found": "KEY_NOT_FOUND",
+  "key.action_failed": "OPERATION_FAILED",
+  "user.not_found": "USER_NOT_FOUND",
+  "user.action_failed": "OPERATION_FAILED",
+  "session.not_found": "NOT_FOUND",
+  "session.action_failed": "OPERATION_FAILED",
+};
+
+export function getApiErrorMessageKey(error: ApiError): string {
+  return API_ERROR_MESSAGE_KEYS[error.errorCode] ?? error.errorCode;
+}
+
+export function getApiErrorMessageParams(
+  error: ApiError
+): Record<string, string | number> | undefined {
+  if (!error.errorParams) return undefined;
+  return Object.fromEntries(
+    Object.entries(error.errorParams).filter(
+      (entry): entry is [string, string | number] =>
+        typeof entry[1] === "string" || typeof entry[1] === "number"
+    )
+  );
+}

@@ -1,0 +1,121 @@
+# ---------------------------------------------------------------------------
+# 冻结的 Node 限流错误文案（messages/ru/errors.json）
+# ---------------------------------------------------------------------------
+#
+# 冻结时点：7f39ec64（tag: pre-node-removal，删该词表前最后一个含它的提交）。
+#           实测该提交与删除前 HEAD 的 errors.json 逐字节一致（sha256 前 16 字节 49d91cb8e8d168e8，11169 字节）。
+# 生成方式：git show 7f39ec64:messages/ru/errors.json 的输出原样附在本文件头之后，
+#           正文未做任何手工编辑（另附 sha256 供复核）。
+# 冻结理由：UI 语种裁到 zh-CN + en（2026-09-13），该词表已从仓库删除；而
+#           go/internal/limit 的九条限流文案仍按 Accept-Language 提供 5 个语种——
+#           那是 **API 行为**，不在「UI 语言只留两语种」的范围内，故其 golden 不能
+#           随词表一起退役。
+#
+# 语义变化（重要）：闸门由「对 UI 词表漂移」降级为「对冻结快照漂移」。
+#   · 仍能抓到：Go 侧 messages.go 的文案被误改。文案是对客户端可见的事实，改一个字
+#     就是改产品行为，而它不会让任何形状断言变红（字段照在、类型照对，只是措辞变了）。
+#   · 不再能抓到：UI 词表将来的变动（该语种的词表已删，不存在「将来」）。
+#
+{
+  "_comment": "Error messages for Russian",
+
+  "REQUIRED_FIELD": "{field} обязательно для заполнения",
+  "USER_NAME_REQUIRED": "Имя пользователя обязательно",
+  "API_KEY_REQUIRED": "API ключ обязателен",
+  "PROVIDER_NAME_REQUIRED": "Имя провайдера обязательно",
+  "PROVIDER_URL_REQUIRED": "URL провайдера обязателен",
+
+  "MIN_LENGTH": "{field} должно содержать не менее {min} символов",
+  "MAX_LENGTH": "{field} не должно превышать {max} символов",
+  "INVALID_EMAIL": "Пожалуйста, введите действительный адрес электронной почты",
+  "INVALID_URL": "Пожалуйста, введите действительный URL",
+
+  "MIN_VALUE": "{field} должно быть не менее {min}",
+  "MAX_VALUE": "{field} не должно превышать {max}",
+  "MUST_BE_INTEGER": "{field} должно быть целым числом",
+  "MUST_BE_POSITIVE": "{field} должно быть положительным",
+
+  "INVALID_TYPE": "{field} имеет неверный тип",
+  "INVALID_FORMAT": "{field} имеет неверный формат",
+
+  "DUPLICATE_NAME": "Имя '{name}' уже существует",
+  "INVALID_RANGE": "{field} должно быть между {min} и {max}",
+  "EMPTY_UPDATE": "Нет полей для обновления",
+
+  "UNAUTHORIZED": "Не авторизован, пожалуйста, войдите",
+  "INVALID_CREDENTIALS": "Неверное имя пользователя или пароль",
+  "SESSION_EXPIRED": "Сеанс истек, пожалуйста, войдите снова",
+  "PERMISSION_DENIED": "Доступ запрещен",
+  "TOKEN_REQUIRED": "Требуется токен аутентификации",
+  "INVALID_TOKEN": "Недействительный токен аутентификации",
+  "SESSION_REQUEST_SOURCE_MISMATCH": "Источник запроса не относится к этой сессии",
+  "SESSION_REQUEST_SELECTOR_INCOMPLETE": "Для запроса префиксной Session необходимо указать физический источник и порядковый номер запроса",
+  "PROXY_INVALID_API_KEY": "Неверный API-ключ. Указанный ключ не существует или был удалён.",
+  "PROXY_API_KEY_DISABLED": "Этот API-ключ отключён. Обратитесь к администратору, чтобы повторно включить его, или используйте другой ключ.",
+  "PROXY_API_KEY_EXPIRED": "Срок действия этого API-ключа истёк. Обратитесь к администратору, чтобы продлить срок, или замените ключ.",
+
+  "INTERNAL_ERROR": "Внутренняя ошибка сервера, попробуйте позже",
+  "DATABASE_ERROR": "Ошибка базы данных",
+  "INVALID_NORMALIZED_BODY": "Нормализованное тело запроса невозможно сериализовать",
+  "NOT_FOUND": "Ресурс не найден",
+  "OPERATION_FAILED": "Операция не удалась",
+  "USER_5H_FIXED_RESET_REQUIRES_REDIS": "Для сброса фиксированного лимита 5H требуется доступный Redis",
+  "USER_5H_FIXED_RESET_CLEANUP_FAILED": "При фиксированном сбросе 5H не удалось очистить состояние Redis для исполнения лимита",
+  "USER_LIMITS_RESET_PARTIAL_FAILURE": "Сброс лимитов обновил базу данных, но состояние Redis для исполнения лимита ещё нужно очистить",
+  "USER_STATS_RESET_PARTIAL_FAILURE": "Сброс статистики уже зафиксировал изменения в базе данных, но состояние Redis для исполнения лимита ещё нужно очистить",
+  "USER_5H_RESET_COMPENSATION_REQUIRED": "После сбоя очистки Redis не удалось полностью откатить сброс 5H, проверьте состояние вручную",
+  "USER_5H_RESET_REQUIRES_REDIS": "Для сброса лимита 5H требуется доступный Redis",
+  "USER_5H_LIMIT_NOT_CONFIGURED": "Для этого пользователя не настроен пользовательский лимит 5H",
+  "CREATE_FAILED": "Не удалось создать, попробуйте позже",
+  "UPDATE_FAILED": "Не удалось обновить, попробуйте позже",
+  "DELETE_FAILED": "Не удалось удалить, попробуйте позже",
+
+  "CONNECTION_FAILED": "Ошибка подключения",
+  "TIMEOUT": "Время ожидания истекло",
+  "NETWORK_ERROR": "Сетевая ошибка",
+
+  "QUOTA_EXCEEDED": "Квота исчерпана",
+  "BATCH_SIZE_EXCEEDED": "Пакетная операция не может превышать {max} элементов",
+  "RATE_LIMIT_EXCEEDED": "Слишком много запросов, попробуйте позже",
+  "RATE_LIMIT_RPM_EXCEEDED": "Превышен лимит запросов: {current} запросов в минуту (лимит: {limit}). Сброс в {resetTime}",
+  "RATE_LIMIT_5H_EXCEEDED": "Превышен 5-часовой лимит расходов: ${current} USD (лимит: ${limit} USD). Сброс в {resetTime}",
+  "RATE_LIMIT_5H_ROLLING_EXCEEDED": "Превышен лимит скользящего окна 5 часов: ${current} USD (лимит: ${limit} USD). Использование постепенно освобождается за последние 5 часов",
+  "RATE_LIMIT_DAILY_QUOTA_EXCEEDED": "Превышена дневная квота: ${current} USD (лимит: ${limit} USD). Сброс в {resetTime}",
+  "RATE_LIMIT_DAILY_ROLLING_EXCEEDED": "Превышен лимит скользящего окна 24 часа: ${current} USD (лимит: ${limit} USD). Использование постепенно освобождается за последние 24 часа",
+  "RATE_LIMIT_WEEKLY_EXCEEDED": "Превышен недельный лимит расходов: ${current} USD (лимит: ${limit} USD). Сброс в {resetTime}",
+  "RATE_LIMIT_MONTHLY_EXCEEDED": "Превышен месячный лимит расходов: ${current} USD (лимит: ${limit} USD). Сброс в {resetTime}",
+  "RATE_LIMIT_TOTAL_EXCEEDED": "Превышен общий лимит расходов: ${current} / ${limit} USD",
+  "RATE_LIMIT_CONCURRENT_SESSIONS_EXCEEDED": "Превышен лимит одновременных сессий: {current} сессий (лимит: {limit}). Пожалуйста, дождитесь завершения активных сессий",
+  "RESOURCE_BUSY": "Ресурс в настоящее время используется",
+  "INVALID_STATE": "Операция не разрешена в текущем состоянии",
+  "CONFLICT": "Конфликт операции",
+  "ENDPOINT_REFERENCED_BY_ENABLED_PROVIDERS": "Этот endpoint все еще используется {count} активными провайдерами: {providers}",
+
+  "USER_NOT_FOUND": "Пользователь не найден",
+  "USER_CANNOT_MODIFY_SENSITIVE_FIELDS": "Обычные пользователи не могут изменять лимиты квоты и группы провайдеров",
+  "CREATE_USER_FAILED": "Не удалось создать пользователя, попробуйте позже",
+  "UPDATE_USER_FAILED": "Не удалось обновить пользователя, попробуйте позже",
+  "DELETE_USER_FAILED": "Не удалось удалить пользователя, попробуйте позже",
+  "GET_USER_QUOTA_FAILED": "Не удалось получить информацию о квоте пользователя",
+
+  "KEY_NOT_FOUND": "Ключ не найден",
+  "CREATE_KEY_FAILED": "Не удалось создать ключ, попробуйте позже",
+  "UPDATE_KEY_FAILED": "Не удалось обновить ключ, попробуйте позже",
+  "DELETE_KEY_FAILED": "Не удалось удалить ключ, попробуйте позже",
+  "CANNOT_DISABLE_LAST_KEY": "Невозможно отключить последний активный ключ. У пользователя должен быть хотя бы один включенный ключ",
+  "CANNOT_DELETE_LAST_KEY": "Невозможно удалить последний активный ключ. У пользователя должен оставаться хотя бы один включенный ключ",
+  "CANNOT_DELETE_LAST_GROUP_KEY": "Невозможно удалить этот ключ: не останется доступных групп провайдеров. Сначала создайте другой ключ с группой или обратитесь к администратору",
+  "KEY_LIMIT_5H_EXCEEDS_USER_LIMIT": "Лимит ключа на 5 часов ({keyLimit}) не может превышать лимит пользователя ({userLimit})",
+  "KEY_LIMIT_DAILY_EXCEEDS_USER_LIMIT": "Дневной лимит ключа ({keyLimit}) не может превышать лимит пользователя ({userLimit})",
+  "KEY_LIMIT_WEEKLY_EXCEEDS_USER_LIMIT": "Недельный лимит ключа ({keyLimit}) не может превышать лимит пользователя ({userLimit})",
+  "KEY_LIMIT_MONTHLY_EXCEEDS_USER_LIMIT": "Месячный лимит ключа ({keyLimit}) не может превышать лимит пользователя ({userLimit})",
+  "KEY_LIMIT_TOTAL_EXCEEDS_USER_LIMIT": "Общий лимит ключа ({keyLimit}) не может превышать лимит пользователя ({userLimit})",
+  "KEY_LIMIT_CONCURRENT_EXCEEDS_USER_LIMIT": "Лимит одновременных сессий ключа ({keyLimit}) не может превышать лимит пользователя ({userLimit})",
+  "EXPIRES_AT_FIELD": "Дата истечения",
+  "IP_ADDRESS_FIELD": "IP-адрес",
+  "EXPIRES_AT_MUST_BE_FUTURE": "Дата истечения должна быть в будущем",
+  "EXPIRES_AT_TOO_FAR": "Дата истечения не может превышать 10 лет",
+  "CANNOT_DISABLE_SELF": "Невозможно отключить свой собственный аккаунт",
+  "NO_DEFAULT_GROUP_PERMISSION": "Нет разрешения на использование группы default. У вас нет ключа с группой default",
+  "NO_GROUP_PERMISSION": "Нет разрешения на использование следующих групп: {groups}"
+}

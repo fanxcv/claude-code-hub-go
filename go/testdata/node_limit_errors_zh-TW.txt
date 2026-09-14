@@ -1,0 +1,121 @@
+# ---------------------------------------------------------------------------
+# 冻结的 Node 限流错误文案（messages/zh-TW/errors.json）
+# ---------------------------------------------------------------------------
+#
+# 冻结时点：7f39ec64（tag: pre-node-removal，删该词表前最后一个含它的提交）。
+#           实测该提交与删除前 HEAD 的 errors.json 逐字节一致（sha256 前 16 字节 33ad00cbfaa403d5，6852 字节）。
+# 生成方式：git show 7f39ec64:messages/zh-TW/errors.json 的输出原样附在本文件头之后，
+#           正文未做任何手工编辑（另附 sha256 供复核）。
+# 冻结理由：UI 语种裁到 zh-CN + en（2026-09-13），该词表已从仓库删除；而
+#           go/internal/limit 的九条限流文案仍按 Accept-Language 提供 5 个语种——
+#           那是 **API 行为**，不在「UI 语言只留两语种」的范围内，故其 golden 不能
+#           随词表一起退役。
+#
+# 语义变化（重要）：闸门由「对 UI 词表漂移」降级为「对冻结快照漂移」。
+#   · 仍能抓到：Go 侧 messages.go 的文案被误改。文案是对客户端可见的事实，改一个字
+#     就是改产品行为，而它不会让任何形状断言变红（字段照在、类型照对，只是措辞变了）。
+#   · 不再能抓到：UI 词表将来的变动（该语种的词表已删，不存在「将来」）。
+#
+{
+  "_comment": "Error messages for Chinese Traditional",
+
+  "REQUIRED_FIELD": "{field}不能為空",
+  "USER_NAME_REQUIRED": "使用者名稱不能為空",
+  "API_KEY_REQUIRED": "API金鑰不能為空",
+  "PROVIDER_NAME_REQUIRED": "服務商名稱不能為空",
+  "PROVIDER_URL_REQUIRED": "服務商URL不能為空",
+
+  "MIN_LENGTH": "{field}長度不能少於{min}個字符",
+  "MAX_LENGTH": "{field}長度不能超過{max}個字符",
+  "INVALID_EMAIL": "請輸入有效的電子郵件地址",
+  "INVALID_URL": "請輸入有效的URL地址",
+
+  "MIN_VALUE": "{field}不能低於{min}",
+  "MAX_VALUE": "{field}不能超過{max}",
+  "MUST_BE_INTEGER": "{field}必須是整數",
+  "MUST_BE_POSITIVE": "{field}必須是正數",
+
+  "INVALID_TYPE": "{field}類型不正確",
+  "INVALID_FORMAT": "{field}格式不正確",
+
+  "DUPLICATE_NAME": "名稱'{name}'已存在",
+  "INVALID_RANGE": "{field}必須在{min}到{max}之間",
+  "EMPTY_UPDATE": "更新內容為空",
+
+  "UNAUTHORIZED": "未授權，請先登入",
+  "INVALID_CREDENTIALS": "使用者名稱或密碼錯誤",
+  "SESSION_EXPIRED": "會話已過期，請重新登入",
+  "PERMISSION_DENIED": "權限不足",
+  "TOKEN_REQUIRED": "需要提供認證令牌",
+  "INVALID_TOKEN": "無效的認證令牌",
+  "SESSION_REQUEST_SOURCE_MISMATCH": "請求來源不屬於此 Session",
+  "SESSION_REQUEST_SELECTOR_INCOMPLETE": "前綴 Session 請求必須同時指定實體來源與請求序號",
+  "PROXY_INVALID_API_KEY": "API 金鑰無效。提供的金鑰不存在或已被刪除。",
+  "PROXY_API_KEY_DISABLED": "API 金鑰已被停用。請聯絡管理員重新啟用，或使用其他可用金鑰。",
+  "PROXY_API_KEY_EXPIRED": "API 金鑰已過期。請聯絡管理員續期或更換金鑰。",
+
+  "INTERNAL_ERROR": "系統內部錯誤，請稍後重試",
+  "DATABASE_ERROR": "資料庫錯誤",
+  "INVALID_NORMALIZED_BODY": "規範化後的請求體無法序列化",
+  "NOT_FOUND": "資源不存在",
+  "OPERATION_FAILED": "操作失敗",
+  "USER_5H_FIXED_RESET_REQUIRES_REDIS": "重設固定 5H 限額需要 Redis 可用",
+  "USER_5H_FIXED_RESET_CLEANUP_FAILED": "固定 5H 重設未能清理 Redis 執行狀態",
+  "USER_LIMITS_RESET_PARTIAL_FAILURE": "限額重設已寫入資料庫，但 Redis 執行狀態仍需清理",
+  "USER_STATS_RESET_PARTIAL_FAILURE": "統計重設已提交資料庫變更，但 Redis 執行狀態仍需清理",
+  "USER_5H_RESET_COMPENSATION_REQUIRED": "Redis 清理失敗後無法完整回滾 5H 重設，請人工確認狀態",
+  "USER_5H_RESET_REQUIRES_REDIS": "重設 5H 限額需要 Redis 可用",
+  "USER_5H_LIMIT_NOT_CONFIGURED": "該使用者尚未設定使用者層級 5H 限額",
+  "CREATE_FAILED": "創建失敗，請稍後重試",
+  "UPDATE_FAILED": "更新失敗，請稍後重試",
+  "DELETE_FAILED": "刪除失敗，請稍後重試",
+
+  "CONNECTION_FAILED": "連接失敗",
+  "TIMEOUT": "請求逾時",
+  "NETWORK_ERROR": "網路錯誤",
+
+  "QUOTA_EXCEEDED": "配額已用盡",
+  "BATCH_SIZE_EXCEEDED": "批次操作不能超過 {max} 個項目",
+  "RATE_LIMIT_EXCEEDED": "請求過於頻繁，請稍後重試",
+  "RATE_LIMIT_RPM_EXCEEDED": "請求頻率超限：當前 {current} 次/分鐘（限制：{limit} 次/分鐘）。將於 {resetTime} 重置",
+  "RATE_LIMIT_5H_EXCEEDED": "5小時消費超限：當前 ${current} USD（限制：${limit} USD）。將於 {resetTime} 重置",
+  "RATE_LIMIT_5H_ROLLING_EXCEEDED": "5小時滾動視窗消費超限：當前 ${current} USD（限制：${limit} USD）。消費將在過去5小時內逐漸釋放",
+  "RATE_LIMIT_DAILY_QUOTA_EXCEEDED": "每日額度超限：當前 ${current} USD（限制：${limit} USD）。將於 {resetTime} 重置",
+  "RATE_LIMIT_DAILY_ROLLING_EXCEEDED": "24小時滾動視窗消費超限：當前 ${current} USD（限制：${limit} USD）。消費將在過去24小時內逐漸釋放",
+  "RATE_LIMIT_WEEKLY_EXCEEDED": "週消費超限：當前 ${current} USD（限制：${limit} USD）。將於 {resetTime} 重置",
+  "RATE_LIMIT_MONTHLY_EXCEEDED": "月消費超限：當前 ${current} USD（限制：${limit} USD）。將於 {resetTime} 重置",
+  "RATE_LIMIT_TOTAL_EXCEEDED": "總消費上限已達到：${current} / ${limit} USD",
+  "RATE_LIMIT_CONCURRENT_SESSIONS_EXCEEDED": "並發 Session 超限：當前 {current} 個（限制：{limit} 個）。請等待活躍 Session 完成",
+  "RESOURCE_BUSY": "資源正在使用中",
+  "INVALID_STATE": "當前狀態不允許此操作",
+  "CONFLICT": "操作衝突",
+  "ENDPOINT_REFERENCED_BY_ENABLED_PROVIDERS": "此端點仍被 {count} 個啟用中的供應商引用：{providers}",
+
+  "USER_NOT_FOUND": "使用者不存在",
+  "USER_CANNOT_MODIFY_SENSITIVE_FIELDS": "普通使用者不能修改帳戶額度和供應商分組",
+  "CREATE_USER_FAILED": "創建使用者失敗，請稍後重試",
+  "UPDATE_USER_FAILED": "更新使用者失敗，請稍後重試",
+  "DELETE_USER_FAILED": "刪除使用者失敗，請稍後重試",
+  "GET_USER_QUOTA_FAILED": "獲取使用者額度使用情況失敗",
+
+  "KEY_NOT_FOUND": "金鑰不存在",
+  "CREATE_KEY_FAILED": "創建金鑰失敗，請稍後重試",
+  "UPDATE_KEY_FAILED": "更新金鑰失敗，請稍後重試",
+  "DELETE_KEY_FAILED": "刪除金鑰失敗，請稍後重試",
+  "CANNOT_DISABLE_LAST_KEY": "無法禁用最後一個可用金鑰，使用者至少需要保留一個啟用的金鑰",
+  "CANNOT_DELETE_LAST_KEY": "該使用者至少需要保留一個可用的金鑰，無法刪除最後一個金鑰",
+  "CANNOT_DELETE_LAST_GROUP_KEY": "無法刪除此金鑰：刪除後將沒有任何可用的供應商分組，請先建立其他包含分組的金鑰或聯絡管理員",
+  "KEY_LIMIT_5H_EXCEEDS_USER_LIMIT": "Key 的 5 小時消費上限（{keyLimit}）不能超過使用者限額（{userLimit}）",
+  "KEY_LIMIT_DAILY_EXCEEDS_USER_LIMIT": "Key 的每日消費上限（{keyLimit}）不能超過使用者限額（{userLimit}）",
+  "KEY_LIMIT_WEEKLY_EXCEEDS_USER_LIMIT": "Key 的每週消費上限（{keyLimit}）不能超過使用者限額（{userLimit}）",
+  "KEY_LIMIT_MONTHLY_EXCEEDS_USER_LIMIT": "Key 的每月消費上限（{keyLimit}）不能超過使用者限額（{userLimit}）",
+  "KEY_LIMIT_TOTAL_EXCEEDS_USER_LIMIT": "Key 的總消費上限（{keyLimit}）不能超過使用者限額（{userLimit}）",
+  "KEY_LIMIT_CONCURRENT_EXCEEDS_USER_LIMIT": "Key 的並發 Session 上限（{keyLimit}）不能超過使用者限額（{userLimit}）",
+  "EXPIRES_AT_FIELD": "過期時間",
+  "IP_ADDRESS_FIELD": "IP位址",
+  "EXPIRES_AT_MUST_BE_FUTURE": "過期時間必須是未來時間",
+  "EXPIRES_AT_TOO_FAR": "過期時間不能超過10年",
+  "CANNOT_DISABLE_SELF": "不能禁用自己的帳戶",
+  "NO_DEFAULT_GROUP_PERMISSION": "無權使用 default 分組，您當前沒有 default 分組的 Key",
+  "NO_GROUP_PERMISSION": "無權使用以下分組: {groups}"
+}

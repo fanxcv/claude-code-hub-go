@@ -1,0 +1,97 @@
+{
+  "constName": "CHECK_AND_TRACK_SESSION",
+  "file": "check-and-track-session.lua",
+  "sha256": "ceac11ca31b3fa779e5e854b32c15bf6d01780f3d8c37b11b8f47551d874e940",
+  "calls": [
+    {
+      "id": "fresh-session-tracked",
+      "keys": ["cchgolden:provider:1:active_sessions", "cchgolden:provider:1:active_session_refs"],
+      "argv": ["session-a", "10", "1757000000000", "300000"],
+      "setup": [],
+      "returned": [1, 1, 1, 1],
+      "after": {
+        "cchgolden:provider:1:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-a": "1757000000000"
+          },
+          "ttl": 3600
+        },
+        "cchgolden:provider:1:active_session_refs": {
+          "type": "hash",
+          "value": {
+            "session-a": "1"
+          },
+          "ttl": 3600
+        }
+      }
+    },
+    {
+      "id": "already-tracked-with-refs",
+      "keys": ["cchgolden:provider:1:active_sessions", "cchgolden:provider:1:active_session_refs"],
+      "argv": ["session-a", "10", "1757000000000", "300000"],
+      "setup": [
+        ["ZADD", "cchgolden:provider:1:active_sessions", "1757000000000", "session-a"],
+        ["HINCRBY", "cchgolden:provider:1:active_session_refs", "session-a", "1"]
+      ],
+      "returned": [1, 1, 0, 1],
+      "after": {
+        "cchgolden:provider:1:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-a": "1757000000000"
+          },
+          "ttl": 3600
+        },
+        "cchgolden:provider:1:active_session_refs": {
+          "type": "hash",
+          "value": {
+            "session-a": "2"
+          },
+          "ttl": 3600
+        }
+      }
+    },
+    {
+      "id": "limit-reached-rejects-new",
+      "keys": ["cchgolden:provider:1:active_sessions", "cchgolden:provider:1:active_session_refs"],
+      "argv": ["session-b", "1", "1757000000000", "300000"],
+      "setup": [["ZADD", "cchgolden:provider:1:active_sessions", "1757000000000", "session-other"]],
+      "returned": [0, 1, 0, 0],
+      "after": {
+        "cchgolden:provider:1:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-other": "1757000000000"
+          },
+          "ttl": -1
+        },
+        "cchgolden:provider:1:active_session_refs": null
+      }
+    },
+    {
+      "id": "invalid-ttl-falls-back",
+      "keys": ["cchgolden:provider:1:active_sessions", "cchgolden:provider:1:active_session_refs"],
+      "argv": ["session-c", "10", "1757000000000", "0"],
+      "setup": [],
+      "returned": [1, 1, 1, 1],
+      "after": {
+        "cchgolden:provider:1:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-c": "1757000000000"
+          },
+          "ttl": 3600
+        },
+        "cchgolden:provider:1:active_session_refs": {
+          "type": "hash",
+          "value": {
+            "session-c": "1"
+          },
+          "ttl": 3600
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

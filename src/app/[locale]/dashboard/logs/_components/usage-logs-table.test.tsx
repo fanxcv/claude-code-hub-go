@@ -1,0 +1,792 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactNode } from "react";
+import { createRoot } from "react-dom/client";
+import { act } from "react";
+import { describe, expect, test, vi } from "vitest";
+
+import type { UsageLogRow } from "@/types/usage-logs";
+import type { RoutingTraceV1 } from "@/types/routing-trace";
+
+vi.mock("next-intl", () => ({
+  useTranslations: () => (key: string) => key,
+}));
+
+const toastMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+}));
+
+vi.mock("sonner", () => ({
+  toast: toastMocks,
+}));
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  Tooltip: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  TooltipTrigger: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  TooltipContent: ({ children }: { children?: ReactNode }) => (
+    <div data-slot="tooltip-content">{children}</div>
+  ),
+}));
+
+vi.mock("@/components/ui/relative-time", () => ({
+  RelativeTime: ({ fallback }: { fallback: string }) => <span>{fallback}</span>,
+}));
+
+vi.mock("./model-display-with-redirect", () => ({
+  ModelDisplayWithRedirect: ({
+    currentModel,
+    onRedirectClick,
+  }: {
+    currentModel: string | null;
+    onRedirectClick?: () => void;
+  }) => (
+    <button type="button" data-slot="model-redirect" onClick={onRedirectClick}>
+      {currentModel ?? "-"}
+    </button>
+  ),
+}));
+
+const dialogProps = vi.hoisted(() => ({ latest: null as Record<string, unknown> | null }));
+
+vi.mock("./error-details-dialog", () => ({
+  ErrorDetailsDialog: (props: Record<string, unknown>) => {
+    dialogProps.latest = props;
+    return (
+      <div
+        data-slot="error-details-dialog"
+        data-replay={String(props.isReplay ?? false)}
+        data-replay-source-request-id={
+          props.isReplay ? String(props.replaySourceRequestId ?? "") : undefined
+        }
+      />
+    );
+  },
+}));
+
+import { UsageLogsTable } from "./usage-logs-table";
+
+function makeLog(overrides: Partial<UsageLogRow>): UsageLogRow {
+  return {
+    id: 1,
+    createdAt: new Date(),
+    sessionId: null,
+    sourceSessionId: null,
+    sessionIdentityKind: null,
+    requestSequence: null,
+    userName: "u",
+    keyName: "k",
+    providerName: "p",
+    model: "m",
+    originalModel: null,
+    actualResponseModel: null,
+    endpoint: "/v1/messages",
+    statusCode: 200,
+    inputTokens: 1,
+    outputTokens: 1,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheCreation5mInputTokens: 0,
+    cacheCreation1hInputTokens: 0,
+    cacheTtlApplied: null,
+    theoreticalCacheTokens: null,
+    cacheScoreEligible: null,
+    cacheScoreExcludedReason: null,
+    cacheInputTotal: 1,
+    actualCacheRate: 0,
+    theoreticalCacheRate: null,
+    requestCacheCoefficientBp: null,
+    requestCacheMetricAvailability: "not_recorded",
+    totalTokens: 2,
+    costUsd: "0.01",
+    costMultiplier: null,
+    groupCostMultiplier: null,
+    costBreakdown: null,
+    hedgeLosers: null,
+    durationMs: 100,
+    ttftMs: 50,
+    firstByteMs: 50,
+    errorMessage: null,
+    providerChain: null,
+    blockedBy: null,
+    blockedReason: null,
+    isReplay: false,
+    replaySourceRequestId: null,
+    userAgent: null,
+    clientIp: null,
+    messagesCount: null,
+    context1mApplied: null,
+    swapCacheTtlApplied: null,
+    specialSettings: null,
+    ...overrides,
+  };
+}
+
+const discoveryTrace: RoutingTraceV1 = {
+  version: 1,
+  mode: "discovery",
+  startedAt: 1,
+  updatedAt: 2,
+  discoveryEnabled: true,
+  eligible: true,
+  events: [],
+};
+
+describe("usage-logs-table thinking effort", () => {
+  test("forwards Replay provenance to the details dialog", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[makeLog({ isReplay: true, replaySourceRequestId: 7 })]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    expect(dialogProps.latest).toEqual(
+      expect.objectContaining({ isReplay: true, replaySourceRequestId: 7 })
+    );
+    expect(html).toContain('data-replay-source-request-id="7"');
+  });
+
+  test("在计费模型右侧显示思考强度列", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            model: "gpt-5.4",
+            specialSettings: [
+              {
+                type: "codex_reasoning_effort",
+                scope: "request",
+                hit: true,
+                effort: "low",
+              },
+              {
+                type: "provider_parameter_override",
+                scope: "provider",
+                providerId: 1,
+                providerName: "Codex",
+                providerType: "codex",
+                hit: true,
+                changed: true,
+                changes: [{ path: "reasoning.effort", before: "low", after: "max", changed: true }],
+              },
+            ],
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+    const container = document.createElement("div");
+    container.innerHTML = html;
+
+    const headers = [...container.querySelectorAll("thead th")].map((node) => node.textContent);
+    expect(headers.slice(6, 10)).toEqual([
+      "logs.columns.model",
+      "logs.columns.reasoningEffort",
+      "logs.columns.protocolConversion",
+      "logs.columns.tokens",
+    ]);
+
+    const cells = [...container.querySelectorAll("tbody tr:first-child td")];
+    expect(cells[6]?.textContent).toContain("gpt-5.4");
+    expect(cells[7]?.textContent).toContain("low");
+    expect(cells[7]?.textContent).toContain("max");
+    expect(cells[7]?.className).toContain("overflow-visible");
+  });
+
+  test("显示 Anthropic 请求的思考强度", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            model: "claude-opus-4-5",
+            specialSettings: [
+              {
+                type: "anthropic_effort",
+                scope: "request",
+                hit: true,
+                effort: "medium",
+              },
+            ],
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+    const container = document.createElement("div");
+    container.innerHTML = html;
+
+    const cells = [...container.querySelectorAll("tbody tr:first-child td")];
+    expect(cells[7]?.textContent).toContain("medium");
+  });
+
+  test("hiddenColumns 含 reasoningEffort 时隐藏思考强度列", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            specialSettings: [
+              { type: "codex_reasoning_effort", scope: "request", hit: true, effort: "high" },
+            ],
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+        hiddenColumns={["reasoningEffort"]}
+      />
+    );
+    const container = document.createElement("div");
+    container.innerHTML = html;
+
+    const headers = [...container.querySelectorAll("thead th")].map((node) => node.textContent);
+    expect(headers).not.toContain("logs.columns.reasoningEffort");
+    expect(headers).toHaveLength(13);
+    expect(container.querySelectorAll("tbody tr:first-child td")).toHaveLength(13);
+    expect(html).not.toContain('data-slot="thinking-effort"');
+  });
+
+  test("有协议转换记录时显示已转换徽章与协议对", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            specialSettings: [
+              {
+                type: "protocol_conversion",
+                scope: "request",
+                hit: true,
+                clientProtocol: "openai-responses",
+                targetProtocol: "openai-chat",
+              },
+            ],
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+    const container = document.createElement("div");
+    container.innerHTML = html;
+
+    const headers = [...container.querySelectorAll("thead th")].map((node) => node.textContent);
+    expect(headers).toContain("logs.columns.protocolConversion");
+
+    const cells = [...container.querySelectorAll("tbody tr:first-child td")];
+    expect(cells[8]?.querySelector('[data-slot="protocol-conversion"]')).not.toBeNull();
+    expect(cells[8]?.textContent).toContain("badge");
+    expect(cells[8]?.textContent).toContain("openai-responses");
+    expect(cells[8]?.textContent).toContain("openai-chat");
+  });
+
+  test("无协议转换记录时不渲染该列内容", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[makeLog({})]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    expect(html).toContain("logs.columns.protocolConversion");
+    expect(html).not.toContain('data-slot="protocol-conversion"');
+  });
+
+  test("hiddenColumns 含 protocolConversion 时隐藏协议转换列", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            specialSettings: [
+              {
+                type: "protocol_conversion",
+                scope: "request",
+                hit: true,
+                clientProtocol: "anthropic-messages",
+                targetProtocol: "openai-chat",
+              },
+            ],
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+        hiddenColumns={["protocolConversion"]}
+      />
+    );
+    const container = document.createElement("div");
+    container.innerHTML = html;
+
+    const headers = [...container.querySelectorAll("thead th")].map((node) => node.textContent);
+    expect(headers).not.toContain("logs.columns.protocolConversion");
+    expect(headers).toHaveLength(13);
+    expect(container.querySelectorAll("tbody tr:first-child td")).toHaveLength(13);
+    expect(html).not.toContain('data-slot="protocol-conversion"');
+  });
+
+  test("隐藏思考强度列后空态占满全部可见列", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[]}
+        total={0}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+        hiddenColumns={["reasoningEffort"]}
+      />
+    );
+    const container = document.createElement("div");
+    container.innerHTML = html;
+
+    const emptyCell = container.querySelector("tbody td");
+    expect(emptyCell?.getAttribute("colspan")).toBe("13");
+  });
+});
+
+describe("usage-logs-table multiplier badge", () => {
+  test("does not render multiplier badge for null/undefined/empty/NaN/Infinity", () => {
+    for (const costMultiplier of [null, undefined, "", "NaN", "Infinity"] as const) {
+      const html = renderToStaticMarkup(
+        <UsageLogsTable
+          logs={[makeLog({ id: 1, costMultiplier })]}
+          total={1}
+          page={1}
+          pageSize={50}
+          onPageChange={() => {}}
+          isPending={false}
+        />
+      );
+
+      expect(html).not.toContain("×0.00");
+      expect(html).not.toContain("×NaN");
+      expect(html).not.toContain("×Infinity");
+    }
+  });
+
+  test("renders multiplier badge when finite and != 1", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[makeLog({ id: 1, costMultiplier: "0.2" })]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    expect(html).toContain("×0.20");
+    expect(html).toContain("0.20x");
+  });
+
+  test("keeps the winner multiplier visible after multiple Discovery attempts", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            id: 1,
+            costMultiplier: "0.01",
+            routingTrace: discoveryTrace,
+            providerChain: [
+              { id: 1, name: "failed", reason: "retry_failed", statusCode: 503 },
+              {
+                id: 2,
+                name: "winner",
+                reason: "retry_success",
+                statusCode: 200,
+                costMultiplier: 0.03,
+              },
+            ],
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    expect(html).toContain("×0.03");
+  });
+
+  test("renders the hedge billing split with cache tokens in the cost tooltip", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            id: 1,
+            costUsd: "0.030000",
+            inputTokens: 100,
+            outputTokens: 50,
+            hedgeLosers: [
+              {
+                providerId: 2,
+                providerName: "loser-a",
+                attemptNumber: 2,
+                costUsd: "0.010000",
+                inputTokens: 80,
+                outputTokens: 20,
+                cacheCreationInputTokens: 0,
+                cacheReadInputTokens: 5000,
+              },
+            ],
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    expect(html).toContain("logs.billingDetails.hedgeRacing");
+    expect(html).toContain("logs.billingDetails.hedgeMergedCount");
+    expect(html).toContain("logs.billingDetails.hedgeWinner");
+    expect(html).toContain("loser-a");
+    // winnerCost = costUsd - sum(losers) = 0.030 - 0.010
+    expect(html).toContain("$0.020000");
+    expect(html).toContain("$0.010000");
+    // Token-total line includes cache-read (present) but omits cache-write (zero).
+    expect(html).toContain("logs.billingDetails.hedgeTokenTotal");
+    expect(html).toContain("logs.billingDetails.hedgeColCacheRead");
+    expect(html).not.toContain("logs.billingDetails.hedgeColCacheWrite");
+  });
+
+  test("renders warmup skipped and blocked labels", () => {
+    const htmlWarmup = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[makeLog({ id: 1, blockedBy: "warmup" })]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+    expect(htmlWarmup).toContain("logs.table.skipped");
+
+    const htmlBlocked = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[makeLog({ id: 1, blockedBy: "sensitive_word" })]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+    expect(htmlBlocked).toContain("logs.table.blocked");
+  });
+
+  test("invokes model redirect and pagination callbacks", async () => {
+    const onPageChange = vi.fn();
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <UsageLogsTable
+          logs={[makeLog({ id: 1, costMultiplier: "0.2" })]}
+          total={100}
+          page={1}
+          pageSize={50}
+          onPageChange={onPageChange}
+          isPending={false}
+        />
+      );
+    });
+
+    // Trigger model redirect click (covers onRedirectClick handler)
+    const redirectButton = container.querySelector('button[data-slot="model-redirect"]');
+    expect(redirectButton).not.toBeNull();
+    await act(async () => {
+      redirectButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    // Trigger pagination (covers onClick handlers)
+    const nextButton = Array.from(container.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("logs.table.nextPage")
+    );
+    expect(nextButton).not.toBeUndefined();
+    await act(async () => {
+      nextButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onPageChange).toHaveBeenCalledWith(2);
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  test("hides tok/s when TTFB is close to duration and rate is abnormally high", () => {
+    // Rule: generationTimeMs / durationMs < 0.1 && outputRate > 5000 => hide tok/s
+    // durationMs=1000, firstByteMs=950 => generationTimeMs=50, ratio=0.05 < 0.1
+    // outputTokens=300 => rate = 300 / 0.05 = 6000 > 5000 => should hide
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({ id: 1, durationMs: 1000, ttftMs: 950, firstByteMs: 950, outputTokens: 300 }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    // tok/s should NOT appear
+    expect(html).not.toContain("tok/s");
+    // TTFT 行仍应出现
+    expect(html).toContain("logs.details.performance.ttft");
+  });
+
+  test("shows tok/s when conditions are normal", () => {
+    // durationMs=1000, firstByteMs=500 => generationTimeMs=500, ratio=0.5 >= 0.1
+    // outputTokens=50 => rate = 50 / 0.5 = 100 <= 5000 => should show
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({ id: 1, durationMs: 1000, ttftMs: 500, firstByteMs: 500, outputTokens: 50 }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    // tok/s should appear
+    expect(html).toContain("tok/s");
+    // TTFT 行同样应出现
+    expect(html).toContain("logs.details.performance.ttft");
+  });
+
+  test("renders swap indicator on cacheTtl badge when swapCacheTtlApplied is true", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[makeLog({ id: 1, cacheTtlApplied: "5m", swapCacheTtlApplied: true })]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    // Should contain the swap indicator "~"
+    expect(html).toContain("5m ~");
+    // Should contain amber styling
+    expect(html).toContain("bg-amber-50");
+  });
+
+  test("renders fast badge when codex priority service tier is recorded", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            id: 1,
+            specialSettings: [
+              {
+                type: "provider_parameter_override",
+                scope: "provider",
+                providerId: 1,
+                providerName: "codex-provider",
+                providerType: "codex",
+                hit: true,
+                changed: true,
+                changes: [{ path: "service_tier", before: null, after: "priority", changed: true }],
+              },
+            ],
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    expect(html).toContain("logs.billingDetails.fast");
+  });
+
+  test("does not render swap indicator when swapCacheTtlApplied is false", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[makeLog({ id: 1, cacheTtlApplied: "5m", swapCacheTtlApplied: false })]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    // Should contain the TTL value without swap indicator
+    expect(html).toContain("5m");
+    expect(html).not.toContain("5m ~");
+    // Should not contain amber styling
+    expect(html).not.toContain("bg-amber-50");
+  });
+
+  test("copies sessionId on click and shows toast", async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    Object.defineProperty(window, "isSecureContext", {
+      value: true,
+      configurable: true,
+    });
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <UsageLogsTable
+          logs={[makeLog({ id: 1, sessionId: "session_test" })]}
+          total={1}
+          page={1}
+          pageSize={50}
+          onPageChange={() => {}}
+          isPending={false}
+        />
+      );
+    });
+
+    const sessionBtn = Array.from(container.querySelectorAll("button")).find((b) =>
+      (b.textContent ?? "").includes("session_test")
+    );
+    expect(sessionBtn).not.toBeUndefined();
+
+    await act(async () => {
+      sessionBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(writeText).toHaveBeenCalledWith("session_test");
+    expect(toastMocks.success).toHaveBeenCalledWith("actions.copied");
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
+  test("shows the client session ID and keeps the canonical prefix identity in the tooltip", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            sessionId: "pfx:scope:fingerprint",
+            sourceSessionId: "client-session-id",
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    expect(html).toContain('data-session-id="client-session-id"');
+    expect(html).toContain("client-session-id");
+    expect(html).toContain("pfx:scope:fingerprint");
+  });
+
+  test("does not duplicate the canonical identity when it is the source fallback", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            sessionId: "same-session-id",
+            sourceSessionId: "same-session-id",
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    const tooltip = [...container.querySelectorAll('[data-slot="tooltip-content"]')].find((node) =>
+      node.textContent?.includes("same-session-id")
+    );
+
+    expect(
+      [...(tooltip?.querySelectorAll("span") ?? [])].filter(
+        (node) => node.textContent === "same-session-id"
+      )
+    ).toHaveLength(1);
+  });
+});
+
+describe("usage-logs-table pricing resolution", () => {
+  test("renders pricing provider and source details when pricing_resolution special setting exists", () => {
+    const html = renderToStaticMarkup(
+      <UsageLogsTable
+        logs={[
+          makeLog({
+            id: 1,
+            specialSettings: [
+              {
+                type: "pricing_resolution",
+                scope: "billing",
+                hit: true,
+                modelName: "gpt-5.5",
+                resolvedModelName: "gpt-5.5",
+                resolvedPricingProviderKey: "openai",
+                source: "priority_fallback",
+              },
+            ],
+          }),
+        ]}
+        total={1}
+        page={1}
+        pageSize={50}
+        onPageChange={() => {}}
+        isPending={false}
+      />
+    );
+
+    expect(html).toContain("logs.billingDetails.pricingProvider");
+    expect(html).toContain("openai");
+    expect(html).toContain("logs.billingDetails.pricingSource.priority_fallback");
+  });
+});

@@ -1,0 +1,461 @@
+{
+  "baseUrl": "http://127.0.0.1:32891",
+  "marker": "MATRIX7F3A",
+  "cells": [
+    {
+      "cell": "claude>anthropic",
+      "sameProtocol": true,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 1474,
+        "totalMs": 1474,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 29
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 1627,
+        "totalMs": 1641,
+        "terminalWanted": "message_stop",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "claude>chat",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 400,
+        "ttfbMs": 10,
+        "totalMs": 10,
+        "shapeOk": false,
+        "textLen": 0,
+        "marker": false,
+        "usage": {
+          "input": null,
+          "output": null
+        },
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-chat\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"",
+        "error": null
+      },
+      "stream": {
+        "status": 400,
+        "ttfbMs": 10,
+        "totalMs": 10,
+        "terminalWanted": "message_stop",
+        "terminalOk": false,
+        "textLen": 0,
+        "marker": false,
+        "error": null,
+        "sample": ""
+      },
+      "pass": false
+    },
+    {
+      "cell": "claude>responses",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 400,
+        "ttfbMs": 10,
+        "totalMs": 10,
+        "shapeOk": false,
+        "textLen": 0,
+        "marker": false,
+        "usage": {
+          "input": null,
+          "output": null
+        },
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-resp\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"",
+        "error": null
+      },
+      "stream": {
+        "status": 400,
+        "ttfbMs": 8,
+        "totalMs": 8,
+        "terminalWanted": "message_stop",
+        "terminalOk": false,
+        "textLen": 0,
+        "marker": false,
+        "error": null,
+        "sample": ""
+      },
+      "pass": false
+    },
+    {
+      "cell": "chat>anthropic",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 400,
+        "ttfbMs": 110,
+        "totalMs": 110,
+        "shapeOk": false,
+        "textLen": 0,
+        "marker": false,
+        "usage": {
+          "input": null,
+          "output": null
+        },
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-anthropic\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_e",
+        "error": null
+      },
+      "stream": {
+        "status": 400,
+        "ttfbMs": 114,
+        "totalMs": 114,
+        "terminalWanted": "[DONE]",
+        "terminalOk": false,
+        "textLen": 0,
+        "marker": false,
+        "error": null,
+        "sample": ""
+      },
+      "pass": false
+    },
+    {
+      "cell": "chat>chat",
+      "sameProtocol": true,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 961,
+        "totalMs": 961,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 19
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 1018,
+        "totalMs": 1327,
+        "terminalWanted": "[DONE]",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "chat>responses",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 400,
+        "ttfbMs": 14,
+        "totalMs": 14,
+        "shapeOk": false,
+        "textLen": 0,
+        "marker": false,
+        "usage": {
+          "input": null,
+          "output": null
+        },
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-resp\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"",
+        "error": null
+      },
+      "stream": {
+        "status": 400,
+        "ttfbMs": 13,
+        "totalMs": 13,
+        "terminalWanted": "[DONE]",
+        "terminalOk": false,
+        "textLen": 0,
+        "marker": false,
+        "error": null,
+        "sample": ""
+      },
+      "pass": false
+    },
+    {
+      "cell": "responses>anthropic",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 400,
+        "ttfbMs": 114,
+        "totalMs": 114,
+        "shapeOk": false,
+        "textLen": 0,
+        "marker": false,
+        "usage": {
+          "input": null,
+          "output": null
+        },
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-anthropic\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_e",
+        "error": null
+      },
+      "stream": {
+        "status": 400,
+        "ttfbMs": 120,
+        "totalMs": 120,
+        "terminalWanted": "response.completed",
+        "terminalOk": false,
+        "textLen": 0,
+        "marker": false,
+        "error": null,
+        "sample": ""
+      },
+      "pass": false
+    },
+    {
+      "cell": "responses>chat",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 400,
+        "ttfbMs": 9,
+        "totalMs": 9,
+        "shapeOk": false,
+        "textLen": 0,
+        "marker": false,
+        "usage": {
+          "input": null,
+          "output": null
+        },
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-chat\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"",
+        "error": null
+      },
+      "stream": {
+        "status": 400,
+        "ttfbMs": 10,
+        "totalMs": 10,
+        "terminalWanted": "response.completed",
+        "terminalOk": false,
+        "textLen": 0,
+        "marker": false,
+        "error": null,
+        "sample": ""
+      },
+      "pass": false
+    },
+    {
+      "cell": "responses>responses",
+      "sameProtocol": true,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 2590,
+        "totalMs": 2590,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 31
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 981,
+        "totalMs": 1449,
+        "terminalWanted": "response.completed",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    }
+  ],
+  "features": {
+    "claude>anthropic": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": {
+            "city": "Beijing"
+          }
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMDAA8TYHSAC2Q10WMXEZP\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_00_nRPiMxht33gRSWjkJLZ34811\",\"name\":\"get_weather\",\"input\":{\"city\": \"Beijing\"}}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":303,\"output_tokens\":51}}"
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMDC6B0H5C7NC167BRFG0G\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"text\",\"text\":\"2\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":34,\"output_tokens\":39}}"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"id\":\"gen_01M2CMDF9EZ1P1RJ27YQJ4FFNS\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"text\",\"text\":\"The code was **ZQ9**.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":49,\"output_tokens\":59}}"
+      }
+    },
+    "claude>chat": {
+      "tools": {
+        "status": 400,
+        "toolCall": null,
+        "note": "请求失败",
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-chat\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "effort": {
+        "status": 400,
+        "textLen": 0,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-chat\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "multiTurn": {
+        "firstStatus": 400,
+        "secondStatus": 400,
+        "reasoningRejected": false,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-chat\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      }
+    },
+    "claude>responses": {
+      "tools": {
+        "status": 400,
+        "toolCall": null,
+        "note": "请求失败",
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-resp\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "effort": {
+        "status": 400,
+        "textLen": 0,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-resp\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "multiTurn": {
+        "firstStatus": 400,
+        "secondStatus": 400,
+        "reasoningRejected": false,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-resp\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      }
+    },
+    "chat>anthropic": {
+      "tools": {
+        "status": 400,
+        "toolCall": null,
+        "note": "请求失败",
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-anthropic\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "effort": {
+        "status": 400,
+        "textLen": 0,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-anthropic\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "multiTurn": {
+        "firstStatus": 400,
+        "secondStatus": 400,
+        "reasoningRejected": false,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-anthropic\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      }
+    },
+    "chat>chat": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": "{\"city\": \"Beijing\"}"
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMDHHG9X2P87PFBVYC41EY\",\"object\":\"chat.completion\",\"created\":1789277948,\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":null,\"reasoning\":\"The user wants me to use the get_weather tool for Beijing.\",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"The user wants me to use the get_weather tool for Beijing.\",\"format\":\"unknown\",\""
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMDJY0J7JTA6WFY27APH1G\",\"object\":\"chat.completion\",\"created\":1789277949,\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"2\",\"reasoning\":\"We need answer simple. Need comply? User asks 1+1=? Answer 2. Could just. Need final. \",\"reasoning_details\":[{\"type\":\"reasoning.text\",\"text\":\"We need answer simple. Need comply? User asks 1+1=? A"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"id\":\"gen_01M2CMDPCDVA3HM128P364KRCS\",\"object\":\"chat.completion\",\"created\":1789277953,\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The code was **ZQ9**.\",\"reasoning\":\"We need answer. Need parse. User said \\\"Remember the code ZQ9.\\\" Then asks \\\"What was the code?\\\" We should answer ZQ9. Need be careful? It's simple memory. Must not mention c"
+      }
+    },
+    "chat>responses": {
+      "tools": {
+        "status": 400,
+        "toolCall": null,
+        "note": "请求失败",
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-resp\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "effort": {
+        "status": 400,
+        "textLen": 0,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-resp\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "multiTurn": {
+        "firstStatus": 400,
+        "secondStatus": 400,
+        "reasoningRejected": false,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-resp\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      }
+    },
+    "responses>anthropic": {
+      "tools": {
+        "status": 400,
+        "toolCall": null,
+        "note": "请求失败",
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-anthropic\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "effort": {
+        "status": 400,
+        "textLen": 0,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-anthropic\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "multiTurn": {
+        "firstStatus": 400,
+        "secondStatus": 400,
+        "reasoningRejected": false,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-anthropic\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      }
+    },
+    "responses>chat": {
+      "tools": {
+        "status": 400,
+        "toolCall": null,
+        "note": "请求失败",
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-chat\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "effort": {
+        "status": 400,
+        "textLen": 0,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-chat\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      },
+      "multiTurn": {
+        "firstStatus": 400,
+        "secondStatus": 400,
+        "reasoningRejected": false,
+        "sample": "{\"error\":{\"message\":\"unknown provider for model mock-chat\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      }
+    },
+    "responses>responses": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": "{\"city\": \"Beijing\"}"
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMDR7BF9QA5RX7VRAWC0TN\",\"object\":\"response\",\"created_at\":1789277955,\"status\":\"completed\",\"background\":false,\"error\":null,\"incomplete_details\":null,\"max_output_tokens\":64,\"model\":\"deepseek/deepseek-v4.1-flash\",\"tools\":[{\"function\":{\"description\":\"Get weather for a city.\",\"name\":\"get_weather\",\"parameters\":{\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"}},\""
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMDS9HEDF4HKDT22M621MR\",\"object\":\"response\",\"created_at\":1789277957,\"status\":\"completed\",\"background\":false,\"error\":null,\"incomplete_details\":null,\"max_output_tokens\":64,\"model\":\"deepseek/deepseek-v4.1-flash\",\"output\":[{\"id\":\"rs_gen_01M2CMDS9HEDF4HKDT22M621MR\",\"type\":\"reasoning\",\"encrypted_content\":\"\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"We need answer simple. 1+1=2. Need final"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"id\":\"gen_01M2CMDY2WCVNN0HMNDVE8H6TY\",\"object\":\"response\",\"created_at\":1789277961,\"status\":\"completed\",\"background\":false,\"error\":null,\"incomplete_details\":null,\"max_output_tokens\":64,\"model\":\"deepseek/deepseek-v4.1-flash\",\"output\":[{\"id\":\"rs_gen_01M2CMDY2WCVNN0HMNDVE8H6TY\",\"type\":\"reasoning\",\"encrypted_content\":\"\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"We need answer. User asked \\\"Remember th"
+      }
+    }
+  },
+  "at": "2026-09-13T05:39:21.683Z"
+}

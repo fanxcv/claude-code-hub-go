@@ -1,0 +1,349 @@
+"use client";
+import { Check, ChevronDown, ChevronRight, Copy, ExternalLink, Eye, EyeOff } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { DataTable, TableColumnTypes } from "@/components/ui/data-table";
+import { RelativeTime } from "@/components/ui/relative-time";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Link } from "@/i18n/routing";
+import { getUnmaskedKey } from "@/lib/api-client/v1/actions/keys";
+import { copyToClipboard, isClipboardSupported } from "@/lib/utils/clipboard";
+import { type CurrencyCode, formatCurrency } from "@/lib/utils/currency";
+import type { User, UserKeyDisplay } from "@/types/user";
+import { KeyActions } from "./key-actions";
+import { KeyLimitUsage } from "./key-limit-usage";
+
+interface KeyListProps {
+  keys: UserKeyDisplay[];
+  currentUser?: User;
+  keyOwnerUserId: number; // 这些Key所属的用户ID
+  keyOwnerUser?: User; // 这些Key所属的用户对象（用于显示限额提示）
+  currencyCode?: CurrencyCode;
+}
+
+export function KeyList({
+  keys,
+  currentUser,
+  keyOwnerUserId,
+  keyOwnerUser,
+  currencyCode = "USD",
+}: KeyListProps) {
+  const t = useTranslations("dashboard.keyList");
+  const tCommon = useTranslations("common");
+  const [copiedKeyId, setCopiedKeyId] = useState<number | null>(null);
+  const [expandedKeys, setExpandedKeys] = useState<Set<number>>(new Set());
+  const [visibleKeyIds, setVisibleKeyIds] = useState<Set<number>>(new Set());
+  const [clipboardAvailable, setClipboardAvailable] = useState(false);
+  // Cache unmasked keys after they have been revealed (lazy fetch via :reveal endpoint).
+  const [revealedKeys, setRevealedKeys] = useState<Record<number, string>>({});
+  const [revealingKeyId, setRevealingKeyId] = useState<number | null>(null);
+  const canDeleteKeys = keys.length > 1;
+
+  // 检测 clipboard 是否可用
+  useEffect(() => {
+    setClipboardAvailable(isClipboardSupported());
+  }, []);
+
+  // Drop the reveal cache whenever the underlying key set changes so a removed
+  // / replaced id can't expose its previously cached plaintext on a new row.
+  useEffect(() => {
+    const currentIds = new Set(keys.map((k) => k.id));
+    setRevealedKeys((prev) => {
+      const next: Record<number, string> = {};
+      for (const [idStr, value] of Object.entries(prev)) {
+        const id = Number(idStr);
+        if (currentIds.has(id)) next[id] = value;
+      }
+      return next;
+    });
+    setVisibleKeyIds((prev) => {
+      const next = new Set<number>();
+      for (const id of prev) {
+        if (currentIds.has(id)) next.add(id);
+      }
+      return next;
+    });
+  }, [keys]);
+
+  const toggleExpanded = (keyId: number) => {
+    setExpandedKeys((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(keyId)) {
+        newSet.delete(keyId);
+      } else {
+        newSet.add(keyId);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleKeyVisibility = (keyId: number) => {
+    setVisibleKeyIds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(keyId)) {
+        newSet.delete(keyId);
+      } else {
+        newSet.add(keyId);
+      }
+      return newSet;
+    });
+  };
+
+  const fetchUnmaskedKey = async (keyId: number): Promise<string | null> => {
+    if (revealedKeys[keyId]) return revealedKeys[keyId];
+    setRevealingKeyId(keyId);
+    try {
+      const res = await getUnmaskedKey(keyId);
+      if (!res.ok) {
+        toast.error(res.error || tCommon("copyFailed"));
+        return null;
+      }
+      if (!res.data?.key) {
+        toast.error(tCommon("copyFailed"));
+        return null;
+      }
+      setRevealedKeys((prev) => ({ ...prev, [keyId]: res.data.key }));
+      return res.data.key;
+    } catch (error) {
+      console.error("[KeyList] reveal failed", error);
+      toast.error(tCommon("copyFailed"));
+      return null;
+    } finally {
+      setRevealingKeyId(null);
+    }
+  };
+
+  const handleCopyKey = async (key: UserKeyDisplay) => {
+    if (!key.canCopy) return;
+    const fullKey = await fetchUnmaskedKey(key.id);
+    if (!fullKey) return;
+    const success = await copyToClipboard(fullKey);
+    if (success) {
+      setCopiedKeyId(key.id);
+      setTimeout(() => setCopiedKeyId(null), 2000);
+    }
+  };
+
+  const handleToggleVisibility = async (keyId: number) => {
+    if (visibleKeyIds.has(keyId)) {
+      toggleKeyVisibility(keyId);
+      return;
+    }
+    const fullKey = await fetchUnmaskedKey(keyId);
+    if (!fullKey) return;
+    toggleKeyVisibility(keyId);
+  };
+
+  const columns = [
+    TableColumnTypes.text<UserKeyDisplay>("name", t("columns.name"), {
+      render: (value, record) => {
+        // 检查是否有限额配置
+        // 使用 Boolean() 确保返回布尔值，避免 React 渲染数字 0
+        const hasLimitConfig = Boolean(
+          (record.limit5hUsd && record.limit5hUsd > 0) ||
+            (record.limitDailyUsd && record.limitDailyUsd > 0) ||
+            (record.limitWeeklyUsd && record.limitWeeklyUsd > 0) ||
+            (record.limitMonthlyUsd && record.limitMonthlyUsd > 0) ||
+            (record.limitConcurrentSessions && record.limitConcurrentSessions > 0)
+        );
+
+        const hasModelStats = record.modelStats.length > 0;
+        const showDetails = hasModelStats || hasLimitConfig;
+
+        return (
+          <div className="space-y-1">
+            <div className="truncate font-medium">{value}</div>
+            {showDetails && (
+              <Collapsible open={expandedKeys.has(record.id)}>
+                <CollapsibleTrigger asChild>
+                  <button
+                    onClick={() => toggleExpanded(record.id)}
+                    className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    {expandedKeys.has(record.id) ? (
+                      <ChevronDown className="h-3 w-3" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3" />
+                    )}
+                    {t("detailsButton")}
+                  </button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="mt-2 space-y-3">
+                  {/* 模型统计 */}
+                  {hasModelStats && (
+                    <div>
+                      <div className="text-xs font-medium text-muted-foreground mb-1.5">
+                        {t("modelStats")} ({record.modelStats.length})
+                      </div>
+                      <div className="border rounded-md">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead className="text-xs py-1.5">
+                                {t("modelStatsColumns.model")}
+                              </TableHead>
+                              <TableHead className="text-xs py-1.5 text-right">
+                                {t("modelStatsColumns.calls")}
+                              </TableHead>
+                              <TableHead className="text-xs py-1.5 text-right">
+                                {t("modelStatsColumns.cost")}
+                              </TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {record.modelStats.map((stat) => (
+                              <TableRow key={stat.model}>
+                                <TableCell className="text-xs py-1.5 font-mono">
+                                  {stat.model}
+                                </TableCell>
+                                <TableCell className="text-xs py-1.5 text-right">
+                                  {stat.callCount}
+                                </TableCell>
+                                <TableCell className="text-xs py-1.5 text-right font-mono">
+                                  {formatCurrency(stat.totalCost, currencyCode)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 限额使用情况 */}
+                  {hasLimitConfig && (
+                    <div>
+                      <div className="text-xs font-medium text-muted-foreground mb-1.5">
+                        {t("limitUsage")}
+                      </div>
+                      <div className="border rounded-md p-3 bg-muted/30">
+                        <KeyLimitUsage keyId={record.id} currencyCode={currencyCode} />
+                      </div>
+                    </div>
+                  )}
+                </CollapsibleContent>
+              </Collapsible>
+            )}
+          </div>
+        );
+      },
+    }),
+    TableColumnTypes.text<UserKeyDisplay>("maskedKey", t("columns.key"), {
+      render: (_, record: UserKeyDisplay) => {
+        const isVisible = visibleKeyIds.has(record.id);
+        const fullKey = revealedKeys[record.id];
+        const displayKey = isVisible && fullKey ? fullKey : record.maskedKey || "-";
+        const isRevealing = revealingKeyId === record.id;
+
+        return (
+          <div className="group inline-flex items-center gap-1">
+            <div className={`font-mono ${isVisible ? "select-all" : "truncate"}`}>{displayKey}</div>
+            {record.canReveal &&
+              (clipboardAvailable && record.canCopy ? (
+                // HTTPS 环境：显示复制按钮（按需 fetch 完整 key）
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleCopyKey(record)}
+                  disabled={isRevealing}
+                  className="h-5 w-5 p-0 hover:bg-muted flex-shrink-0"
+                  title={t("copyKeyTooltip")}
+                >
+                  {copiedKeyId === record.id ? (
+                    <Check className="h-3 w-3 text-green-600" />
+                  ) : (
+                    <Copy className="h-3 w-3" />
+                  )}
+                </Button>
+              ) : (
+                // HTTP 环境（或不允许复制）：显示显示/隐藏按钮（按需 fetch）
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleToggleVisibility(record.id)}
+                  disabled={isRevealing}
+                  className="h-5 w-5 p-0 hover:bg-muted flex-shrink-0"
+                  title={isVisible ? t("hideKeyTooltip") : t("showKeyTooltip")}
+                >
+                  {isVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                </Button>
+              ))}
+          </div>
+        );
+      },
+    }),
+    TableColumnTypes.text<UserKeyDisplay>("todayCallCount", t("columns.todayCalls"), {
+      render: (value) => (
+        <div className="text-sm">
+          {typeof value === "number" ? value.toLocaleString() : 0} {t("timesUnit")}
+        </div>
+      ),
+    }),
+    TableColumnTypes.number<UserKeyDisplay>("todayUsage", t("columns.todayCost"), {
+      render: (value) => {
+        const amount = typeof value === "number" ? value : 0;
+        return formatCurrency(amount, currencyCode);
+      },
+    }),
+    TableColumnTypes.text<UserKeyDisplay>("lastUsedAt", t("columns.lastUsed"), {
+      render: (_, record: UserKeyDisplay) => (
+        <div className="space-y-0.5">
+          {record.lastUsedAt ? (
+            <>
+              <div className="text-sm">
+                <RelativeTime date={record.lastUsedAt} format="short" />
+              </div>
+              {record.lastProviderName && (
+                <div className="text-xs text-muted-foreground">
+                  {t("provider")}: {record.lastProviderName}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-sm text-muted-foreground">{t("neverUsed")}</div>
+          )}
+        </div>
+      ),
+    }),
+    TableColumnTypes.actions<UserKeyDisplay>(t("columns.actions"), (_value, record) => (
+      <div className="flex items-center gap-1">
+        <Link href={`/dashboard/logs?keyId=${record.id}`}>
+          <Button variant="ghost" size="sm" className="h-7 text-xs" title={t("viewLogsTooltip")}>
+            <ExternalLink className="h-3.5 w-3.5 mr-1" />
+            {t("logsButton")}
+          </Button>
+        </Link>
+        <KeyActions
+          keyData={record}
+          currentUser={currentUser}
+          keyOwnerUserId={keyOwnerUserId}
+          keyOwnerUser={keyOwnerUser}
+          canDelete={canDeleteKeys}
+        />
+      </div>
+    )),
+  ];
+
+  return (
+    <DataTable
+      columns={columns}
+      data={keys}
+      emptyState={{
+        title: t("emptyState.title"),
+        description: t("emptyState.description"),
+      }}
+      maxHeight="600px"
+      stickyHeader
+    />
+  );
+}

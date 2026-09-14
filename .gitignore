@@ -1,0 +1,99 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+tests/.tmp-*
+/reports/
+
+# next.js
+/.next/
+/out/
+
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.bun-debug.log*
+.workflow/
+
+# Bun 缓存（lockfile 必须入库：CI 用 --frozen-lockfile 保证依赖可复现）
+.bun-cache/
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# tooling & logs
+.cursor/
+.claude/
+.codex/
+.serena/
+!src/app/dashboard/logs/
+!src/app/settings/logs/
+.idea/
+.specify
+
+# docker volumes data
+/data/*
+!/data/.gitkeep
+!/data/README.md
+
+# dev tools (local development utilities)
+# Keep the dev toolchain in repo; ignore local-only overrides.
+/dev/.env
+/dev/.env.*
+!/dev/.env.example
+
+# translation checklists and temporary docs
+TRANSLATIONS_CHECKLIST.txt
+TRANSLATIONS_CHECKLIST.md
+
+# i18n verification screenshots (temporary)
+/i18n-verification/
+/bmad
+
+# local scratch
+tmp/
+.playwright-mcp/
+.trae/
+.sisyphus
+.ace-tool/
+.worktrees/
+.omx/
+.opencode/
+bunx-*/
+
+# crash core dumps (node --report / kernel core)
+core.*
+
+# UI 静态导出产物（go/uiapp 收编；仅保留 .gitkeep）
+go/internal/uiapp/assets/*
+!go/internal/uiapp/assets/.gitkeep
+
+# Release 工作流打包二进制的临时目录（.github/workflows/release.yml 在仓库根写这里）
+/dist/

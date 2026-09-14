@@ -1,0 +1,115 @@
+import type { Metadata } from "next";
+import "../globals.css";
+import { headers } from "next/headers";
+import { notFound } from "next/navigation";
+import { setRequestLocale } from "next-intl/server";
+import { Footer } from "@/components/customs/footer";
+import { I18nProvider } from "@/components/i18n-provider";
+import { Toaster } from "@/components/ui/sonner";
+import { type Locale, locales } from "@/i18n/config";
+import {
+  resolveDefaultLayoutTimeZone,
+  resolveDefaultSiteMetadataSource,
+} from "@/lib/layout-site-metadata";
+import { logger } from "@/lib/logger";
+import {
+  resolveLayoutTimeZone,
+  resolveSiteMetadataSource,
+} from "@/lib/public-status/layout-metadata";
+import { DEFAULT_SITE_TITLE } from "@/lib/site-title";
+import { AppProviders } from "../providers";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ locale: string }>;
+}): Promise<Metadata> {
+  const { locale } = await params;
+  const headersStore = await headers();
+  const isPublicStatusRequest = headersStore.get("x-cch-public-status") === "1";
+
+  try {
+    const metadata = isPublicStatusRequest
+      ? await resolveSiteMetadataSource()
+      : await resolveDefaultSiteMetadataSource();
+    const title = metadata?.siteTitle?.trim() || DEFAULT_SITE_TITLE;
+    const description = metadata?.siteDescription?.trim() || title;
+
+    // Generate alternates for all locales
+    const alternates: Record<string, string> = {};
+    const baseUrl = process.env.APP_URL || "http://localhost:13500";
+
+    locales.forEach((loc) => {
+      alternates[loc] = `${baseUrl}/${loc}`;
+    });
+
+    return {
+      title,
+      description,
+      alternates: {
+        canonical: `${baseUrl}/${locale}`,
+        languages: alternates,
+      },
+      openGraph: {
+        title,
+        description,
+        locale,
+        alternateLocale: locales.filter((l) => l !== locale),
+      },
+    };
+  } catch (error) {
+    logger.error("Failed to load metadata", { error });
+    return {
+      title: DEFAULT_SITE_TITLE,
+      description: DEFAULT_SITE_TITLE,
+    };
+  }
+}
+
+export default async function RootLayout({
+  children,
+  params,
+}: Readonly<{
+  children: React.ReactNode;
+  params: Promise<{ locale: string }>;
+}>) {
+  const { locale } = await params;
+  const headersStore = await headers();
+  const isPublicStatusRequest = headersStore.get("x-cch-public-status") === "1";
+
+  // Validate locale
+  if (!locales.includes(locale as Locale)) {
+    notFound();
+  }
+
+  // 将路由段 locale 固定到 next-intl 请求上下文，避免后续导航回落到默认语言。
+  setRequestLocale(locale);
+
+  // 词表不再在此读取：客户端 provider 按 locale 从共享 chunk 取（见 @/components/i18n-provider）。
+  // 以 props 传词表会把它序列化进每个路由每个 locale 的 RSC payload（实测占 payload 65%）。
+  const timeZone = isPublicStatusRequest
+    ? await resolveLayoutTimeZone()
+    : await resolveDefaultLayoutTimeZone();
+  // Create a stable `now` timestamp to avoid SSR/CSR hydration mismatch for relative time
+  const now = new Date();
+
+  return (
+    <html lang={locale} suppressHydrationWarning>
+      <body className="antialiased">
+        <I18nProvider locale={locale} timeZone={timeZone} now={now}>
+          <AppProviders>
+            <div className="flex min-h-[var(--cch-viewport-height,100vh)] flex-col bg-background text-foreground">
+              <div className="flex-1">{children}</div>
+              <Footer />
+            </div>
+            <Toaster />
+          </AppProviders>
+        </I18nProvider>
+      </body>
+    </html>
+  );
+}
+
+export function generateStaticParams() {
+  return locales.map((locale) => ({ locale }));
+}

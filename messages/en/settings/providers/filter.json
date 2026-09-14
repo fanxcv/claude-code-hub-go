@@ -1,0 +1,18 @@
+{
+  "circuitBroken": "Circuit Broken",
+  "keyCircuitBroken": "Key Circuit Broken",
+  "endpointCircuitBroken": "Endpoint Circuit Broken",
+  "groups": {
+    "all": "All",
+    "default": "default",
+    "label": "Groups:"
+  },
+  "status": {
+    "active": "Active",
+    "all": "Any status",
+    "inactive": "Inactive"
+  },
+  "mobileFilter": "Filter",
+  "mobileFilterCount": "Filter ({count})",
+  "resetFilters": "Reset Filters"
+}

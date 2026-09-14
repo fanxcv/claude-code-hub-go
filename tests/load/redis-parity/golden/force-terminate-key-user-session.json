@@ -1,0 +1,33 @@
+{
+  "constName": "FORCE_TERMINATE_KEY_USER_SESSION",
+  "file": "force-terminate-key-user-session.lua",
+  "sha256": "76aa93f47e1f221c1f67d13d743ac9d56bab1a01b362b7ed6dfca077049eba33",
+  "calls": [
+    {
+      "id": "removes-from-three-indexes",
+      "keys": [
+        "cchgolden:{active_sessions}:global:active_sessions",
+        "cchgolden:{active_sessions}:key:1:active_sessions",
+        "cchgolden:{active_sessions}:user:1:active_sessions"
+      ],
+      "argv": ["session-a"],
+      "setup": [
+        [
+          "ZADD",
+          "cchgolden:{active_sessions}:global:active_sessions",
+          "1757000000000",
+          "session-a"
+        ],
+        ["ZADD", "cchgolden:{active_sessions}:key:1:active_sessions", "1757000000000", "session-a"],
+        ["ZADD", "cchgolden:{active_sessions}:user:1:active_sessions", "1757000000000", "session-a"]
+      ],
+      "returned": [1, 1, 1],
+      "after": {
+        "cchgolden:{active_sessions}:global:active_sessions": null,
+        "cchgolden:{active_sessions}:key:1:active_sessions": null,
+        "cchgolden:{active_sessions}:user:1:active_sessions": null
+      }
+    }
+  ],
+  "uncollected": []
+}

@@ -1,0 +1,65 @@
+{
+  "common": {
+    "noData": "No data available",
+    "actions": "Actions",
+    "loading": "Loading...",
+    "empty": "Empty",
+    "error": "Error",
+    "retry": "Retry"
+  },
+  "table": {
+    "pagination": "Pagination",
+    "sorting": "Sort",
+    "filtering": "Filter",
+    "search": "Search",
+    "refresh": "Refresh",
+    "columns": "Columns",
+    "previousPage": "Previous",
+    "nextPage": "Next",
+    "pageInfo": "Page {current} of {total}",
+    "itemsPerPage": "Items per page",
+    "selectAll": "Select all",
+    "deselectAll": "Deselect all"
+  },
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "defaultDescription": "An unexpected error occurred. Please try again.",
+    "refreshPage": "Refresh page",
+    "listErrorTitle": "Failed to load list",
+    "listErrorDescription": "An error occurred while loading the list. Please try again."
+  },
+  "pagination": {
+    "first": "First",
+    "last": "Last",
+    "previous": "Previous",
+    "next": "Next",
+    "goToPage": "Go to page",
+    "pageSize": "Page size",
+    "total": "Total {total} items"
+  },
+  "empty": {
+    "title": "No data",
+    "description": "No data to display"
+  },
+  "loading": {
+    "title": "Loading",
+    "description": "Please wait..."
+  },
+  "tagInput": {
+    "placeholder": "Type and press Enter or comma to add tags",
+    "emptyTag": "Tag cannot be empty",
+    "duplicateTag": "Tag already exists",
+    "maxTags": "Maximum number of tags reached",
+    "tooLong": "Tag length cannot exceed {max} characters",
+    "invalidFormat": "Tags can only contain letters, numbers, underscores and hyphens",
+    "removeTag": "Remove tag {tag}",
+    "unknownError": "Invalid input"
+  },
+  "providerGroupSelect": {
+    "placeholder": "Select provider groups",
+    "searchPlaceholder": "Search groups...",
+    "noGroupsAvailable": "No groups available",
+    "clearAll": "Clear all",
+    "removeGroup": "Remove group {group}"
+  }
+}

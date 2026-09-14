@@ -1,0 +1,182 @@
+{
+  "schema": "cchp.pricing-table/v1",
+  "version": "2026.09.13-test",
+  "currency": "USD",
+  "refreshed_at": "2026-09-13T00:00:00Z",
+  "providers": {
+    "anthropic": { "name": "Anthropic", "icon": "anthropic.svg", "icon_mono": true },
+    "openai": { "name": "OpenAI" },
+    "__proto__": { "name": "should be dropped" }
+  },
+  "models": [
+    {
+      "slug": "claude-sonnet-test",
+      "model_name": "claude-sonnet-test",
+      "vendor": "anthropic",
+      "display_name": "Claude Sonnet Test",
+      "aliases": ["claude-sonnet-test-alias", "claude-sonnet-test", "  "],
+      "family": "claude-4",
+      "model_type": "chat",
+      "knowledge_cutoff": "2025-04",
+      "deprecated": true,
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "capabilities": { "vision": true, "function_calling": true, "reasoning": true, "audio_input": false },
+      "pricing": [
+        {
+          "provider": "anthropic",
+          "official": true,
+          "source": "vendor",
+          "provider_model_id": "claude-sonnet-4-5",
+          "charges": {
+            "prompt": { "price": "3.0", "unit": "per_M_tokens" },
+            "completion": { "price": "15.0", "unit": "per_M_tokens" },
+            "cache_read": { "price": "0.3", "unit": "per_M_tokens" },
+            "cache_write": { "price": "3.75", "unit": "per_M_tokens" },
+            "cache_write_1h": { "price": "6.0", "unit": "per_M_tokens" },
+            "web_search": { "price": "10.0", "unit": "per_k_calls" },
+            "file_search_call": { "price": "2.5", "unit": "per_k_calls" },
+            "request": { "price": "0.01", "unit": "per_request" },
+            "image_input": { "price": "1.5", "unit": "per_M_tokens" },
+            "image_output": { "price": "0.04", "unit": "per_image" },
+            "image_output_1024x1536": { "price": "0.08", "unit": "per_image" },
+            "audio_input": { "price": "5.0", "unit": "per_M_tokens" },
+            "cny_prompt": { "price": "21.0", "unit": "per_M_tokens", "currency": "CNY" },
+            "weird": { "price": "1.0", "unit": "per_second" }
+          },
+          "tracks": [
+            { "label": "default", "factor": "1" },
+            {
+              "label": "above-200k",
+              "factor": "2",
+              "triggers": [{ "kind": "input_tokens_above", "threshold": 200000, "inclusive": false }]
+            },
+            {
+              "label": "above-272k",
+              "factor": "1.5",
+              "charge_factors": { "prompt": "3", "completion": "2" },
+              "triggers": [{ "kind": "input_tokens_above", "threshold": 272001 }]
+            },
+            {
+              "label": "priority",
+              "factor": "1.8",
+              "triggers": [{ "kind": "body_matches", "field": "service_tier", "pattern": "^priority$" }]
+            },
+            {
+              "label": "priority-above-200k",
+              "factor": "2.5",
+              "triggers": [
+                { "kind": "input_tokens_above", "threshold": 200000 },
+                { "kind": "body_matches", "field": "service_tier", "pattern": "priority" }
+              ]
+            },
+            {
+              "label": "long-context-beta",
+              "factor": "2",
+              "triggers": [
+                { "kind": "input_tokens_above", "threshold": 200000 },
+                { "kind": "header_matches", "header": "anthropic-beta", "pattern": "context-1m" }
+              ]
+            },
+            {
+              "label": "unsupported-endpoint",
+              "factor": "9",
+              "triggers": [{ "kind": "endpoint_matches", "pattern": "^/v1/messages$" }]
+            },
+            {
+              "label": "unsupported-threshold",
+              "factor": "9",
+              "triggers": [{ "kind": "input_tokens_above", "threshold": 12345 }]
+            }
+          ]
+        },
+        {
+          "provider": "openai",
+          "official": false,
+          "source": "community",
+          "region": "us",
+          "charges": {
+            "prompt": { "price": "2.5", "unit": "per_M_tokens" },
+            "completion": { "price": "10.0", "unit": "per_M_tokens" },
+            "negative": { "price": "-1.0", "unit": "per_M_tokens" },
+            "prompt_negative": { "price": "-0.5", "unit": "per_M_tokens" }
+          }
+        },
+        {
+          "provider": "no-charge-provider",
+          "official": false,
+          "source": "community",
+          "charges": { "weird": { "price": "1.0", "unit": "per_second" } }
+        }
+      ]
+    },
+    {
+      "slug": "image-model-test",
+      "model_name": "image-model-test",
+      "vendor": "openai",
+      "display_name": "",
+      "model_type": "image_generation",
+      "pricing": [
+        {
+          "provider": "openai",
+          "official": true,
+          "source": "vendor",
+          "charges": {
+            "image_output": { "price": "0.04", "unit": "per_image" },
+            "image_input": { "price": "0.02", "unit": "per_image" },
+            "prompt": { "price": "5", "unit": "per_M_tokens" }
+          }
+        }
+      ]
+    },
+    {
+      "slug": "no-usable-charge",
+      "model_name": "no-usable-charge",
+      "vendor": "other",
+      "display_name": "No usable charge",
+      "pricing": [
+        { "provider": "somewhere", "official": false, "source": "community", "charges": { "weird": { "price": "1", "unit": "per_second" } } }
+      ]
+    },
+    {
+      "slug": "dup-official",
+      "model_name": "collision-model",
+      "vendor": "anthropic",
+      "display_name": "Collision official",
+      "pricing": [
+        {
+          "provider": "anthropic",
+          "official": true,
+          "source": "vendor",
+          "charges": { "prompt": { "price": "1", "unit": "per_M_tokens" } }
+        }
+      ]
+    },
+    {
+      "slug": "dup-community",
+      "model_name": "collision-model",
+      "vendor": "community-vendor",
+      "display_name": "Collision community",
+      "pricing": [
+        {
+          "provider": "community",
+          "official": false,
+          "source": "community",
+          "charges": { "prompt": { "price": "9", "unit": "per_M_tokens" } }
+        }
+      ]
+    },
+    {
+      "slug": "missing-vendor",
+      "model_name": "skipped-missing-vendor",
+      "display_name": "no vendor",
+      "pricing": []
+    },
+    {
+      "slug": "",
+      "model_name": "skipped-empty-slug",
+      "vendor": "anthropic",
+      "pricing": []
+    }
+  ]
+}

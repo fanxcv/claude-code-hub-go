@@ -1,0 +1,2457 @@
+{
+  "actions": {
+    "copy": "复制",
+    "download": "下载",
+    "copied": "已复制"
+  },
+  "title": {
+    "costRanking": "消耗排行榜",
+    "costRankingDescription": "查看用户消耗排名，数据每 5 分钟更新一次",
+    "usageLogs": "使用记录",
+    "usageLogsDescription": "查看 API 调用日志和使用统计",
+    "clients": "客户端",
+    "userAndKeyManagement": "用户和密钥管理",
+    "requestMessages": "请求 Messages",
+    "activeSessions": "活跃 Session（最近 5 分钟）",
+    "sessionMonitoring": "Session 监控",
+    "sessionMonitoringDescription": "实时显示活跃和非活跃 Session（每 3 秒自动刷新）",
+    "inactiveSessions": "非活跃 Session（超过 5 分钟，仅供查看）",
+    "quotasManagement": "限额管理",
+    "quotasManagementDescription": "查看和管理所有层级的限额使用情况",
+    "usersQuotas": "用户限额统计",
+    "keysQuotas": "密钥限额统计",
+    "providersQuotas": "供应商限额统计",
+    "filterCriteria": "筛选条件",
+    "filterCriteriaDescription": "按时间、用户、供应商等条件缩小日志范围"
+  },
+  "description": {
+    "viewApiCallLogs": "查看 API 调用日志和使用统计",
+    "dashboard": "查看系统统计数据和监控信息",
+    "quotas": "查看和管理所有层级的限额使用情况",
+    "clientInfo": "User-Agent 请求头",
+    "requestMessagesDescription": "客户端发送的消息内容",
+    "responseBodyDescription": "服务器返回的完整响应（5分钟 TTL）"
+  },
+  "overview": {
+    "title": "概览",
+    "totalRequests": "总请求数",
+    "totalCost": "总成本",
+    "totalUsers": "总用户数",
+    "totalProviders": "总供应商数",
+    "activeUsers": "活跃用户",
+    "activeSessions": "活跃会话",
+    "errorRate": "错误率",
+    "avgResponseTime": "平均响应时间"
+  },
+  "stats": {
+    "title": "统计",
+    "requests": "请求",
+    "cost": "成本",
+    "tokens": "Tokens",
+    "period": {
+      "hour": "最近1小时",
+      "day": "今天",
+      "week": "本周",
+      "month": "本月"
+    }
+  },
+  "logs": {
+    "title": "使用日志",
+    "description": "查看和分析 API 调用记录",
+    "filters": {
+      "user": "用户",
+      "provider": "供应商",
+      "sessionId": "Session / Prefix ID",
+      "searchUser": "搜索用户...",
+      "searchProvider": "搜索供应商...",
+      "searchSessionId": "搜索 Session 或 Prefix ID...",
+      "noUserFound": "未找到匹配的用户",
+      "noProviderFound": "未找到匹配的供应商",
+      "noSessionFound": "未找到匹配的 Session 或 Prefix ID",
+      "model": "模型",
+      "actualResponseModelMismatch": "计费/实际模型不一致",
+      "endpoint": "端点",
+      "status": "状态",
+      "timeRange": "时间范围",
+      "dateRange": "日期范围",
+      "startTime": "开始时间",
+      "endTime": "结束时间",
+      "allUsers": "全部用户",
+      "allKeys": "全部密钥",
+      "selectUserFirst": "请先选择用户",
+      "allProviders": "全部供应商",
+      "allModels": "全部模型",
+      "allEndpoints": "全部端点",
+      "allStatusCodes": "全部状态码",
+      "apiKey": "API 密钥",
+      "statusCode": "状态码",
+      "minRetryCount": "重试次数≥",
+      "minRetryCountPlaceholder": "输入次数（0 表示不限）",
+      "enabled": "已开启",
+      "replay": {
+        "label": "Replay",
+        "all": "全部请求",
+        "only": "仅 Replay 请求",
+        "exclude": "排除 Replay 请求"
+      },
+      "apply": "应用筛选",
+      "reset": "重置",
+      "last7days": "近7天",
+      "last30days": "近30天",
+      "customRange": "自定义范围",
+      "export": "导出",
+      "exporting": "导出中...",
+      "exportSuccess": "导出成功",
+      "exportError": "导出失败",
+      "exportPreparing": "正在准备导出...",
+      "exportProgress": "已导出 {current} / {total} 条",
+      "exportAsCsv": "导出为 CSV",
+      "exportAsXlsx": "导出为 XLSX（含汇总表）",
+      "quickFilters": {
+        "today": "今天",
+        "thisWeek": "本周",
+        "errorsOnly": "仅错误",
+        "showRetries": "有重试"
+      },
+      "activeFilters": {
+        "title": "已激活筛选",
+        "remove": "移除筛选",
+        "clearAll": "清除全部"
+      },
+      "groups": {
+        "time": "时间范围",
+        "timeDesc": "按日期和时间筛选",
+        "identity": "身份信息",
+        "identityDesc": "按用户和密钥筛选",
+        "request": "请求参数",
+        "requestDesc": "按供应商、模型、端点筛选",
+        "status": "状态信息",
+        "statusDesc": "按状态码和重试次数筛选"
+      }
+    },
+    "columns": {
+      "time": "时间",
+      "user": "用户",
+      "key": "密钥",
+      "sessionId": "Session ID",
+      "ip": "IP",
+      "provider": "供应商",
+      "model": "计费模型",
+      "reasoningEffort": "思考强度",
+      "reasoningEffortTooltip": "该模型请求的思考强度",
+      "protocolConversion": "协议转换",
+      "protocolConversionTooltip": "该请求在发往上游前是否经过协议转换",
+      "endpoint": "端点",
+      "inputTokens": "输入",
+      "outputTokens": "输出",
+      "tokens": "Tokens",
+      "cacheWrite": "缓存写入",
+      "cacheRead": "缓存读取",
+      "cache": "缓存",
+      "cost": "成本",
+      "duration": "耗时",
+      "performance": "性能",
+      "status": "状态"
+    },
+    "stats": {
+      "title": "统计汇总",
+      "description": "当前筛选条件下的聚合统计",
+      "totalRequests": "总请求数",
+      "totalAmount": "总消耗金额",
+      "totalTokens": "总 Token 数",
+      "cacheTokens": "缓存 Token",
+      "input": "输入",
+      "output": "输出",
+      "write": "写入",
+      "read": "读取",
+      "loading": "加载中..."
+    },
+    "table": {
+      "noData": "暂无数据",
+      "pagination": "共 {total} 条记录，第 {page} / {totalPages} 页",
+      "prevPage": "上一页",
+      "nextPage": "下一页",
+      "blocked": "被拦截",
+      "replay": "Replay",
+      "nonBilling": "非计费",
+      "skipped": "已跳过",
+      "specialSettings": "特殊设置",
+      "anthropicEffort": "Effort: {effort}",
+      "times": "次",
+      "loadedCount": "已加载 {count} 条记录",
+      "loadingMore": "加载更多中...",
+      "noMoreData": "已加载全部记录",
+      "scrollToTop": "回到顶部",
+      "hideProviderColumn": "隐藏供应商列",
+      "showProviderColumn": "显示供应商列",
+      "columnVisibility": "显示/隐藏列"
+    },
+    "actions": {
+      "refresh": "刷新",
+      "refreshing": "刷新中...",
+      "stopAutoRefresh": "停止自动刷新",
+      "startAutoRefresh": "开启自动刷新",
+      "view": "查看",
+      "fullscreen": "全屏显示",
+      "exitFullscreen": "退出全屏"
+    },
+    "error": {
+      "loadFailed": "加载失败",
+      "loadKeysFailed": "加载密钥列表失败"
+    },
+    "protocolConversion": {
+      "badge": "已转换",
+      "tooltip": "客户端协议与上游协议",
+      "failedBadge": "转换失败",
+      "failedTooltip": "本次本应转换协议，但转换失败，已回退为原生直通（请求未受影响）",
+      "phaseLabel": "失败阶段",
+      "phase": {
+        "path_resolution": "上游路径映射失败（目标协议线无对应端点）",
+        "body_conversion": "正文转换失败（解码或编码不通过）",
+        "unknown": "未记录"
+      },
+      "reasonLabel": "原因",
+      "reasonUnknown": "未记录原因",
+      "fallbackNotice": "已按 Node 语义回退为原生直通，请求照常完成。"
+    },
+    "details": {
+      "title": "请求详情",
+      "statusTitle": "状态: {status}",
+      "inProgress": "请求中",
+      "retrying": "Retrying",
+      "unknown": "未知",
+      "success": "请求成功完成",
+      "error": "请求失败，以下是详细的错误信息和供应商决策链",
+      "processing": "请求正在进行中，尚未完成",
+      "tabs": {
+        "summary": "概览",
+        "logicTrace": "决策链",
+        "performance": "性能",
+        "metadata": "元数据"
+      },
+      "summary": {
+        "keyMetrics": "关键指标",
+        "totalCost": "总费用",
+        "totalTokens": "总令牌数",
+        "duration": "耗时",
+        "outputRate": "输出速率",
+        "viewFullError": "查看完整错误",
+        "viewSession": "查看会话"
+      },
+      "cachePerformance": {
+        "title": "缓存表现",
+        "actualRate": "实际缓存率",
+        "theoreticalRate": "理论缓存率",
+        "coefficient": "本请求缓存系数",
+        "rawCoefficient": "单请求原始系数，不应用供应商窗口置信度折扣。",
+        "estimateNote": "理论缓存率根据最长规范化前缀估算（字节数 / 4）。",
+        "availability": {
+          "available": "请求符合条件，前缀缓存估算可测量。",
+          "no_input": "该请求没有记录输入令牌。",
+          "no_affinity_key": "未记录 Prefix ID，因此理论缓存率和缓存系数不可用。",
+          "attempt_failed": "请求尝试失败，缓存系数已排除。",
+          "not_observable": "无法观测上游缓存用量，缓存系数已排除。",
+          "stream_truncated": "响应流被截断，缓存系数已排除。",
+          "not_recorded": "该请求未记录单请求前缀缓存指标。"
+        }
+      },
+      "specialSettings": {
+        "title": "特殊设置"
+      },
+      "skipped": {
+        "title": "跳过信息",
+        "reason": "原因",
+        "warmup": "Warmup 抢答（CCH）",
+        "desc": "该请求被识别为 Warmup 探测请求，已由 CCH 直接抢答响应，未转发上游供应商；不计费、不限流、不计入统计。"
+      },
+      "blocked": {
+        "title": "拦截信息",
+        "type": "拦截类型",
+        "sensitiveWord": "敏感词拦截",
+        "word": "敏感词",
+        "matchType": "匹配类型",
+        "matchTypeContains": "包含匹配",
+        "matchTypeExact": "精确匹配",
+        "matchTypeRegex": "正则表达式",
+        "matchedText": "匹配内容"
+      },
+      "sessionId": "会话 ID",
+      "messagesCount": "消息数量",
+      "messagesLabel": "Messages",
+      "messagesUnit": "条",
+      "clientInfo": "客户端信息",
+      "modelRedirect": {
+        "title": "模型重定向",
+        "requestModel": "请求模型",
+        "actualModel": "实际调用",
+        "billing": "计费说明",
+        "billingDescription": "系统优先使用请求模型（{original}）的价格计费。如果价格表中不存在该模型，则使用实际调用模型（{current}）的价格。",
+        "billingModel": "计费模型",
+        "actualModelTooltip": "实际模型: {model}",
+        "originalModelTooltip": "原始模型: {model}",
+        "billingDescription_original": "当前计费模式：使用重定向前的原始模型（{original}）计费",
+        "billingDescription_redirected": "当前计费模式：使用重定向后的实际模型（{current}）计费",
+        "billingOriginal": "计费: 原始",
+        "billingRedirected": "计费: 实际"
+      },
+      "modelAudit": {
+        "unifiedLabel": "模型",
+        "requestModelLabel": "请求模型",
+        "responseModelLabel": "实际响应模型",
+        "mismatchTooltip": "上游供应商实际返回的模型与请求的模型不一致。计费仍然基于请求模型。",
+        "secondaryLineAriaLabel": "实际响应模型：{model}",
+        "arrowPrefix": "↳",
+        "noSignatureBadge": "无思考签名",
+        "noSignatureTooltip": "请求开启了思考但响应流中没有 thinking signature，实际响应模型回退到 message_start 明文字段。"
+      },
+      "errorMessage": "错误信息",
+      "fake200ForwardedNotice": "提示：对于流式请求，该失败可能在流结束后才被识别；响应内容可能已原样透传给客户端。",
+      "fake200DetectedReason": "检测原因：{reason}",
+      "fake200RetryTooltipLabel": "为何这次不能服务端重试？",
+      "fake200RetryTooltipTitle": "为什么 CCH 无法在服务端重试这次响应",
+      "fake200RetryTooltipServerRetry": "上游已经先返回了 HTTP 200，CCH 也已开始向客户端透传 SSE 响应体；当后续流事件里才识别到错误时，这次响应已经无法再被服务端优雅重试。",
+      "fake200RetryTooltipSessionFallback": "客户端仍可自行重试；同一 Session 的后续请求会避开刚刚 fake200 的供应商，并继续自动 fallback。",
+      "fake200Reasons": {
+        "emptyBody": "响应体为空",
+        "htmlBody": "返回了 HTML 文档（可能是错误页）",
+        "jsonErrorNonEmpty": "JSON 顶层 error 字段非空",
+        "jsonErrorMessageNonEmpty": "JSON 中 error.message 非空",
+        "jsonMessageKeywordMatch": "JSON message 字段包含 \"error\"（启发式）",
+        "unknown": "响应体内容指示错误"
+      },
+      "statusCodeInferredBadge": "推测",
+      "statusCodeInferredTooltip": "该状态码根据响应体内容推断（例如假200），可能与上游真实 HTTP 状态码不同。",
+      "statusCodeInferredSuffix": "(推测)",
+      "filteredProviders": "被过滤的供应商",
+      "providerChain": {
+        "title": "供应商决策链时间线",
+        "totalDuration": "总耗时: {duration}ms"
+      },
+      "noError": {
+        "processing": "请求正在处理中，等待响应...",
+        "success": "请求成功，无错误信息",
+        "default": "暂无详细错误信息"
+      },
+      "clickStatusCode": "点击状态码查看完整时间线",
+      "viewDetails": "查看详情",
+      "reasons": {
+        "rateLimited": "供应商费用已达限额",
+        "circuitOpen": "熔断器打开"
+      },
+      "billingDetails": {
+        "title": "计费详情",
+        "input": "输入",
+        "output": "输出",
+        "cacheWrite": "缓存写入",
+        "cacheWrite5m": "缓存写入 (5m)",
+        "cacheWrite1h": "缓存写入 (1h)",
+        "cacheRead": "缓存读取",
+        "cacheTtl": "缓存 TTL",
+        "cacheTtlSwapped": "计费 TTL (已互换)",
+        "multiplier": "供应商倍率",
+        "totalCost": "总费用",
+        "fast": "fast",
+        "fastPriority": "优先服务等级（fast 模式）",
+        "context1m": "1M 上下文",
+        "context1mEnabled": "1M 上下文窗口已启用",
+        "pricingProvider": "计费价格提供商",
+        "pricingSourceLabel": "计费价格来源",
+        "pricingSource": {
+          "local_manual": "本地手动价格",
+          "cloud_exact": "云端精确提供商价格",
+          "cloud_model_fallback": "回退模型的提供商价格",
+          "cloud_official": "云端官方价格",
+          "priority_fallback": "优先级回退价格",
+          "single_provider_top_level": "顶层单提供商价格",
+          "official_fallback": "官方价格"
+        },
+        "baseCost": "基础费用",
+        "providerMultiplier": "供应商倍率",
+        "groupMultiplier": "分组倍率",
+        "baseTotal": "基础合计",
+        "hedgeRacing": "供应商竞速",
+        "hedgeWinner": "竞速赢家",
+        "hedgeLoser": "竞速输家",
+        "hedgeLosersTotal": "竞速输家合计",
+        "hedgeMergedCount": "合并 {count} 次",
+        "hedgeWinnerShort": "赢家",
+        "hedgeLoserShort": "输家",
+        "hedgeColAttempt": "尝试",
+        "hedgeColCacheRead": "缓存R",
+        "hedgeColCacheWrite": "缓存W",
+        "hedgeColCost": "费用",
+        "hedgeTokenTotal": "Token 合计",
+        "hedgeReclaimedNotDelivered": "已拿回响应，未交付客户端",
+        "unitPricePer1M": "@ {price} / 1M",
+        "unit": {
+          "tokens": "tokens"
+        }
+      },
+      "performance": {
+        "title": "性能数据",
+        "ttfb": "首字节时间（TTFB）",
+        "ttft": "首 Token 时间（TTFT）",
+        "ttftShort": "TTFT",
+        "duration": "总耗时",
+        "outputRate": "输出速率",
+        "outputTokens": "输出 Tokens"
+      },
+      "performanceTab": {
+        "noPerformanceData": "暂无性能数据",
+        "ttftGauge": "首 Token 时间",
+        "outputRateGauge": "输出速率",
+        "latencyBreakdown": "延迟分解",
+        "generationTime": "生成时间",
+        "segmentTtfb": "TTFB",
+        "segmentTtft": "等待首 Token",
+        "segmentTotal": "总计",
+        "assessment": {
+          "excellent": "优秀",
+          "good": "良好",
+          "warning": "警告",
+          "poor": "较差"
+        }
+      },
+      "metadata": {
+        "noMetadata": "暂无元数据",
+        "sessionInfo": "会话信息",
+        "sessionId": "Session ID",
+        "prefixId": "Prefix ID",
+        "canonicalSessionId": "Canonical Session ID",
+        "clientSessionId": "客户端 Session ID",
+        "clientInfo": "客户端信息",
+        "billingInfo": "计费信息",
+        "technicalTimeline": "技术时间线",
+        "copyTimeline": "复制时间线"
+      },
+      "effort": {
+        "label": "Effort",
+        "overridden": "已被供应商覆写",
+        "tooltip": "客户端在请求体中声明的思考强度（output_config.effort），按原值显示，代理不会重命名或转换等级。"
+      },
+      "routingTrace": {
+        "title": "路由模式",
+        "modes": {
+          "discovery": "有界供应商 Discovery",
+          "legacy_hedge": "旧版 Hedge 竞速",
+          "legacy_serial": "旧版串行故障转移",
+          "single_upstream": "单上游模式",
+          "lease_conflict": "单路保护"
+        },
+        "bypassed": "本请求未使用 Discovery：{reason}",
+        "bypassReasons": {
+          "disabled": "Discovery 未启用",
+          "non_streaming": "非流式请求",
+          "retry_not_allowed": "该端点不允许重试",
+          "provider_switch_not_allowed": "该端点不允许切换供应商",
+          "raw_passthrough": "原始透传请求",
+          "unsupported_protocol": "Discovery 不支持该协议",
+          "websocket": "WebSocket 请求",
+          "streaming_hedge_disabled": "本请求已禁用流式竞速",
+          "raw_cross_provider_fallback": "已启用原始跨供应商故障转移",
+          "missing_session": "缺少 Session 标识",
+          "missing_key": "缺少 API Key 标识",
+          "rollout_ineligible": "本请求不在当前灰度范围内",
+          "redis_capability_unavailable": "Redis 绑定能力不可用",
+          "binding_conflict": "Session 绑定状态冲突",
+          "lease_conflict": "另一个请求持有 Discovery 租约，本请求只使用一个上游",
+          "lease_unavailable": "Discovery 租约不可用",
+          "unknown": "未满足 Discovery 准入条件"
+        },
+        "discoveryTitle": "Discovery 轮次",
+        "discoveryCompact": "{rounds} 轮 · {attempts} 次",
+        "routeMode": "路由方式",
+        "routeModes": {
+          "sticky": "Sticky",
+          "cold_start": "冷启动",
+          "rediscovery": "重新发现"
+        },
+        "finalProvider": "最终供应商",
+        "roundsLabel": "轮次",
+        "attemptsLabel": "尝试",
+        "winnerOrigin": "赢家来源",
+        "viewDetails": "查看 Discovery 详情",
+        "stickyPhase": "Sticky 探测",
+        "round": "第 {round} 轮",
+        "attempts": "{count} 次尝试",
+        "noAttempts": "没有记录到供应商尝试",
+        "providerFallback": "供应商 {id}",
+        "elapsed": "+{elapsed}ms",
+        "priority": "优先级 {priority}",
+        "roles": {
+          "sticky": "Sticky",
+          "normal": "候选",
+          "fallback": "保底"
+        },
+        "winnerSources": {
+          "sticky": "Sticky",
+          "normal": "正常候选",
+          "fallback": "保底接管"
+        },
+        "roleTransition": "{from} → {to}",
+        "outcomes": {
+          "success": "成功",
+          "pending": "等待中",
+          "ready": "已就绪",
+          "held": "已就绪，暂缓交付",
+          "winner": "胜出",
+          "failed": "失败",
+          "cancelled": "已取消",
+          "timeout": "SLA 超时",
+          "client_abort": "客户端已断开",
+          "deadline": "总时限到期"
+        },
+        "terminalOutcome": "请求结果",
+        "bindingResult": "Sticky 绑定",
+        "bindingActions": {
+          "create": "创建",
+          "renew": "续期",
+          "clear": "清除",
+          "none": "不变更"
+        },
+        "bindingFallbackWinner": "未写入 · 保底赢家",
+        "bindingOutcomes": {
+          "updated": "已更新",
+          "cleared": "已清除",
+          "skipped": "已跳过",
+          "failed": "失败",
+          "unknown": "未知"
+        },
+        "fallbackPromoted": "提升为保底请求",
+        "winnerCommitted": "已提交赢家",
+        "roundStarted": "轮次开始",
+        "events": {
+          "started": "请求已发出",
+          "ready": "已收到有效首字",
+          "held": "按路由规则暂缓交付",
+          "fallbackPromoted": "已提升为保底",
+          "winnerCommitted": "已提交为赢家",
+          "finished": "结束：{outcome}"
+        },
+        "traceTruncated": "追踪事件达到存储上限，部分事件已省略。",
+        "summary": "{rounds} 轮 · {attempts} 次尝试 · 最大并发 {maxActive}",
+        "config": "配置快照",
+        "configConcurrency": "并发数",
+        "configLegacyHedgeMaxInFlight": "Legacy hedge 并发上限",
+        "configMaxRounds": "最大轮数",
+        "configDiscoverySla": "每轮 SLA",
+        "configStickySla": "Sticky SLA",
+        "configTotalTimeout": "总超时",
+        "configStickyCooldown": "Sticky 超时冷却",
+        "configStickyBindingTtl": "Sticky 绑定有效期（SESSION_TTL）",
+        "slotSaturation": "Hedge 槽位已饱和（{count} 次）",
+        "slotSaturationEvent": "{provider} · {active}/{cap} 个活跃 · 已耗时 {elapsed}ms",
+        "attemptDetails": {
+          "providerId": "供应商 ID",
+          "attempt": "尝试次数",
+          "status": "HTTP 状态",
+          "inferred": "推断",
+          "endpoint": "端点",
+          "error": "上游错误",
+          "cancellation": "取消原因",
+          "timeline": "尝试时间线",
+          "billing": "费用与用量",
+          "billed": "已计入总费用",
+          "billedCost": "已计入费用",
+          "winnerCost": "赢家费用",
+          "notObtained": "已取消，未取得用量"
+        },
+        "cancellationKinds": {
+          "discovery_loser": "其他 Discovery 尝试已胜出",
+          "discovery_sla_timeout": "Discovery SLA 已到期",
+          "round_timeout": "本轮 SLA 已到期",
+          "sticky_timeout": "Sticky SLA 已到期",
+          "request_deadline": "Discovery 总时限已到期",
+          "client_abort": "客户端已断开",
+          "winner_committed": "其他供应商已提交为赢家"
+        }
+      },
+      "reasoningEffort": {
+        "label": "思考强度",
+        "overridden": "已被供应商覆写",
+        "tooltip": "Codex 请求中的思考强度（reasoning.effort），按原值显示。"
+      },
+      "reasoningEffortOpenai": {
+        "label": "思考强度",
+        "overridden": "已被供应商覆写",
+        "tooltip": "OpenAI chat/completions 请求中的思考强度（reasoning_effort / reasoning.effort），按原值显示。"
+      },
+      "effortConversion": {
+        "dropped": "丢弃",
+        "droppedTooltip": "协议转换未能把该字段带给上游：上游收到的是没有思考强度的请求。"
+      },
+      "logicTrace": {
+        "title": "决策链",
+        "singleRouteSelectionTitle": "单路保护下的供应商选择",
+        "noDecisionData": "暂无决策数据",
+        "providersCount": "{count} 个供应商",
+        "healthyCount": "{count} 个健康",
+        "initialSelection": "初始选择",
+        "healthCheck": "健康检查",
+        "prioritySelection": "优先级选择",
+        "survivingHint": "前缀亲和已命中 {provider}；以下 {count} 家已通过全部硬校验，本次未参与竞争。",
+        "survivingSelected": "已选中",
+        "survivingSkipped": "未参与竞争",
+        "consideredHint": "本次 {count} 家通过全部硬校验进入候选池；已选中 P{selected} 档。",
+        "consideredTier": "P{tier}",
+        "consideredConfigured": "配置 P{priority}",
+        "consideredOverride": "分组覆盖改写了这家的档位：此处显示的是生效档位，与供应商配置的优先级不同。",
+        "consideredSelected": "已选中",
+        "consideredLowerTier": "档位更低",
+        "consideredSameTier": "同档未抽中",
+        "attemptProvider": "尝试: {provider}",
+        "retryAttempt": "重试 #{number}",
+        "httpStatus": "HTTP {code}{inferredSuffix}",
+        "sessionReuse": "会话复用",
+        "sessionReuseDesc": "从会话缓存复用供应商",
+        "sessionReuseTitle": "会话绑定",
+        "sessionReuseSelection": "会话复用选择",
+        "sessionReuseSelectionDesc": "从会话缓存中选择供应商",
+        "sessionInfo": "会话信息",
+        "sessionIdLabel": "会话 ID",
+        "requestSequence": "请求序号",
+        "sessionAge": "会话年龄",
+        "reusedProvider": "复用的供应商",
+        "executeRequest": "执行请求",
+        "cacheOptimizationHint": "会话复用通过在同一对话中保持供应商亲和性来优化性能，减少选择开销并提高缓存命中率。",
+        "originDecisionTitle": "原始选择决策",
+        "originDecisionDesc": "此会话中供应商最初被选择的原因",
+        "originDecisionLoading": "正在加载原始决策...",
+        "originDecisionUnavailable": "原始决策记录不可用",
+        "originDecisionExpand": "查看原始选择"
+      },
+      "replayServe": {
+        "title": "由 Replay 缓存服务",
+        "desc": "该请求由 Replay 缓存直接服务（相同请求正在进行或已完成），未发起上游供应商调用，不产生费用。",
+        "replayId": "Replay ID",
+        "sourceRequestId": "源请求"
+      }
+    },
+    "providerChain": {
+      "decisionChain": "供应商决策链",
+      "clickItemForDetails": "点击步骤查看详情"
+    },
+    "modelRedirect": {
+      "redirected": "已重定向",
+      "targetModel": "目标模型"
+    },
+    "statusCodes": {
+      "200": "200 (成功)",
+      "400": "400 (错误请求)",
+      "401": "401 (未授权)",
+      "429": "429 (限流)",
+      "500": "500 (服务器错误)",
+      "not200": "非 200（全部非成功请求）"
+    },
+    "billingDetails": {
+      "input": "输入",
+      "output": "输出",
+      "cacheWrite5m": "缓存写入 (5m)",
+      "cacheWrite1h": "缓存写入 (1h)",
+      "cacheRead": "缓存读取",
+      "cacheTtl": "缓存 TTL",
+      "cacheTtlSwapped": "计费 TTL (已互换)",
+      "multiplier": "供应商倍率",
+      "totalCost": "总费用",
+      "unitPricePer1M": "@ {price} / 1M",
+      "fast": "fast",
+      "combinedFastContext": "{fast} + {context} 上下文",
+      "fastPriority": "优先服务等级（fast 模式）",
+      "context1m": "1M 上下文",
+      "context1mEnabled": "1M 上下文窗口已启用",
+      "pricingProvider": "计费价格提供商",
+      "pricingSourceLabel": "计费价格来源",
+      "pricingSource": {
+        "local_manual": "本地手动价格",
+        "cloud_exact": "云端精确提供商价格",
+        "cloud_model_fallback": "回退模型的提供商价格",
+        "cloud_official": "云端官方价格",
+        "priority_fallback": "优先级回退价格",
+        "single_provider_top_level": "顶层单提供商价格",
+        "official_fallback": "官方价格"
+      },
+      "baseCost": "基础费用",
+      "providerMultiplier": "供应商倍率",
+      "groupMultiplier": "分组倍率",
+      "baseTotal": "基础合计",
+      "hedgeRacing": "供应商竞速",
+      "hedgeWinner": "竞速赢家",
+      "hedgeLoser": "竞速输家",
+      "hedgeLosersTotal": "竞速输家合计",
+      "hedgeMergedCount": "合并 {count} 次",
+      "hedgeWinnerShort": "赢家",
+      "hedgeLoserShort": "输家",
+      "hedgeColAttempt": "尝试",
+      "hedgeColCacheRead": "缓存R",
+      "hedgeColCacheWrite": "缓存W",
+      "hedgeColCost": "费用",
+      "hedgeTokenTotal": "Token 合计",
+      "hedgeReclaimedNotDelivered": "已拿回响应，未交付客户端",
+      "unit": {
+        "tokens": "tokens"
+      }
+    },
+    "refresh": {
+      "modeLabel": "刷新方式",
+      "modePull": "轮询",
+      "modePush": "推送",
+      "intervalLabel": "刷新间隔",
+      "intervalOff": "关闭",
+      "intervalSeconds": "{seconds} 秒",
+      "streamStatus": {
+        "idle": "未连接",
+        "connecting": "连接中",
+        "connected": "已连接",
+        "reconnecting": "重连中",
+        "unauthorized": "无权限"
+      }
+    }
+  },
+  "leaderboard": {
+    "title": "成本排行榜",
+    "description": "查看用户和密钥的成本统计排名",
+    "todayTitle": "今日排行榜",
+    "viewAll": "查看全部",
+    "userRankings": "用户排行",
+    "providerRankings": "供应商排行",
+    "modelRankings": "模型排行",
+    "noData": "今日暂无数据",
+    "requests": "请求",
+    "tokens": "Token",
+    "tabs": {
+      "users": "用户排行",
+      "keys": "密钥排行",
+      "userRanking": "用户排行",
+      "userCacheHitRateRanking": "用户缓存命中率排行",
+      "providerRanking": "供应商排行",
+      "providerCacheHitRateRanking": "供应商缓存命中率排行",
+      "modelRanking": "模型排行",
+      "primaryUser": "用户",
+      "primaryProvider": "供应商",
+      "primaryModel": "模型",
+      "secondaryCost": "成本榜",
+      "secondaryCacheHit": "缓存命中榜",
+      "dailyRanking": "今日",
+      "weeklyRanking": "本周",
+      "monthlyRanking": "本月",
+      "allTimeRanking": "全部"
+    },
+    "dateRange": {
+      "to": "至",
+      "prevPeriod": "上一周期",
+      "nextPeriod": "下一周期",
+      "customRange": "自定义日期范围"
+    },
+    "columns": {
+      "rank": "排名",
+      "name": "名称",
+      "totalCost": "总成本",
+      "totalRequests": "总请求数",
+      "avgCost": "平均成本",
+      "lastActive": "最后活跃时间",
+      "user": "用户",
+      "requests": "请求数",
+      "tokens": "Token 数",
+      "consumedAmount": "消耗金额",
+      "provider": "供应商",
+      "model": "模型",
+      "cost": "成本",
+      "cacheHitRequests": "缓存触发请求数",
+      "cacheHitRate": "缓存命中率",
+      "cacheCoefficient": "缓存系数",
+      "cacheCoefficientTooltip": "缓存系数越大，供应商切号越少，失缓现象越不明显。0.9 以上为优秀，0.8 以上为良好。",
+      "cacheReadTokens": "缓存读取 Token 数",
+      "totalTokens": "总 Token 数",
+      "cacheCreationConsumedAmount": "缓存创建消耗金额",
+      "totalConsumedAmount": "总消耗金额",
+      "successRate": "成功率",
+      "avgResponseTime": "平均响应时间",
+      "avgTtftMs": "平均 TTFT",
+      "avgTokensPerSecond": "平均输出速率",
+      "avgCostPerRequest": "平均单次请求成本",
+      "avgCostPerMillionTokens": "平均百万 Token 成本",
+      "unknownModel": "未知",
+      "successRateUnavailable": "不适用",
+      "successRateBasisDisclosure": "所选时间段内该模型没有可计数的成功或失败结果，因此无法计算成功率。"
+    },
+    "expandModelStats": "展开模型详情",
+    "collapseModelStats": "收起模型详情",
+    "states": {
+      "loading": "加载中...",
+      "noData": "暂无数据",
+      "todayNoData": "今日暂无数据",
+      "weekNoData": "本周暂无数据",
+      "monthNoData": "本月暂无数据",
+      "fetchFailed": "获取排行榜数据失败"
+    },
+    "permission": {
+      "title": "需要权限",
+      "restricted": "访问受限",
+      "description": "排行榜功能需要管理员开启\"允许查看全站使用量\"权限。",
+      "adminAction": "开启此权限。",
+      "userAction": "请联系管理员开启此权限。",
+      "systemSettings": "系统设置"
+    },
+    "filters": {
+      "userTagsPlaceholder": "按用户标签筛选...",
+      "userGroupsPlaceholder": "按用户分组筛选..."
+    },
+    "userInsights": {
+      "title": "用户洞察",
+      "backToLeaderboard": "返回排行榜",
+      "overview": "概览",
+      "keyTrend": "Key 使用趋势",
+      "modelBreakdown": "模型明细",
+      "requests": "请求数",
+      "cost": "费用",
+      "avgResponseTime": "平均响应时间",
+      "errorRate": "错误率",
+      "timeRange": {
+        "today": "今日",
+        "7days": "近 7 天",
+        "30days": "近 30 天",
+        "thisMonth": "本月"
+      },
+      "unknownModel": "未知模型",
+      "noData": "暂无数据",
+      "dateRange": "日期范围",
+      "allTime": "全部时间",
+      "providerBreakdown": "供应商明细",
+      "unknownProvider": "未知供应商",
+      "apiKey": "API 密钥",
+      "provider": "供应商",
+      "model": "模型",
+      "allKeys": "全部密钥",
+      "allProviders": "全部供应商",
+      "allModels": "全部模型",
+      "dimensions": "维度",
+      "filters": "筛选",
+      "loadError": "数据加载失败"
+    }
+  },
+  "sessions": {
+    "title": "活跃会话",
+    "description": "实时监控当前活跃的 API 会话",
+    "monitoring": "Session 监控",
+    "monitoringDescription": "实时显示活跃和非活跃 Session（每 3 秒自动刷新）",
+    "activeSessions": "活跃 Session（最近 5 分钟）",
+    "inactiveSessions": "非活跃 Session（超过 5 分钟，仅供查看）",
+    "columns": {
+      "sessionId": "Session ID",
+      "user": "用户",
+      "key": "密钥",
+      "provider": "供应商",
+      "model": "模型",
+      "startTime": "开始时间",
+      "lastActivity": "最后活动",
+      "requestCount": "请求数",
+      "totalInput": "总输入",
+      "totalOutput": "总输出",
+      "totalCost": "总成本",
+      "totalDuration": "总耗时",
+      "status": "状态",
+      "actions": "操作"
+    },
+    "table": {
+      "count": "共 {count} 个{type} Session",
+      "active": "活跃",
+      "inactive": "非活跃",
+      "notCountedInConcurrency": "(不计入并发数)",
+      "refreshing": "刷新中...",
+      "noActiveSessions": "暂无活跃 Session"
+    },
+    "pagination": {
+      "total": "个"
+    },
+    "details": {
+      "title": "Session Messages",
+      "canonicalSessionId": "Canonical Session ID",
+      "clientSessionId": "客户端 Session ID",
+      "messages": "消息列表",
+      "info": "会话信息",
+      "timeline": "时间线",
+      "overview": "Session 概览",
+      "overviewDescription": "聚合统计信息",
+      "providersAndModels": "供应商与模型",
+      "providersAndModelsDescription": "使用的提供商和模型",
+      "tokenUsage": "Token 使用（总量）",
+      "tokenUsageDescription": "所有请求的累计统计",
+      "costInfo": "成本信息（总计）",
+      "costInfoDescription": "所有请求的累计费用",
+      "totalRequests": "总请求数",
+      "firstRequest": "首次请求",
+      "lastRequest": "最后请求",
+      "totalDuration": "总耗时",
+      "totalInput": "总输入",
+      "totalOutput": "总输出",
+      "cacheCreation": "缓存创建",
+      "cacheTtlMixed": "混合",
+      "cacheRead": "缓存读取",
+      "total": "总计",
+      "totalFee": "总费用",
+      "providers": "供应商",
+      "models": "模型",
+      "noDetailedData": "暂无详细数据",
+      "storageTip": "未找到详细数据。可能原因：Redis 未配置/不可用（REDIS_URL + ENABLE_RATE_LIMIT=true）、数据已过期（SESSION_TTL，默认 300 秒），或已禁用响应体存储（STORE_SESSION_RESPONSE_BODY=false，仅影响响应体）。如需保存未脱敏 messages，请设置 STORE_SESSION_MESSAGES=true。",
+      "clientInfo": "客户端信息",
+      "requestHeaders": "请求头",
+      "requestBody": "请求体",
+      "requestMessages": "请求 Messages",
+      "viewMode": "视图",
+      "before": "处理前",
+      "after": "处理后",
+      "viewModeTooltip": "处理前展示 CCH 在最终上游转发或最终客户端响应改写之前记录的请求与响应快照；处理后展示 CCH 最终发往上游的请求，以及最终返回给客户端的响应。",
+      "viewModeTooltipLabel": "解释处理前与处理后视图",
+      "snapshotSourceClient": "客户端",
+      "snapshotSourceUpstream": "上游",
+      "specialSettings": "特殊设置",
+      "specialSettingsStaticNote": "特殊设置是派生出来的审计结果，不区分处理前或处理后。",
+      "requestMessagesDescription": "客户端发送的消息内容",
+      "afterRequestMessagesEmpty": "处理后的请求体里没有根级 messages 字段，请改看 {requestBodyLabel}。",
+      "specialSettingsEmpty": "本次请求没有记录特殊设置。",
+      "responseHeaders": "响应头",
+      "responseBody": "响应体",
+      "responseBodyDescription": "服务器返回的完整响应（5分钟 TTL）",
+      "noHeaders": "无数据",
+      "noData": "暂无数据",
+      "prevRequest": "上一条",
+      "nextRequest": "下一条"
+    },
+    "actions": {
+      "back": "返回",
+      "view": "查看",
+      "copy": "复制",
+      "download": "下载",
+      "copyMessages": "复制请求头和请求体",
+      "downloadMessages": "下载请求头和请求体",
+      "copied": "已复制",
+      "copyResponse": "复制响应体",
+      "terminate": "终止",
+      "terminateTitle": "终止 Session",
+      "terminateDescription": "确认要终止此 Session 吗？终止后，该 Session 的供应商绑定将被清除，下次请求将重新选择供应商。",
+      "sessionIdLabel": "Session ID: {sessionId}",
+      "cancel": "取消",
+      "confirmTerminate": "确认终止",
+      "terminating": "终止中...",
+      "terminateSuccess": "Session 已成功终止",
+      "terminateFailed": "终止 Session 失败",
+      "terminateSelected": "终止所选",
+      "selectedCount": "已选 {count} 个",
+      "selectAll": "全选",
+      "selectSessionLabel": "选择会话",
+      "multiSelect": "多选",
+      "cancelMultiSelect": "取消",
+      "terminateSessionTitle": "终止 Session",
+      "terminateSessionDescription": "确定要终止此 Session 吗？此操作无法撤销。",
+      "batchTerminateSuccess": "已终止 {count} 个 Session",
+      "batchTerminatePartial": "无权限 {unauthorized} 个 · 未找到 {missing} 个",
+      "batchTerminateAllowedFailed": "有权限但终止失败 {count} 个",
+      "batchTerminateNone": "没有任何 Session 被终止",
+      "noSelection": "请至少选择一个 Session"
+    },
+    "codeDisplay": {
+      "raw": "原始",
+      "pretty": "美化",
+      "searchPlaceholder": "搜索",
+      "expand": "展开",
+      "collapse": "收起",
+      "themeAuto": "跟随系统",
+      "themeLight": "浅色",
+      "themeDark": "深色",
+      "noMatches": "无匹配结果",
+      "onlyMatches": "仅匹配行",
+      "showAll": "显示全部",
+      "prevPage": "上一页",
+      "nextPage": "下一页",
+      "pageInfo": "第 {page} / {total} 页",
+      "sseEvent": "事件",
+      "sseData": "数据",
+      "hardLimit": {
+        "title": "内容过大",
+        "size": "大小：{sizeMB} MB（{sizeBytes} 字节）",
+        "maximum": "上限：{maxSizeMB} MB 或 {maxLines} 行",
+        "hint": "请下载文件以查看完整内容。",
+        "download": "下载"
+      }
+    },
+    "status": {
+      "loading": "加载中...",
+      "loadError": "加载失败",
+      "fetchFailed": "获取失败",
+      "unknownError": "未知错误",
+      "error": "Session 详情加载失败",
+      "storageNotEnabled": "未存储",
+      "storageNotEnabledHint": "提示：请检查 REDIS_URL 与 ENABLE_RATE_LIMIT=true（用于会话详情缓存）；如需保存未脱敏 messages，请设置 STORE_SESSION_MESSAGES=true。"
+    },
+    "errors": {
+      "copyFailed": "复制失败",
+      "fetchSessionsFailed": "获取 Session 列表失败",
+      "fetchSessionsTimeout": "获取 Session 列表超时",
+      "fetchSettingsFailed": "获取系统设置失败",
+      "retry": "重试"
+    },
+    "requestList": {
+      "title": "请求列表",
+      "noRequests": "暂无请求记录",
+      "fetchFailed": "获取请求列表失败",
+      "unknownError": "未知错误",
+      "searchPlaceholder": "搜索请求...",
+      "prev": "上一页",
+      "next": "下一页",
+      "orderAsc": "切换为正序（最早的在前）",
+      "orderDesc": "切换为倒序（最新的在前）",
+      "itemTitle": "请求 #{sequence} - {model}",
+      "unknownModel": "未知模型"
+    },
+    "back": "返回",
+    "loadingError": "加载失败"
+  },
+  "quotas": {
+    "title": "配额管理",
+    "description": "管理用户、密钥和供应商的使用配额",
+    "tabs": {
+      "overview": "概览",
+      "users": "用户配额",
+      "keys": "密钥配额",
+      "providers": "供应商配额"
+    },
+    "columns": {
+      "name": "名称",
+      "limit": "限额",
+      "used": "已用",
+      "remaining": "剩余",
+      "resetTime": "重置时间",
+      "status": "状态"
+    },
+    "labels": {
+      "byName": "按名称",
+      "byUsageRate": "按使用率",
+      "all": "全部",
+      "warning": "接近限额 (>60%)",
+      "exceeded": "已超限 (≥100%)"
+    },
+    "users": {
+      "title": "用户限额统计",
+      "totalUsers": "共 {count} 个用户"
+    },
+    "keys": {
+      "title": "密钥限额统计",
+      "totalKeysInfo": "共 {userCount} 个用户，{keyCount} 个密钥",
+      "setKeyQuota": "设置密钥限额",
+      "setUserQuota": "设置用户限额",
+      "onlyKeyQuota": "仅密钥限额",
+      "onlyUserQuota": "仅用户限额",
+      "success": "用户限额设置成功"
+    },
+    "providers": {
+      "title": "供应商限额统计",
+      "totalProviders": "共 {count} 个供应商"
+    }
+  },
+  "labels": {
+    "byName": "按名称",
+    "byUsageRate": "按使用率"
+  },
+  "nav": {
+    "mobileMenuTitle": "导航菜单",
+    "dashboard": "仪表盘",
+    "userManagement": "用户管理",
+    "usageLogs": "使用记录",
+    "leaderboard": "排行榜",
+    "availability": "可用性监控",
+    "myQuota": "我的配额",
+    "quotasManagement": "限额管理",
+    "providers": "供应商管理",
+    "auditLogs": "审计日志",
+    "documentation": "文档",
+    "systemSettings": "系统设置",
+    "feedback": "反馈问题",
+    "login": "登录",
+    "logout": "退出登录"
+  },
+  "statistics": {
+    "title": "使用统计",
+    "cost": "消费金额",
+    "calls": "API调用次数",
+    "totalCost": "总消费金额",
+    "totalCalls": "总API调用次数",
+    "timeRange": {
+      "today": "今天",
+      "todayDescription": "今天的使用情况",
+      "7days": "过去 7 天",
+      "7daysDescription": "过去 7 天的使用情况",
+      "30days": "过去 30 天",
+      "30daysDescription": "过去 30 天的使用情况",
+      "thisMonth": "本月",
+      "thisMonthDescription": "本月的使用情况",
+      "default": "使用情况"
+    },
+    "mode": {
+      "keys": "仅显示您名下各密钥的使用统计",
+      "mixed": "展示您的密钥明细和其他用户汇总",
+      "users": "展示所有用户的使用统计"
+    },
+    "legend": {
+      "selectAll": "全选",
+      "deselectAll": "清空",
+      "selected": "已选"
+    },
+    "chartMode": {
+      "label": "显示模式",
+      "overlay": "对比",
+      "stacked": "堆叠"
+    },
+    "states": {
+      "noData": "暂无统计数据",
+      "fetchFailed": "获取统计数据失败"
+    },
+    "othersAggregate": "其他用户"
+  },
+  "errors": {
+    "fetchSystemSettingsFailed": "获取系统设置失败",
+    "fetchFailed": "获取失败",
+    "fetchSessionListFailed": "获取 session 列表失败"
+  },
+  "keyList": {
+    "columns": {
+      "name": "名称",
+      "key": "Key",
+      "todayCalls": "今日调用",
+      "todayCost": "今日消耗",
+      "lastUsed": "最后使用",
+      "actions": "操作"
+    },
+    "detailsButton": "详细信息",
+    "modelStats": "模型统计",
+    "modelStatsColumns": {
+      "model": "模型",
+      "calls": "调用次数",
+      "cost": "消耗"
+    },
+    "limitUsage": "限额使用情况",
+    "copyKeyTooltip": "复制完整密钥",
+    "showKeyTooltip": "显示完整密钥",
+    "hideKeyTooltip": "隐藏密钥",
+    "copyFailed": "复制失败:",
+    "timesUnit": "次",
+    "provider": "供应商",
+    "neverUsed": "未使用",
+    "viewLogsTooltip": "查看详细日志",
+    "logsButton": "日志",
+    "emptyState": {
+      "title": "暂无 Key",
+      "description": "可点击右上角 \"新增 Key\" 按钮添加密钥"
+    }
+  },
+  "userList": {
+    "title": "用户列表",
+    "badge": "{count} 个 Key",
+    "activeKeys": "活跃密钥",
+    "totalKeys": "总密钥",
+    "expiresAt": "过期时间",
+    "expiresAtHint": "用户过期后将自动禁用",
+    "status": {
+      "active": "已启用",
+      "expiringSoon": "即将过期",
+      "expired": "已过期",
+      "disabled": "已禁用"
+    },
+    "actions": {
+      "renew": "续期",
+      "renew30d": "续期 30 天",
+      "renew90d": "续期 90 天",
+      "renew1y": "续期 1 年",
+      "renewCustom": "自定义...",
+      "customRenewTitle": "自定义续期时间",
+      "customRenewDescription": "为用户 {userName} 设置新的过期时间",
+      "expirationDate": "过期日期",
+      "enableOnRenew": "同时启用用户",
+      "cancel": "取消",
+      "confirm": "确认",
+      "customPrompt": "请输入新的过期日期（YYYY-MM-DD），取消请留空",
+      "invalidDate": "请输入有效日期",
+      "enable": "启用",
+      "disable": "禁用",
+      "success": "操作成功",
+      "failed": "操作失败，请稍后再试"
+    },
+    "emptyState": {
+      "title": "暂无用户",
+      "description": "您还没有创建任何用户。用户是管理 API 密钥和使用限额的基础单位，创建第一个用户开始使用吧！",
+      "action": "创建第一个用户"
+    },
+    "addUser": "新增用户"
+  },
+  "keyListHeader": {
+    "todayUsage": "今日用量",
+    "userStatus": {
+      "disabled": "已禁用",
+      "expired": "已过期",
+      "expiringSoon": "即将过期",
+      "active": "已启用"
+    },
+    "allowedModels": {
+      "label": "允许的模型",
+      "noRestrictions": "允许的模型：无限制"
+    },
+    "expiresAt": "过期时间",
+    "proxyStatus": {
+      "loading": "代理状态加载中",
+      "fetchFailed": "代理状态获取失败",
+      "noStatus": "暂无代理状态",
+      "activeRequests": "活跃请求",
+      "lastRequest": "最近请求",
+      "noRecord": "暂无记录",
+      "timeAgo": {
+        "justNow": "刚刚",
+        "secondsAgo": "{count}s前",
+        "minutesAgo": "{count}分钟前",
+        "hoursAgo": "{count}小时前",
+        "daysAgo": "{count}天前"
+      }
+    },
+    "addKey": "新增 Key",
+    "keyCreatedDialog": {
+      "title": "Key 创建成功",
+      "description": "你的 API Key 已成功创建。请复制并妥善保存，避免泄露；后续可在密钥列表中重新查看完整密钥。",
+      "apiKeyLabel": "API Key",
+      "warningText": "请妥善保管此密钥，避免泄露。如有需要，可随时在密钥列表中重新查看完整密钥",
+      "httpWarningText": "检测到 HTTP 访问，浏览器限制无法使用复制功能。请点击眼睛图标显示密钥后手动复制。",
+      "copyTooltip": "复制到剪贴板",
+      "showTooltip": "显示完整密钥",
+      "hideTooltip": "隐藏密钥",
+      "closeButton": "关闭"
+    },
+    "allowedClients": {
+      "label": "允许的客户端",
+      "noRestrictions": "允许的客户端：无限制"
+    }
+  },
+  "keyLimitUsage": {
+    "loading": "加载中...",
+    "error": "获取失败",
+    "networkError": "网络错误",
+    "cost5h": "5小时消费",
+    "costDaily": "每日消费",
+    "costWeekly": "周消费",
+    "costMonthly": "月消费",
+    "costTotal": "总消费",
+    "concurrentSessions": "并发 Session",
+    "noLimit": "无限额限制"
+  },
+  "addKeyForm": {
+    "title": "新增 Key",
+    "description": "为当前用户创建新的API密钥，Key值将自动生成。",
+    "submitText": "确认创建",
+    "loadingText": "创建中...",
+    "keyName": {
+      "label": "Key名称",
+      "placeholder": "请输入Key名称"
+    },
+    "expiresAt": {
+      "label": "过期时间",
+      "placeholder": "选择过期时间",
+      "description": "留空表示永不过期"
+    },
+    "canLoginWebUi": {
+      "label": "允许登录 Web UI",
+      "description": "关闭后，此 Key 仅可用于 API 调用，无法登录管理后台"
+    },
+    "limit5hUsd": {
+      "label": "5小时消费上限 (USD)",
+      "placeholder": "留空表示无限制",
+      "description": "5小时内最大消费金额",
+      "descriptionWithUserLimit": "5小时内最大消费金额（用户限额: ${limit}）"
+    },
+    "limitDailyUsd": {
+      "label": "每日消费上限 (USD)",
+      "placeholder": "留空表示无限制",
+      "description": "每日最大消费金额"
+    },
+    "dailyResetMode": {
+      "label": "每日重置模式",
+      "options": {
+        "fixed": "固定时间重置",
+        "rolling": "滚动窗口（24小时）"
+      },
+      "desc": {
+        "fixed": "每天在指定时间重置额度",
+        "rolling": "从首次请求开始计算24小时滚动窗口"
+      }
+    },
+    "dailyResetTime": {
+      "label": "每日重置时间",
+      "placeholder": "HH:mm",
+      "description": "每日限额的重置时间（使用系统时区）"
+    },
+    "limitWeeklyUsd": {
+      "label": "周消费上限 (USD)",
+      "placeholder": "留空表示无限制",
+      "description": "每周最大消费金额",
+      "descriptionWithUserLimit": "每周最大消费金额（用户限额: ${limit}）"
+    },
+    "limitMonthlyUsd": {
+      "label": "月消费上限 (USD)",
+      "placeholder": "留空表示无限制",
+      "description": "每月最大消费金额",
+      "descriptionWithUserLimit": "每月最大消费金额（用户限额: ${limit}）"
+    },
+    "limitTotalUsd": {
+      "label": "总消费上限 (USD)",
+      "placeholder": "留空表示无限制",
+      "description": "累计消费上限（不重置）",
+      "descriptionWithUserLimit": "累计消费上限（用户限额: ${limit}）"
+    },
+    "limitConcurrentSessions": {
+      "label": "并发 Session 上限",
+      "placeholder": "0 表示无限制",
+      "description": "同时运行的对话数量",
+      "descriptionWithUserLimit": "同时运行的对话数量（用户限额: {limit}）"
+    },
+    "providerGroup": {
+      "label": "供应商分组",
+      "placeholder": "输入供应商分组标签，按回车添加",
+      "description": "供应商分组（默认：default）",
+      "defaultDescription": "default 分组包含所有未设置 groupTag 的供应商",
+      "descriptionWithUserGroup": "供应商分组（默认：default；用户分组：{group}）"
+    },
+    "cacheTtl": {
+      "label": "Cache TTL 覆写",
+      "description": "强制为包含 cache_control 的请求设置 Anthropic prompt cache TTL。",
+      "options": {
+        "inherit": "不覆写（跟随供应商/客户端）",
+        "5m": "5m",
+        "1h": "1h"
+      }
+    },
+    "successTitle": "密钥创建成功",
+    "successDescription": "您的 API 密钥已成功创建。",
+    "generatedKey": {
+      "label": "生成的密钥",
+      "hint": "您可以在密钥列表中管理此密钥（启用/禁用、设置限额等），并可随时重新查看完整密钥。请妥善保管，避免泄露"
+    },
+    "errors": {
+      "userIdMissing": "用户ID不存在",
+      "createFailed": "创建失败，请稍后重试",
+      "noKeyReturned": "创建成功但未返回密钥"
+    },
+    "limit5hResetMode": {
+      "label": "5小时重置模式",
+      "options": {
+        "fixed": "固定窗口",
+        "rolling": "滚动窗口（5小时）"
+      },
+      "desc": {
+        "fixed": "从首次成功记账开始锁定 5 小时固定窗口",
+        "rolling": "按最近 5 小时滚动窗口统计额度"
+      }
+    }
+  },
+  "userForm": {
+    "title": {
+      "add": "新增用户",
+      "edit": "编辑用户"
+    },
+    "description": {
+      "add": "创建新用户，系统将自动为其生成默认密钥。",
+      "edit": "修改用户的基本信息。"
+    },
+    "submitText": {
+      "add": "确认创建",
+      "edit": "保存修改"
+    },
+    "loadingText": {
+      "add": "创建中...",
+      "edit": "保存中..."
+    },
+    "username": {
+      "label": "用户名",
+      "placeholder": "请输入用户名"
+    },
+    "note": {
+      "label": "备注",
+      "placeholder": "请输入备注（可选）",
+      "description": "用于描述用户的用途或备注信息"
+    },
+    "providerGroup": {
+      "label": "供应商分组",
+      "placeholder": "例如：default 或 premium,economy",
+      "description": "用户供应商分组（默认：default）。default 分组包含所有未设置 groupTag 的供应商。"
+    },
+    "tags": {
+      "label": "用户标签",
+      "placeholder": "输入标签（回车添加）",
+      "description": "为用户添加标签，便于分类和筛选（最多20个，每个最长32字符）"
+    },
+    "rpm": {
+      "label": "RPM限制",
+      "placeholder": "每分钟请求数限制",
+      "description": "默认值: {default}，范围: 1-1000000"
+    },
+    "dailyQuota": {
+      "label": "每日额度",
+      "placeholder": "每日消费额度限制",
+      "helperText": "设置为 0 表示无限制",
+      "description": "默认值: ${default}，范围: $0.01-$100000"
+    },
+    "limit5hUsd": {
+      "label": "5小时限额 (USD)",
+      "placeholder": "留空表示无限制",
+      "description": "5小时内最大消费金额"
+    },
+    "limitWeeklyUsd": {
+      "label": "周限额 (USD)",
+      "placeholder": "留空表示无限制",
+      "description": "每周最大消费金额"
+    },
+    "limitMonthlyUsd": {
+      "label": "月限额 (USD)",
+      "placeholder": "留空表示无限制",
+      "description": "每月最大消费金额"
+    },
+    "limitTotalUsd": {
+      "label": "总限额 (USD)",
+      "placeholder": "留空表示无限制",
+      "description": "累计消费上限（不重置）"
+    },
+    "limitConcurrentSessions": {
+      "label": "并发 Session 上限",
+      "placeholder": "0 表示无限制",
+      "description": "同时运行的对话数量"
+    },
+    "isEnabled": {
+      "label": "启用用户",
+      "description": "禁用后用户将无法使用 API"
+    },
+    "expiresAt": {
+      "label": "过期时间",
+      "placeholder": "留空表示永不过期",
+      "description": "用户过期后将自动禁用",
+      "pastWarning": "选择的日期已在过去，保存后用户将立即过期并被禁用。"
+    },
+    "allowedClients": {
+      "label": "允许的客户端",
+      "description": "限制哪些 CLI/IDE 客户端可以使用此账户。留空表示无限制。",
+      "customLabel": "自定义客户端模式",
+      "customPlaceholder": "输入模式（如 'my-ide'、'codex-*'）"
+    },
+    "allowedModels": {
+      "label": "允许的模型",
+      "placeholder": "输入模型名称（回车添加）",
+      "description": "限制用户只能使用指定的AI模型。留空表示无限制（最多50个模型，每个最长64字符）"
+    }
+  },
+  "deleteKeyConfirm": {
+    "title": "确认删除密钥",
+    "description": "您确定要删除密钥 \"{name}\" 吗？\n{maskedKey}\n此操作无法撤销，删除后所有使用此密钥的应用将无法访问。",
+    "cancel": "取消",
+    "confirm": "确认删除",
+    "confirmLoading": "删除中...",
+    "errors": {
+      "deleteFailed": "删除失败",
+      "retryError": "删除失败，请稍后重试"
+    }
+  },
+  "keyActions": {
+    "edit": "编辑",
+    "delete": "删除",
+    "editAriaLabel": "编辑密钥",
+    "deleteAriaLabel": "删除密钥"
+  },
+  "userActions": {
+    "edit": "编辑用户",
+    "delete": "删除用户",
+    "editAriaLabel": "编辑用户",
+    "deleteAriaLabel": "删除用户"
+  },
+  "rateLimits": {
+    "title": "限流事件统计",
+    "description": "查看和分析限流事件的统计数据",
+    "loading": "加载中...",
+    "error": "加载失败",
+    "totalEvents": "总事件数",
+    "avgUsage": "平均使用率",
+    "affectedUsers": "受影响用户数",
+    "noData": "暂无数据",
+    "noDataHint": "在选定的时间范围内没有限流事件",
+    "filters": {
+      "startTime": "开始时间",
+      "endTime": "结束时间",
+      "user": "用户",
+      "provider": "供应商",
+      "limitType": "限流类型",
+      "allUsers": "全部用户",
+      "allProviders": "全部供应商",
+      "allLimitTypes": "全部类型",
+      "apply": "应用筛选",
+      "reset": "重置",
+      "loading": "加载中...",
+      "limitTypes": {
+        "rpm": "RPM限流",
+        "usd_5h": "5小时消费限流",
+        "usd_weekly": "周消费限流",
+        "usd_monthly": "月消费限流",
+        "concurrent_sessions": "并发Session限流",
+        "daily_quota": "每日额度限流"
+      }
+    },
+    "chart": {
+      "title": "限流事件时间线",
+      "description": "按小时统计的限流事件趋势",
+      "total": "总计",
+      "events": "事件数"
+    },
+    "breakdown": {
+      "title": "限流类型分布",
+      "description": "不同限流类型的事件占比",
+      "total": "总计",
+      "count": "事件数",
+      "percentage": "占比",
+      "noData": "暂无数据",
+      "types": {
+        "rpm": "RPM限流",
+        "usd_5h": "5小时消费",
+        "usd_weekly": "周消费",
+        "usd_monthly": "月消费",
+        "concurrent_sessions": "并发Session",
+        "daily_quota": "每日额度"
+      }
+    },
+    "topUsers": {
+      "title": "受影响用户排行",
+      "description": "触发限流最多的用户列表",
+      "total": "总计",
+      "rank": "排名",
+      "username": "用户名",
+      "eventCount": "事件数",
+      "percentage": "占比",
+      "loading": "加载中...",
+      "noData": "暂无数据"
+    }
+  },
+  "users": {
+    "title": "用户管理",
+    "description": "显示 {count} 个用户",
+    "toolbar": {
+      "searchPlaceholder": "搜索用户名、备注、标签、Key...",
+      "groupFilter": "按分组筛选",
+      "allGroups": "所有分组",
+      "tagFilter": "按标签筛选",
+      "allTags": "所有标签",
+      "keyGroupFilter": "密钥分组",
+      "allKeyGroups": "所有密钥分组",
+      "sortBy": "排序方式",
+      "sortOrder": "排序顺序",
+      "sortByName": "按名称",
+      "sortByTags": "按标签",
+      "sortByExpiresAt": "按过期时间",
+      "sortByRpm": "按RPM限制",
+      "sortByLimit5h": "按5小时限额",
+      "sortByLimitDaily": "按每日限额",
+      "sortByLimitWeekly": "按周限额",
+      "sortByLimitMonthly": "按月限额",
+      "sortByCreatedAt": "按创建时间",
+      "ascending": "升序",
+      "descending": "降序",
+      "statusFilter": "状态筛选",
+      "allStatus": "全部状态",
+      "statusActive": "正常",
+      "statusExpired": "已过期",
+      "statusExpiringSoon": "即将过期",
+      "statusEnabled": "已启用",
+      "statusDisabled": "已禁用",
+      "createUser": "创建用户",
+      "createKey": "创建 Key"
+    },
+    "dialog": {
+      "userProviderGroup": "您的供应商分组",
+      "userProviderGroupHint": "新创建的 Key 只能使用您已有的分组"
+    }
+  },
+  "availability": {
+    "title": "供应商可用性监控",
+    "description": "实时监控供应商的可用性状态和性能指标",
+    "nav": "可用性监控",
+    "tabs": {
+      "provider": "供应商可用性",
+      "endpoint": "端点健康"
+    },
+    "overview": {
+      "systemAvailability": "系统可用性",
+      "avgLatency": "平均延迟",
+      "errorRate": "错误率",
+      "activeProbes": "活跃探测",
+      "load": "负载"
+    },
+    "status": {
+      "green": "正常",
+      "red": "异常",
+      "unknown": "未知"
+    },
+    "statusDescription": {
+      "green": "服务正常，请求成功",
+      "red": "服务异常或不可用",
+      "unknown": "暂无数据"
+    },
+    "metrics": {
+      "systemAvailability": "系统可用性",
+      "totalRequests": "总请求数",
+      "successRate": "成功率",
+      "avgLatency": "平均延迟",
+      "p50Latency": "P50 延迟",
+      "p95Latency": "P95 延迟",
+      "p99Latency": "P99 延迟",
+      "lastRequest": "最后请求",
+      "requestCount": "请求数"
+    },
+    "timeRange": {
+      "label": "时间范围",
+      "15min": "15 分钟",
+      "1h": "1 小时",
+      "6h": "6 小时",
+      "24h": "24 小时",
+      "7d": "7 天",
+      "last15min": "最近 15 分钟",
+      "last1h": "最近 1 小时",
+      "last6h": "最近 6 小时",
+      "last24h": "最近 24 小时",
+      "last7d": "最近 7 天",
+      "custom": "自定义"
+    },
+    "filters": {
+      "provider": "供应商",
+      "allProviders": "全部供应商",
+      "includeDisabled": "包含已禁用"
+    },
+    "sort": {
+      "label": "排序",
+      "availability": "可用性",
+      "name": "名称",
+      "requests": "请求数"
+    },
+    "columns": {
+      "provider": "供应商",
+      "type": "类型",
+      "status": "状态",
+      "availability": "可用性",
+      "requests": "请求数",
+      "successRate": "成功率",
+      "avgLatency": "平均延迟",
+      "lastRequest": "最后请求",
+      "actions": "操作"
+    },
+    "chart": {
+      "title": "可用性趋势",
+      "description": "按时间段统计的可用性变化",
+      "availabilityScore": "可用性评分",
+      "requestVolume": "请求量",
+      "latencyTrend": "延迟趋势",
+      "noData": "暂无数据"
+    },
+    "details": {
+      "title": "供应商详情",
+      "overview": "概览",
+      "timeBuckets": "时间分段",
+      "greenCount": "成功请求",
+      "redCount": "失败请求"
+    },
+    "actions": {
+      "refresh": "刷新",
+      "refreshing": "刷新中...",
+      "autoRefresh": "自动刷新",
+      "stopAutoRefresh": "停止自动刷新",
+      "viewDetails": "查看详情",
+      "testProvider": "测试供应商",
+      "retry": "重试",
+      "probeNow": "立即探测",
+      "probing": "探测中...",
+      "probeAll": "探测全部",
+      "probeSuccess": "探测成功",
+      "probeFailed": "探测失败"
+    },
+    "states": {
+      "loading": "加载中...",
+      "error": "加载失败",
+      "noProviders": "暂无供应商",
+      "noData": "暂无可用性数据",
+      "fetchFailed": "获取可用性数据失败"
+    },
+    "legend": {
+      "green": "优秀 (可用性 95%+)",
+      "lime": "良好 (可用性 80-95%)",
+      "orange": "警告 (可用性 50-80%)",
+      "red": "异常 (可用性 <50%)",
+      "noData": "无数据"
+    },
+    "summary": {
+      "title": "可用性摘要",
+      "healthyProviders": "健康供应商",
+      "unhealthyProviders": "异常供应商",
+      "unknownProviders": "无数据",
+      "totalProviders": "供应商总数"
+    },
+    "heatmap": {
+      "bucketSize": "时间分段",
+      "minutes": "分钟",
+      "requests": "请求",
+      "noData": "无数据",
+      "noRequests": "无请求"
+    },
+    "probeHistory": {
+      "title": "端点探测历史",
+      "description": "查看探测日志并手动触发特定端点的探测",
+      "selectVendor": "选择供应商",
+      "selectType": "选择供应商类型",
+      "selectEndpoint": "选择端点",
+      "noEndpoints": "未找到端点",
+      "probeNow": "立即探测",
+      "probing": "探测中...",
+      "columns": {
+        "time": "时间",
+        "method": "方法",
+        "status": "状态码",
+        "latency": "延迟",
+        "error": "错误信息"
+      },
+      "success": "成功",
+      "manual": "手动探测",
+      "auto": "自动探测",
+      "probeSuccess": "探测成功",
+      "probeFailed": "探测失败"
+    },
+    "laneChart": {
+      "title": "供应商可用性时间线",
+      "noData": "暂无数据",
+      "requests": "{count} 个请求",
+      "availability": "可用性 {value}%",
+      "noRequests": "无请求",
+      "denseData": "密集",
+      "sparseData": "稀疏",
+      "latency": "延迟"
+    },
+    "latencyChart": {
+      "title": "延迟分布",
+      "p50": "P50",
+      "p95": "P95",
+      "p99": "P99",
+      "noData": "暂无延迟数据"
+    },
+    "latencyCurve": {
+      "title": "延迟趋势",
+      "noData": "暂无延迟数据",
+      "avg": "平均",
+      "min": "最小",
+      "max": "最大",
+      "latency": "延迟"
+    },
+    "terminal": {
+      "title": "探测日志",
+      "live": "实时",
+      "download": "下载日志",
+      "noLogs": "暂无探测日志",
+      "manual": "手动",
+      "auto": "自动",
+      "filterPlaceholder": "筛选日志..."
+    },
+    "probeGrid": {
+      "title": "端点状态",
+      "noEndpoints": "未配置端点",
+      "lastProbe": "最后探测",
+      "status": {
+        "unknown": "未知",
+        "healthy": "健康",
+        "unhealthy": "异常"
+      }
+    },
+    "endpoint": {
+      "selectVendor": "选择供应商",
+      "selectType": "选择类型"
+    },
+    "confidence": {
+      "low": "低",
+      "medium": "中",
+      "high": "高",
+      "lowTooltip": "请求数少于 {count}，数据可能不具代表性。",
+      "mediumTooltip": "请求量适中，数据较为可靠。",
+      "highTooltip": "请求量充足，数据可靠。"
+    },
+    "toast": {
+      "refreshSuccess": "可用性数据已刷新",
+      "refreshFailed": "刷新失败，请重试"
+    }
+  },
+  "userManagement": {
+    "table": {
+      "columns": {
+        "username": "用户名",
+        "note": "备注",
+        "expiresAt": "到期时间",
+        "expiresAtHint": "点击快捷续期",
+        "limitRpm": "RPM",
+        "limit5h": "5h 限额",
+        "limitDaily": "每日限额",
+        "limitWeekly": "周限额",
+        "limitMonthly": "月限额",
+        "limitTotal": "总限额",
+        "limitSessions": "并发"
+      },
+      "keyRow": {
+        "name": "密钥名称",
+        "key": "密钥",
+        "group": "分组",
+        "todayUsage": "今日请求",
+        "todayCost": "今日消耗",
+        "todayTokens": "今日Token",
+        "lastUsed": "最后使用",
+        "actions": "操作",
+        "quotaButton": "查看限额用量",
+        "fields": {
+          "callsLabel": "请求",
+          "tokensLabel": "Token",
+          "costLabel": "消耗"
+        }
+      },
+      "expand": "展开",
+      "collapse": "收起",
+      "refresh": "刷新",
+      "noKeys": "无密钥",
+      "defaultGroup": "default",
+      "userStatus": {
+        "disabled": "已禁用"
+      },
+      "actions": {
+        "addKey": "新增密钥"
+      }
+    },
+    "keyFullDisplay": {
+      "title": "完整密钥",
+      "copySuccess": "密钥已复制到剪贴板",
+      "copyFailed": "复制失败",
+      "show": "显示密钥",
+      "hide": "隐藏密钥",
+      "copied": "已复制",
+      "copy": "复制密钥"
+    },
+    "keyStatsDialog": {
+      "title": "今日模型统计",
+      "columns": {
+        "model": "模型",
+        "calls": "调用次数",
+        "tokens": "Token数",
+        "cost": "消费金额"
+      },
+      "modal": {
+        "requests": "请求",
+        "totalTokens": "总Token",
+        "cost": "费用",
+        "inputTokens": "输入Token",
+        "outputTokens": "输出Token",
+        "cacheWrite": "缓存写入",
+        "cacheRead": "缓存读取",
+        "cacheHitRate": "缓存命中率",
+        "cacheTokens": "缓存Token",
+        "performanceHigh": "高",
+        "performanceMedium": "中",
+        "performanceLow": "低"
+      },
+      "noData": "今日暂无使用记录",
+      "totalCalls": "总调用",
+      "totalCost": "总消费"
+    },
+    "keyQuotaUsageDialog": {
+      "title": "Key 限额使用情况",
+      "fetchFailed": "获取限额使用情况失败",
+      "noLimit": "无限制",
+      "modeFixed": "固定时间",
+      "modeRolling": "滚动 24h",
+      "retry": "重试",
+      "labels": {
+        "limit5h": "5 小时",
+        "limitDaily": "每日",
+        "limitWeekly": "每周",
+        "limitMonthly": "每月",
+        "limitTotal": "总计",
+        "limitSessions": "并发"
+      }
+    },
+    "quickRenew": {
+      "title": "快捷续期",
+      "description": "为用户 {userName} 设置新的过期时间",
+      "currentExpiry": "当前到期时间",
+      "neverExpires": "永不过期",
+      "expired": "已过期",
+      "quickExtensionLabel": "快捷延期",
+      "quickExtensionHint": "在当前过期时间基础上延长（如已过期则从现在开始计算）",
+      "customDateLabel": "设置到期日期",
+      "customDateHint": "直接指定具体的到期日期",
+      "quickOptions": {
+        "7days": "7 天",
+        "30days": "30 天",
+        "90days": "90 天",
+        "1year": "1 年"
+      },
+      "customDate": "自定义日期",
+      "enableOnRenew": "同时启用用户",
+      "enableKeyOnRenew": "同时启用密钥",
+      "cancel": "取消",
+      "confirm": "确认续期",
+      "confirming": "续期中...",
+      "success": "续期成功",
+      "failed": "续期失败"
+    },
+    "dialog": {
+      "createKeyTitle": "创建 Key",
+      "editKeyTitle": "编辑 Key"
+    },
+    "editDialog": {
+      "title": "编辑用户",
+      "description": "编辑用户信息",
+      "userSection": "用户设置",
+      "keysSection": "密钥设置",
+      "scrollToKey": "滚动到密钥",
+      "saveFailed": "保存用户失败",
+      "keySaveFailed": "保存密钥失败",
+      "keyDeleteFailed": "删除密钥失败",
+      "saveSuccess": "保存成功",
+      "atLeastOneKeyEnabled": "至少需要保留一个启用的密钥",
+      "operationFailed": "操作失败",
+      "userDisabled": "用户已禁用",
+      "userEnabled": "用户已启用",
+      "deleteFailed": "删除用户失败",
+      "userDeleted": "用户已删除",
+      "saving": "保存中...",
+      "resetSection": {
+        "title": "重置选项"
+      },
+      "resetLimits": {
+        "title": "重置全部限额",
+        "description": "重置全部限额（5小时、每日、每周、每月、总计）的累计消费计数器。请求日志和统计数据将被保留。",
+        "button": "重置全部限额",
+        "confirmTitle": "确认重置全部限额？",
+        "confirmDescription": "这将把所有累计消费计数器（5小时、每日、每周、每月、总计）归零。请求日志和使用统计将被保留。",
+        "confirm": "是的，重置全部限额",
+        "loading": "正在重置...",
+        "error": "重置全部限额失败",
+        "success": "所有限额已重置",
+        "lastResetAt": "上次全部重置: {date}"
+      },
+      "reset5h": {
+        "button": "重置 5H 限额",
+        "confirm": "是的，重置 5H 限额",
+        "confirmDescriptionFixed": "这只会清空当前用户聚合层的固定 5 小时窗口，不影响每日、每周、每月、总计，也不会影响该用户下的子 Key。",
+        "confirmDescriptionRolling": "这只会把当前用户聚合层的滚动 5 小时用量从现在开始重新计算，不影响每日、每周、每月、总计，也不会影响该用户下的子 Key。",
+        "confirmTitle": "确认重置 5H 限额？",
+        "error": "重置 5H 限额失败",
+        "loading": "正在重置...",
+        "successFixed": "该用户当前固定 5H 窗口已重置",
+        "successRolling": "该用户滚动 5H 限额已重置",
+        "unavailableReason": "仅当该用户配置了用户级 5H 限额时才可用。"
+      },
+      "resetData": {
+        "title": "重置统计",
+        "description": "删除该用户的所有请求日志和使用数据。此操作不可逆。",
+        "error": "重置数据失败",
+        "button": "重置统计",
+        "confirmTitle": "重置所有统计？",
+        "confirmDescription": "这将永久删除该用户的所有请求日志和使用统计。此操作无法撤销。",
+        "confirm": "是的，重置全部",
+        "loading": "重置中...",
+        "queued": "重置任务已排队",
+        "running": "正在重置统计",
+        "completed": "重置已完成",
+        "failed": "重置失败，可以重试",
+        "statusUnavailable": "暂时无法更新重置状态",
+        "retryStatus": "重试状态查询",
+        "success": "所有统计已重置"
+      }
+    },
+    "batchEdit": {
+      "enterMode": "批量编辑",
+      "exitMode": "退出",
+      "selectAll": "全选",
+      "selectedCount": "已选 {users} 个用户，{keys} 个密钥",
+      "editSelected": "编辑选中项",
+      "dialog": {
+        "title": "批量编辑",
+        "description": "将影响 {users} 个用户，{keys} 个密钥",
+        "cancel": "取消",
+        "next": "下一步",
+        "noFieldEnabled": "请先启用至少一个要覆盖的字段",
+        "noUpdate": "没有可执行的更新",
+        "noSelection": "请先选择要批量编辑的用户或密钥。"
+      },
+      "confirm": {
+        "title": "确认批量更新",
+        "description": "此操作将更新 {users} 个用户和 {keys} 个密钥，操作不可撤销。",
+        "userFields": "用户字段",
+        "keyFields": "密钥字段",
+        "goBack": "返回修改",
+        "update": "确认更新",
+        "updating": "更新中..."
+      },
+      "toast": {
+        "usersUpdated": "已更新 {count} 个用户",
+        "keysUpdated": "已更新 {count} 个密钥",
+        "usersFailed": "用户更新失败：{error}",
+        "keysFailed": "密钥更新失败：{error}",
+        "batchFailed": "批量更新失败"
+      },
+      "validation": {
+        "invalidNumber": "请输入有效数字",
+        "negativeNumber": "数值不能为负数"
+      },
+      "aria": {
+        "selectUser": "选择用户",
+        "selectKey": "选择密钥"
+      },
+      "user": {
+        "title": "用户设置",
+        "affected": "将影响 {count} 个用户",
+        "enableFieldAria": "启用字段：{title}",
+        "fields": {
+          "note": "备注",
+          "tags": "标签",
+          "rpm": "RPM 限制",
+          "limit5h": "5h 限额 (USD)",
+          "limitDaily": "每日限额 (USD)",
+          "limitWeekly": "周限额 (USD)",
+          "limitMonthly": "月限额 (USD)"
+        },
+        "placeholders": {
+          "emptyToClear": "留空表示清空",
+          "tagsPlaceholder": "输入后回车添加，支持逗号分隔",
+          "emptyNoLimit": "留空表示不限额"
+        }
+      },
+      "key": {
+        "title": "密钥设置",
+        "affected": "将影响 {count} 个密钥",
+        "fields": {
+          "providerGroup": "分组 (providerGroup)",
+          "limit5h": "5h 限额 (USD)",
+          "limitDaily": "每日限额 (USD)",
+          "limitWeekly": "周限额 (USD)",
+          "limitMonthly": "月限额 (USD)",
+          "canLoginWebUi": "独立个人用量页面",
+          "keyEnabled": "Key 启用状态"
+        },
+        "placeholders": {
+          "groupPlaceholder": "留空表示清空分组，多个用逗号分隔",
+          "emptyNoLimit": "留空表示不限额"
+        },
+        "targetValue": "目标值"
+      }
+    },
+    "createDialog": {
+      "title": "创建用户",
+      "description": "创建新用户并配置 API 密钥",
+      "saveFailed": "创建用户失败",
+      "keyCreateFailed": "创建密钥失败",
+      "rollbackFailed": "自动回滚失败：可能已创建用户但未创建密钥。请手动删除该用户（userId: {userId}）后重试",
+      "createSuccess": "用户创建成功",
+      "successTitle": "创建成功",
+      "successDescription": "用户和密钥已成功创建",
+      "generatedKey": "生成的密钥",
+      "keyHint": "您可以在用户管理页面管理此密钥（启用/禁用、设置限额等），并可随时重新查看完整密钥。请妥善保管，避免泄露",
+      "keysSection": "密钥",
+      "addKey": "添加密钥",
+      "removeKey": "删除密钥",
+      "cannotDeleteLastKey": "无法删除最后一个密钥",
+      "confirmRemoveKeyTitle": "删除密钥",
+      "confirmRemoveKeyDescription": "确定要删除密钥 \"{name}\" 吗?",
+      "creating": "创建中...",
+      "create": "创建"
+    },
+    "limitRules": {
+      "addRule": "添加限额规则",
+      "ruleTypes": {
+        "limitRpm": "RPM 限额",
+        "limit5h": "5小时限额",
+        "limitDaily": "每日限额",
+        "limitWeekly": "周限额",
+        "limitMonthly": "月限额",
+        "limitTotal": "总限额",
+        "limitSessions": "并发 Session"
+      },
+      "dailyMode": {
+        "fixed": "固定时间重置",
+        "rolling": "滚动窗口（24h）"
+      },
+      "quickValues": {
+        "10": "$10",
+        "50": "$50",
+        "100": "$100",
+        "500": "$500",
+        "unlimited": "无限"
+      },
+      "alreadySet": "已配置",
+      "confirmAdd": "添加",
+      "cancel": "取消"
+    },
+    "quickExpire": {
+      "oneWeek": "一周后",
+      "oneMonth": "一月后",
+      "threeMonths": "三月后",
+      "oneYear": "一年后"
+    },
+    "providerGroupSelect": {
+      "providersSuffix": "个供应商",
+      "loadFailed": "加载供应商分组失败"
+    },
+    "providerGroup": {
+      "label": "供应商分组",
+      "placeholder": "选择供应商分组",
+      "noRestriction": "无限制（所有供应商）",
+      "providerCount": "{count} 个供应商"
+    },
+    "dangerZone": {
+      "title": "危险操作",
+      "description": "以下操作不可逆，请谨慎执行",
+      "enable": {
+        "title": "启用用户",
+        "description": "启用后该用户及其密钥将恢复正常使用",
+        "trigger": "启用",
+        "confirm": "确认启用",
+        "confirmDescription": "确认要启用用户 \"{userName}\" 吗？",
+        "loading": "处理中..."
+      },
+      "disable": {
+        "title": "禁用用户",
+        "description": "禁用后该用户及其密钥将无法继续使用",
+        "trigger": "禁用",
+        "confirm": "确认禁用",
+        "confirmDescription": "确认要禁用用户 \"{userName}\" 吗？",
+        "loading": "处理中..."
+      },
+      "delete": {
+        "title": "删除用户",
+        "description": "将删除该用户的所有关联数据，此操作无法撤销",
+        "trigger": "删除",
+        "confirm": "确认删除",
+        "confirmDescription": "此操作将删除用户 \"{userName}\" 的所有关联数据，且无法撤销。",
+        "confirmLabel": "二次确认",
+        "confirmHint": "请输入 \"{userName}\" 以确认删除",
+        "loading": "删除中..."
+      },
+      "actions": {
+        "cancel": "取消"
+      },
+      "errors": {
+        "enableFailed": "启用用户失败，请稍后重试",
+        "disableFailed": "禁用用户失败，请稍后重试",
+        "deleteFailed": "删除用户失败，请稍后重试"
+      }
+    },
+    "limitIndicator": {
+      "notSet": "未设置",
+      "unlimited": "无限制"
+    },
+    "keySettings": {
+      "balanceQueryPage": {
+        "label": "启用独立余额查询页",
+        "description": "允许用户通过专属页面查看余额"
+      },
+      "cacheTtlOverride": {
+        "label": "Cache TTL 覆写",
+        "inherit": "不覆写（跟随供应商/客户端）",
+        "5m": "5 分钟",
+        "1h": "1 小时"
+      }
+    },
+    "pagination": {
+      "previous": "上一页",
+      "next": "下一页",
+      "page": "第 {current} 页",
+      "of": "共 {total} 页"
+    },
+    "toolbar": {
+      "expandAll": "全部展开",
+      "collapseAll": "全部折叠"
+    },
+    "keyStatus": {
+      "enabled": "启用",
+      "disabled": "禁用",
+      "active": "正常",
+      "expired": "已过期",
+      "expiringSoon": "即将过期",
+      "keyEnabled": "密钥已启用",
+      "keyDisabled": "密钥已禁用",
+      "toggleKeyStatus": "切换密钥启用状态",
+      "clickToDisableKey": "点击禁用密钥",
+      "clickToEnableKey": "点击启用密钥",
+      "operationFailed": "操作失败",
+      "clickToQuickRenew": "点击快捷续期"
+    },
+    "userStatus": {
+      "enabled": "启用",
+      "disabled": "禁用",
+      "active": "正常",
+      "expired": "已过期",
+      "expiringSoon": "即将过期",
+      "userEnabled": "用户已启用",
+      "userDisabled": "用户已禁用",
+      "toggleUserStatus": "切换用户启用状态",
+      "clickToDisableUser": "点击禁用用户",
+      "clickToEnableUser": "点击启用用户",
+      "operationFailed": "操作失败",
+      "deleteFailed": "删除失败",
+      "deleteSuccess": "删除成功",
+      "daysLeft": "{days, plural, =0 {今天到期} =1 {剩余1天} other {剩余#天}}"
+    },
+    "userEditSection": {
+      "sections": {
+        "basicInfo": "基本信息",
+        "expireTime": "过期时间",
+        "limitRules": "限额规则",
+        "accessRestrictions": "访问限制"
+      },
+      "fields": {
+        "username": {
+          "label": "用户名",
+          "placeholder": "请输入用户名"
+        },
+        "description": {
+          "label": "备注",
+          "placeholder": "请输入备注（可选）"
+        },
+        "tags": {
+          "label": "用户标签",
+          "placeholder": "输入标签（回车添加）"
+        },
+        "providerGroup": {
+          "label": "供应商分组",
+          "placeholder": "default"
+        },
+        "allowedClients": {
+          "label": "客户端限制",
+          "description": "限制哪些 CLI/IDE 客户端可以使用此账户。留空表示无限制。",
+          "customLabel": "自定义客户端模式",
+          "customPlaceholder": "输入模式（如 'my-ide'、'codex-*'）",
+          "customHelp": "不含 '*'：不区分大小写的子串匹配（忽略 '-' 和 '_'）。含 '*'：从 UA 开头的 glob 通配符匹配（用 *foo* 匹配任意位置；不区分大小写，字符按原样匹配）。"
+        },
+        "blockedClients": {
+          "label": "黑名单客户端",
+          "description": "匹配这些模式的客户端将被拒绝，即使它们也匹配白名单。",
+          "customLabel": "自定义黑名单模式",
+          "customPlaceholder": "输入模式（如 'my-ide'、'codex-*'）",
+          "customHelp": "不含 '*'：不区分大小写的子串匹配（忽略 '-' 和 '_'）。含 '*'：从 UA 开头的 glob 通配符匹配（用 *foo* 匹配任意位置；不区分大小写，字符按原样匹配）。"
+        },
+        "allowedModels": {
+          "label": "模型限制",
+          "placeholder": "输入模型名称或从下拉列表选择",
+          "description": "限制用户只能使用指定的 AI 模型。留空表示无限制。"
+        },
+        "enableStatus": {
+          "label": "启用状态",
+          "enabledDescription": "当前已启用，禁用后该用户及其密钥将无法继续使用",
+          "disabledDescription": "当前已禁用，启用后该用户及其密钥将恢复正常使用",
+          "confirmDisable": "确认禁用",
+          "confirmEnable": "确认启用",
+          "confirmEnableTitle": "确认启用用户",
+          "confirmDisableTitle": "确认禁用用户",
+          "confirmEnableDescription": "启用后该用户及其密钥将恢复正常使用",
+          "confirmDisableDescription": "禁用后该用户及其密钥将无法继续使用",
+          "cancel": "取消",
+          "processing": "处理中..."
+        }
+      },
+      "actions": {
+        "allow": "允许",
+        "block": "阻止"
+      },
+      "presetClients": {
+        "claude-cli": "Claude Code CLI",
+        "gemini-cli": "Gemini CLI",
+        "factory-cli": "Droid CLI",
+        "codex-cli": "Codex CLI",
+        "claude-code": "Claude Code（全部）",
+        "claude-code-cli": "Claude Code CLI (精确检测)",
+        "claude-code-cli-sdk": "Claude Code CLI SDK",
+        "claude-code-vscode": "Claude Code VSCode",
+        "claude-code-sdk-ts": "Claude Code SDK（TypeScript）",
+        "claude-code-sdk-py": "Claude Code SDK（Python）",
+        "claude-code-gh-action": "Claude Code GitHub Action"
+      },
+      "subClients": {
+        "all": "全部",
+        "cli": "CLI",
+        "vscode": "VS Code",
+        "sdk-ts": "SDK (TypeScript)",
+        "sdk-py": "SDK (Python)",
+        "cli-sdk": "CLI SDK",
+        "gh-action": "GitHub Action",
+        "codex-cli-core": "CLI / TUI",
+        "desktop": "Desktop",
+        "exec": "Exec"
+      },
+      "nSelected": "已选 {count} 项"
+    },
+    "keyEditSection": {
+      "sections": {
+        "basicInfo": "基本信息",
+        "expireTime": "过期时间",
+        "limitRules": "限额规则",
+        "specialFeatures": "特殊功能"
+      },
+      "fields": {
+        "keyName": {
+          "label": "密钥名称",
+          "placeholder": "请输入密钥名称"
+        },
+        "enableStatus": {
+          "label": "启用状态",
+          "description": "禁用后此密钥将无法使用。禁用后仅管理员可启用。",
+          "cannotDisableTooltip": "无法禁用最后一个启用的密钥"
+        },
+        "balanceQueryPage": {
+          "label": "独立个人用量页面",
+          "description": "启用后，此密钥可使用独立的个人用量查询页面",
+          "descriptionEnabled": "启用后，此密钥在登录时将进入独立的个人用量页面。但不可修改自己密钥的供应商分组。",
+          "descriptionDisabled": "关闭后，用户将无法进入个人独立用量页面 UI，而是进入受限的 Web UI。"
+        },
+        "providerGroup": {
+          "label": "供应商分组",
+          "placeholder": "默认：default",
+          "selectHint": "选择此 Key 可使用的供应商分组",
+          "editHint": "已有密钥的分组不可修改",
+          "allGroups": "使用全部分组",
+          "noGroupHint": "default 分组包含所有未设置 groupTag 的供应商"
+        },
+        "cacheTtl": {
+          "label": "Cache TTL 覆写",
+          "description": "强制为包含 cache_control 的请求设置 Anthropic prompt cache TTL。",
+          "options": {
+            "inherit": "不覆写（跟随供应商/客户端）",
+            "5m": "5m",
+            "1h": "1h"
+          }
+        }
+      },
+      "limitRules": {
+        "title": "添加限额规则",
+        "actions": {
+          "add": "添加规则",
+          "remove": "移除"
+        },
+        "daily": {
+          "mode": {
+            "fixed": "固定时间重置",
+            "rolling": "滚动窗口（24小时）"
+          }
+        },
+        "overwriteHint": "此类型已存在，保存将覆盖原有值"
+      }
+    }
+  },
+  "webhookMigration": {
+    "title": "Webhook 系统升级",
+    "description": "我们推出了全新的 Webhook 通知系统，支持多目标推送、独立配置和更好的可靠性。",
+    "step1": {
+      "title": "检测到旧版 Webhook 配置",
+      "description": "系统检测到您正在使用旧版 Webhook 配置。新版系统支持更强大的功能，建议您进行迁移。"
+    },
+    "step2": {
+      "title": "选择平台类型",
+      "description": "以下 Webhook 地址无法自动识别平台类型，请手动选择："
+    },
+    "platformOptions": {
+      "wechat": "企业微信",
+      "feishu": "飞书",
+      "dingtalk": "钉钉",
+      "telegram": "Telegram",
+      "custom": "自定义"
+    },
+    "migrateButton": "开始迁移",
+    "skipButton": "稍后再说",
+    "nextButton": "下一步",
+    "goToSettingsButton": "前往设置",
+    "migrating": "正在迁移...",
+    "success": "迁移完成",
+    "successDescription": "您的 Webhook 配置已成功迁移到新系统。",
+    "error": "迁移失败",
+    "errorGeneric": "迁移失败，请稍后重试。",
+    "detectedWebhooks": "检测到的 Webhook",
+    "notificationTypes": {
+      "circuit_breaker": "熔断器告警",
+      "daily_leaderboard": "每日排行榜",
+      "cost_alert": "成本预警"
+    },
+    "urlLabel": "Webhook 地址",
+    "platformLabel": "平台类型",
+    "autoDetected": "自动识别",
+    "selectPlatform": "请选择平台",
+    "successStats": "已创建 {targets} 个目标，{bindings} 个绑定"
+  },
+  "limitRules": {
+    "addRule": "添加限额规则",
+    "title": "添加限额规则",
+    "description": "选择限额类型并设置数值",
+    "cancel": "取消",
+    "confirm": "保存",
+    "fields": {
+      "type": {
+        "label": "限额类型",
+        "placeholder": "请选择"
+      },
+      "value": {
+        "label": "数值",
+        "placeholder": "请输入"
+      }
+    },
+    "limit5h": {
+      "mode": {
+        "label": "5小时重置模式",
+        "fixed": "固定窗口",
+        "rolling": "滚动窗口（5小时）",
+        "helperFixed": "从首次成功记账开始锁定 5 小时固定窗口。",
+        "helperRolling": "按最近 5 小时滚动窗口统计额度。"
+      }
+    },
+    "daily": {
+      "mode": {
+        "label": "每日重置模式",
+        "fixed": "固定时间重置",
+        "rolling": "滚动窗口（24小时）",
+        "helperFixed": "每天在指定时间重置额度。",
+        "helperRolling": "从首次请求开始计算24小时滚动窗口"
+      },
+      "time": {
+        "label": "重置时间",
+        "placeholder": "HH:mm"
+      }
+    },
+    "limitTypes": {
+      "limitRpm": "RPM 限额",
+      "limit5h": "5小时限额",
+      "limitDaily": "每日限额",
+      "limitWeekly": "周限额",
+      "limitMonthly": "月限额",
+      "limitTotal": "总限额",
+      "limitSessions": "并发 Session"
+    },
+    "ruleTypes": {
+      "limitRpm": "RPM 限额",
+      "limit5h": "5小时限额",
+      "limitDaily": "每日限额",
+      "limitWeekly": "周限额",
+      "limitMonthly": "月限额",
+      "limitTotal": "总限额",
+      "limitSessions": "并发 Session"
+    },
+    "errors": {
+      "missingType": "请选择限额类型",
+      "invalidValue": "请输入有效数值",
+      "invalidTime": "请输入有效时间（HH:mm）"
+    },
+    "overwriteHint": "该类型已存在，保存后会覆盖现有配置",
+    "quickValues": {
+      "10": "$10",
+      "50": "$50",
+      "100": "$100",
+      "500": "$500",
+      "unlimited": "无限"
+    },
+    "alreadySet": "已配置",
+    "confirmAdd": "添加"
+  }
+}

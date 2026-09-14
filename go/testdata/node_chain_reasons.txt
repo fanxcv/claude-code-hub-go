@@ -1,0 +1,127 @@
+# ---------------------------------------------------------------------------
+# 冻结的 Node 链上 reason 词表（ProviderChainItem.reason）
+# ---------------------------------------------------------------------------
+#
+# 冻结时点：7f39ec64（Node 数据面删除前、最后一个含该实现的提交）
+# 生成方式：由**原抽取逻辑**在真源在位时生成——三处来源的并集
+#           ① src/types/message.ts 的 reason 联合类型字面量
+#           ② src/app/v1/_lib/proxy/** 与 src/lib/** 的写链字面量 reason: "..."
+#           生成时原闸门当场判定为**绿**，故本表即退役时的 Node 事实。
+# 冻结理由：来源②的第一处路径（src/app/v1）已随 Node 数据面退役删除，原闸门读不到真源。
+#
+# 语义变化（重要，2026-09-13）：
+#   闸门由「对 live Node 漂移」降级为「对冻结快照漂移」。
+#   · 仍能抓到：Go 侧误改/新增词表——这是本闸门的主要价值。词是**跨语言数据契约**
+#     （两侧写同一列、消费者按精确词判定），写错一个词不会让任何形状断言变红：
+#     列照写、类型照对，只是值不在词表里，消费者于是把它归进「失败」兜底。
+#     实测代价：success 让可用率恒 0。
+#   · 不再能抓到：Node 侧将来若发生变动（Node 已退役，不会再变动；这是可接受降级的前提）。
+#   · 注意：来源②的 src/lib 子树在退役第三批删除后同样读不到，故整表一并冻结，
+#     而非只冻结已删路径——否则闸门会在下一批删除时再次转红。
+#
+# 复核方式：本文件词表 ⊇ Go 侧词表（chainreason.go 常量 + 本包写链字面量）。
+# 表内行格式：一行一个词；以 # 开头的行为注释，空行忽略。共 102 词。
+# ---------------------------------------------------------------------------
+
+aborted
+affinity_hit
+already_exists
+already_retried
+anthropic_warmup_intercepted
+binding_error
+binding_owner_unavailable
+circuit_open
+circuit_open_fallback
+client_abort
+client_abort_no_first_byte
+client_error_non_retryable
+client_restriction
+client_restriction_filtered
+completed
+completion_marker_missing
+concurrency_exhausted
+concurrent_binding_changed
+concurrent_binding_exists
+concurrent_limit_failed
+csrf_guard_bypassed_in_development
+current_provider_not_found
+disabled
+discovery_lease_not_owned
+empty
+empty_body
+end_turn
+endpoint_pool_exhausted
+error
+external_client_abort
+fanout_data_invalid
+first_success
+hedge_launched
+hedge_loser_billed
+hedge_loser_cancelled
+hedge_threshold
+hedge_triggered
+hedge_winner
+ignored
+initial_selection
+injected
+insert_failed
+invalid_input
+ip_rate_limited
+keep_healthy_higher_priority
+key_rate_limited
+lazy_warmup
+lease_held
+legacy_binding_conflict
+legacy_webhook_missing
+local_overload
+lock_not_owned_or_expired
+memory_budget_exhausted
+metering_reserve
+missing_key
+missing_key_id
+missing_or_mismatched_snapshot
+missing_session
+missing_session_id
+missing_snapshot
+no_bindings
+no_previous_binding
+non_streaming
+not_applicable
+not_owner_or_missing
+note_existing_key_failed
+pending_key
+pending_key_during_reload
+priority_gate
+priority_upgrade
+projection_missing
+provider_switch_not_allowed
+rate_limited
+raw_cross_provider_fallback
+raw_passthrough
+reason
+rectifier_retry
+redis_capability_unavailable
+redis_not_ready
+replacement_wave_pending
+request_success
+resource_not_found
+response_incomplete
+responses_ws_attempted
+responses_ws_fallback
+retry_failed
+retry_not_allowed
+retry_success
+retry_with_cached_instructions
+retry_with_official_instructions
+selector_error
+session_reuse
+stale_repeatable_remove_failed
+stream_not_successful
+streaming_hedge_disabled
+strict_blocked_legacy_fallback
+system_error
+unsupported
+unsupported_protocol
+vendor_type_all_timeout
+versioned_binding_conflict
+websocket

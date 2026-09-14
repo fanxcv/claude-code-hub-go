@@ -1,0 +1,128 @@
+[
+  {
+    "constName": "BATCH_CHECK_SESSION_LIMITS",
+    "file": "batch-check-session-limits.lua",
+    "sha256": "57bdf9729f071e2ce06a079d708288bec7290ab84f55b5879c8a7676f173d35a",
+    "bytes": 703,
+    "keysArityNote": "KEYS=多个 provider:{id}:active_sessions；ARGV[1]=sessionId，ARGV[2..N-1]=各供应商 limit，ARGV[N]=now(ms)。返回每个 key 一项的 {{allowed,count}}。"
+  },
+  {
+    "constName": "CAS_SESSION_BINDING",
+    "file": "cas-session-binding.lua",
+    "sha256": "c1e9eaf7353d3733ac2551b232629dc936510f48c184ca5896c96e470f34950a",
+    "bytes": 2285,
+    "keysArityNote": "KEYS[1..3]=绑定 hash 与两个 legacy 镜像；ARGV[1]=currentKeyId，ARGV[2]=expectedGeneration，ARGV[3]=nextGeneration，ARGV[4]=nextProviderId，ARGV[5]=TTL 秒。返回 {ok|conflict, ...}；缺失规范态一律 conflict，绝不在此初始化。"
+  },
+  {
+    "constName": "CHECK_AND_TRACK_KEY_USER_SESSION",
+    "file": "check-and-track-key-user-session.lua",
+    "sha256": "590b009f3bbc9af2232b9d594721ad56be8ade6bf1dbc32a2371283bcd54b3fc",
+    "bytes": 2347,
+    "keysArityNote": "KEYS[1..3]={active_sessions}:global|key|user 并发索引 ZSET（须同 hash tag）；ARGV[1]=sessionId，ARGV[2]=keyLimit，ARGV[3]=userLimit，ARGV[4]=now(ms)，ARGV[5]=ttlMs(可选,默认 300000)。返回 {allowed,rejectedBy,keyCount,keyTracked,userCount,userTracked}。"
+  },
+  {
+    "constName": "CHECK_AND_TRACK_SESSION",
+    "file": "check-and-track-session.lua",
+    "sha256": "ceac11ca31b3fa779e5e854b32c15bf6d01780f3d8c37b11b8f47551d874e940",
+    "bytes": 2185,
+    "keysArityNote": "KEYS[1]=provider:{id}:active_sessions，KEYS[2]=provider:{id}:active_session_refs；ARGV[1]=sessionId，ARGV[2]=limit，ARGV[3]=now(ms)，ARGV[4]=ttlMs(可选,默认 300000)。返回 {allowed,count,tracked,referenced}。"
+  },
+  {
+    "constName": "CLEAR_SESSION_BINDING",
+    "file": "clear-session-binding.lua",
+    "sha256": "c1b97cc3e11ae7c258817d4d99986b2c7a17baaefef814d73aa5cb3c5fd19edf",
+    "bytes": 2723,
+    "keysArityNote": "KEYS[1..3]=绑定 hash 与两个 legacy 镜像，KEYS[4]=租户级 cooldown 键（cooldown TTL 为 0 时不使用）；ARGV[1]=currentKeyId，ARGV[2]=expectedGeneration，ARGV[3]=nextGeneration，ARGV[4]=expectedProviderId（空表示 null 绑定），ARGV[5]=TTL 秒，ARGV[6]=cooldownProviderId（可空），ARGV[7]=cooldownTtl 秒（0 表示不写）。"
+  },
+  {
+    "constName": "DELETE_LEGACY_PROVIDER_IF_VALUE",
+    "file": "delete-legacy-provider-if-value.lua",
+    "sha256": "15c85e0726bb418d7f43e46264a80bbfadf4a2f73549c6cf85cee972b4ee515d",
+    "bytes": 96,
+    "keysArityNote": "KEYS[1]=legacy provider 镜像键；ARGV[1]=期望值。单键，兼容 Redis Cluster。返回 1=已删除，0=值不符。"
+  },
+  {
+    "constName": "FORCE_TERMINATE_KEY_USER_SESSION",
+    "file": "force-terminate-key-user-session.lua",
+    "sha256": "76aa93f47e1f221c1f67d13d743ac9d56bab1a01b362b7ed6dfca077049eba33",
+    "bytes": 263,
+    "keysArityNote": "KEYS[1..3]=global/key/user 并发索引 ZSET；ARGV[1]=sessionId。返回 {removedGlobal,removedKey,removedUser}。"
+  },
+  {
+    "constName": "FORCE_TERMINATE_PROVIDER_SESSION",
+    "file": "force-terminate-provider-session.lua",
+    "sha256": "5514103cc56959d8171adfabe3bbd7d881b745d2f99afc18eda903a27f6cae60",
+    "bytes": 251,
+    "keysArityNote": "KEYS[1]=provider:{id}:active_sessions，KEYS[2]=provider:{id}:active_session_refs；ARGV[1]=sessionId。返回 {removedSession,removedRefs}。"
+  },
+  {
+    "constName": "GET_COST_5H_ROLLING_WINDOW",
+    "file": "get-cost-5h-rolling-window.lua",
+    "sha256": "f4229a740782eba4045d33b5e5d9a770edbb55b3473fd2dc0e5525b6c6bff51e",
+    "bytes": 482,
+    "keysArityNote": "KEYS[1]=成本滚动窗 ZSET；ARGV[1]=now(ms)，ARGV[2]=windowMs(默认 18000000)。返回窗口内总消费的字符串。"
+  },
+  {
+    "constName": "GET_COST_DAILY_ROLLING_WINDOW",
+    "file": "get-cost-daily-rolling-window.lua",
+    "sha256": "c955231898cb0853e699022fedfb715b0fdf218ba802696bc232f679245f3149",
+    "bytes": 483,
+    "keysArityNote": "KEYS[1]=成本滚动窗 ZSET；ARGV[1]=now(ms)，ARGV[2]=windowMs(默认 86400000)。返回窗口内总消费的字符串。"
+  },
+  {
+    "constName": "READ_OR_RECONCILE_SESSION_BINDING",
+    "file": "read-or-reconcile-session-binding.lua",
+    "sha256": "f50c2516690802a736f9101ea4ee170fcc54f1d168b28cd90cfa698bb6cbd58e",
+    "bytes": 3026,
+    "keysArityNote": "KEYS[1]=规范绑定 hash，KEYS[2]=legacy provider 字符串，KEYS[3]=legacy key owner 字符串；ARGV[1]=currentKeyId，ARGV[2]=初始化/升级用 generation，ARGV[3]=绑定 TTL 秒。返回 {ok|conflict, source|reason, generation, providerIdOrEmpty}。"
+  },
+  {
+    "constName": "RELEASE_PROVIDER_SESSION",
+    "file": "release-provider-session.lua",
+    "sha256": "899fab3df77f9078bf06a8f4a115438b5704a3da6d963bfedce5351f680e3d17",
+    "bytes": 500,
+    "keysArityNote": "KEYS[1]=provider:{id}:active_sessions，KEYS[2]=provider:{id}:active_session_refs；ARGV[1]=sessionId。返回 {removed,remainingRefs}。"
+  },
+  {
+    "constName": "RELEASE_SESSION_DISCOVERY_LEASE",
+    "file": "release-session-discovery-lease.lua",
+    "sha256": "b7a38142879ba429b6679d7c33fcde28febe9a88efd936a5e5e83cb84ea1b410",
+    "bytes": 181,
+    "keysArityNote": "KEYS[1]=租户级 Discovery 租约键；ARGV[1]=ownerToken。返回 1=已释放，0=非本 owner。"
+  },
+  {
+    "constName": "RENEW_SESSION_DISCOVERY_LEASE",
+    "file": "renew-session-discovery-lease.lua",
+    "sha256": "129622d9207177a4c0ffbd209f98d8164c340cd1c97700159f62e8eb627d355b",
+    "bytes": 262,
+    "keysArityNote": "KEYS[1]=租户级 Discovery 租约键；ARGV[1]=ownerToken，ARGV[2]=TTL 秒。返回 1=续期成功，0=非本 owner。"
+  },
+  {
+    "constName": "RESTORE_LEGACY_PROVIDER_IF_ABSENT",
+    "file": "restore-legacy-provider-if-absent.lua",
+    "sha256": "41e102f861f5bfc07efa0c6883818dd26503ea36ef55bfc3ea918f290925172c",
+    "bytes": 117,
+    "keysArityNote": "KEYS[1]=legacy provider 镜像键；ARGV[1]=值，ARGV[2]=TTL 秒。返回 1=已写入，0=键已存在。"
+  },
+  {
+    "constName": "TERMINATE_SESSION_BINDING",
+    "file": "terminate-session-binding.lua",
+    "sha256": "02648162e5f539683e8d1f4e44020376649b303917daf5fa23482b3b9fdf7dc3",
+    "bytes": 2280,
+    "keysArityNote": "KEYS[1..3]=绑定 hash 与两个 legacy 镜像；ARGV[1]=currentKeyId，ARGV[2]=nextGeneration，ARGV[3]=TTL 秒，ARGV[4]=可选 expectedProviderId。返回 {ok|conflict, ...}；不比较旧 generation，但校验规范所有权与两个镜像。"
+  },
+  {
+    "constName": "TOUCH_SESSION_BINDING",
+    "file": "touch-session-binding.lua",
+    "sha256": "83a3a41091d2bb16a35e59c194817d241fa747be4efa9dfec2ef7a6a66e15436",
+    "bytes": 2254,
+    "keysArityNote": "KEYS[1..3]=绑定 hash 与两个 legacy 镜像；ARGV[1]=currentKeyId，ARGV[2]=expectedGeneration，ARGV[3]=expectedProviderId（空表示 null 绑定），ARGV[4]=TTL 秒。返回 {ok|conflict, ...}；只续 TTL，不旋转 generation。"
+  },
+  {
+    "constName": "TRACK_COST_ROLLING_WINDOW",
+    "file": "track-cost-rolling-window.lua",
+    "sha256": "6373f961c31ec4d65d078fe75136b4969ac7f91bfda585e0b6ee6c8f70edc57f",
+    "bytes": 852,
+    "keysArityNote": "KEYS[1]={entity}:{id}:cost_{window}_rolling；ARGV[1]=cost，ARGV[2]=now(ms)，ARGV[3]=windowMs，ARGV[4]=requestId(可空)，ARGV[5]=ttlSeconds。任一枚举参数非法返回 error_reply('invalid rolling cost arguments')，正常返回 1。"
+  }
+]

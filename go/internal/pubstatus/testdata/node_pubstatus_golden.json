@@ -1,0 +1,405 @@
+{
+  "descriptions": {
+    "full": "{\"version\":2,\"note\":\"备注\",\"publicStatus\":{\"displayName\":\"主分组\",\"publicGroupSlug\":\"Main Group\",\"explanatoryCopy\":\"说明文案\",\"sortOrder\":2,\"publicModels\":[{\"modelKey\":\"claude-opus-4\",\"providerTypeOverride\":\"claude\"},\"gpt-5.5\",{\"modelKey\":\"claude-opus-4\"},{\"modelKey\":\"  \"},{\"modelKey\":\"gemini-2.5\",\"providerTypeOverride\":\"not-a-type\"}]}}",
+    "version3": "{\"version\":3,\"note\":\"future\",\"publicStatus\":{\"displayName\":\"x\"}}",
+    "plain": "just a note",
+    "legacyModels": "{\"version\":2,\"publicStatus\":{\"displayName\":\"旧字段\",\"publicModelKeys\":[\"deepseek-v3\",\"deepseek-v3\"]}}",
+    "noModels": "{\"version\":2,\"publicStatus\":{\"displayName\":\"空\"}}",
+    "badJson": "{not json"
+  },
+  "parsed": {
+    "full": {
+      "note": "备注",
+      "publicStatus": {
+        "displayName": "主分组",
+        "publicGroupSlug": "Main Group",
+        "explanatoryCopy": "说明文案",
+        "sortOrder": 2,
+        "publicModels": [
+          {
+            "modelKey": "claude-opus-4",
+            "providerTypeOverride": "claude"
+          },
+          {
+            "modelKey": "gpt-5.5"
+          },
+          {
+            "modelKey": "gemini-2.5"
+          }
+        ]
+      }
+    },
+    "version3": {
+      "note": "{\"version\":3,\"note\":\"future\",\"publicStatus\":{\"displayName\":\"x\"}}",
+      "publicStatus": null
+    },
+    "plain": {
+      "note": "just a note",
+      "publicStatus": null
+    },
+    "legacyModels": {
+      "note": null,
+      "publicStatus": {
+        "displayName": "旧字段",
+        "explanatoryCopy": null,
+        "publicModels": [
+          {
+            "modelKey": "deepseek-v3"
+          }
+        ]
+      }
+    },
+    "noModels": {
+      "note": null,
+      "publicStatus": {
+        "displayName": "空",
+        "explanatoryCopy": null,
+        "publicModels": []
+      }
+    },
+    "badJson": {
+      "note": "{not json",
+      "publicStatus": null
+    }
+  },
+  "slugify": [
+    [
+      "Main Group",
+      "main-group"
+    ],
+    [
+      "团队一",
+      "group-1rsdfk"
+    ],
+    [
+      "hello world!",
+      "hello-world"
+    ],
+    [
+      "--weird--",
+      "weird"
+    ],
+    [
+      "团队一",
+      "group-1rsdfk"
+    ]
+  ],
+  "enabledGroups": [
+    {
+      "groupName": "flat",
+      "displayName": "旧字段",
+      "publicGroupSlug": "flat",
+      "explanatoryCopy": null,
+      "sortOrder": 0,
+      "publicModels": [
+        {
+          "modelKey": "deepseek-v3"
+        }
+      ]
+    },
+    {
+      "groupName": "团队一",
+      "displayName": "主分组",
+      "publicGroupSlug": "main-group",
+      "explanatoryCopy": "说明文案",
+      "sortOrder": 2,
+      "publicModels": [
+        {
+          "modelKey": "claude-opus-4",
+          "providerTypeOverride": "claude"
+        },
+        {
+          "modelKey": "gpt-5.5"
+        },
+        {
+          "modelKey": "gemini-2.5"
+        }
+      ]
+    },
+    {
+      "groupName": "团队二",
+      "displayName": "主分组",
+      "publicGroupSlug": "main-group-oxza1y",
+      "explanatoryCopy": "说明文案",
+      "sortOrder": 2,
+      "publicModels": [
+        {
+          "modelKey": "claude-opus-4",
+          "providerTypeOverride": "claude"
+        },
+        {
+          "modelKey": "gpt-5.5"
+        },
+        {
+          "modelKey": "gemini-2.5"
+        }
+      ]
+    }
+  ],
+  "badgeCases": [
+    [
+      "claude-opus-4",
+      null,
+      "anthropic"
+    ],
+    [
+      "gpt-5.5",
+      "codex",
+      "codex"
+    ],
+    [
+      "gemini-2.5-pro",
+      null,
+      "gemini"
+    ],
+    [
+      "deepseek-r1",
+      "openai-compatible",
+      "openaiCompatible"
+    ],
+    [
+      "mystery-model",
+      null,
+      "openaiCompatible"
+    ]
+  ],
+  "iconCases": [
+    [
+      "claude-opus-4",
+      null,
+      null,
+      "anthropic"
+    ],
+    [
+      "gpt-5.5",
+      "openai",
+      null,
+      "openai"
+    ],
+    [
+      "qwen3-max",
+      "alibaba",
+      null,
+      "qwen"
+    ],
+    [
+      "unknown-thing",
+      null,
+      null,
+      "generic"
+    ],
+    [
+      "unknown-thing",
+      "anthropic",
+      null,
+      "anthropic"
+    ],
+    [
+      "gpt-5.5",
+      null,
+      "gemini-cli",
+      "gemini"
+    ],
+    [
+      "meta-llama/Llama-4",
+      null,
+      null,
+      "meta"
+    ],
+    [
+      "@cf/facebook/llama-3",
+      null,
+      null,
+      "meta"
+    ],
+    [
+      "ppio/deepseek-v3",
+      null,
+      null,
+      "deepseek"
+    ],
+    [
+      "us.anthropic.claude-3-5-sonnet",
+      null,
+      null,
+      "anthropic"
+    ]
+  ],
+  "siteDescription": [
+    [
+      "CC Hub",
+      null,
+      "CC Hub public status"
+    ],
+    [
+      "CC Hub",
+      " 自定义 ",
+      "自定义"
+    ],
+    [
+      "",
+      null,
+      "Request-derived public status"
+    ]
+  ],
+  "publicSnapshot": {
+    "configVersion": "cfg-1700000000000",
+    "generatedAt": "2026-09-12T03:27:26.795Z",
+    "siteTitle": "CC Hub",
+    "siteDescription": "CC Hub public status",
+    "timeZone": "Asia/Shanghai",
+    "defaultIntervalMinutes": 5,
+    "defaultRangeHours": 24,
+    "groups": [
+      {
+        "slug": "flat",
+        "displayName": "旧字段",
+        "sortOrder": 0,
+        "description": null,
+        "models": [
+          {
+            "publicModelKey": "deepseek-v3",
+            "label": "deepseek-v3",
+            "vendorIconKey": "deepseek",
+            "requestTypeBadge": "openaiCompatible"
+          }
+        ]
+      },
+      {
+        "slug": "main-group",
+        "displayName": "主分组",
+        "sortOrder": 2,
+        "description": "说明文案",
+        "models": [
+          {
+            "publicModelKey": "claude-opus-4",
+            "label": "claude-opus-4",
+            "vendorIconKey": "anthropic",
+            "requestTypeBadge": "anthropic"
+          },
+          {
+            "publicModelKey": "gpt-5.5",
+            "label": "gpt-5.5",
+            "vendorIconKey": "openai",
+            "requestTypeBadge": "openaiCompatible"
+          },
+          {
+            "publicModelKey": "gemini-2.5",
+            "label": "gemini-2.5",
+            "vendorIconKey": "gemini",
+            "requestTypeBadge": "gemini"
+          }
+        ]
+      },
+      {
+        "slug": "main-group-oxza1y",
+        "displayName": "主分组",
+        "sortOrder": 2,
+        "description": "说明文案",
+        "models": [
+          {
+            "publicModelKey": "claude-opus-4",
+            "label": "claude-opus-4",
+            "vendorIconKey": "anthropic",
+            "requestTypeBadge": "anthropic"
+          },
+          {
+            "publicModelKey": "gpt-5.5",
+            "label": "gpt-5.5",
+            "vendorIconKey": "openai",
+            "requestTypeBadge": "openaiCompatible"
+          },
+          {
+            "publicModelKey": "gemini-2.5",
+            "label": "gemini-2.5",
+            "vendorIconKey": "gemini",
+            "requestTypeBadge": "gemini"
+          }
+        ]
+      }
+    ]
+  },
+  "internalSnapshot": {
+    "configVersion": "cfg-1700000000000",
+    "siteTitle": "  CC Hub  ",
+    "siteDescription": "CC Hub public status",
+    "timeZone": "Asia/Shanghai",
+    "defaultIntervalMinutes": 5,
+    "defaultRangeHours": 24,
+    "groups": [
+      {
+        "sourceGroupId": 1,
+        "sourceGroupName": "flat",
+        "slug": "flat",
+        "displayName": "旧字段",
+        "sortOrder": 0,
+        "description": null,
+        "models": [
+          {
+            "publicModelKey": "deepseek-v3",
+            "label": "deepseek-v3",
+            "vendorIconKey": "deepseek",
+            "requestTypeBadge": "openaiCompatible"
+          }
+        ]
+      },
+      {
+        "sourceGroupId": 2,
+        "sourceGroupName": "团队一",
+        "slug": "main-group",
+        "displayName": "主分组",
+        "sortOrder": 2,
+        "description": "说明文案",
+        "models": [
+          {
+            "publicModelKey": "claude-opus-4",
+            "label": "claude-opus-4",
+            "vendorIconKey": "anthropic",
+            "requestTypeBadge": "anthropic"
+          },
+          {
+            "publicModelKey": "gpt-5.5",
+            "label": "gpt-5.5",
+            "vendorIconKey": "openai",
+            "requestTypeBadge": "openaiCompatible"
+          },
+          {
+            "publicModelKey": "gemini-2.5",
+            "label": "gemini-2.5",
+            "vendorIconKey": "gemini",
+            "requestTypeBadge": "gemini"
+          }
+        ]
+      },
+      {
+        "sourceGroupId": 3,
+        "sourceGroupName": "团队二",
+        "slug": "main-group-oxza1y",
+        "displayName": "主分组",
+        "sortOrder": 2,
+        "description": "说明文案",
+        "models": [
+          {
+            "publicModelKey": "claude-opus-4",
+            "label": "claude-opus-4",
+            "vendorIconKey": "anthropic",
+            "requestTypeBadge": "anthropic"
+          },
+          {
+            "publicModelKey": "gpt-5.5",
+            "label": "gpt-5.5",
+            "vendorIconKey": "openai",
+            "requestTypeBadge": "openaiCompatible"
+          },
+          {
+            "publicModelKey": "gemini-2.5",
+            "label": "gemini-2.5",
+            "vendorIconKey": "gemini",
+            "requestTypeBadge": "gemini"
+          }
+        ]
+      }
+    ],
+    "generatedAt": "2026-09-12T03:27:26.795Z"
+  }
+}

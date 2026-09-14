@@ -1,0 +1,73 @@
+import type { BatchUpdateKeysParams, Key, PatchKeyLimitField } from "@/types/key";
+import {
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
+  toActionResult,
+  toVoidActionResult,
+  unwrapItems,
+} from "./_compat";
+
+export type { BatchUpdateKeysParams, Key, PatchKeyLimitField } from "@/types/key";
+
+export function addKey(data: { userId: number } & Record<string, unknown>) {
+  const { userId, ...body } = data;
+  // Admin-only route; a 403 must surface instead of silently retargeting the
+  // key to the session user (U03). Self-service callers use addOwnKey().
+  return toActionResult(apiPost(`/api/v1/users/${userId}/keys`, body));
+}
+
+export function addOwnKey(body: Record<string, unknown>) {
+  // Session-scoped endpoint (#1259): the server derives the target user from
+  // the authenticated session and rejects read-only sessions.
+  return toActionResult(apiPost("/api/v1/users:self/keys", body));
+}
+
+export function editKey(keyId: number, data: unknown) {
+  return toActionResult(apiPatch(`/api/v1/keys/${keyId}`, data));
+}
+
+export function removeKey(keyId: number) {
+  return toVoidActionResult(apiDelete(`/api/v1/keys/${keyId}`));
+}
+
+export function getKeys(userId: number) {
+  return toActionResult(
+    apiGet<{ items?: Key[] }>(`/api/v1/users/${userId}/keys`).then(unwrapItems)
+  );
+}
+
+export function getKeysWithStatistics(userId: number) {
+  return toActionResult(
+    apiGet<{ items?: Key[] }>(`/api/v1/users/${userId}/keys?include=statistics`).then(unwrapItems)
+  );
+}
+
+export function getKeyLimitUsage(keyId: number) {
+  return toActionResult(apiGet(`/api/v1/keys/${keyId}/limit-usage`));
+}
+
+export function resetKeyLimitsOnly(keyId: number) {
+  return toVoidActionResult(apiPost(`/api/v1/keys/${keyId}/limits:reset`));
+}
+
+export function toggleKeyEnabled(keyId: number, enabled: boolean) {
+  return toActionResult(apiPost(`/api/v1/keys/${keyId}:enable`, { enabled }));
+}
+
+export function batchUpdateKeys(data: BatchUpdateKeysParams) {
+  return toActionResult(apiPost("/api/v1/keys:batchUpdate", data));
+}
+
+export function renewKeyExpiresAt(keyId: number, data: unknown) {
+  return toActionResult(apiPost(`/api/v1/keys/${keyId}:renew`, data));
+}
+
+export function patchKeyLimit(keyId: number, field: PatchKeyLimitField, value: unknown) {
+  return toActionResult(apiPatch(`/api/v1/keys/${keyId}/limits/${field}`, { value }));
+}
+
+export function getUnmaskedKey(keyId: number) {
+  return toActionResult(apiGet<{ key: string }>(`/api/v1/keys/${keyId}:reveal`));
+}

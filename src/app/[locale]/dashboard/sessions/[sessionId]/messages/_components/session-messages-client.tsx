@@ -1,0 +1,671 @@
+"use client";
+
+import { useQuery } from "@tanstack/react-query";
+import {
+  ArrowLeft,
+  Check,
+  Copy,
+  Download,
+  Info,
+  Menu,
+  Monitor,
+  MoreVertical,
+  XCircle,
+} from "lucide-react";
+import { useParams, useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { usePathname, useRouter } from "@/i18n/routing";
+import {
+  getSessionDetails,
+  terminateActiveSession,
+} from "@/lib/api-client/v1/actions/active-sessions";
+import { getSystemSettings } from "@/lib/api-client/v1/actions/system-config";
+import { getErrorMessage } from "@/lib/utils/error-messages";
+import {
+  DEFAULT_SESSION_DETAIL_VIEW_MODE,
+  type SessionDetailSnapshots,
+  type SessionDetailViewMode,
+} from "@/types/session";
+import { RequestListSidebar } from "./request-list-sidebar";
+import { SessionMessagesDetailsTabs } from "./session-details-tabs";
+import { hasSnapshotData } from "./session-messages-guards";
+import { SessionStats } from "./session-stats";
+
+function normalizeCanonicalSessionRouteParam(sessionId: string): string {
+  try {
+    const decoded = decodeURIComponent(sessionId);
+    return decoded.startsWith("pfx:") || decoded.startsWith("sid:") ? decoded : sessionId;
+  } catch {
+    return sessionId;
+  }
+}
+
+export function SessionMessagesClient() {
+  const t = useTranslations("dashboard.sessions");
+  const tErrors = useTranslations("errors");
+
+  const params = useParams<{ sessionId: string }>();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const sessionId = normalizeCanonicalSessionRouteParam(params.sessionId);
+
+  // URL state
+  const seqParam = searchParams.get("seq");
+  const selectedSourceSessionId = searchParams.get("sourceSessionId");
+  const requestIdParam = searchParams.get("requestId");
+  const selectedSeq = (() => {
+    if (!seqParam) return null;
+    const parsed = Number.parseInt(seqParam, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+  })();
+  const selectedRequestId = (() => {
+    if (!requestIdParam) return null;
+    const parsed = Number.parseInt(requestIdParam, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+  })();
+
+  // Data State
+  const [snapshots, setSnapshots] = useState<SessionDetailSnapshots | null>(null);
+  const [specialSettings, setSpecialSettings] =
+    useState<
+      Extract<
+        Awaited<ReturnType<typeof getSessionDetails>>,
+        { ok: true }
+      >["data"]["specialSettings"]
+    >(null);
+  const [sessionStats, setSessionStats] =
+    useState<
+      Extract<Awaited<ReturnType<typeof getSessionDetails>>, { ok: true }>["data"]["sessionStats"]
+    >(null);
+  const [canonicalSessionId, setCanonicalSessionId] = useState<string | null>(null);
+  const [currentSourceSessionId, setCurrentSourceSessionId] = useState<string | null>(null);
+  const [currentSequence, setCurrentSequence] = useState<number | null>(null);
+  const [prevRequest, setPrevRequest] = useState<{
+    requestId: number;
+    sourceSessionId: string;
+    requestSequence: number;
+  } | null>(null);
+  const [nextRequest, setNextRequest] = useState<{
+    requestId: number;
+    sourceSessionId: string;
+    requestSequence: number;
+  } | null>(null);
+
+  // UI State
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [copiedRequest, setCopiedRequest] = useState(false);
+  const [copiedResponse, setCopiedResponse] = useState(false);
+  const [viewMode, setViewMode] = useState<SessionDetailViewMode>(DEFAULT_SESSION_DETAIL_VIEW_MODE);
+  const [showTerminateDialog, setShowTerminateDialog] = useState(false);
+  const [isTerminating, setIsTerminating] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobileStatsOpen, setIsMobileStatsOpen] = useState(false);
+
+  const resetDetailsState = useCallback(() => {
+    setSnapshots(null);
+    setSpecialSettings(null);
+    setSessionStats(null);
+    setCanonicalSessionId(null);
+    setCurrentSourceSessionId(null);
+    setCurrentSequence(null);
+    setPrevRequest(null);
+    setNextRequest(null);
+  }, []);
+
+  const { data: systemSettings } = useQuery({
+    queryKey: ["system-settings"],
+    queryFn: getSystemSettings,
+  });
+
+  const currencyCode = systemSettings?.currencyDisplay || "USD";
+
+  const handleSelectRequest = useCallback(
+    (sourceSessionId: string | null, seq: number, requestId?: number) => {
+      const params = new URLSearchParams(window.location.search);
+      params.set("seq", seq.toString());
+      if (sourceSessionId) {
+        params.set("sourceSessionId", sourceSessionId);
+      } else {
+        params.delete("sourceSessionId");
+      }
+      if (requestId) {
+        params.set("requestId", requestId.toString());
+      } else {
+        params.delete("requestId");
+      }
+      router.replace(`${pathname}?${params.toString()}`);
+      setIsMobileMenuOpen(false);
+    },
+    [router, pathname]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchDetails = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const result = await getSessionDetails(
+          sessionId,
+          selectedSeq ?? undefined,
+          selectedSourceSessionId ?? undefined,
+          selectedRequestId ?? undefined
+        );
+        if (cancelled) return;
+
+        if (result.ok) {
+          setSnapshots(result.data.snapshots);
+          setSpecialSettings(result.data.specialSettings);
+          setSessionStats(result.data.sessionStats);
+          setCanonicalSessionId(result.data.canonicalSessionId);
+          setCurrentSourceSessionId(result.data.currentSourceSessionId);
+          setCurrentSequence(result.data.currentSequence);
+          setPrevRequest(result.data.prevRequest);
+          setNextRequest(result.data.nextRequest);
+        } else {
+          resetDetailsState();
+          setError(
+            result.errorCode
+              ? getErrorMessage(tErrors, result.errorCode, result.errorParams)
+              : result.error || t("status.fetchFailed")
+          );
+        }
+      } catch (err) {
+        if (cancelled) return;
+        resetDetailsState();
+        setError(err instanceof Error ? err.message : t("status.unknownError"));
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void fetchDetails();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    resetDetailsState,
+    selectedRequestId,
+    selectedSeq,
+    selectedSourceSessionId,
+    sessionId,
+    t,
+    tErrors,
+  ]);
+
+  const currentRequestSnapshot = snapshots?.request[viewMode] ?? null;
+  const currentResponseSnapshot = snapshots?.response[viewMode] ?? null;
+  const hasAnyRequestSnapshotData =
+    hasSnapshotData(snapshots?.request.before) || hasSnapshotData(snapshots?.request.after);
+  const hasAnyResponseSnapshotData =
+    hasSnapshotData(snapshots?.response.before) || hasSnapshotData(snapshots?.response.after);
+  const canExportRequest =
+    !isLoading &&
+    error === null &&
+    currentRequestSnapshot !== null &&
+    currentRequestSnapshot?.headers !== null &&
+    currentRequestSnapshot?.body !== null;
+  const exportSequence = selectedSeq ?? currentSequence;
+
+  const getRequestExportJson = () => {
+    return JSON.stringify(
+      {
+        sessionId,
+        sequence: exportSequence,
+        view: viewMode,
+        request: currentRequestSnapshot,
+        specialSettings,
+      },
+      null,
+      2
+    );
+  };
+
+  const handleCopyRequest = async () => {
+    if (!canExportRequest) return;
+    try {
+      await navigator.clipboard.writeText(getRequestExportJson());
+      setCopiedRequest(true);
+      setTimeout(() => setCopiedRequest(false), 2000);
+      toast.success(t("actions.copied"));
+    } catch (err) {
+      console.error(t("errors.copyFailed"), err);
+      toast.error(t("errors.copyFailed"));
+    }
+  };
+
+  const handleCopyResponse = async () => {
+    if (currentResponseSnapshot?.body == null) return;
+    try {
+      await navigator.clipboard.writeText(currentResponseSnapshot.body);
+      setCopiedResponse(true);
+      setTimeout(() => setCopiedResponse(false), 2000);
+      toast.success(t("actions.copied"));
+    } catch (err) {
+      console.error(t("errors.copyFailed"), err);
+      toast.error(t("errors.copyFailed"));
+    }
+  };
+
+  const handleDownloadRequest = () => {
+    if (!canExportRequest) return;
+    const jsonStr = getRequestExportJson();
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const seqPart = exportSequence !== null ? `-seq-${exportSequence}` : "";
+    a.download = `session-${sessionId.substring(0, 8)}${seqPart}-request.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleTerminateSession = async () => {
+    setIsTerminating(true);
+    try {
+      const result = await terminateActiveSession(sessionId);
+      if (result.ok) {
+        toast.success(t("actions.terminateSuccess"));
+        router.push("/dashboard/sessions");
+      } else {
+        toast.error(result.error || t("actions.terminateFailed"));
+      }
+    } catch (_error) {
+      toast.error(t("actions.terminateFailed"));
+    } finally {
+      setIsTerminating(false);
+      setShowTerminateDialog(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full bg-background">
+      {/* Mobile Sidebar (Requests) */}
+      <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
+        <SheetContent side="left" className="p-0 w-[300px]">
+          <SheetHeader className="p-4 border-b">
+            <SheetTitle>{t("requestList.title")}</SheetTitle>
+          </SheetHeader>
+          <div className="h-full">
+            <RequestListSidebar
+              sessionId={sessionId}
+              selectedSeq={selectedSeq ?? currentSequence}
+              selectedSourceSessionId={selectedSourceSessionId}
+              onSelect={handleSelectRequest}
+              className="border-none w-full"
+            />
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Mobile Stats (Right Sheet) */}
+      {sessionStats && (
+        <Sheet open={isMobileStatsOpen} onOpenChange={setIsMobileStatsOpen}>
+          <SheetContent side="right" className="w-[300px] overflow-y-auto">
+            <SheetHeader className="pb-4">
+              <SheetTitle>{t("details.overview")}</SheetTitle>
+            </SheetHeader>
+            <SessionStats stats={sessionStats} currencyCode={currencyCode} />
+          </SheetContent>
+        </Sheet>
+      )}
+
+      {/* Desktop Left Sidebar (Requests) */}
+      <aside className="hidden md:flex flex-col border-r bg-muted/10 h-full transition-all duration-300 ease-in-out relative group">
+        <div className={sidebarCollapsed ? "w-16" : "w-72"}>
+          <RequestListSidebar
+            sessionId={sessionId}
+            selectedSeq={selectedSeq ?? currentSequence}
+            selectedSourceSessionId={selectedSourceSessionId}
+            onSelect={handleSelectRequest}
+            collapsed={sidebarCollapsed}
+            className="h-full"
+          />
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+          className="absolute -right-3 top-1/2 -translate-y-1/2 h-6 w-6 rounded-full border bg-background shadow-md opacity-0 group-hover:opacity-100 transition-opacity z-10"
+        >
+          <MoreVertical className="h-3 w-3" />
+        </Button>
+      </aside>
+
+      {/* Main Content Area */}
+      <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        {/* Header */}
+        <header className="flex-none h-16 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 px-6 flex items-center justify-between z-10">
+          <div className="flex items-center gap-4 min-w-0">
+            {/* Mobile Menu Toggle */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden"
+              onClick={() => setIsMobileMenuOpen(true)}
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 -ml-2 text-muted-foreground"
+                onClick={() => router.back()}
+              >
+                <ArrowLeft className="h-4 w-4 mr-1" />
+                {t("actions.back")}
+              </Button>
+              <span className="text-muted-foreground/40">/</span>
+              <div className="flex items-center gap-2 min-w-0">
+                <h1 className="font-semibold text-foreground truncate">{t("details.title")}</h1>
+                <Badge
+                  variant="outline"
+                  className="font-mono font-normal text-xs bg-muted/50 truncate max-w-[100px] sm:max-w-none"
+                >
+                  {t("details.canonicalSessionId")}: {canonicalSessionId ?? sessionId}
+                </Badge>
+                {currentSourceSessionId &&
+                  currentSourceSessionId !== (canonicalSessionId ?? sessionId) && (
+                    <Badge
+                      variant="outline"
+                      className="font-mono font-normal text-xs bg-muted/50 truncate max-w-[100px] sm:max-w-none"
+                    >
+                      {t("details.clientSessionId")}: {currentSourceSessionId}
+                    </Badge>
+                  )}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            {/* Desktop Actions */}
+            <div className="hidden sm:flex items-center gap-2">
+              {canExportRequest && (
+                <>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label={t("actions.copyMessages")}
+                          onClick={handleCopyRequest}
+                        >
+                          {copiedRequest ? (
+                            <Check className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <Copy className="h-4 w-4" />
+                          )}
+                          <span className="sr-only">{t("actions.copyMessages")}</span>
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("actions.copyMessages")}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-8 w-8"
+                          aria-label={t("actions.downloadMessages")}
+                          onClick={handleDownloadRequest}
+                        >
+                          <Download className="h-4 w-4" />
+                          <span className="sr-only">{t("actions.downloadMessages")}</span>
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{t("actions.downloadMessages")}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </>
+              )}
+
+              {sessionStats && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="h-8"
+                  onClick={() => setShowTerminateDialog(true)}
+                >
+                  <XCircle className="h-4 w-4 mr-2" />
+                  {t("actions.terminate")}
+                </Button>
+              )}
+            </div>
+
+            {/* Mobile Actions Dropdown */}
+            <div className="sm:hidden flex items-center gap-2">
+              {/* Info Toggle for Mobile */}
+              {sessionStats && (
+                <Button variant="ghost" size="icon" onClick={() => setIsMobileStatsOpen(true)}>
+                  <Info className="h-5 w-5" />
+                </Button>
+              )}
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon">
+                    <MoreVertical className="h-5 w-5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {canExportRequest && (
+                    <>
+                      <DropdownMenuItem onClick={handleCopyRequest}>
+                        <Copy className="h-4 w-4 mr-2" /> {t("actions.copyMessages")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={handleDownloadRequest}>
+                        <Download className="h-4 w-4 mr-2" /> {t("actions.downloadMessages")}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {sessionStats && (
+                    <DropdownMenuItem
+                      className="text-destructive focus:text-destructive"
+                      onClick={() => setShowTerminateDialog(true)}
+                    >
+                      <XCircle className="h-4 w-4 mr-2" /> {t("actions.terminate")}
+                    </DropdownMenuItem>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </div>
+        </header>
+
+        {/* 3-Column Content Layout */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Center: Scrollable Content */}
+          <div className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8">
+            <div className="max-w-5xl mx-auto space-y-6">
+              {isLoading ? (
+                <div className="flex flex-col items-center justify-center py-32 text-muted-foreground animate-pulse">
+                  <div className="h-8 w-8 border-2 border-primary border-t-transparent rounded-full animate-spin mb-4" />
+                  <p>{t("status.loading")}</p>
+                </div>
+              ) : error ? (
+                <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-8 text-center">
+                  <XCircle className="h-8 w-8 text-destructive mx-auto mb-4" />
+                  <h3 className="text-lg font-semibold text-destructive">{t("status.error")}</h3>
+                  <p className="text-muted-foreground mt-2">{error}</p>
+                </div>
+              ) : (
+                <>
+                  {/* Nav & Info Banner */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!prevRequest}
+                        onClick={() =>
+                          prevRequest &&
+                          handleSelectRequest(
+                            prevRequest.sourceSessionId,
+                            prevRequest.requestSequence,
+                            prevRequest.requestId
+                          )
+                        }
+                      >
+                        <ArrowLeft className="h-4 w-4 mr-2" />
+                        {t("details.prevRequest")}
+                      </Button>
+                      <Badge variant="secondary">#{selectedSeq ?? currentSequence ?? "-"}</Badge>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={!nextRequest}
+                        onClick={() =>
+                          nextRequest &&
+                          handleSelectRequest(
+                            nextRequest.sourceSessionId,
+                            nextRequest.requestSequence,
+                            nextRequest.requestId
+                          )
+                        }
+                        className="flex-row-reverse"
+                      >
+                        <ArrowLeft className="h-4 w-4 ml-2 rotate-180" />
+                        {t("details.nextRequest")}
+                      </Button>
+                    </div>
+
+                    {sessionStats?.userAgent && (
+                      <div className="bg-muted/30 rounded-lg p-3 flex items-start gap-3 border text-sm text-muted-foreground">
+                        <Monitor className="h-4 w-4 mt-0.5 text-blue-500 shrink-0" />
+                        <code className="break-all font-mono text-xs">
+                          {sessionStats.userAgent}
+                        </code>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Main Content - No more extra Card wrapper */}
+                  <SessionMessagesDetailsTabs
+                    snapshots={snapshots}
+                    viewMode={viewMode}
+                    onViewModeChange={setViewMode}
+                    specialSettings={specialSettings}
+                    onCopyResponse={handleCopyResponse}
+                    isResponseCopied={copiedResponse}
+                  />
+
+                  {/* Empty State */}
+                  {!sessionStats?.userAgent &&
+                    specialSettings === null &&
+                    !hasAnyRequestSnapshotData &&
+                    !hasAnyResponseSnapshotData && (
+                      <div className="text-center py-20 border-2 border-dashed rounded-xl bg-muted/10">
+                        <div className="text-muted-foreground text-lg mb-2 font-medium">
+                          {t("details.noDetailedData")}
+                        </div>
+                        <p className="text-sm text-muted-foreground">{t("details.storageTip")}</p>
+                      </div>
+                    )}
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Right Sidebar: Stats (Desktop Only) */}
+          {sessionStats && (
+            <aside className="w-80 border-l bg-muted/5 overflow-y-auto hidden xl:block p-6">
+              <h3 className="font-semibold mb-4 text-sm uppercase tracking-wider text-muted-foreground">
+                {t("details.overview")}
+              </h3>
+              <SessionStats stats={sessionStats} currencyCode={currencyCode} />
+            </aside>
+          )}
+        </div>
+      </main>
+
+      {/* Terminate Dialog */}
+      <AlertDialog open={showTerminateDialog} onOpenChange={setShowTerminateDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("actions.terminateSessionTitle")}</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div>
+                {t("actions.terminateSessionDescription")}
+                <div className="mt-2 p-2 bg-muted rounded font-mono text-xs break-all">
+                  {sessionId}
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isTerminating}>{t("actions.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleTerminateSession}
+              disabled={isTerminating}
+            >
+              {isTerminating ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              {isTerminating ? t("actions.terminating") : t("actions.confirmTerminate")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+// Helper icons
+function Loader2(props: React.ComponentProps<"svg">) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      {...props}
+    >
+      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+    </svg>
+  );
+}

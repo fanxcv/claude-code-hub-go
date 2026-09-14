@@ -1,0 +1,5 @@
+# 运行期残留（本地实例的 pid/端口/日志）与逐轮时间戳读数
+.cchd.pid
+.cchd.port
+.cchd.log
+results/matrix-*.json

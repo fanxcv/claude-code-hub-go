@@ -1,0 +1,1 @@
+ALTER TABLE "system_settings" ALTER COLUMN "allow_global_usage_view" SET DEFAULT false;

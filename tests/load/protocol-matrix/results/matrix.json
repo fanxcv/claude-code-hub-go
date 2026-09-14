@@ -1,0 +1,480 @@
+{
+  "baseUrl": "http://127.0.0.1:32891",
+  "marker": "MATRIX7F3A",
+  "cells": [
+    {
+      "cell": "claude>anthropic",
+      "sameProtocol": true,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 1334,
+        "totalMs": 1334,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 27
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 4,
+        "totalMs": 4,
+        "terminalWanted": "message_stop",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "claude>chat",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 1771,
+        "totalMs": 1771,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 26
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 11,
+        "totalMs": 11,
+        "terminalWanted": "message_stop",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "claude>responses",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 1471,
+        "totalMs": 1471,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 27
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 5,
+        "totalMs": 5,
+        "terminalWanted": "message_stop",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "chat>anthropic",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 899,
+        "totalMs": 899,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 21
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 6,
+        "totalMs": 6,
+        "terminalWanted": "[DONE]",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "chat>chat",
+      "sameProtocol": true,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 1074,
+        "totalMs": 1074,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 27
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 5,
+        "totalMs": 5,
+        "terminalWanted": "[DONE]",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "chat>responses",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 1477,
+        "totalMs": 1477,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 29
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 5,
+        "totalMs": 5,
+        "terminalWanted": "[DONE]",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "responses>anthropic",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 1038,
+        "totalMs": 1038,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 27
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 5,
+        "totalMs": 5,
+        "terminalWanted": "response.completed",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "responses>chat",
+      "sameProtocol": false,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 2562,
+        "totalMs": 2562,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 28
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 5,
+        "totalMs": 5,
+        "terminalWanted": "response.completed",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    },
+    {
+      "cell": "responses>responses",
+      "sameProtocol": true,
+      "nonStream": {
+        "status": 200,
+        "ttfbMs": 1683,
+        "totalMs": 1683,
+        "shapeOk": true,
+        "textLen": 10,
+        "marker": true,
+        "usage": {
+          "input": 41,
+          "output": 27
+        },
+        "sample": "MATRIX7F3A",
+        "error": null
+      },
+      "stream": {
+        "status": 200,
+        "ttfbMs": 5,
+        "totalMs": 5,
+        "terminalWanted": "response.completed",
+        "terminalOk": true,
+        "textLen": 10,
+        "marker": true,
+        "error": null,
+        "sample": "MATRIX7F3A"
+      },
+      "pass": true
+    }
+  ],
+  "features": {
+    "claude>anthropic": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": {
+            "city": "Beijing"
+          }
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMJ0Y1WXXC6QG60DXE6TTV\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_00_Onn116YfevSHS1Z6MXUk2266\",\"name\":\"get_weather\",\"input\":{\"city\": \"Beijing\"}}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":175,\"output_tokens\":58,\"cache_read_input_tokens\":128}}"
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMJ2GTK2TV9C2WC1C7W8GQ\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"text\",\"text\":\"2\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":34,\"output_tokens\":25}}"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"id\":\"gen_01M2CMJ5C0RAH1ZK88HCGZGWSV\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[],\"stop_reason\":\"max_tokens\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":49,\"output_tokens\":64}}"
+      }
+    },
+    "claude>chat": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": {
+            "city": "Beijing"
+          }
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMJ78ZJH3EGPBYR8ZY3R8X\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_00_EDKFhGPngFTcfNyV6Low6441\",\"name\":\"get_weather\",\"input\":{\"city\": \"Beijing\"}}],\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":175,\"output_tokens\":58,\"cache_read_input_tokens\":128}}"
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMJ936JQP3KXPEM0JKPAMZ\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"text\",\"text\":\"2\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":34,\"output_tokens\":35}}"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"id\":\"gen_01M2CMJCN9DRX9HFN3N507C4QG\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[],\"stop_reason\":\"max_tokens\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":49,\"output_tokens\":64}}"
+      }
+    },
+    "claude>responses": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": {
+            "city": "Beijing"
+          }
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"type\":\"message\",\"id\":\"gen_01M2CMJE2HQ2358XAWX9T27T78\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"tool_use\",\"id\":\"call_00_oMEoYEShv7gUH2sJltU01147\",\"name\":\"get_weather\",\"input\":{\"city\":\"Beijing\"}}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":175,\"output_tokens\":53,\"cache_read_input_tokens\":128}}"
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"type\":\"message\",\"id\":\"gen_01M2CMJFG4NAE4DT1QANY5SY8X\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"text\",\"text\":\"2\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":34,\"output_tokens\":28,\"cache_read_input_tokens\":0}}"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"type\":\"message\",\"id\":\"gen_01M2CMJJWGFN9TT04K2M6GVAE3\",\"role\":\"assistant\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"content\":[{\"type\":\"text\",\"text\":\"The code was **ZQ9**.\"}],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":49,\"output_tokens\":59,\"cache_read_input_tokens\":0}}"
+      }
+    },
+    "chat>anthropic": {
+      "tools": {
+        "status": 200,
+        "toolCall": null,
+        "note": "本发未触发调用（模型选择直接回答）",
+        "sample": "{\"id\":\"gen_01M2CMJMCNC0FJ5FDAHAQB9M6E\",\"object\":\"chat.completion\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"\",\"reasoning_content\":\"The user wants me to use the get_weather tool for Beijing.\\n\\nI should just make the call. No need to plan much — one independent call.\\n\\nHowever, I'm told not to answer from memory. So I'll call the tool and"
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMJNXTCZWKZG0TE86C8VMF\",\"object\":\"chat.completion\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"2\",\"reasoning_content\":\"We need answer simple. Need answer. 1+1=2. Must final.\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":34,\"completion_tokens\":20,\"total_tokens\":54,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_t"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"id\":\"gen_01M2CMJSF3R5JM2A05Y8RF2WRQ\",\"object\":\"chat.completion\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The\",\"reasoning_content\":\"We need answer. User asked \\\"Remember the code ZQ9.\\\" Then \\\"What was the code?\\\" Need recall: code ZQ9. Simple. Must answer. But maybe trick? They said remember code ZQ9, then ask what was code. Answer ZQ9"
+      }
+    },
+    "chat>chat": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": "{\"city\": \"Beijing\"}"
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMJV30CGJ3W013MK64RYKV\",\"object\":\"chat.completion\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":\"Simple request.\",\"tool_calls\":[{\"id\":\"call_00_tMTdpM99FqgW3sp9AmZk6662\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Beijing\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"p"
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMJX2D2X3AFJ4WZ6QJEFRT\",\"object\":\"chat.completion\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"2\",\"reasoning_content\":\"We need answer simple. Need comply. 1+1=2. But maybe trick? User asks in Chinese? \\\"1+1=?\\\" Just answer.\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":34,\"completion_tokens\":35,\"total_tokens\":69,\"prompt"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"id\":\"gen_01M2CMJZSKXDFMHWRH5T20B9KQ\",\"object\":\"chat.completion\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The code was **ZQ9**.\",\"reasoning_content\":\"We need answer. User asks \\\"Remember the code ZQ9.\\\" then \\\"What was the code?\\\" Need answer code was ZQ9. Straight. Ensure no issue.\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":49"
+      }
+    },
+    "chat>responses": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": "{\"city\": \"Beijing\"}"
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMK16440N35KPVDE32G3N8\",\"object\":\"chat.completion\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":null,\"reasoning_content\":\"The user wants me to use the get_weather tool for Beijing.\",\"tool_calls\":[{\"id\":\"call_00_T2EaX8ONmmuap43JeSBe1770\",\"type\":\"function\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\": \\\"Beijing\\\"}\"}}]}"
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMK2PZYBSSH0AVAMR1TME3\",\"object\":\"chat.completion\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"2\",\"reasoning_content\":\"We need answer simple. Need final. 1+1=2. But maybe trick? User asks. We can answer. Ensure no extra. \"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":34,\"completion_tokens\":33,\"total_tokens\":67,\"prompt_t"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"id\":\"gen_01M2CMK62DS07V8V9FAFCSJ0XC\",\"object\":\"chat.completion\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The code was **ZQ9**.\",\"reasoning_content\":\"We need answer. User asks \\\"Remember the code ZQ9.\\\" then \\\"What was the code?\\\" Need provide code ZQ9. Simple. Need maybe \\\"The code was ZQ9.\\\" Ensure not overcomplicate.\"},\"finish_reason"
+      }
+    },
+    "responses>anthropic": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": "{\"city\": \"Beijing\"}"
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMK7VBVGJMP6V714JV41FQ\",\"object\":\"response\",\"created_at\":1789278135,\"status\":\"completed\",\"background\":false,\"error\":null,\"incomplete_details\":null,\"max_output_tokens\":64,\"model\":\"deepseek/deepseek-v4.1-flash\",\"tools\":[{\"function\":{\"description\":\"Get weather for a city.\",\"name\":\"get_weather\",\"parameters\":{\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"type\":\"object\"}},\""
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMK98ZF07SFZ2CMDJWBM32\",\"object\":\"response\",\"created_at\":1789278136,\"status\":\"completed\",\"background\":false,\"error\":null,\"incomplete_details\":null,\"max_output_tokens\":64,\"model\":\"deepseek/deepseek-v4.1-flash\",\"output\":[{\"id\":\"rs_gen_01M2CMK98ZF07SFZ2CMDJWBM32\",\"type\":\"reasoning\",\"encrypted_content\":\"\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"We need answer simple. Need likely 2. Bu"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 400,
+        "reasoningRejected": false,
+        "sample": "{\"error\":{\"message\":\"Too small: expected array to have \\u003e=1 items\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      }
+    },
+    "responses>chat": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": "{\"city\":\"Beijing\"}"
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMKD021FFSKRNSJJ86GE25\",\"object\":\"response\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"call_00_u2v32V0D3ObKgAyVTsUb4482\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Beijing\\\"}\"}],\"usage\":{\"input_tokens\":303,\"output_tokens\":51,\"total_tokens\":354,\"input_tokens_details\":{\"cached_tokens\":128}}}"
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMKEBC8MSQ5QM8JK0EKXWC\",\"object\":\"response\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"2\"}],\"status\":\"completed\"}],\"usage\":{\"input_tokens\":34,\"output_tokens\":27,\"total_tokens\":61}}"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 400,
+        "reasoningRejected": false,
+        "sample": "{\"error\":{\"message\":\"Too small: expected array to have \\u003e=1 items\",\"type\":\"invalid_request_error\",\"code\":\"invalid_request_error\"}}"
+      }
+    },
+    "responses>responses": {
+      "tools": {
+        "status": 200,
+        "toolCall": {
+          "name": "get_weather",
+          "input": "{\"city\":\"Beijing\"}"
+        },
+        "note": "调用发生并取到名字/参数",
+        "sample": "{\"id\":\"gen_01M2CMKMA45AGYJB8NB605EK03\",\"object\":\"response\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"status\":\"completed\",\"output\":[{\"type\":\"function_call\",\"call_id\":\"call_00_zZSXK5lNcOdIyh1D2b4O5847\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\\\"Beijing\\\"}\"}],\"usage\":{\"input_tokens\":303,\"output_tokens\":54,\"total_tokens\":357,\"input_tokens_details\":{\"cached_tokens\":128}}}"
+      },
+      "effort": {
+        "status": 200,
+        "textLen": 1,
+        "sample": "{\"id\":\"gen_01M2CMKP0DB88J34KDD0311B85\",\"object\":\"response\",\"model\":\"deepseek/deepseek-v4.1-flash\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"2\"}],\"status\":\"completed\"}],\"usage\":{\"input_tokens\":34,\"output_tokens\":36,\"total_tokens\":70}}"
+      },
+      "multiTurn": {
+        "firstStatus": 200,
+        "secondStatus": 200,
+        "reasoningRejected": false,
+        "sample": "{\"id\":\"gen_01M2CMKRQZ88D7YXGVZ4HXX13E\",\"object\":\"response\",\"created_at\":1789278152,\"status\":\"incomplete\",\"background\":false,\"error\":null,\"incomplete_details\":{\"reason\":\"max_output_tokens\"},\"max_output_tokens\":64,\"model\":\"deepseek/deepseek-v4.1-flash\",\"output\":[{\"id\":\"rs_gen_01M2CMKRQZ88D7YXGVZ4HXX13E\",\"type\":\"reasoning\",\"encrypted_content\":\"\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"We need answe"
+      }
+    }
+  },
+  "at": "2026-09-13T05:42:32.902Z"
+}

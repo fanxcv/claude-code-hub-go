@@ -1,0 +1,160 @@
+import type { RequestCacheMetricAvailability } from "@/lib/cache-effectiveness/request-metrics";
+import type { HedgeLoserBilling, StoredCostBreakdown } from "@/types/cost-breakdown";
+import type { ProviderChainItem } from "@/types/message";
+import type { RoutingTraceV1 } from "@/types/routing-trace";
+import type { SpecialSetting } from "@/types/special-settings";
+import type { BillingModelSource } from "@/types/system-config";
+
+/**
+ * Shared props interface for all tab components
+ */
+export interface TabSharedProps {
+  /** HTTP status code */
+  statusCode: number | null;
+  /** Error message if request failed */
+  errorMessage: string | null;
+  /** Provider decision chain */
+  providerChain: ProviderChainItem[] | null;
+  /** Versioned routing trace for Discovery and legacy routing decisions */
+  routingTrace?: RoutingTraceV1 | null;
+  /** Session ID */
+  sessionId: string | null;
+  /** Physical Session source for request-scoped readback */
+  sourceSessionId?: string | null;
+  /** Canonical identity kind used to distinguish Prefix ID from Session ID */
+  sessionIdentityKind?: "session_id" | "prefix_affinity" | null;
+  /** Request sequence number within session */
+  requestSequence?: number | null;
+  /** Database request ID used to select an exact request */
+  requestId?: number | null;
+  /** Block type (e.g., "sensitive_word", "warmup") */
+  blockedBy?: string | null;
+  /** Block reason (JSON string) */
+  blockedReason?: string | null;
+  /** Whether this audit row was served by Request Replay */
+  isReplay?: boolean;
+  /** Source terminal request copied into this Replay audit row */
+  replaySourceRequestId?: number | null;
+  /** Original model before redirect */
+  originalModel?: string | null;
+  /** Current model after redirect */
+  currentModel?: string | null;
+  /** Upstream response's actually returned model name (audit; not billing) */
+  actualResponseModel?: string | null;
+  /** User-Agent header */
+  userAgent?: string | null;
+  /** Client IP (IPv4/IPv6) */
+  clientIp?: string | null;
+  /** Number of messages in request */
+  messagesCount?: number | null;
+  /** API endpoint */
+  endpoint?: string | null;
+  /** Billing model source */
+  billingModelSource?: BillingModelSource;
+  /** Special settings applied */
+  specialSettings?: SpecialSetting[] | null;
+  /** Input tokens */
+  inputTokens?: number | null;
+  /** Output tokens */
+  outputTokens?: number | null;
+  /** Cache creation input tokens (total) */
+  cacheCreationInputTokens?: number | null;
+  /** Cache creation 5m input tokens */
+  cacheCreation5mInputTokens?: number | null;
+  /** Cache creation 1h input tokens */
+  cacheCreation1hInputTokens?: number | null;
+  /** Cache read input tokens */
+  cacheReadInputTokens?: number | null;
+  /** Cache TTL applied */
+  cacheTtlApplied?: string | null;
+  /** Theoretical longest-prefix cache token estimate */
+  theoreticalCacheTokens?: number | null;
+  /** Whether the request is eligible for the cache-effectiveness window */
+  cacheScoreEligible?: boolean | null;
+  /** Exclusion reason when the request is not eligible */
+  cacheScoreExcludedReason?: string | null;
+  /** Input-side cache denominator */
+  cacheInputTotal?: number | null;
+  actualCacheRate?: number | null;
+  theoreticalCacheRate?: number | null;
+  requestCacheCoefficientBp?: number | null;
+  requestCacheMetricAvailability?: RequestCacheMetricAvailability;
+  /** Whether swap cache TTL billing was applied */
+  swapCacheTtlApplied?: boolean | null;
+  /** Total cost in USD */
+  costUsd?: string | null;
+  /** Cost multiplier */
+  costMultiplier?: string | null;
+  /** Group cost multiplier */
+  groupCostMultiplier?: string | null;
+  /** Cost breakdown per component */
+  costBreakdown?: StoredCostBreakdown | null;
+  /** Hedge (provider racing) loser billing detail; cost already included in costUsd */
+  hedgeLosers?: HedgeLoserBilling[] | null;
+  /** Whether 1M context pricing was applied */
+  context1mApplied?: boolean | null;
+  /** Total request duration in ms */
+  durationMs?: number | null;
+  /** Time to first token in ms */
+  ttftMs?: number | null;
+  /** Time to first byte in ms (null on rows persisted before it was recorded) */
+  firstByteMs?: number | null;
+}
+
+/**
+ * Props for SummaryTab with additional handlers
+ */
+export interface SummaryTabProps extends TabSharedProps {
+  /** Whether session has messages data */
+  hasMessages: boolean;
+  /** Whether messages check is loading */
+  checkingMessages: boolean;
+  /** Callback to switch to Logic Trace tab */
+  onViewLogicTrace?: () => void;
+}
+
+/**
+ * Props for LogicTraceTab
+ */
+export interface LogicTraceTabProps extends TabSharedProps {
+  /** Index into providerChain to expand by default */
+  initialExpandedChainIndex?: number;
+}
+
+/**
+ * Props for PerformanceTab
+ */
+export interface PerformanceTabProps extends TabSharedProps {}
+
+/**
+ * Parse blocked reason JSON string
+ */
+export function parseBlockedReason(blockedReason: string | null | undefined): {
+  word?: string;
+  matchType?: string;
+  matchedText?: string;
+  // F2 replay_serve audit payload
+  source?: string;
+  replayId?: string;
+} | null {
+  if (!blockedReason) return null;
+  try {
+    return JSON.parse(blockedReason);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check if request is successful (2xx status)
+ */
+export function isSuccessStatus(statusCode: number | null): boolean {
+  return statusCode !== null && statusCode >= 200 && statusCode < 300;
+}
+
+/**
+ * Check if request is in progress (no status code)
+ */
+export function isInProgressStatus(statusCode: number | null): boolean {
+  return statusCode === null;
+}

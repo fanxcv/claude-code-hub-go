@@ -1,0 +1,32 @@
+{
+  "constName": "DELETE_LEGACY_PROVIDER_IF_VALUE",
+  "file": "delete-legacy-provider-if-value.lua",
+  "sha256": "15c85e0726bb418d7f43e46264a80bbfadf4a2f73549c6cf85cee972b4ee515d",
+  "calls": [
+    {
+      "id": "value-matches",
+      "keys": ["cchgolden:session:1:provider"],
+      "argv": ["7"],
+      "setup": [["SET", "cchgolden:session:1:provider", "7"]],
+      "returned": 1,
+      "after": {
+        "cchgolden:session:1:provider": null
+      }
+    },
+    {
+      "id": "value-differs",
+      "keys": ["cchgolden:session:1:provider"],
+      "argv": ["7"],
+      "setup": [["SET", "cchgolden:session:1:provider", "9"]],
+      "returned": 0,
+      "after": {
+        "cchgolden:session:1:provider": {
+          "type": "string",
+          "value": "9",
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

@@ -1,0 +1,418 @@
+{
+  "header": {
+    "title": "User Quota",
+    "role": {
+      "admin": "Admin",
+      "user": "User"
+    },
+    "keysCountSuffix": " keys",
+    "rpm": "Rate Limit",
+    "todayCost": "Today's Cost",
+    "exceededNotice": "Quota exceeded, please contact administrator"
+  },
+  "countdown": {
+    "reset": "Reset Countdown"
+  },
+  "windowType": {
+    "5h": {
+      "label": "5-Hour Rolling",
+      "description": "Tracks consumption over the past 5 hours, updated hourly"
+    },
+    "weekly": {
+      "label": "Weekly Reset",
+      "description": "Natural week cycle (resets Monday 00:00), weekly statistics"
+    },
+    "monthly": {
+      "label": "Monthly Reset",
+      "description": "Natural month cycle (resets 1st of month 00:00), monthly statistics"
+    },
+    "daily": {
+      "label": "Daily Reset",
+      "description": "Natural day cycle (resets daily 00:00), daily statistics"
+    }
+  },
+  "toolbar": {
+    "searchPlaceholder": "Search username or key",
+    "filter": "Filter",
+    "sort": "Sort",
+    "refresh": "Refresh",
+    "autoRefresh": "Auto Refresh",
+    "filterOptions": {
+      "all": "All",
+      "warning": "Warning",
+      "exceeded": "Exceeded"
+    },
+    "sortOptions": {
+      "name": "By Name",
+      "usage": "By Usage"
+    },
+    "interval": {
+      "10s": "10s",
+      "30s": "30s",
+      "60s": "60s"
+    }
+  },
+  "layout": {
+    "title": "Quota Management",
+    "description": "View and manage quota usage across all levels",
+    "tabs": {
+      "users": "User Quotas",
+      "keys": "Key Quotas",
+      "providers": "Provider Quotas"
+    }
+  },
+  "users": {
+    "title": "User Quota Statistics",
+    "totalCount": "{count} users total",
+    "manageNotice": "To manage users and keys, visit",
+    "manageLink": "User Management",
+    "noNote": "No note",
+    "rpm": {
+      "label": "RPM Quota",
+      "description": "Requests per minute"
+    },
+    "dailyCost": {
+      "label": "Daily Cost",
+      "resetAt": "Resets at"
+    },
+    "noQuotaData": "Unable to retrieve quota information",
+    "noMatches": "No matching users found",
+    "noData": "No user data available",
+    "sort": {
+      "name": "By Name",
+      "usage": "By Usage"
+    },
+    "filter": {
+      "all": "All",
+      "warning": "Near Limit (>60%)",
+      "exceeded": "Exceeded (≥100%)"
+    },
+    "withQuotas": "With Quotas",
+    "unlimited": "Unlimited",
+    "totalCost": "Total Cost",
+    "totalCostAllTime": "All-time Total",
+    "todayCost": "Today's Cost",
+    "expiresAtLabel": "Expiration",
+    "keys": "Keys",
+    "more": "more",
+    "noLimitSet": "-",
+    "noUnlimited": "No unlimited users",
+    "noKeys": "No keys",
+    "limit5h": "5-Hour Limit",
+    "limitWeekly": "Weekly Limit",
+    "limitMonthly": "Monthly Limit",
+    "limitTotal": "Total Limit",
+    "limitConcurrent": "Concurrent Sessions",
+    "role": {
+      "admin": "Admin",
+      "user": "User"
+    },
+    "keyStatus": {
+      "enabled": "Enabled",
+      "disabled": "Disabled"
+    },
+    "totalUsageUnavailable": "Unavailable"
+  },
+  "providers": {
+    "title": "Provider Quota Statistics",
+    "totalCount": "{count} providers total",
+    "filterCount": "Showing {filtered} / {total} providers",
+    "searchPlaceholder": "Search provider name...",
+    "status": {
+      "enabled": "Enabled",
+      "disabled": "Disabled"
+    },
+    "card": {
+      "priority": "Priority",
+      "weight": "Weight"
+    },
+    "sort": {
+      "name": "By Name",
+      "priority": "By Priority",
+      "weight": "By Weight",
+      "usage": "By Usage"
+    },
+    "list": {
+      "resetIn": "Resets in",
+      "unlimited": "Unlimited",
+      "current": "Current",
+      "limit": "Limit",
+      "used": "used"
+    },
+    "cost5h": {
+      "label": "5-Hour Cost"
+    },
+    "costDaily": {
+      "label": "Daily Cost",
+      "resetAt": "Resets at"
+    },
+    "costWeekly": {
+      "label": "Weekly Cost",
+      "resetAt": "Resets at"
+    },
+    "costMonthly": {
+      "label": "Monthly Cost",
+      "resetAt": "Resets at"
+    },
+    "costTotal": {
+      "label": "Total Cost"
+    },
+    "concurrentSessions": {
+      "label": "Concurrent Sessions"
+    },
+    "noQuotaSet": "No quota set",
+    "noQuotaData": "Unable to retrieve quota information",
+    "noMatches": "No matching providers",
+    "noMatchesDesc": "No providers match your search criteria. Try adjusting your filters.",
+    "noProvidersDesc": "No providers have been configured yet.",
+    "unlimitedSection": "Providers without quota ({count})"
+  },
+  "keys": {
+    "title": "Key Quota Statistics",
+    "totalCount": "{users} users, {keys} keys total",
+    "searchPlaceholder": "Search user or key...",
+    "filterLabel": "Filter",
+    "filterCount": "Showing {users} users, {keys} keys",
+    "filter": {
+      "all": "All Keys",
+      "keyQuota": "Key Quota Only",
+      "userQuotaOnly": "User Quota Only",
+      "warning": "Warning (≥60%)",
+      "exceeded": "Exceeded (≥100%)"
+    },
+    "table": {
+      "keyName": "Key Name",
+      "quotaType": "Quota Type",
+      "cost5h": "5-Hour Quota",
+      "costDaily": "Daily Quota",
+      "costWeekly": "Weekly Quota",
+      "costMonthly": "Monthly Quota",
+      "costTotal": "Total Quota",
+      "concurrentSessions": "Concurrent Limit",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "quotaType": {
+      "independent": "Independent Quota",
+      "inherited": "Inherited from User"
+    },
+    "status": {
+      "disabled": "Disabled",
+      "restricted": "Restricted",
+      "normal": "Normal"
+    },
+    "noMatches": "No matching users or keys",
+    "editDialog": {
+      "title": "Set Key Quota",
+      "description": "Key: {keyName} ({userName})",
+      "cost5h": {
+        "label": "5-Hour Quota (USD)",
+        "placeholder": "Unlimited",
+        "current": "Current usage: {currency}{current} / {currency}{limit}"
+      },
+      "costDaily": {
+        "label": "Daily Quota (USD)",
+        "placeholder": "Unlimited",
+        "current": "Current usage: {currency}{current} / {currency}{limit}"
+      },
+      "dailyResetMode": {
+        "label": "Daily Reset Mode",
+        "options": {
+          "fixed": "Fixed Time Reset",
+          "rolling": "Rolling Window (24h)"
+        },
+        "desc": {
+          "fixed": "Reset quota at a fixed time each day",
+          "rolling": "Reset 24 hours after first API call"
+        }
+      },
+      "dailyResetTime": {
+        "label": "Daily Reset Time",
+        "placeholder": "HH:mm"
+      },
+      "costWeekly": {
+        "label": "Weekly Quota (USD)",
+        "placeholder": "Unlimited",
+        "current": "Current usage: {currency}{current} / {currency}{limit}"
+      },
+      "costMonthly": {
+        "label": "Monthly Quota (USD)",
+        "placeholder": "Unlimited",
+        "current": "Current usage: {currency}{current} / {currency}{limit}"
+      },
+      "limitTotalUsd": {
+        "label": "Total Quota (USD)",
+        "placeholder": "Unlimited",
+        "current": "Current usage: {currency}{current} / {currency}{limit}"
+      },
+      "concurrentSessions": {
+        "label": "Concurrent Session Quota",
+        "placeholder": "0 = Unlimited",
+        "current": "Current concurrent: {current} / {limit}"
+      },
+      "clearAll": "Clear All Quotas",
+      "save": "Save",
+      "setQuota": "Set Quota",
+      "success": "Quota set successfully",
+      "clearSuccess": "Quota cleared",
+      "error": "Failed to set",
+      "clearError": "Failed to clear",
+      "retryError": "Failed to set, please try again later",
+      "limit5hResetMode": {
+        "label": "5-Hour Reset Mode",
+        "options": {
+          "fixed": "Fixed window",
+          "rolling": "Rolling Window (5h)"
+        },
+        "desc": {
+          "fixed": "Start a fixed 5-hour window from the first successful charge",
+          "rolling": "Use a rolling 5-hour window from the latest usage"
+        }
+      }
+    },
+    "editUserDialog": {
+      "title": "Set User Quota",
+      "description": "User: {userName}",
+      "unlimited": "Unlimited",
+      "rpm": {
+        "label": "Requests Per Minute (RPM)",
+        "placeholder": "60",
+        "current": "Current: {current} / {limit} requests/minute"
+      },
+      "dailyQuota": {
+        "label": "Daily Cost Quota (USD)",
+        "placeholder": "100",
+        "current": "Today's usage: {currency}{current} / {currency}{limit}"
+      },
+      "save": "Save",
+      "editQuota": "Edit Quota",
+      "success": "User quota set successfully",
+      "error": "Failed to set",
+      "retryError": "Failed to set, please try again later"
+    },
+    "editKeyForm": {
+      "title": "Edit Key",
+      "description": "Modify the key's name, expiration time, and rate limit configuration.",
+      "keyName": {
+        "label": "Key Name",
+        "placeholder": "Enter key name",
+        "required": "Key Name *"
+      },
+      "expiresAt": {
+        "label": "Expiration Time",
+        "placeholder": "Select expiration time",
+        "description": "Leave blank for never expires"
+      },
+      "canLoginWebUi": {
+        "label": "Enable dedicated balance page",
+        "description": "Allow users to view their balance via a dedicated page"
+      },
+      "limit5hUsd": {
+        "label": "5-Hour Cost Limit (USD)",
+        "placeholder": "Leave blank for unlimited",
+        "description": "Maximum cost within 5 hours",
+        "descriptionWithUserLimit": "Cannot exceed user 5-hour limit ({limit})"
+      },
+      "limitDailyUsd": {
+        "label": "Daily Cost Limit (USD)",
+        "placeholder": "Leave blank for unlimited",
+        "description": "Maximum cost per day"
+      },
+      "dailyResetMode": {
+        "label": "Daily Reset Mode",
+        "options": {
+          "fixed": "Fixed Time Reset",
+          "rolling": "Rolling Window (24h)"
+        },
+        "desc": {
+          "fixed": "Reset quota at a specific time each day",
+          "rolling": "24-hour rolling window from first request"
+        }
+      },
+      "dailyResetTime": {
+        "label": "Daily Reset Time",
+        "placeholder": "HH:mm",
+        "description": "When the daily limit resets (uses system timezone)"
+      },
+      "limitWeeklyUsd": {
+        "label": "Weekly Cost Limit (USD)",
+        "placeholder": "Leave blank for unlimited",
+        "description": "Maximum cost per week",
+        "descriptionWithUserLimit": "Cannot exceed user weekly limit ({limit})"
+      },
+      "limitMonthlyUsd": {
+        "label": "Monthly Cost Limit (USD)",
+        "placeholder": "Leave blank for unlimited",
+        "description": "Maximum cost per month",
+        "descriptionWithUserLimit": "Cannot exceed user monthly limit ({limit})"
+      },
+      "limitTotalUsd": {
+        "label": "Total Cost Limit (USD)",
+        "placeholder": "Leave blank for unlimited",
+        "description": "Maximum cumulative spending (no reset)",
+        "descriptionWithUserLimit": "Cannot exceed user total limit ({limit})"
+      },
+      "limitConcurrentSessions": {
+        "label": "Concurrent Session Limit",
+        "placeholder": "0 means unlimited",
+        "description": "Number of simultaneous conversations",
+        "descriptionWithUserLimit": "Cannot exceed user session limit ({limit})"
+      },
+      "providerGroup": {
+        "label": "Provider Group",
+        "placeholder": "Enter provider group tags, press Enter to add",
+        "description": "Provider groups for this key (default: default).",
+        "defaultDescription": "default includes providers without groupTag.",
+        "descriptionWithUserGroup": "Provider groups for this key (user groups: {group}; default: default)."
+      },
+      "submitText": "Save Changes",
+      "loadingText": "Saving...",
+      "success": "Key updated successfully",
+      "error": "Failed to update key",
+      "retryError": "Save failed, please try again later",
+      "keyInfoMissing": "Key information does not exist",
+      "resetLimits": {
+        "title": "Reset Quota",
+        "description": "Reset all limit counters for this key. Usage logs will be preserved.",
+        "button": "Reset Quota",
+        "confirmTitle": "Reset Quota?",
+        "confirmDescription": "This will reset all accumulated usage counters (5h, daily, weekly, monthly, total) to zero. Usage logs and statistics will be kept.",
+        "confirm": "Yes, reset quota",
+        "loading": "Resetting...",
+        "error": "Failed to reset quota",
+        "success": "Quota has been reset successfully",
+        "lastResetAt": "Last reset: {date}"
+      },
+      "limit5hResetMode": {
+        "label": "5-Hour Reset Mode",
+        "options": {
+          "fixed": "Fixed window",
+          "rolling": "Rolling Window (5h)"
+        },
+        "desc": {
+          "fixed": "Start a fixed 5-hour window from the first successful charge",
+          "rolling": "Use a rolling 5-hour window from the latest usage"
+        }
+      }
+    }
+  },
+  "quickEdit": {
+    "title": "Adjust Limit",
+    "currentLabel": "Current",
+    "noLimit": "Unlimited",
+    "tabs": {
+      "set": "Set value",
+      "add": "Add value"
+    },
+    "setPlaceholder": "Enter new limit (empty = unlimited)",
+    "addPlaceholder": "Enter increment",
+    "preview": "New limit: {value}",
+    "previewNoLimit": "Will clear limit (unlimited)",
+    "save": "Save",
+    "cancel": "Cancel",
+    "saveSuccess": "Limit updated",
+    "saveFailed": "Update failed",
+    "invalidNumber": "Please enter a valid number",
+    "negativeNotAllowed": "Cannot be negative"
+  }
+}

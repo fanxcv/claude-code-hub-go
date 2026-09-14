@@ -1,0 +1,117 @@
+name: CI
+
+# 常态门禁：push 到 main 与所有 PR。
+# 只跑**确定性**的部分（不注入 DSN → 真库集成组自动跳过），以保证 CI 常态绿。
+# 需要真库集成的话见文件末尾注释的配方。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ui:
+    name: UI（typecheck / lint / test）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 安装依赖
+        # 用 frozen：依赖必须可复现（bun.lock 已入库）。若这里报 lockfile 过期，
+        # 说明 package.json 改了而 lockfile 没同步 —— 本地跑 `bun install` 重新生成并提交。
+        run: bun install --frozen-lockfile
+
+      - name: 类型检查
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: 单元测试
+        # 退出码现在是**可信的**：本仓曾有 3 条 unhandled rejection（全屏浮层的 queryClient mock
+        # 缺 getQueryData、user-menu 里 happy-dom abort 掉真实的登出请求），它们让 vitest 恒 exit=1；
+        # 噪声已从根上修掉，于是这里直接裸跑，不再需要「语义断言 + 棘轮」。
+        # 纪律：若将来再出现基线噪声，请修噪声本身，而不要加棘轮把它容忍掉——棘轮会掩盖新增的
+        # 未处理拒绝，而那些拒绝正是断言失真的温床。
+        run: bun run test
+
+  go:
+    name: Go（gofmt / vet / test）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: gofmt
+        working-directory: go
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未格式化（本地跑 gofmt -w . 修）"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        working-directory: go
+        run: go vet ./...
+
+      - name: 单元测试
+        # 不注入 CCH_TEST_DSN / CCH_TEST_REDIS_URL：真库集成用例会整组跳过（既有设计），
+        # 于是这里只跑纯单测，无需外部依赖。加 -timeout 防止用例挂住耗光 runner 时间。
+        working-directory: go
+        run: go test -timeout 300s ./...
+
+# ---------------------------------------------------------------------------
+# 想在本工作流里跑**真库集成**（PG + Redis）时的配方（本地已验证过该形态，此处默认不开）：
+#
+#   go:
+#     runs-on: ubuntu-latest
+#     services:
+#       postgres:
+#         image: postgres:18
+#         env:
+#           POSTGRES_USER: cch
+#           POSTGRES_PASSWORD: cch
+#           POSTGRES_DB: cch_test
+#         ports: ["5432:5432"]
+#         options: >-
+#           --health-cmd "pg_isready -U cch" --health-interval 5s
+#           --health-timeout 5s --health-retries 10
+#       redis:
+#         image: redis:7
+#         ports: ["6379:6379"]
+#         options: >-
+#           --health-cmd "redis-cli ping" --health-interval 5s
+#           --health-timeout 5s --health-retries 10
+#     steps:
+#       ...
+#       - name: 单元测试（含真库集成）
+#         working-directory: go
+#         env:
+#           CCH_TEST_DSN: postgres://cch:cch@127.0.0.1:5432/cch_test
+#           CCH_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+#         run: go test -timeout 600s ./...
+#
+# 注意两点：① 集成用例依赖迁移建表，确认用例自身会建 schema（或先跑一次 `cchd` 让
+# AUTO_MIGRATE 建表）后再开启，否则会是常态红；② Redis 用独立 db（如 /15）避免与其它用例互相刷键。
+# ---------------------------------------------------------------------------

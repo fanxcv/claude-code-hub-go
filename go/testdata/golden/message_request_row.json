@@ -1,0 +1,197 @@
+{
+  "note": "由 Node 数据面一次真实请求产生（/v1/responses + codex provider + mock 上游 complete 模式）；key 列已脱敏；created_at/id 等易变列保留原值仅供列名与类型对照。",
+  "row": {
+    "actual_response_model": null,
+    "affinity_fingerprint": "949485ee1bdc217c3d6cf2e8e829fcc5",
+    "affinity_fingerprint_chain": [
+      "949485ee1bdc217c3d6cf2e8e829fcc5"
+    ],
+    "affinity_scope_tag": "7cd80586b1316007",
+    "api_type": null,
+    "blocked_by": null,
+    "blocked_reason": null,
+    "cache_compatibility_key": "7cd80586b1316007:949485ee1bdc217c3d6cf2e8e829fcc5",
+    "cache_creation_1h_input_tokens": null,
+    "cache_creation_5m_input_tokens": null,
+    "cache_creation_input_tokens": null,
+    "cache_read_input_tokens": null,
+    "cache_score_eligible": true,
+    "cache_score_excluded_reason": null,
+    "cache_ttl_applied": null,
+    "cache_ttl_bucket": "5m",
+    "client_ip": "127.0.0.1",
+    "context_1m_applied": false,
+    "cost_breakdown": {
+      "input": "0.000004",
+      "total": "0.000024",
+      "output": "0.00002",
+      "base_total": "0.000024",
+      "cache_read": "0",
+      "cache_creation": "0",
+      "group_multiplier": 1,
+      "cache_creation_1h": "0",
+      "cache_creation_5m": "0",
+      "provider_multiplier": 1
+    },
+    "cost_multiplier": 1,
+    "cost_usd": 0.000024,
+    "created_at": "2026-09-12T01:40:54.210057+08:00",
+    "deleted_at": null,
+    "duration_ms": 62,
+    "endpoint": "/v1/responses",
+    "error_cause": null,
+    "error_message": null,
+    "error_stack": null,
+    "first_byte_ms": 43,
+    "group_cost_multiplier": 1,
+    "hedge_losers": null,
+    "id": 5009,
+    "input_tokens": 1,
+    "is_replay": false,
+    "key": "<redacted>",
+    "messages_count": 1,
+    "model": "gpt-5.6",
+    "original_model": "gpt-5.6",
+    "output_tokens": 1,
+    "provider_chain": [
+      {
+        "id": 1,
+        "name": "mock-upstream",
+        "reason": "initial_selection",
+        "weight": 1,
+        "groupTag": null,
+        "priority": 0,
+        "vendorId": 1,
+        "timestamp": 1789148454207,
+        "circuitState": "closed",
+        "providerType": "codex",
+        "costMultiplier": 1,
+        "decisionContext": {
+          "userGroup": "default",
+          "targetType": "codex",
+          "priorityLevels": [
+            0
+          ],
+          "requestedModel": "gpt-5.6",
+          "totalProviders": 1,
+          "afterGroupFilter": 1,
+          "afterHealthCheck": 1,
+          "enabledProviders": 1,
+          "selectedPriority": 0,
+          "beforeHealthCheck": 1,
+          "filteredProviders": [],
+          "groupFilterApplied": true,
+          "candidatesAtPriority": [
+            {
+              "id": 1,
+              "name": "mock-upstream",
+              "weight": 1,
+              "probability": 1,
+              "costMultiplier": 1
+            }
+          ]
+        },
+        "selectionMethod": "group_filtered"
+      },
+      {
+        "id": 1,
+        "name": "mock-upstream",
+        "reason": "request_success",
+        "weight": 1,
+        "groupTag": null,
+        "priority": 0,
+        "vendorId": 1,
+        "timestamp": 1789148454247,
+        "endpointId": 1,
+        "statusCode": 200,
+        "endpointUrl": "http://127.0.0.1:39217/",
+        "providerType": "codex",
+        "attemptNumber": 1,
+        "costMultiplier": 1
+      }
+    ],
+    "provider_id": 1,
+    "replay_source_request_id": null,
+    "request_sequence": 454293,
+    "routing_trace": {
+      "mode": "legacy_serial",
+      "config": {
+        "stickySlaMs": 20000,
+        "discoverySlaMs": 10000,
+        "sessionTtlSeconds": 300,
+        "maxDiscoveryRounds": 2,
+        "discoveryConcurrency": 2,
+        "racingTotalTimeoutMs": 60000,
+        "legacyHedgeMaxInFlight": 2,
+        "stickyTimeoutCooldownMs": 300000
+      },
+      "events": [
+        {
+          "at": 1789148454215,
+          "type": "request_started",
+          "reason": "disabled",
+          "elapsedMs": 0
+        },
+        {
+          "at": 1789148454259,
+          "type": "request_finished",
+          "outcome": "success",
+          "elapsedMs": 44,
+          "statusCode": 200
+        }
+      ],
+      "version": 1,
+      "eligible": false,
+      "startedAt": 1789148454215,
+      "updatedAt": 1789148454259,
+      "bypassReason": "disabled",
+      "discoveryEnabled": false
+    },
+    "session_id": "01a0918e-dd36-7501-a899-ad015221dec8",
+    "session_identity": "pfx:7cd80586b1316007:949485ee1bdc217c3d6cf2e8e829fcc5",
+    "session_identity_kind": "prefix_affinity",
+    "special_settings": [
+      {
+        "hit": true,
+        "type": "response_input_rectifier",
+        "scope": "request",
+        "action": "string_to_array",
+        "originalType": "string"
+      },
+      {
+        "hit": true,
+        "type": "codex_session_id_completion",
+        "scope": "request",
+        "action": "generated_uuid_v7",
+        "source": "generated_uuid_v7",
+        "sessionId": "01a0918e-dd36-7501-a899-ad015221dec8"
+      },
+      {
+        "hit": false,
+        "type": "codex_service_tier_result",
+        "scope": "response",
+        "resolvedFrom": null,
+        "actualServiceTier": null,
+        "effectivePriority": false,
+        "requestedServiceTier": null,
+        "billingSourcePreference": "requested"
+      },
+      {
+        "hit": true,
+        "type": "pricing_resolution",
+        "scope": "billing",
+        "source": "cloud_official",
+        "modelName": "gpt-5.6",
+        "resolvedModelName": "gpt-5.6",
+        "resolvedPricingProviderKey": "openai"
+      }
+    ],
+    "status_code": 200,
+    "swap_cache_ttl_applied": false,
+    "theoretical_cache_tokens": 19,
+    "ttfb_ms": 45,
+    "updated_at": "2026-09-12T01:40:54.513164+08:00",
+    "user_agent": "curl/8.21.0",
+    "user_id": 1
+  }
+}

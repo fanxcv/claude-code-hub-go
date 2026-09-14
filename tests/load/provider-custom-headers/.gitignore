@@ -1,0 +1,3 @@
+# 运行期残留（本地实例的网关日志与上游回显文件）
+.gateway.log
+.upstream.out

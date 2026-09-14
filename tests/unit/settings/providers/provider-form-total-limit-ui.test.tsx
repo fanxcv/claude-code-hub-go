@@ -1,0 +1,442 @@
+/**
+ * @vitest-environment happy-dom
+ */
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { NextIntlClientProvider } from "next-intl";
+import { beforeEach, describe, expect, test, vi } from "vitest";
+import "../../../framer-motion.mock";
+import { ProviderForm } from "../../../../src/app/[locale]/settings/providers/_components/forms/provider-form";
+import { Dialog } from "../../../../src/components/ui/dialog";
+import enMessages from "../../../../messages/en";
+import type { ProviderDisplay } from "../../../../src/types/provider";
+
+let queryClient: QueryClient;
+
+function hasOwn(obj: object, prop: PropertyKey): boolean {
+  return (Object as unknown as { hasOwn: (obj: object, prop: PropertyKey) => boolean }).hasOwn(
+    obj,
+    prop
+  );
+}
+
+const sonnerMocks = vi.hoisted(() => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}));
+vi.mock("sonner", () => sonnerMocks);
+
+const providersActionMocks = vi.hoisted(() => ({
+  addProvider: vi.fn(async (_data: unknown) => ({
+    ok: true,
+    data: { operationId: "op-add", undoToken: "undo-add" },
+  })),
+  editProvider: vi.fn(async (_providerId: number, _data: unknown) => ({
+    ok: true,
+    data: { operationId: "op-edit", undoToken: "undo-edit" },
+  })),
+  removeProvider: vi.fn(async (_providerId: number) => ({ ok: true })),
+  getUnmaskedProviderKey: vi.fn(async () => ({ ok: true, data: { key: "test-key" } })),
+  getProviderTestPresets: vi.fn(async () => ({ ok: true, data: [] })),
+  getModelSuggestionsByProviderGroup: vi.fn(async () => ({ ok: true, data: [] })),
+  fetchUpstreamModels: vi.fn(async () => ({ ok: true, data: { models: [] } })),
+}));
+vi.mock("@/lib/api-client/v1/actions/providers", () => providersActionMocks);
+
+const requestFiltersActionMocks = vi.hoisted(() => ({
+  getDistinctProviderGroupsAction: vi.fn(async () => ({ ok: true, data: [] })),
+}));
+vi.mock("@/lib/api-client/v1/actions/request-filters", () => requestFiltersActionMocks);
+
+const modelPricesActionMocks = vi.hoisted(() => ({
+  getAvailableModelCatalog: vi.fn(async () => []),
+  getAvailableModelsByProviderType: vi.fn(async () => []),
+}));
+vi.mock("@/lib/api-client/v1/actions/model-prices", () => modelPricesActionMocks);
+
+const providerEndpointsActionMocks = vi.hoisted(() => ({
+  getProviderVendors: vi.fn(async () => []),
+  getProviderEndpoints: vi.fn(async () => []),
+  addProviderEndpoint: vi.fn(async () => ({ ok: true, data: { endpoint: {} } })),
+}));
+vi.mock("@/lib/api-client/v1/actions/provider-endpoints", () => providerEndpointsActionMocks);
+
+function loadMessages() {
+  return {
+    common: enMessages.common,
+    errors: enMessages.errors,
+    ui: enMessages.ui,
+    forms: enMessages.forms,
+    settings: enMessages.settings,
+  };
+}
+
+function render(node: ReactNode) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  act(() => {
+    root.render(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>);
+  });
+
+  return {
+    unmount: () => {
+      act(() => root.unmount());
+      container.remove();
+    },
+  };
+}
+
+function setNativeValue(element: HTMLInputElement, value: string) {
+  const prototype = Object.getPrototypeOf(element) as unknown as { value?: unknown };
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+  if (descriptor?.set) {
+    descriptor.set.call(element, value);
+    return;
+  }
+  element.value = value;
+}
+
+describe("ProviderForm: 编辑时应支持提交总消费上限(limit_total_usd)", () => {
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    vi.clearAllMocks();
+
+    // happy-dom 在部分运行时可能不会提供完整的 Storage 实现，这里做最小 mock，避免组件读写报错
+    // 仅用于本测试文件，避免污染全局行为
+    const storage = (() => {
+      let store: Record<string, string> = {};
+      return {
+        getItem: (key: string) => (hasOwn(store, key) ? store[key] : null),
+        setItem: (key: string, value: string) => {
+          store[key] = String(value);
+        },
+        removeItem: (key: string) => {
+          delete store[key];
+        },
+        clear: () => {
+          store = {};
+        },
+        key: (index: number) => Object.keys(store)[index] ?? null,
+        get length() {
+          return Object.keys(store).length;
+        },
+      };
+    })();
+
+    Object.defineProperty(globalThis, "localStorage", {
+      value: storage,
+      configurable: true,
+    });
+
+    storage.setItem("provider-form-sections", JSON.stringify({ rateLimit: true }));
+  });
+
+  test("填写总消费上限后提交应调用 editProvider 且 payload 携带 limit_total_usd", async () => {
+    const messages = loadMessages();
+
+    const provider: ProviderDisplay = {
+      id: 1,
+      name: "p",
+      url: "https://example.com",
+      maskedKey: "xxxxxx",
+      isEnabled: true,
+      weight: 1,
+      priority: 0,
+      groupPriorities: null,
+      costMultiplier: 1,
+      groupTag: null,
+      providerType: "claude",
+      providerVendorId: null,
+      preserveClientIp: false,
+      modelRedirects: null,
+      activeTimeStart: null,
+      activeTimeEnd: null,
+      allowedModels: null,
+      allowedClients: [],
+      blockedClients: [],
+      mcpPassthroughType: "none",
+      mcpPassthroughUrl: null,
+      limit5hUsd: null,
+      limitDailyUsd: null,
+      dailyResetMode: "fixed",
+      dailyResetTime: "00:00",
+      limitWeeklyUsd: null,
+      limitMonthlyUsd: null,
+      limitTotalUsd: null,
+      limitConcurrentSessions: 0,
+      maxRetryAttempts: null,
+      circuitBreakerFailureThreshold: 5,
+      circuitBreakerOpenDuration: 1800000,
+      circuitBreakerHalfOpenSuccessThreshold: 2,
+      proxyUrl: null,
+      proxyFallbackToDirect: false,
+      firstByteTimeoutStreamingMs: 0,
+      streamingIdleTimeoutMs: 0,
+      requestTimeoutNonStreamingMs: 0,
+      websiteUrl: null,
+      faviconUrl: null,
+      cacheTtlPreference: null,
+      swapCacheTtlBilling: false,
+      context1mPreference: null,
+      codexReasoningEffortPreference: null,
+      codexReasoningSummaryPreference: null,
+      codexTextVerbosityPreference: null,
+      codexParallelToolCallsPreference: null,
+      codexImageGenerationPreference: null,
+      codexServiceTierPreference: null,
+      anthropicMaxTokensPreference: null,
+      anthropicThinkingBudgetPreference: null,
+      anthropicAdaptiveThinking: null,
+      geminiGoogleSearchPreference: null,
+      tpm: null,
+      rpm: null,
+      rpd: null,
+      cc: null,
+      createdAt: "2026-01-04",
+      updatedAt: "2026-01-04",
+    };
+
+    const { unmount } = render(
+      <NextIntlClientProvider locale="en" messages={messages} timeZone="UTC">
+        <Dialog open onOpenChange={() => {}}>
+          <ProviderForm mode="edit" provider={provider} enableMultiProviderTypes />
+        </Dialog>
+      </NextIntlClientProvider>
+    );
+
+    // 等待 useEffect 从 localStorage 打开折叠区域
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const totalInput = document.getElementById("edit-limit-total") as HTMLInputElement | null;
+    expect(totalInput).toBeTruthy();
+
+    await act(async () => {
+      if (!totalInput) return;
+      setNativeValue(totalInput, "10.5");
+      totalInput.dispatchEvent(new Event("input", { bubbles: true }));
+      totalInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    const form = document.body.querySelector("form") as HTMLFormElement | null;
+    expect(form).toBeTruthy();
+
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    // React 的 transition 可能会延后调度，这里给一个很小的等待窗口，避免测试偶发抢跑
+    for (let i = 0; i < 5; i++) {
+      if (providersActionMocks.editProvider.mock.calls.length > 0) break;
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    }
+
+    expect(providersActionMocks.editProvider).toHaveBeenCalledTimes(1);
+    const payload = providersActionMocks.editProvider.mock.calls[0]?.[1] as {
+      limit_total_usd?: unknown;
+    };
+    expect(hasOwn(payload, "limit_total_usd")).toBe(true);
+    expect(payload.limit_total_usd).toBe(10.5);
+
+    unmount();
+  });
+});
+
+describe("ProviderForm: 新增成功后应重置总消费上限输入", () => {
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    vi.clearAllMocks();
+
+    const storage = (() => {
+      let store: Record<string, string> = {};
+      return {
+        getItem: (key: string) => (hasOwn(store, key) ? store[key] : null),
+        setItem: (key: string, value: string) => {
+          store[key] = String(value);
+        },
+        removeItem: (key: string) => {
+          delete store[key];
+        },
+        clear: () => {
+          store = {};
+        },
+        key: (index: number) => Object.keys(store)[index] ?? null,
+        get length() {
+          return Object.keys(store).length;
+        },
+      };
+    })();
+
+    Object.defineProperty(globalThis, "localStorage", {
+      value: storage,
+      configurable: true,
+    });
+
+    storage.setItem("provider-form-sections", JSON.stringify({ rateLimit: true }));
+  });
+
+  test("提交新增后应清空 limit_total_usd，避免连续添加沿用上一次输入", async () => {
+    const messages = loadMessages();
+
+    const { unmount } = render(
+      <NextIntlClientProvider locale="en" messages={messages} timeZone="UTC">
+        <Dialog open onOpenChange={() => {}}>
+          <ProviderForm mode="create" enableMultiProviderTypes />
+        </Dialog>
+      </NextIntlClientProvider>
+    );
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const nameInput = document.getElementById("name") as HTMLInputElement | null;
+    const urlInput = document.getElementById("url") as HTMLInputElement | null;
+    const keyInput = document.getElementById("key") as HTMLInputElement | null;
+    expect(nameInput).toBeTruthy();
+    expect(urlInput).toBeTruthy();
+    expect(keyInput).toBeTruthy();
+
+    await act(async () => {
+      if (!nameInput || !urlInput || !keyInput) return;
+      setNativeValue(nameInput, "p2");
+      nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+      nameInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+      setNativeValue(urlInput, "https://example.com");
+      urlInput.dispatchEvent(new Event("input", { bubbles: true }));
+      urlInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+      setNativeValue(keyInput, "k");
+      keyInput.dispatchEvent(new Event("input", { bubbles: true }));
+      keyInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    const totalInput = document.getElementById("limit-total") as HTMLInputElement | null;
+    expect(totalInput).toBeTruthy();
+
+    await act(async () => {
+      if (!totalInput) return;
+      setNativeValue(totalInput, "10.5");
+      totalInput.dispatchEvent(new Event("input", { bubbles: true }));
+      totalInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    const form = document.body.querySelector("form") as HTMLFormElement | null;
+    expect(form).toBeTruthy();
+
+    await act(async () => {
+      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    for (let i = 0; i < 5; i++) {
+      if (providersActionMocks.addProvider.mock.calls.length > 0) break;
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+    }
+
+    expect(providersActionMocks.addProvider).toHaveBeenCalledTimes(1);
+    const payload = providersActionMocks.addProvider.mock.calls[0]?.[0] as {
+      limit_total_usd?: unknown;
+    };
+    expect(payload.limit_total_usd).toBe(10.5);
+
+    // 等待一次调度，让 React 处理新增成功后的 state 重置
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 成功后应清空输入（state -> null -> input value 变为空字符串）
+    expect((document.getElementById("limit-total") as HTMLInputElement | null)?.value ?? null).toBe(
+      ""
+    );
+
+    unmount();
+  });
+});
+
+describe("ProviderForm: timeout defaults", () => {
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    vi.clearAllMocks();
+
+    const storage = (() => {
+      let store: Record<string, string> = {};
+      return {
+        getItem: (key: string) => (hasOwn(store, key) ? store[key] : null),
+        setItem: (key: string, value: string) => {
+          store[key] = String(value);
+        },
+        removeItem: (key: string) => {
+          delete store[key];
+        },
+        clear: () => {
+          store = {};
+        },
+        key: (index: number) => Object.keys(store)[index] ?? null,
+        get length() {
+          return Object.keys(store).length;
+        },
+      };
+    })();
+
+    Object.defineProperty(globalThis, "localStorage", {
+      value: storage,
+      configurable: true,
+    });
+
+    storage.setItem("provider-form-sections", JSON.stringify({ network: true }));
+  });
+
+  test("create mode shows timeout defaults as 0 seconds instead of blank inputs", async () => {
+    const messages = loadMessages();
+
+    const { unmount } = render(
+      <NextIntlClientProvider locale="en" messages={messages} timeZone="UTC">
+        <Dialog open onOpenChange={() => {}}>
+          <ProviderForm mode="create" enableMultiProviderTypes />
+        </Dialog>
+      </NextIntlClientProvider>
+    );
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect((document.getElementById("first-byte-timeout") as HTMLInputElement | null)?.value).toBe(
+      "0"
+    );
+    expect((document.getElementById("streaming-idle") as HTMLInputElement | null)?.value).toBe("0");
+    expect(
+      (document.getElementById("non-streaming-timeout") as HTMLInputElement | null)?.value
+    ).toBe("0");
+
+    unmount();
+  });
+});

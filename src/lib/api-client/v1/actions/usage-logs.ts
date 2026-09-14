@@ -1,0 +1,152 @@
+import type {
+  UsageLogSummary,
+  UsageLogsBatchResult,
+  UsageLogsExportStatus,
+} from "@/types/usage-logs";
+import {
+  apiGet,
+  apiPost,
+  legacyCursorQueryEntries,
+  normalizeLegacyCursor,
+  searchParams,
+  toActionResult,
+  unwrapItems,
+} from "./_compat";
+
+export type { UsageLogsExportStatus } from "@/types/usage-logs";
+
+export function getUsageLogs(params?: object) {
+  return toActionResult(
+    apiGet(`/api/v1/usage-logs${searchParams(toQuery(params))}`).then(toLegacyUsageLogsPage)
+  );
+}
+
+export function getUsageLogsBatch(params?: object) {
+  return toActionResult(
+    apiGet(`/api/v1/usage-logs${searchParams(toQuery(params))}`).then(toLegacyUsageLogsPage)
+  );
+}
+
+export function getUsageLogsStats(params?: object) {
+  return toActionResult(
+    apiGet<UsageLogSummary>(`/api/v1/usage-logs/stats${searchParams(toQuery(params))}`)
+  );
+}
+
+export function getFilterOptions() {
+  return toActionResult(apiGet("/api/v1/usage-logs/filter-options"));
+}
+
+export function getModelList() {
+  return toActionResult(
+    apiGet<{ items?: string[] }>("/api/v1/usage-logs/models").then(unwrapItems)
+  );
+}
+
+export function getStatusCodeList() {
+  return toActionResult(
+    apiGet<{ items?: number[] }>("/api/v1/usage-logs/status-codes").then(unwrapItems)
+  );
+}
+
+export function getEndpointList() {
+  return toActionResult(
+    apiGet<{ items?: string[] }>("/api/v1/usage-logs/endpoints").then(unwrapItems)
+  );
+}
+
+export function getUsageLogSessionIdSuggestions(params: object) {
+  return toActionResult(
+    apiGet<{ items?: string[] }>(
+      `/api/v1/usage-logs/session-id-suggestions${searchParams(toQuery(params))}`
+    ).then(unwrapItems)
+  );
+}
+
+export function exportUsageLogs(params?: object) {
+  // Unwrap the REST `{ csv }` envelope so the result matches the server action
+  // contract (ActionResult<string>).
+  return toActionResult(
+    apiPost<{ csv: string }>("/api/v1/usage-logs/exports", params).then((body) => body.csv)
+  );
+}
+
+export function startUsageLogsExport(params?: object) {
+  return toActionResult(
+    apiPost("/api/v1/usage-logs/exports", params, {
+      headers: { Prefer: "respond-async" },
+    })
+  );
+}
+
+export function getUsageLogsExportStatus(jobId: string) {
+  return toActionResult(
+    apiGet<UsageLogsExportStatus>(`/api/v1/usage-logs/exports/${encodeURIComponent(jobId)}`)
+  );
+}
+
+export interface UsageLogsExportDownloadFile {
+  blob: Blob;
+}
+
+export function downloadUsageLogsExport(jobId: string) {
+  return toActionResult<UsageLogsExportDownloadFile>(
+    fetch(`/api/v1/usage-logs/exports/${encodeURIComponent(jobId)}/download`, {
+      credentials: "include",
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(response.statusText || "Export download failed");
+      return { blob: await response.blob() };
+    })
+  );
+}
+
+function toQuery(params?: object) {
+  return Object.fromEntries(
+    Object.entries(params ?? {}).flatMap(([key, value]) => {
+      if (key === "cursor") return legacyCursorQueryEntries(value);
+      if (value instanceof Date) return [[key, value.toISOString()]];
+      if (["string", "number", "boolean"].includes(typeof value)) return [[key, value]];
+      return [];
+    })
+  );
+}
+
+function toLegacyUsageLogsPage(body: unknown): UsageLogsBatchResult {
+  const page = body as {
+    logs?: UsageLogsBatchResult["logs"];
+    items?: UsageLogsBatchResult["logs"];
+    sourceSessionIdsByIdentity?: UsageLogsBatchResult["sourceSessionIdsByIdentity"];
+    pageInfo?: {
+      nextCursor?: UsageLogsBatchResult["nextCursor"] | string;
+      hasMore?: boolean;
+      page?: number;
+      pageSize?: number;
+      total?: number;
+      totalPages?: number;
+    };
+    nextCursor?: UsageLogsBatchResult["nextCursor"] | string;
+    hasMore?: boolean;
+    total?: number;
+    page?: number;
+    pageSize?: number;
+    totalPages?: number;
+  };
+  return {
+    logs: page.logs ?? page.items ?? [],
+    sourceSessionIdsByIdentity: page.sourceSessionIdsByIdentity,
+    nextCursor: normalizeLegacyCursor(page.nextCursor ?? page.pageInfo?.nextCursor),
+    hasMore: page.hasMore ?? page.pageInfo?.hasMore ?? false,
+    ...((page.total ?? page.pageInfo?.total !== undefined)
+      ? { total: page.total ?? page.pageInfo?.total }
+      : {}),
+    ...((page.page ?? page.pageInfo?.page !== undefined)
+      ? { page: page.page ?? page.pageInfo?.page }
+      : {}),
+    ...((page.pageSize ?? page.pageInfo?.pageSize !== undefined)
+      ? { pageSize: page.pageSize ?? page.pageInfo?.pageSize }
+      : {}),
+    ...((page.totalPages ?? page.pageInfo?.totalPages !== undefined)
+      ? { totalPages: page.totalPages ?? page.pageInfo?.totalPages }
+      : {}),
+  } as UsageLogsBatchResult;
+}

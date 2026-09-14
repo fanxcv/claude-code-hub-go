@@ -1,0 +1,189 @@
+{
+  "generated_by": "scripts/availproj-consume-golden.ts（直接调用 Node 的 processBatch）",
+  "fixture": "availproj_consume_fixture.json",
+  "node_process_batch_applied": 9,
+  "buckets": [
+    {
+      "provider_id": 101,
+      "bucket_offset_seconds": -180,
+      "success_cnt": 1,
+      "failure_cnt": 1,
+      "excluded_cnt": 0,
+      "latency_cnt": 2,
+      "latency_sum_ms": 1750,
+      "last_request_at_offset_seconds": -180
+    },
+    {
+      "provider_id": 101,
+      "bucket_offset_seconds": -120,
+      "success_cnt": 5,
+      "failure_cnt": 0,
+      "excluded_cnt": 0,
+      "latency_cnt": 3,
+      "latency_sum_ms": 300,
+      "last_request_at_offset_seconds": -90
+    },
+    {
+      "provider_id": 102,
+      "bucket_offset_seconds": -60,
+      "success_cnt": 0,
+      "failure_cnt": 0,
+      "excluded_cnt": 2,
+      "latency_cnt": 0,
+      "latency_sum_ms": 0,
+      "last_request_at_offset_seconds": -60
+    },
+    {
+      "provider_id": 103,
+      "bucket_offset_seconds": -180,
+      "success_cnt": 1,
+      "failure_cnt": 0,
+      "excluded_cnt": 0,
+      "latency_cnt": 1,
+      "latency_sum_ms": 10,
+      "last_request_at_offset_seconds": -180
+    },
+    {
+      "provider_id": 103,
+      "bucket_offset_seconds": 0,
+      "success_cnt": 1,
+      "failure_cnt": 0,
+      "excluded_cnt": 0,
+      "latency_cnt": 1,
+      "latency_sum_ms": 88,
+      "last_request_at_offset_seconds": 0
+    },
+    {
+      "provider_id": 107,
+      "bucket_offset_seconds": -1800,
+      "success_cnt": 1,
+      "failure_cnt": 0,
+      "excluded_cnt": 0,
+      "latency_cnt": 1,
+      "latency_sum_ms": 42,
+      "last_request_at_offset_seconds": -1800
+    }
+  ],
+  "current": [
+    {
+      "provider_id": 101,
+      "state": "green",
+      "availability": 0.8571428571428571,
+      "request_count": 7,
+      "last_request_at_offset_seconds": -90
+    },
+    {
+      "provider_id": 102,
+      "state": "unknown",
+      "availability": 0,
+      "request_count": 0,
+      "last_request_at_offset_seconds": -60
+    },
+    {
+      "provider_id": 103,
+      "state": "green",
+      "availability": 1,
+      "request_count": 2,
+      "last_request_at_offset_seconds": 0
+    },
+    {
+      "provider_id": 106,
+      "state": "green",
+      "availability": 1,
+      "request_count": 7,
+      "last_request_at_offset_seconds": -1200
+    },
+    {
+      "provider_id": 107,
+      "state": "unknown",
+      "availability": 0,
+      "request_count": 0,
+      "last_request_at_offset_seconds": -1800
+    }
+  ],
+  "outbox": [
+    {
+      "event_id": "11111111-1111-4111-8111-111111111101",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111102",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111103",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111104",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111105",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111106",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111107",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111108",
+      "published": true,
+      "attempts": 1,
+      "last_error": "invalid payload"
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111109",
+      "published": true,
+      "attempts": 1,
+      "last_error": "invalid payload"
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111110",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111111",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    },
+    {
+      "event_id": "11111111-1111-4111-8111-111111111112",
+      "published": true,
+      "attempts": 1,
+      "last_error": null
+    }
+  ],
+  "applied_request_ids": [
+    9001,
+    9002,
+    9003,
+    9004,
+    9005,
+    9006,
+    9007,
+    9011,
+    9012
+  ]
+}

@@ -1,0 +1,34 @@
+# Ignore git metadata
+.git
+.gitignore
+
+# Node modules and build artifacts
+node_modules
+.next
+out
+coverage
+dist
+
+# Local env files (will be provided via runtime)
+.env
+.env.*
+!.env.example
+
+# Editor/IDE
+.vscode
+.idea
+
+# Logs and misc
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Data directories (PostgreSQL, Redis persistent data)
+data/redis
+data/postgres
+data/redis-dev
+data/postgres-dev
+
+# Go 构建产物与 UI 导出（Dockerfile 会在 builder 内自行生成嵌入产物）
+go/vendor

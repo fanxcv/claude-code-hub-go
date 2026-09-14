@@ -1,0 +1,395 @@
+"use client";
+import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
+import { useCallback, useEffect, useState, useTransition } from "react";
+import { toast } from "sonner";
+import { DatePickerField } from "@/components/form/date-picker-field";
+import { NumberField, TagInputField, TextField } from "@/components/form/form-field";
+import { DialogFormLayout, FormGrid } from "@/components/form/form-layout";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { addKey, addOwnKey } from "@/lib/api-client/v1/actions/keys";
+import { getAvailableProviderGroups } from "@/lib/api-client/v1/actions/providers";
+import { PROVIDER_GROUP } from "@/lib/constants/provider.constants";
+import { useZodForm } from "@/lib/hooks/use-zod-form";
+import { getErrorMessage } from "@/lib/utils/error-messages";
+import { parseProviderGroups } from "@/lib/utils/provider-group";
+import { KeyFormSchema } from "@/lib/validation/schemas";
+import type { KeyDialogUserContext } from "@/types/user";
+
+interface AddKeyFormProps {
+  userId?: number;
+  user?: KeyDialogUserContext;
+  isAdmin?: boolean;
+  onSuccess?: (result: { generatedKey: string; name: string }) => void;
+}
+
+export function AddKeyForm({ userId, user, isAdmin = false, onSuccess }: AddKeyFormProps) {
+  const [isPending, startTransition] = useTransition();
+  const [providerGroupSuggestions, setProviderGroupSuggestions] = useState<string[]>([]);
+  const router = useRouter();
+  const t = useTranslations("dashboard.addKeyForm");
+  const tBalancePage = useTranslations(
+    "dashboard.userManagement.keyEditSection.fields.balanceQueryPage"
+  );
+  const tUI = useTranslations("ui.tagInput");
+  const tCommon = useTranslations("common");
+  const tErrors = useTranslations("errors");
+
+  // Load provider group suggestions
+  useEffect(() => {
+    if (user?.id && !isAdmin) {
+      getAvailableProviderGroups(user.id).then(setProviderGroupSuggestions);
+    } else {
+      getAvailableProviderGroups().then(setProviderGroupSuggestions);
+    }
+  }, [isAdmin, user?.id]);
+
+  const form = useZodForm({
+    schema: KeyFormSchema,
+    defaultValues: {
+      name: "",
+      expiresAt: "",
+      canLoginWebUi: false,
+      providerGroup: PROVIDER_GROUP.DEFAULT,
+      cacheTtlPreference: "inherit",
+      limit5hUsd: null,
+      limit5hResetMode: "rolling" as const,
+      limitDailyUsd: null,
+      dailyResetMode: "fixed" as const,
+      dailyResetTime: "00:00",
+      limitWeeklyUsd: null,
+      limitMonthlyUsd: null,
+      limitTotalUsd: null,
+      limitConcurrentSessions: 0,
+    },
+    onSubmit: async (data) => {
+      if (!userId) {
+        throw new Error(t("errors.userIdMissing"));
+      }
+
+      try {
+        const body = {
+          name: data.name,
+          // 重要：清除到期时间时用空字符串表达，避免 undefined 在 Server Action 序列化时被丢弃
+          expiresAt: data.expiresAt ?? "",
+          canLoginWebUi: data.canLoginWebUi,
+          limit5hUsd: data.limit5hUsd,
+          limit5hResetMode: data.limit5hResetMode,
+          limitDailyUsd: data.limitDailyUsd,
+          dailyResetMode: data.dailyResetMode,
+          dailyResetTime: data.dailyResetTime,
+          limitWeeklyUsd: data.limitWeeklyUsd,
+          limitMonthlyUsd: data.limitMonthlyUsd,
+          limitTotalUsd: data.limitTotalUsd,
+          limitConcurrentSessions: data.limitConcurrentSessions,
+          cacheTtlPreference: data.cacheTtlPreference,
+          providerGroup: data.providerGroup || PROVIDER_GROUP.DEFAULT,
+        };
+        // 非管理员走会话定向的自助端点，目标用户由服务端会话决定（U03：
+        // 避免 admin 路由 403 后静默改为给会话用户建 key）
+        const result = isAdmin ? await addKey({ userId: userId!, ...body }) : await addOwnKey(body);
+
+        if (!result.ok) {
+          const msg = result.errorCode
+            ? getErrorMessage(tErrors, result.errorCode, result.errorParams)
+            : result.error || t("errors.createFailed");
+          toast.error(msg);
+          return;
+        }
+
+        const payload = result.data;
+        if (!payload) {
+          toast.error(t("errors.noKeyReturned"));
+          return;
+        }
+
+        startTransition(() => {
+          onSuccess?.({
+            generatedKey: payload.generatedKey,
+            name: payload.name,
+          });
+          router.refresh();
+        });
+      } catch (err) {
+        console.error("添加Key失败:", err);
+        // 使用toast显示具体的错误信息
+        const errorMessage = err instanceof Error ? err.message : t("errors.createFailed");
+        toast.error(errorMessage);
+      }
+    },
+  });
+
+  // 选择分组时，自动移除 default（当有多个分组时）
+  const handleProviderGroupChange = useCallback(
+    (newValue: string) => {
+      const groups = parseProviderGroups(newValue);
+      const normalizedGroups =
+        groups.length > 1 && groups.includes(PROVIDER_GROUP.DEFAULT)
+          ? groups.filter((g) => g !== PROVIDER_GROUP.DEFAULT)
+          : groups;
+      form.setValue("providerGroup", normalizedGroups.join(","));
+    },
+    [form]
+  );
+
+  return (
+    <DialogFormLayout
+      config={{
+        title: t("title"),
+        description: t("description"),
+        submitText: t("submitText"),
+        loadingText: t("loadingText"),
+      }}
+      onSubmit={form.handleSubmit}
+      isSubmitting={isPending}
+      canSubmit={form.canSubmit && !!userId}
+      error={form.errors._form}
+    >
+      <TextField
+        label={t("keyName.label")}
+        required
+        maxLength={64}
+        autoFocus
+        placeholder={t("keyName.placeholder")}
+        {...form.getFieldProps("name")}
+      />
+
+      <DatePickerField
+        label={t("expiresAt.label")}
+        placeholder={t("expiresAt.placeholder")}
+        description={t("expiresAt.description")}
+        clearLabel={tCommon("clearDate")}
+        value={String(form.values.expiresAt || "")}
+        onChange={(val) => form.setValue("expiresAt", val)}
+        error={form.getFieldProps("expiresAt").error}
+        touched={form.getFieldProps("expiresAt").touched}
+      />
+
+      {/* Balance Query Page toggle uses inverted logic by design:
+          - canLoginWebUi=true means user accesses full WebUI (switch OFF)
+          - canLoginWebUi=false means user uses independent balance page (switch ON)
+          The switch represents "enable independent page" which is !canLoginWebUi */}
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-dashed border-border px-4 py-3">
+        <div>
+          <Label htmlFor="can-login-web-ui" className="text-sm font-medium">
+            {tBalancePage("label")}
+          </Label>
+          <p className="text-xs text-muted-foreground mt-1">
+            {form.values.canLoginWebUi
+              ? tBalancePage("descriptionDisabled")
+              : tBalancePage("descriptionEnabled")}
+          </p>
+        </div>
+        <Switch
+          id="can-login-web-ui"
+          aria-label={tBalancePage("label")}
+          checked={!form.values.canLoginWebUi}
+          onCheckedChange={(checked) => form.setValue("canLoginWebUi", !checked)}
+        />
+      </div>
+
+      <TagInputField
+        label={t("providerGroup.label")}
+        maxTagLength={200}
+        placeholder={t("providerGroup.placeholder")}
+        description={
+          user?.providerGroup
+            ? t("providerGroup.descriptionWithUserGroup", {
+                group: user.providerGroup,
+              })
+            : t("providerGroup.description")
+        }
+        suggestions={providerGroupSuggestions}
+        validateTag={() => true}
+        onInvalidTag={(_tag, reason) => {
+          const messages: Record<string, string> = {
+            empty: tUI("emptyTag"),
+            duplicate: tUI("duplicateTag"),
+            too_long: tUI("tooLong", { max: 200 }),
+            invalid_format: tUI("invalidFormat"),
+            max_tags: tUI("maxTags"),
+          };
+          toast.error(messages[reason] || reason);
+        }}
+        value={String(form.getFieldProps("providerGroup").value)}
+        onChange={handleProviderGroupChange}
+        error={form.getFieldProps("providerGroup").error}
+        touched={form.getFieldProps("providerGroup").touched}
+      />
+
+      <div className="space-y-2">
+        <Label>{t("cacheTtl.label")}</Label>
+        <Select
+          value={form.values.cacheTtlPreference}
+          onValueChange={(val) =>
+            form.setValue("cacheTtlPreference", val as "inherit" | "5m" | "1h")
+          }
+        >
+          <SelectTrigger>
+            <SelectValue placeholder={t("cacheTtl.options.inherit")} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="inherit">{t("cacheTtl.options.inherit")}</SelectItem>
+            <SelectItem value="5m">{t("cacheTtl.options.5m")}</SelectItem>
+            <SelectItem value="1h">{t("cacheTtl.options.1h")}</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">{t("cacheTtl.description")}</p>
+      </div>
+
+      <FormGrid columns={2}>
+        <NumberField
+          label={t("limit5hUsd.label")}
+          placeholder={t("limit5hUsd.placeholder")}
+          description={
+            user?.limit5hUsd
+              ? t("limit5hUsd.descriptionWithUserLimit", {
+                  limit: user.limit5hUsd,
+                })
+              : t("limit5hUsd.description")
+          }
+          min={0}
+          step={0.01}
+          {...form.getFieldProps("limit5hUsd")}
+        />
+
+        <NumberField
+          label={t("limitDailyUsd.label")}
+          placeholder={t("limitDailyUsd.placeholder")}
+          description={t("limitDailyUsd.description")}
+          min={0}
+          step={0.01}
+          {...form.getFieldProps("limitDailyUsd")}
+        />
+      </FormGrid>
+
+      <FormGrid columns={2}>
+        <div className="space-y-2">
+          <Label htmlFor="limit-5h-reset-mode">{t("limit5hResetMode.label")}</Label>
+          <Select
+            value={form.values.limit5hResetMode}
+            onValueChange={(value: "fixed" | "rolling") => form.setValue("limit5hResetMode", value)}
+            disabled={isPending}
+          >
+            <SelectTrigger id="limit-5h-reset-mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="fixed">{t("limit5hResetMode.options.fixed")}</SelectItem>
+              <SelectItem value="rolling">{t("limit5hResetMode.options.rolling")}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {form.values.limit5hResetMode === "fixed"
+              ? t("limit5hResetMode.desc.fixed")
+              : t("limit5hResetMode.desc.rolling")}
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="daily-reset-mode">{t("dailyResetMode.label")}</Label>
+          <Select
+            value={form.values.dailyResetMode}
+            onValueChange={(value: "fixed" | "rolling") => form.setValue("dailyResetMode", value)}
+            disabled={isPending}
+          >
+            <SelectTrigger id="daily-reset-mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="fixed">{t("dailyResetMode.options.fixed")}</SelectItem>
+              <SelectItem value="rolling">{t("dailyResetMode.options.rolling")}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {form.values.dailyResetMode === "fixed"
+              ? t("dailyResetMode.desc.fixed")
+              : t("dailyResetMode.desc.rolling")}
+          </p>
+        </div>
+      </FormGrid>
+
+      {form.values.dailyResetMode === "fixed" && (
+        <TextField
+          label={t("dailyResetTime.label")}
+          placeholder={t("dailyResetTime.placeholder")}
+          description={t("dailyResetTime.description")}
+          type="time"
+          step={60}
+          {...form.getFieldProps("dailyResetTime")}
+        />
+      )}
+
+      <FormGrid columns={2}>
+        <NumberField
+          label={t("limitWeeklyUsd.label")}
+          placeholder={t("limitWeeklyUsd.placeholder")}
+          description={
+            user?.limitWeeklyUsd
+              ? t("limitWeeklyUsd.descriptionWithUserLimit", {
+                  limit: user.limitWeeklyUsd,
+                })
+              : t("limitWeeklyUsd.description")
+          }
+          min={0}
+          step={0.01}
+          {...form.getFieldProps("limitWeeklyUsd")}
+        />
+
+        <NumberField
+          label={t("limitMonthlyUsd.label")}
+          placeholder={t("limitMonthlyUsd.placeholder")}
+          description={
+            user?.limitMonthlyUsd
+              ? t("limitMonthlyUsd.descriptionWithUserLimit", {
+                  limit: user.limitMonthlyUsd,
+                })
+              : t("limitMonthlyUsd.description")
+          }
+          min={0}
+          step={0.01}
+          {...form.getFieldProps("limitMonthlyUsd")}
+        />
+
+        <NumberField
+          label={t("limitTotalUsd.label")}
+          placeholder={t("limitTotalUsd.placeholder")}
+          description={
+            user?.limitTotalUsd
+              ? t("limitTotalUsd.descriptionWithUserLimit", {
+                  limit: user.limitTotalUsd,
+                })
+              : t("limitTotalUsd.description")
+          }
+          min={0}
+          max={10000000}
+          step={0.01}
+          {...form.getFieldProps("limitTotalUsd")}
+        />
+
+        <NumberField
+          label={t("limitConcurrentSessions.label")}
+          placeholder={t("limitConcurrentSessions.placeholder")}
+          description={
+            user?.limitConcurrentSessions
+              ? t("limitConcurrentSessions.descriptionWithUserLimit", {
+                  limit: user.limitConcurrentSessions,
+                })
+              : t("limitConcurrentSessions.description")
+          }
+          min={0}
+          step={1}
+          {...form.getFieldProps("limitConcurrentSessions")}
+        />
+      </FormGrid>
+    </DialogFormLayout>
+  );
+}

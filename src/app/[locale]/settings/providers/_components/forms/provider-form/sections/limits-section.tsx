@@ -1,0 +1,618 @@
+"use client";
+
+import { motion } from "framer-motion";
+import {
+  AlertTriangle,
+  Clock,
+  DollarSign,
+  Gauge,
+  RefreshCw,
+  Shield,
+  TrendingUp,
+  Users,
+  Zap,
+} from "lucide-react";
+import { useTranslations } from "next-intl";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { PROVIDER_DEFAULTS } from "@/lib/constants/provider.constants";
+import { cn } from "@/lib/utils";
+import { MixedValueIndicator } from "../../../batch-edit/mixed-value-indicator";
+import { FieldGroup, SectionCard, SmartInputWrapper } from "../components/section-card";
+import { useProviderForm } from "../provider-form-context";
+
+// Validation helpers
+function validatePositiveDecimalField(value: string): number | null {
+  if (value === "") return null;
+  const num = parseFloat(value);
+  if (Number.isNaN(num) || num < 0) return null;
+  return num;
+}
+
+function validateNumericField(value: string): number | null {
+  if (value === "") return null;
+  const num = parseInt(value, 10);
+  if (Number.isNaN(num) || num < 0) return null;
+  return num;
+}
+
+// Visual limit card component
+interface LimitCardProps {
+  label: string;
+  value: number | null;
+  unit: string;
+  icon: React.ElementType;
+  color: string;
+  id: string;
+  placeholder: string;
+  onChange: (value: number | null) => void;
+  disabled?: boolean;
+  step?: string;
+  min?: string;
+  isDecimal?: boolean;
+  mixedValues?: (number | null)[];
+}
+
+function LimitCard({
+  label,
+  value,
+  unit,
+  icon: Icon,
+  color,
+  id,
+  placeholder,
+  onChange,
+  disabled,
+  step = "0.01",
+  min = "0",
+  isDecimal = true,
+  mixedValues,
+}: LimitCardProps) {
+  return (
+    <div
+      className={cn(
+        "relative overflow-hidden rounded-lg border bg-card/50 p-4",
+        "transition-all duration-200 hover:border-border",
+        value !== null && "border-primary/30"
+      )}
+    >
+      <div className="flex items-start gap-3">
+        <span
+          className={cn("flex items-center justify-center w-10 h-10 rounded-lg shrink-0", color)}
+        >
+          <Icon className="h-5 w-5" />
+        </span>
+        <div className="flex-1 min-w-0 space-y-2">
+          <label htmlFor={id} className="text-sm font-medium text-foreground">
+            {label}
+          </label>
+          <div className="relative">
+            <Input
+              id={id}
+              type="number"
+              value={value?.toString() ?? ""}
+              onChange={(e) =>
+                onChange(
+                  isDecimal
+                    ? validatePositiveDecimalField(e.target.value)
+                    : validateNumericField(e.target.value)
+                )
+              }
+              placeholder={placeholder}
+              disabled={disabled}
+              min={min}
+              step={step}
+              className="pr-12 font-mono"
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+              {unit}
+            </span>
+          </div>
+          {mixedValues && mixedValues.length > 0 && <MixedValueIndicator values={mixedValues} />}
+        </div>
+      </div>
+      {value !== null && (
+        <motion.div
+          initial={{ scaleX: 0 }}
+          animate={{ scaleX: 1 }}
+          className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary/50 origin-left"
+        />
+      )}
+    </div>
+  );
+}
+
+interface LimitsSectionProps {
+  subSectionRefs?: {
+    circuitBreaker?: (el: HTMLDivElement | null) => void;
+  };
+}
+
+export function LimitsSection({ subSectionRefs }: LimitsSectionProps) {
+  const t = useTranslations("settings.providers.form");
+  const { state, dispatch, mode, batchAnalysis } = useProviderForm();
+  const rateLimit = state.rateLimit as typeof state.rateLimit & {
+    limit5hResetMode?: "fixed" | "rolling";
+  };
+  const isEdit = mode === "edit";
+  const isBatch = mode === "batch";
+  const limit5hResetMode = rateLimit.limit5hResetMode ?? "rolling";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -20 }}
+      transition={{ duration: 0.2 }}
+      className="space-y-6"
+    >
+      {/* USD Spending Limits */}
+      <SectionCard
+        title={t("sections.rateLimit.title")}
+        description={t("sections.rateLimit.desc")}
+        icon={DollarSign}
+        variant="highlight"
+      >
+        <div className="space-y-4">
+          {/* Time-based limits grid */}
+          <FieldGroup label={t("sections.limits.timeBased")}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <LimitCard
+                label={t("sections.rateLimit.limit5h.label")}
+                value={state.rateLimit.limit5hUsd}
+                unit="USD"
+                icon={Clock}
+                color="bg-blue-500/10 text-blue-500"
+                id={isEdit ? "edit-limit-5h" : "limit-5h"}
+                placeholder={t("sections.rateLimit.limit5h.placeholder")}
+                onChange={(value) => dispatch({ type: "SET_LIMIT_5H_USD", payload: value })}
+                disabled={state.ui.isPending}
+                mixedValues={
+                  isBatch && batchAnalysis?.rateLimit.limit5hUsd.status === "mixed"
+                    ? batchAnalysis.rateLimit.limit5hUsd.values
+                    : undefined
+                }
+              />
+              <LimitCard
+                label={t("sections.rateLimit.limitDaily.label")}
+                value={state.rateLimit.limitDailyUsd}
+                unit="USD"
+                icon={DollarSign}
+                color="bg-green-500/10 text-green-500"
+                id={isEdit ? "edit-limit-daily" : "limit-daily"}
+                placeholder={t("sections.rateLimit.limitDaily.placeholder")}
+                onChange={(value) => dispatch({ type: "SET_LIMIT_DAILY_USD", payload: value })}
+                disabled={state.ui.isPending}
+                mixedValues={
+                  isBatch && batchAnalysis?.rateLimit.limitDailyUsd.status === "mixed"
+                    ? batchAnalysis.rateLimit.limitDailyUsd.values
+                    : undefined
+                }
+              />
+              <LimitCard
+                label={t("sections.rateLimit.limitWeekly.label")}
+                value={state.rateLimit.limitWeeklyUsd}
+                unit="USD"
+                icon={DollarSign}
+                color="bg-purple-500/10 text-purple-500"
+                id={isEdit ? "edit-limit-weekly" : "limit-weekly"}
+                placeholder={t("sections.rateLimit.limitWeekly.placeholder")}
+                onChange={(value) => dispatch({ type: "SET_LIMIT_WEEKLY_USD", payload: value })}
+                disabled={state.ui.isPending}
+                mixedValues={
+                  isBatch && batchAnalysis?.rateLimit.limitWeeklyUsd.status === "mixed"
+                    ? batchAnalysis.rateLimit.limitWeeklyUsd.values
+                    : undefined
+                }
+              />
+              <LimitCard
+                label={t("sections.rateLimit.limitMonthly.label")}
+                value={state.rateLimit.limitMonthlyUsd}
+                unit="USD"
+                icon={DollarSign}
+                color="bg-orange-500/10 text-orange-500"
+                id={isEdit ? "edit-limit-monthly" : "limit-monthly"}
+                placeholder={t("sections.rateLimit.limitMonthly.placeholder")}
+                onChange={(value) => dispatch({ type: "SET_LIMIT_MONTHLY_USD", payload: value })}
+                disabled={state.ui.isPending}
+                mixedValues={
+                  isBatch && batchAnalysis?.rateLimit.limitMonthlyUsd.status === "mixed"
+                    ? batchAnalysis.rateLimit.limitMonthlyUsd.values
+                    : undefined
+                }
+              />
+            </div>
+          </FieldGroup>
+
+          {/* Window Reset Settings */}
+          <FieldGroup label={t("sections.limits.windowReset")}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <SmartInputWrapper
+                label={t("sections.rateLimit.limit5hResetMode.label")}
+                description={
+                  limit5hResetMode === "fixed"
+                    ? t("sections.rateLimit.limit5hResetMode.desc.fixed")
+                    : t("sections.rateLimit.limit5hResetMode.desc.rolling")
+                }
+              >
+                <Select
+                  value={limit5hResetMode}
+                  onValueChange={(value: "fixed" | "rolling") =>
+                    (
+                      dispatch as unknown as (action: {
+                        type: "SET_LIMIT_5H_RESET_MODE";
+                        payload: "fixed" | "rolling";
+                      }) => void
+                    )({ type: "SET_LIMIT_5H_RESET_MODE", payload: value })
+                  }
+                  disabled={state.ui.isPending}
+                >
+                  <SelectTrigger id={isEdit ? "edit-limit-5h-reset-mode" : "limit-5h-reset-mode"}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fixed">
+                      {t("sections.rateLimit.limit5hResetMode.options.fixed")}
+                    </SelectItem>
+                    <SelectItem value="rolling">
+                      {t("sections.rateLimit.limit5hResetMode.options.rolling")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                {isBatch && batchAnalysis?.rateLimit.limit5hResetMode.status === "mixed" && (
+                  <MixedValueIndicator values={batchAnalysis.rateLimit.limit5hResetMode.values} />
+                )}
+              </SmartInputWrapper>
+
+              <SmartInputWrapper
+                label={t("sections.rateLimit.dailyResetMode.label")}
+                description={
+                  state.rateLimit.dailyResetMode === "fixed"
+                    ? t("sections.rateLimit.dailyResetMode.desc.fixed")
+                    : t("sections.rateLimit.dailyResetMode.desc.rolling")
+                }
+              >
+                <Select
+                  value={state.rateLimit.dailyResetMode}
+                  onValueChange={(value: "fixed" | "rolling") =>
+                    dispatch({ type: "SET_DAILY_RESET_MODE", payload: value })
+                  }
+                  disabled={state.ui.isPending}
+                >
+                  <SelectTrigger id={isEdit ? "edit-daily-reset-mode" : "daily-reset-mode"}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fixed">
+                      {t("sections.rateLimit.dailyResetMode.options.fixed")}
+                    </SelectItem>
+                    <SelectItem value="rolling">
+                      {t("sections.rateLimit.dailyResetMode.options.rolling")}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </SmartInputWrapper>
+
+              {state.rateLimit.dailyResetMode === "fixed" && (
+                <SmartInputWrapper label={t("sections.rateLimit.dailyResetTime.label")}>
+                  <Input
+                    id={isEdit ? "edit-daily-reset" : "daily-reset"}
+                    type="time"
+                    value={state.rateLimit.dailyResetTime}
+                    onChange={(e) =>
+                      dispatch({ type: "SET_DAILY_RESET_TIME", payload: e.target.value || "00:00" })
+                    }
+                    placeholder={t("sections.rateLimit.dailyResetTime.placeholder")}
+                    disabled={state.ui.isPending}
+                    step="60"
+                  />
+                </SmartInputWrapper>
+              )}
+            </div>
+          </FieldGroup>
+
+          {/* Total and Concurrent Limits */}
+          <FieldGroup label={t("sections.limits.otherLimits")}>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <LimitCard
+                label={t("sections.rateLimit.limitTotal.label")}
+                value={state.rateLimit.limitTotalUsd}
+                unit="USD"
+                icon={Gauge}
+                color="bg-red-500/10 text-red-500"
+                id={isEdit ? "edit-limit-total" : "limit-total"}
+                placeholder={t("sections.rateLimit.limitTotal.placeholder")}
+                onChange={(value) => dispatch({ type: "SET_LIMIT_TOTAL_USD", payload: value })}
+                disabled={state.ui.isPending}
+                mixedValues={
+                  isBatch && batchAnalysis?.rateLimit.limitTotalUsd.status === "mixed"
+                    ? batchAnalysis.rateLimit.limitTotalUsd.values
+                    : undefined
+                }
+              />
+              <LimitCard
+                label={t("sections.rateLimit.limitConcurrent.label")}
+                value={state.rateLimit.limitConcurrentSessions}
+                unit=""
+                icon={Users}
+                color="bg-cyan-500/10 text-cyan-500"
+                id={isEdit ? "edit-limit-concurrent" : "limit-concurrent"}
+                placeholder={t("sections.rateLimit.limitConcurrent.placeholder")}
+                onChange={(value) =>
+                  dispatch({ type: "SET_LIMIT_CONCURRENT_SESSIONS", payload: value })
+                }
+                disabled={state.ui.isPending}
+                step="1"
+                isDecimal={false}
+                mixedValues={
+                  isBatch && batchAnalysis?.rateLimit.limitConcurrentSessions.status === "mixed"
+                    ? batchAnalysis.rateLimit.limitConcurrentSessions.values
+                    : undefined
+                }
+              />
+            </div>
+          </FieldGroup>
+        </div>
+      </SectionCard>
+
+      {/* Circuit Breaker Settings */}
+      <div ref={subSectionRefs?.circuitBreaker}>
+        <SectionCard
+          title={t("sections.circuitBreaker.title")}
+          description={t("sections.circuitBreaker.desc")}
+          icon={Shield}
+        >
+          <div className="space-y-4">
+            {/* Circuit Breaker Parameters */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <SmartInputWrapper
+                label={t("sections.circuitBreaker.failureThreshold.label")}
+                description={t("sections.circuitBreaker.failureThreshold.desc")}
+              >
+                <div className="space-y-2">
+                  <div className="relative">
+                    <Input
+                      id={isEdit ? "edit-failure-threshold" : "failure-threshold"}
+                      type="number"
+                      value={state.circuitBreaker.failureThreshold ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        dispatch({
+                          type: "SET_FAILURE_THRESHOLD",
+                          payload: val === "" ? undefined : parseInt(val, 10),
+                        });
+                      }}
+                      placeholder={t("sections.circuitBreaker.failureThreshold.placeholder")}
+                      disabled={state.ui.isPending}
+                      min="0"
+                      step="1"
+                      className={cn(
+                        state.circuitBreaker.failureThreshold === 0 && "border-yellow-500"
+                      )}
+                    />
+                    <AlertTriangle
+                      className={cn(
+                        "absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4",
+                        state.circuitBreaker.failureThreshold === 0
+                          ? "text-yellow-500"
+                          : "text-muted-foreground/30"
+                      )}
+                    />
+                  </div>
+                  {state.circuitBreaker.failureThreshold === 0 && (
+                    <p className="text-xs text-yellow-600">
+                      {t("sections.circuitBreaker.failureThreshold.warning")}
+                    </p>
+                  )}
+                  {isBatch && batchAnalysis?.circuitBreaker.failureThreshold.status === "mixed" && (
+                    <MixedValueIndicator
+                      values={batchAnalysis.circuitBreaker.failureThreshold.values}
+                    />
+                  )}
+                </div>
+              </SmartInputWrapper>
+
+              <SmartInputWrapper
+                label={t("sections.circuitBreaker.openDuration.label")}
+                description={t("sections.circuitBreaker.openDuration.desc")}
+              >
+                <div className="space-y-2">
+                  <div className="relative">
+                    <Input
+                      id={isEdit ? "edit-open-duration" : "open-duration"}
+                      type="number"
+                      value={state.circuitBreaker.openDurationMinutes ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        dispatch({
+                          type: "SET_OPEN_DURATION_MINUTES",
+                          payload: val === "" ? undefined : parseInt(val, 10),
+                        });
+                      }}
+                      placeholder={t("sections.circuitBreaker.openDuration.placeholder")}
+                      disabled={state.ui.isPending}
+                      min="1"
+                      max="1440"
+                      step="1"
+                      className="pr-12"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                      min
+                    </span>
+                  </div>
+                  {isBatch &&
+                    batchAnalysis?.circuitBreaker.openDurationMinutes.status === "mixed" && (
+                      <MixedValueIndicator
+                        values={batchAnalysis.circuitBreaker.openDurationMinutes.values}
+                      />
+                    )}
+                </div>
+              </SmartInputWrapper>
+
+              <SmartInputWrapper
+                label={t("sections.circuitBreaker.successThreshold.label")}
+                description={t("sections.circuitBreaker.successThreshold.desc")}
+              >
+                <div className="space-y-2">
+                  <Input
+                    id={isEdit ? "edit-success-threshold" : "success-threshold"}
+                    type="number"
+                    value={state.circuitBreaker.halfOpenSuccessThreshold ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      dispatch({
+                        type: "SET_HALF_OPEN_SUCCESS_THRESHOLD",
+                        payload: val === "" ? undefined : parseInt(val, 10),
+                      });
+                    }}
+                    placeholder={t("sections.circuitBreaker.successThreshold.placeholder")}
+                    disabled={state.ui.isPending}
+                    min="1"
+                    max="10"
+                    step="1"
+                  />
+                  {isBatch &&
+                    batchAnalysis?.circuitBreaker.halfOpenSuccessThreshold.status === "mixed" && (
+                      <MixedValueIndicator
+                        values={batchAnalysis.circuitBreaker.halfOpenSuccessThreshold.values}
+                      />
+                    )}
+                </div>
+              </SmartInputWrapper>
+
+              <SmartInputWrapper
+                label={t("sections.circuitBreaker.maxRetryAttempts.label")}
+                description={t("sections.circuitBreaker.maxRetryAttempts.desc")}
+              >
+                <div className="space-y-2">
+                  <div className="relative">
+                    <Input
+                      id={isEdit ? "edit-max-retry-attempts" : "max-retry-attempts"}
+                      type="number"
+                      value={state.circuitBreaker.maxRetryAttempts ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        dispatch({
+                          type: "SET_MAX_RETRY_ATTEMPTS",
+                          payload: val === "" ? null : parseInt(val, 10),
+                        });
+                      }}
+                      placeholder={t("sections.circuitBreaker.maxRetryAttempts.placeholder")}
+                      disabled={state.ui.isPending}
+                      min="1"
+                      max="10"
+                      step="1"
+                    />
+                    <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/30" />
+                  </div>
+                  {isBatch && batchAnalysis?.circuitBreaker.maxRetryAttempts.status === "mixed" && (
+                    <MixedValueIndicator
+                      values={batchAnalysis.circuitBreaker.maxRetryAttempts.values}
+                    />
+                  )}
+                </div>
+              </SmartInputWrapper>
+            </div>
+
+            {/* 等待阶梯：窗口 = 熔断时长 + 递增时长 × 级数 n（n 封顶最大次数）。
+                单独一行，因为它是**同一件事的两个参数**（单给一个没有意义），
+                且默认不启用（两项都空 = 窗口恒为熔断时长，行为与加该特性之前逐字段一致）。 */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <SmartInputWrapper
+                label={t("sections.circuitBreaker.releaseIncrement.label")}
+                description={t("sections.circuitBreaker.releaseIncrement.desc")}
+              >
+                <div className="space-y-2">
+                  <div className="relative">
+                    <Input
+                      id={isEdit ? "edit-release-increment" : "release-increment"}
+                      type="number"
+                      value={state.circuitBreaker.releaseIncrementMinutes ?? ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        dispatch({
+                          type: "SET_RELEASE_INCREMENT_MINUTES",
+                          payload: val === "" ? null : parseInt(val, 10),
+                        });
+                      }}
+                      placeholder={t("sections.circuitBreaker.releaseIncrement.placeholder")}
+                      disabled={state.ui.isPending}
+                      min="0"
+                      max="1440"
+                      step="1"
+                      className="pr-12"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                      min
+                    </span>
+                  </div>
+                </div>
+              </SmartInputWrapper>
+
+              <SmartInputWrapper
+                label={t("sections.circuitBreaker.maxOpenCount.label")}
+                description={t("sections.circuitBreaker.maxOpenCount.desc")}
+              >
+                <div className="space-y-2">
+                  <Input
+                    id={isEdit ? "edit-max-open-count" : "max-open-count"}
+                    type="number"
+                    value={state.circuitBreaker.maxOpenCount ?? ""}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      dispatch({
+                        type: "SET_MAX_OPEN_COUNT",
+                        payload: val === "" ? null : parseInt(val, 10),
+                      });
+                    }}
+                    placeholder={t("sections.circuitBreaker.maxOpenCount.placeholder")}
+                    disabled={state.ui.isPending}
+                    min="0"
+                    max="20"
+                    step="1"
+                  />
+                </div>
+              </SmartInputWrapper>
+            </div>
+
+            {/* 阶梯说明：把公式与三项默认讲清（用户明确要求「默认 0 = 关闭、行为不变」要在界面上说明）。 */}
+            <div className="rounded-lg border border-border/50 bg-muted/30 p-3">
+              <div className="flex items-start gap-2">
+                <TrendingUp className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  <p className="font-medium text-foreground">
+                    {t("sections.circuitBreaker.ladder.title")}
+                  </p>
+                  <p>{t("sections.circuitBreaker.ladder.formula")}</p>
+                  <p>{t("sections.circuitBreaker.ladder.example")}</p>
+                  <p>{t("sections.circuitBreaker.ladder.disabledByDefault")}</p>
+                  <p>{t("sections.circuitBreaker.ladder.resetOnRecovery")}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Circuit Breaker Status Indicator */}
+            <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/30 border border-border/50">
+              <Zap className="h-4 w-4 text-primary" />
+              <div className="flex-1 text-xs text-muted-foreground">
+                {t("sections.circuitBreaker.summary", {
+                  failureThreshold: state.circuitBreaker.failureThreshold ?? 5,
+                  openDuration: state.circuitBreaker.openDurationMinutes ?? 30,
+                  successThreshold: state.circuitBreaker.halfOpenSuccessThreshold ?? 2,
+                  maxRetryAttempts:
+                    state.circuitBreaker.maxRetryAttempts ?? PROVIDER_DEFAULTS.MAX_RETRY_ATTEMPTS,
+                })}
+              </div>
+            </div>
+          </div>
+        </SectionCard>
+      </div>
+    </motion.div>
+  );
+}

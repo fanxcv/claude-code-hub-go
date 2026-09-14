@@ -1,0 +1,52 @@
+{
+  "constName": "TRACK_COST_ROLLING_WINDOW",
+  "file": "track-cost-rolling-window.lua",
+  "sha256": "6373f961c31ec4d65d078fe75136b4969ac7f91bfda585e0b6ee6c8f70edc57f",
+  "calls": [
+    {
+      "id": "appends-with-request-id",
+      "keys": ["cchgolden:key:1:cost_5h_rolling"],
+      "argv": ["1.5", "1757000000000", "18000000", "req-1", "3600"],
+      "setup": [],
+      "returned": 1,
+      "after": {
+        "cchgolden:key:1:cost_5h_rolling": {
+          "type": "zset",
+          "value": {
+            "1757000000000:req-1:1.5": "1757000000000"
+          },
+          "ttl": 3600
+        }
+      }
+    },
+    {
+      "id": "appends-without-request-id",
+      "keys": ["cchgolden:key:1:cost_5h_rolling"],
+      "argv": ["2.5", "1757000000000", "18000000", "", "3600"],
+      "setup": [],
+      "returned": 1,
+      "after": {
+        "cchgolden:key:1:cost_5h_rolling": {
+          "type": "zset",
+          "value": {
+            "1757000000000:2.5": "1757000000000"
+          },
+          "ttl": 3600
+        }
+      }
+    },
+    {
+      "id": "invalid-arguments-error-reply",
+      "keys": ["cchgolden:key:1:cost_5h_rolling"],
+      "argv": ["abc", "not-a-number", "18000000", "", "3600"],
+      "setup": [],
+      "returned": {
+        "error": "invalid rolling cost arguments"
+      },
+      "after": {
+        "cchgolden:key:1:cost_5h_rolling": null
+      }
+    }
+  ],
+  "uncollected": []
+}

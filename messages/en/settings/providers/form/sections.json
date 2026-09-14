@@ -1,0 +1,518 @@
+{
+  "basic": {
+    "identity": {
+      "title": "Provider Identity",
+      "desc": "Set a unique name to identify this provider"
+    },
+    "endpoint": {
+      "title": "API Endpoint",
+      "desc": "Configure the base URL for API requests"
+    },
+    "endpointPool": {
+      "title": "Endpoint Pool",
+      "desc": "Manage vendor endpoints for this provider type"
+    },
+    "auth": {
+      "title": "Authentication",
+      "desc": "Provide your API key for authentication"
+    }
+  },
+  "apiTest": {
+    "desc": "Validate whether the selected provider type and model respond correctly. Defaults to the routing configuration unless overridden.",
+    "summary": "Verify provider & model connectivity",
+    "testLabel": "Provider Model Test",
+    "title": "Provider Model Test"
+  },
+  "circuitBreaker": {
+    "desc": "Automatically break on consecutive failures to protect overall service quality",
+    "failureThreshold": {
+      "desc": "Number of consecutive failures to trigger break",
+      "label": "Failure Threshold",
+      "placeholder": "5",
+      "warning": "Setting to 0 disables the circuit breaker - use with caution"
+    },
+    "releaseIncrement": {
+      "label": "Increment per level (min)",
+      "desc": "Backoff ladder: how much the break duration grows after each failed half-open probe. Empty = ladder disabled.",
+      "placeholder": "Empty"
+    },
+    "maxOpenCount": {
+      "label": "Maximum level",
+      "desc": "Backoff ladder: the level (and therefore the extra duration) stops growing here. Empty = ladder disabled.",
+      "placeholder": "Empty"
+    },
+    "maxRetryAttempts": {
+      "desc": "Total tries (including the first call) before switching providers. Leave empty to use the system default.",
+      "label": "Max Attempts Per Provider",
+      "placeholder": "2"
+    },
+    "openDuration": {
+      "desc": "Time before switching to half-open",
+      "label": "Break Duration (minutes)",
+      "placeholder": "30"
+    },
+    "successThreshold": {
+      "desc": "Number of successes in half-open to fully recover",
+      "label": "Recovery Threshold",
+      "placeholder": "2"
+    },
+    "ladder": {
+      "title": "Backoff ladder (optional)",
+      "formula": "Break duration = base duration + increment x level (level capped at the maximum level)",
+      "example": "Example with base 5 min, increment 10 min, max 3: 5 / 15 / 25 / 35 / 35... minutes",
+      "disabledByDefault": "Leaving both empty disables the ladder: the break duration stays at the base duration, exactly as before this feature.",
+      "resetOnRecovery": "Once a half-open probe recovers, the level resets to zero and the next break starts from the base duration."
+    },
+    "summary": "{failureThreshold} failures / {openDuration} min break / {successThreshold} successes to recover / {maxRetryAttempts} attempts per provider",
+    "title": "Circuit Breaker"
+  },
+  "mcpPassthrough": {
+    "desc": "When enabled, pass through MCP tool calls to specified AI provider (e.g. minimax for image recognition, web search)",
+    "hint": "Hint: MCP passthrough allows Claude Code client to use tool capabilities provided by third-party AI providers (e.g. image recognition, web search)",
+    "select": {
+      "custom": {
+        "desc": "Pass through to custom MCP service (reserved, not implemented yet)",
+        "label": "Custom"
+      },
+      "glm": {
+        "desc": "Pass through to GLM MCP service (supports image analysis, video analysis, etc.)",
+        "label": "GLM"
+      },
+      "label": "Passthrough Type",
+      "minimax": {
+        "desc": "Pass through to minimax MCP service (supports image recognition, web search, etc.)",
+        "label": "Minimax"
+      },
+      "none": {
+        "desc": "Do not enable MCP passthrough (default)",
+        "label": "Disabled"
+      },
+      "placeholder": "Select passthrough type"
+    },
+    "summary": {
+      "custom": "Custom (Reserved)",
+      "glm": "GLM",
+      "minimax": "Minimax",
+      "none": "Disabled"
+    },
+    "title": "MCP Passthrough Configuration",
+    "urlAuto": "Auto-extracted: {url}",
+    "urlDesc": "MCP service base URL. Leave empty to auto-extract from provider URL",
+    "urlLabel": "MCP Passthrough URL",
+    "urlPlaceholder": "https://api.minimaxi.com"
+  },
+  "proxy": {
+    "desc": "Configure a proxy to improve connectivity (HTTP, HTTPS, SOCKS4, SOCKS5 supported)",
+    "fallback": {
+      "desc": "When enabled, will try direct connection if proxy fails",
+      "label": "Fallback to direct on proxy failure"
+    },
+    "summary": {
+      "configured": "Proxy configured",
+      "fallback": " (fallback enabled)",
+      "none": "Not configured"
+    },
+    "test": {
+      "desc": "Test accessing provider URL via proxy (HEAD request, no credits consumed)",
+      "label": "Connectivity Test"
+    },
+    "title": "Proxy",
+    "url": {
+      "formats": "Supports http://, https://, socks5://, socks4:// protocols. For authenticated proxies use http://user:password@host:port (URL-encode special characters in password, e.g. # as %23)",
+      "label": "Proxy URL",
+      "optional": "(optional)",
+      "placeholder": "e.g. http://proxy.example.com:8080 or http://user:pass@proxy:8080"
+    }
+  },
+  "rateLimit": {
+    "dailyResetMode": {
+      "desc": {
+        "fixed": "Reset quota at a fixed time each day",
+        "rolling": "Reset 24 hours after first API call"
+      },
+      "label": "Daily Reset Mode",
+      "options": {
+        "fixed": "Fixed Time Reset",
+        "rolling": "Rolling Window (24h)"
+      }
+    },
+    "dailyResetTime": {
+      "label": "Daily Reset Time (HH:mm)",
+      "placeholder": "HH:mm"
+    },
+    "desc": "Configure spending limits to control costs across different time windows",
+    "limit5h": {
+      "label": "5h Spend Limit (USD)",
+      "placeholder": "Leave empty for unlimited"
+    },
+    "limitConcurrent": {
+      "label": "Concurrent Sessions Limit",
+      "placeholder": "0 means unlimited"
+    },
+    "limitDaily": {
+      "label": "Daily Spend Limit (USD)",
+      "placeholder": "Leave empty for unlimited"
+    },
+    "limitMonthly": {
+      "label": "Monthly Spend Limit (USD)",
+      "placeholder": "Leave empty for unlimited"
+    },
+    "limitTotal": {
+      "label": "Total Spend Limit (USD)",
+      "placeholder": "Leave empty for unlimited"
+    },
+    "limitWeekly": {
+      "label": "Weekly Spend Limit (USD)",
+      "placeholder": "Leave empty for unlimited"
+    },
+    "summary": {
+      "concurrent": "Concurrent: {count}",
+      "daily": "Day: ${amount} (reset ${resetTime})",
+      "fiveHour": "5h: ${amount}",
+      "monthly": "Month: ${amount}",
+      "none": "Unlimited",
+      "total": "Total: ${amount}",
+      "weekly": "Week: ${amount}"
+    },
+    "title": "Rate Limit",
+    "limit5hResetMode": {
+      "label": "5-Hour Reset Mode",
+      "options": {
+        "fixed": "Fixed Window (5h)",
+        "rolling": "Rolling Window (5h)"
+      },
+      "desc": {
+        "fixed": "Start a fixed 5-hour window from the first successful charge",
+        "rolling": "Use a rolling 5-hour window from the latest usage"
+      }
+    }
+  },
+  "limits": {
+    "timeBased": "Time-based Limits",
+    "dailyReset": "Daily Reset Settings",
+    "otherLimits": "Other Limits",
+    "windowReset": "Window Reset Behavior"
+  },
+  "routing": {
+    "cacheTtl": {
+      "desc": "Force prompt cache TTL; only affects requests with cache_control.",
+      "label": "Cache TTL Override",
+      "options": {
+        "1h": "1 hour",
+        "5m": "5 minutes",
+        "inherit": "No override (follow client)"
+      }
+    },
+    "swapCacheTtlBilling": {
+      "label": "Swap Cache TTL Billing",
+      "desc": "Invert cache TTL for incoming data: 1h tokens treated as 5min and vice versa. Affects badge, cost, and all stored metrics."
+    },
+    "customHeaders": {
+      "label": "Custom request headers (JSON)",
+      "desc": "Static headers merged into outbound requests. Cannot override authentication or final request filters.",
+      "errors": {
+        "invalidJson": "Custom headers must be valid JSON",
+        "notObject": "Custom headers must be a JSON object",
+        "invalidName": "Header name contains characters that are not allowed",
+        "duplicateName": "Header name appears more than once (case-insensitive)",
+        "protectedName": "Authentication headers cannot be set via custom headers",
+        "invalidValue": "Header values must be strings",
+        "emptyName": "Header name cannot be empty",
+        "crlf": "Header name and value cannot contain line breaks"
+      }
+    },
+    "codexOverrides": {
+      "title": "Codex Parameter Overrides",
+      "desc": "Override Codex (Responses API) request parameters at the provider level",
+      "parallelToolCalls": {
+        "help": "Controls whether parallel tool calls are allowed. \"inherit\" follows the client request. Disabling may reduce tool-call concurrency.",
+        "label": "Parallel Tool Calls Override",
+        "options": {
+          "false": "Force disable",
+          "inherit": "No override (follow client)",
+          "true": "Force enable"
+        }
+      },
+      "imageGeneration": {
+        "help": "OpenAI documents image_generation as a built-in Responses tool rather than a top-level boolean field. Force enable injects a type=image_generation tool; force disable removes it and clears conflicting tool_choice settings.",
+        "label": "Image Generation Tool Override",
+        "options": {
+          "false": "Force disable",
+          "inherit": "No override (follow client)",
+          "true": "Force enable"
+        }
+      },
+      "serviceTier": {
+        "help": "Controls the OpenAI service_tier for Codex (Responses API) requests. \"priority\" corresponds to fast mode. \"inherit\" follows the client request; other values force override service_tier. Unsupported tiers may cause upstream errors.",
+        "label": "Service Tier Override",
+        "options": {
+          "auto": "auto (project default)",
+          "default": "default (standard)",
+          "flex": "flex (best-effort)",
+          "inherit": "No override (follow client)",
+          "priority": "priority (fast)"
+        }
+      },
+      "reasoningEffort": {
+        "help": "Controls how much reasoning effort the model uses before answering. \"inherit\" follows the client request; other values force override reasoning.effort. Available levels are model-dependent; unsupported values cause an upstream error.",
+        "label": "Reasoning Effort Override",
+        "options": {
+          "high": "high",
+          "inherit": "No override (follow client)",
+          "low": "low",
+          "max": "max (highest effort)",
+          "medium": "medium (default)",
+          "minimal": "minimal",
+          "none": "none",
+          "xhigh": "xhigh"
+        }
+      },
+      "reasoningSummary": {
+        "help": "Controls whether the Responses API returns reasoning summaries. \"auto\" returns a condensed summary, \"detailed\" returns a more comprehensive one. \"inherit\" follows the client request.",
+        "label": "Reasoning Summary Override",
+        "options": {
+          "auto": "auto",
+          "detailed": "detailed",
+          "inherit": "No override (follow client)"
+        }
+      },
+      "textVerbosity": {
+        "help": "Controls how verbose the model output is. \"low\" is concise, \"high\" is verbose. \"inherit\" follows the client request.",
+        "label": "Text Verbosity Override",
+        "options": {
+          "high": "high",
+          "inherit": "No override (follow client)",
+          "low": "low",
+          "medium": "medium (default)"
+        }
+      },
+      "maxTokens": {
+        "label": "Max Tokens Override",
+        "help": "Overrides max_output_tokens in Codex (Responses API) requests. \"inherit\" follows the client request and does not rewrite it; choosing a custom value forces the override. Model support for this parameter varies, and an unsupported or rejected value may cause an upstream error.",
+        "options": {
+          "inherit": "No override (follow client)",
+          "custom": "Force override"
+        },
+        "placeholder": "e.g. 8192"
+      }
+    },
+    "anthropicOverrides": {
+      "maxTokens": {
+        "label": "Max Tokens Override",
+        "help": "Override max_tokens in request body. Range: 1-64000. 'inherit' follows the client request.",
+        "options": {
+          "inherit": "No override (follow client)",
+          "custom": "Custom"
+        },
+        "placeholder": "e.g. 32000"
+      },
+      "thinkingBudget": {
+        "label": "Thinking Budget Override",
+        "help": "Override thinking.budget_tokens in request body. Range: 1024-32000. Forces thinking.type to 'enabled' when set. If adaptive thinking is also enabled and model matches, adaptive takes priority.",
+        "options": {
+          "inherit": "No override (follow client)",
+          "custom": "Custom"
+        },
+        "placeholder": "e.g. 10240",
+        "maxOutButton": "Max Out (32000)"
+      },
+      "adaptiveThinking": {
+        "label": "Adaptive Thinking",
+        "help": "Enable adaptive thinking mode. When enabled and model matches, overrides thinking budget. Non-matching models fall back to thinking budget override.",
+        "effort": {
+          "label": "Effort Level",
+          "help": "Controls depth of reasoning. Higher effort = deeper thinking.",
+          "options": {
+            "low": "Low",
+            "medium": "Medium",
+            "high": "High",
+            "xhigh": "Xhigh (Recommended)",
+            "max": "Max"
+          }
+        },
+        "modelMatchMode": {
+          "label": "Model Matching",
+          "help": "Which models should use adaptive thinking.",
+          "options": {
+            "all": "All models",
+            "specific": "Specific models only"
+          }
+        },
+        "models": {
+          "label": "Target Models",
+          "help": "Models that will use adaptive thinking. Non-matching models pass through unchanged.",
+          "placeholder": "e.g. claude-opus-4-6",
+          "addButton": "Add Model"
+        }
+      }
+    },
+    "openaiOverrides": {
+      "title": "OpenAI Parameter Overrides",
+      "desc": "Override OpenAI-compatible (Chat Completions) request parameters at the provider level",
+      "maxTokens": {
+        "label": "Max Tokens Override",
+        "help": "Overrides the max token value in OpenAI-compatible (Chat Completions) requests. \"inherit\" follows the client request and does not rewrite it; choosing a custom value forces the override. The field name follows the client: max_completion_tokens is written when the client sends it, otherwise max_tokens. If the upstream does not support the resulting parameter, it may return an error.",
+        "options": {
+          "inherit": "No override (follow client)",
+          "custom": "Force override"
+        },
+        "placeholder": "e.g. 8192"
+      }
+    },
+    "geminiOverrides": {
+      "title": "Gemini Parameter Overrides",
+      "desc": "Override Gemini API request parameters at the provider level",
+      "googleSearch": {
+        "label": "Google Search (Web Access)",
+        "options": {
+          "inherit": "No override (follow client)",
+          "enabled": "Force enabled",
+          "disabled": "Force disabled"
+        }
+      }
+    },
+    "modelRedirects": {
+      "label": "Model Redirects",
+      "optional": "(optional)"
+    },
+    "modelWhitelist": {
+      "allowAll": "✓ Allow all models (recommended)",
+      "desc": "Restrict which models this provider can serve. By default, a provider can serve all models of its type.",
+      "legacyExactOnlyWarning": "This legacy form only shows exact-match allowlist rules. Saving here will discard prefix, suffix, keyword, or regex rules. Use the new provider form to edit advanced rules safely.",
+      "label": "Allowed Models",
+      "moreModels": "+{count} more",
+      "optional": "(optional)",
+      "selectedOnly": "Only models matching the configured {count} rules are allowed. Other models will not be routed to this provider.",
+      "title": "Model Allowlist"
+    },
+    "clientRestrictions": {
+      "toggleLabel": "Enable Client Restrictions",
+      "toggleDesc": "Clients are not restricted by default. Enable to configure allowlist/blocklist rules.",
+      "priorityNote": "Blocklist takes precedence over allowlist.",
+      "allowedLabel": "Allowed Clients",
+      "allowedPlaceholder": "e.g. claude-code-cli",
+      "blockedLabel": "Blocked Clients",
+      "blockedPlaceholder": "e.g. gemini-cli",
+      "allowAction": "Allow",
+      "blockAction": "Block",
+      "customAllowedLabel": "Custom Allowed Patterns",
+      "customAllowedPlaceholder": "e.g. my-ide, internal-tool",
+      "customBlockedLabel": "Custom Blocked Patterns",
+      "customBlockedPlaceholder": "e.g. legacy-client",
+      "customHelp": "Without '*': case-insensitive substring match ('-'/'_' ignored). With '*': glob pattern match from start of UA (use *foo* to match anywhere; case-insensitive, characters are literal).",
+      "presetClients": {
+        "claude-code": "Claude Code (all)",
+        "gemini-cli": "Gemini CLI",
+        "factory-cli": "Droid CLI",
+        "codex-cli": "Codex CLI"
+      },
+      "subClients": {
+        "all": "All",
+        "cli": "CLI",
+        "vscode": "VS Code",
+        "sdk-ts": "SDK (TypeScript)",
+        "sdk-py": "SDK (Python)",
+        "cli-sdk": "CLI SDK",
+        "gh-action": "GitHub Action",
+        "codex-cli-core": "CLI / TUI",
+        "desktop": "Desktop",
+        "exec": "Exec"
+      },
+      "nSelected": "{count} selected"
+    },
+    "testRule": "Test Rule Matching",
+    "preserveClientIp": {
+      "desc": "Pass x-forwarded-for / x-real-ip to upstream providers (may expose real client IP)",
+      "help": "Keep off by default for privacy. Enable only when upstream must see the end-user IP.",
+      "label": "Forward client IP"
+    },
+    "disableSessionReuse": {
+      "label": "Skip session reuse",
+      "desc": "When enabled, the next request will ignore this provider's sticky binding and rerun priority and health checks. Useful when a cheap higher-priority provider should be retried as soon as it recovers."
+    },
+    "protocolConversion": {
+      "label": "Protocol conversion",
+      "desc": "When enabled, the gateway may route client requests that use a different protocol to this provider and converts both the request and the response. Conversion is lossy: thinking signatures and cache hints may be dropped."
+    },
+    "options": {
+      "title": "Options",
+      "desc": "Additional provider options and overrides"
+    },
+    "providerType": {
+      "desc": "(determines scheduling policy)",
+      "label": "Provider Type",
+      "placeholder": "Select provider type"
+    },
+    "providerTypeDesc": "Choose the API format type of the provider.",
+    "providerTypeDisabledNote": "Note: OpenAI Compatible is under development and currently unavailable",
+    "scheduleParams": {
+      "costMultiplier": {
+        "desc": "Cost multiplier. Official provider = 1.0, 20% cheaper = 0.8, 20% more expensive = 1.2 (up to 4 decimals)",
+        "label": "Cost Multiplier",
+        "placeholder": "1.0"
+      },
+      "group": {
+        "desc": "Group tag. Select from list or type a new name and press Enter to create (max 50 chars). Only users whose providerGroup matches can use this provider.",
+        "label": "Provider Group",
+        "placeholder": "e.g. premium, economy"
+      },
+      "groupPriorities": {
+        "label": "Per-Group Priority",
+        "desc": "Override global priority for specific groups. Leave empty to use the global priority above.",
+        "placeholder": "Use global priority",
+        "noGroups": "Set a group tag first to configure per-group priorities"
+      },
+      "priority": {
+        "desc": "Lower value = higher priority (0 is highest). The system only chooses from the highest priority tier. Suggested: primary=0, standby=1, emergency=2",
+        "label": "Priority",
+        "placeholder": "0"
+      },
+      "title": "Scheduling",
+      "weight": {
+        "desc": "Weighted random. Within the same priority, higher weight increases selection probability. Example 1:2:3 ≈ 16%:33%:50%",
+        "label": "Weight",
+        "placeholder": "1"
+      }
+    },
+    "activeTime": {
+      "title": "Scheduled Active Time",
+      "description": "Automatically activate provider during specific time windows",
+      "toggleLabel": "Enable Schedule",
+      "toggleDescription": "When enabled, this provider is only active during the specified time window",
+      "startLabel": "Start Time",
+      "endLabel": "End Time",
+      "timezoneNote": "Times are based on system timezone",
+      "crossDayHint": "Cross-day schedule: active from {start} to next day {end}"
+    },
+    "summary": {
+      "models": "{count} whitelisted models",
+      "none": "Not configured",
+      "redirects": "{count} redirects"
+    },
+    "title": "Routing"
+  },
+  "timeout": {
+    "desc": "Configure request timeout duration, 0 means disable timeout",
+    "disableHint": "Set to 0 to disable the timeout (for canary rollback scenarios only, not recommended)",
+    "nonStreamingTotal": {
+      "core": "true",
+      "desc": "Non-streaming request total timeout, range 60-1800 seconds, enter 0 to disable (default: no limit)",
+      "label": "Non-streaming Total Timeout (seconds)",
+      "placeholder": "0"
+    },
+    "streamingFirstByte": {
+      "core": "true",
+      "desc": "Streaming request first byte timeout, range 1-180 seconds, enter 0 to disable (default: no limit)",
+      "label": "Streaming First Byte Timeout (seconds)",
+      "placeholder": "0"
+    },
+    "streamingIdle": {
+      "core": "true",
+      "desc": "Streaming request idle timeout, range 60-600 seconds, enter 0 to disable (default: no limit)",
+      "label": "Streaming Idle Timeout (seconds)",
+      "placeholder": "0"
+    },
+    "summary": "First byte: {streaming}s | Stream interval: {idle}s | Non-streaming: {nonStreaming}s",
+    "title": "Timeout Configuration"
+  }
+}

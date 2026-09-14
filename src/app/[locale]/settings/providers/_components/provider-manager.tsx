@@ -1,0 +1,787 @@
+"use client";
+import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
+import {
+  AlertTriangle,
+  Filter,
+  Layers,
+  LayoutGrid,
+  LayoutList,
+  Loader2,
+  Search,
+} from "lucide-react";
+import { useTranslations } from "next-intl";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { Dialog, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import { useDebounce } from "@/lib/hooks/use-debounce";
+import type { CurrencyCode } from "@/lib/utils/currency";
+import { parseProviderGroups, resolveProviderGroupsWithDefault } from "@/lib/utils/provider-group";
+import type {
+  ProviderDisplay,
+  ProviderHealthStatus,
+  ProviderStatisticsMap,
+  ProviderType,
+} from "@/types/provider";
+import {
+  type BatchActionMode,
+  ProviderBatchActions,
+  ProviderBatchDialog,
+  ProviderBatchToolbar,
+} from "./batch-edit";
+import { BatchTestDialog } from "./batch-test";
+import { ProviderForm } from "./forms/provider-form";
+import { ProviderFormDialogContent } from "./provider-form-dialog-content";
+import { ProviderGroupTab } from "./provider-group-tab";
+import { ProviderList } from "./provider-list";
+import { ProviderSortDropdown, type SortKey } from "./provider-sort-dropdown";
+import { ProviderTypeFilter } from "./provider-type-filter";
+import { ProviderVendorView } from "./provider-vendor-view";
+import type { ProviderViewer } from "./provider-viewer";
+
+/** Per-endpoint circuit breaker state, keyed by provider ID */
+export type EndpointCircuitInfoMap = Record<
+  number,
+  Array<{
+    endpointId: number;
+    circuitState: "closed" | "open" | "half-open";
+    failureCount: number;
+    circuitOpenUntil: number | null;
+  }>
+>;
+
+interface ProviderManagerProps {
+  providers: ProviderDisplay[];
+  currentUser?: ProviderViewer;
+  healthStatus: ProviderHealthStatus;
+  /** Endpoint-level circuit breaker info, keyed by provider ID */
+  endpointCircuitInfo?: EndpointCircuitInfoMap;
+  statistics?: ProviderStatisticsMap;
+  statisticsLoading?: boolean;
+  currencyCode?: CurrencyCode;
+  enableMultiProviderTypes: boolean;
+  loading?: boolean;
+  refreshing?: boolean;
+  addDialogSlot?: ReactNode;
+}
+
+export function ProviderManager({
+  providers,
+  currentUser,
+  healthStatus,
+  endpointCircuitInfo = {},
+  statistics = {},
+  statisticsLoading = false,
+  currencyCode = "USD",
+  enableMultiProviderTypes,
+  loading = false,
+  refreshing = false,
+  addDialogSlot,
+}: ProviderManagerProps) {
+  const t = useTranslations("settings.providers.search");
+  const tStrings = useTranslations("settings.providers");
+  const tFilter = useTranslations("settings.providers.filter");
+  const tCommon = useTranslations("settings.common");
+  const [typeFilter, setTypeFilter] = useState<ProviderType | "all">("all");
+  const [sortBy, setSortBy] = useState<SortKey>("priority");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [viewMode, setViewMode] = useState<"list" | "vendor" | "groups">("list");
+  const debouncedSearchTerm = useDebounce(searchTerm, 500);
+
+  // Status and group filters
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
+  const [groupFilter, setGroupFilter] = useState<string[]>([]);
+  const [circuitBrokenFilter, setCircuitBrokenFilter] = useState(false);
+  const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
+
+  // Batch edit state
+  const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
+  const [selectedProviderIds, setSelectedProviderIds] = useState<Set<number>>(new Set());
+  const [batchDialogOpen, setBatchDialogOpen] = useState(false);
+  const [batchActionMode, setBatchActionMode] = useState<BatchActionMode>(null);
+  const [batchTestOpen, setBatchTestOpen] = useState(false);
+  const [editingProviderId, setEditingProviderId] = useState<number | null>(null);
+
+  // Helper: check if a provider has any circuit open (key-level or endpoint-level)
+  const hasAnyCircuitOpen = useCallback(
+    (providerId: number): boolean => {
+      // Key-level circuit open
+      if (healthStatus[providerId]?.circuitState === "open") {
+        return true;
+      }
+      // Endpoint-level circuit open
+      const endpoints = endpointCircuitInfo[providerId];
+      if (Array.isArray(endpoints) && endpoints.some((ep) => ep.circuitState === "open")) {
+        return true;
+      }
+      return false;
+    },
+    [healthStatus, endpointCircuitInfo]
+  );
+
+  // Count providers with circuit breaker open (key-level or endpoint-level, deduplicated)
+  const circuitBrokenCount = useMemo(() => {
+    return providers.filter((p) => hasAnyCircuitOpen(p.id)).length;
+  }, [providers, hasAnyCircuitOpen]);
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (typeFilter !== "all") count++;
+    if (statusFilter !== "all") count++;
+    if (groupFilter.length > 0) count++;
+    if (circuitBrokenFilter) count++;
+    if (sortBy !== "priority") count++;
+    return count;
+  }, [typeFilter, statusFilter, groupFilter, circuitBrokenFilter, sortBy]);
+
+  // Auto-reset circuit broken filter when no providers are broken
+  useEffect(() => {
+    if (circuitBrokenCount === 0 && circuitBrokenFilter) {
+      setCircuitBrokenFilter(false);
+    }
+  }, [circuitBrokenCount, circuitBrokenFilter]);
+
+  // Extract unique groups from all providers
+  const allGroups = useMemo(() => {
+    const groups = new Set<string>();
+    let hasDefaultGroup = false;
+    providers.forEach((p) => {
+      const tags = resolveProviderGroupsWithDefault(p.groupTag);
+      tags.forEach((g) => {
+        if (g === "default") {
+          hasDefaultGroup = true;
+        } else {
+          groups.add(g);
+        }
+      });
+    });
+
+    // Sort groups: "default" first, then alphabetically
+    const sortedGroups = Array.from(groups).sort();
+    if (hasDefaultGroup) {
+      return ["default", ...sortedGroups];
+    }
+    return sortedGroups;
+  }, [providers]);
+
+  // User's assigned groups (for non-admin users)
+  const userGroups = useMemo(() => {
+    if (!currentUser?.providerGroup) return [];
+    return parseProviderGroups(currentUser.providerGroup);
+  }, [currentUser?.providerGroup]);
+
+  // Check if current user is admin
+  const isAdmin = currentUser?.role === "admin";
+
+  // 统一过滤逻辑：搜索 + 类型筛选 + 排序
+  const filteredProviders = useMemo(() => {
+    let result = providers;
+
+    // 搜索过滤（name, url, groupTag - 支持匹配逗号分隔的单个标签）
+    if (debouncedSearchTerm) {
+      const term = debouncedSearchTerm.toLowerCase();
+      result = result.filter(
+        (p) =>
+          p.name.toLowerCase().includes(term) ||
+          p.url.toLowerCase().includes(term) ||
+          parseProviderGroups(p.groupTag).some((tag) => tag.toLowerCase().includes(term))
+      );
+    }
+
+    // 类型筛选
+    if (typeFilter !== "all") {
+      result = result.filter((p) => p.providerType === typeFilter);
+    }
+
+    // Filter by status
+    if (statusFilter !== "all") {
+      result = result.filter((p) => (statusFilter === "active" ? p.isEnabled : !p.isEnabled));
+    }
+
+    // Filter by groups
+    if (groupFilter.length > 0) {
+      result = result.filter((p) => {
+        const providerGroups = resolveProviderGroupsWithDefault(p.groupTag);
+        return groupFilter.some((g) => providerGroups.includes(g));
+      });
+    }
+
+    // Filter by circuit breaker state (key-level or endpoint-level)
+    if (circuitBrokenFilter) {
+      result = result.filter((p) => hasAnyCircuitOpen(p.id));
+    }
+
+    // 排序
+    return [...result].sort((a, b) => {
+      switch (sortBy) {
+        case "name":
+          return a.name.localeCompare(b.name);
+        case "priority":
+          // 优先级：数值越小越优先（1 > 2 > 3），升序排列
+          return a.priority - b.priority;
+        case "weight":
+          // 权重：数值越大越优先，降序排列
+          return b.weight - a.weight;
+        case "actualPriority":
+          // 实际选取顺序：先按优先级升序，再按权重降序
+          if (a.priority !== b.priority) {
+            return a.priority - b.priority;
+          }
+          return b.weight - a.weight;
+        case "createdAt": {
+          const timeA = new Date(a.createdAt).getTime();
+          const timeB = new Date(b.createdAt).getTime();
+          if (Number.isNaN(timeA) || Number.isNaN(timeB)) {
+            return b.createdAt.localeCompare(a.createdAt);
+          }
+          return timeB - timeA;
+        }
+        default:
+          return 0;
+      }
+    });
+  }, [
+    providers,
+    debouncedSearchTerm,
+    typeFilter,
+    sortBy,
+    statusFilter,
+    groupFilter,
+    circuitBrokenFilter,
+    hasAnyCircuitOpen,
+  ]);
+
+  const editingProvider = useMemo(() => {
+    if (editingProviderId == null) return null;
+    return providers.find((provider) => provider.id === editingProviderId) ?? null;
+  }, [editingProviderId, providers]);
+
+  // Batch selection handlers
+  const handleSelectAll = useCallback(
+    (checked: boolean) => {
+      if (checked) {
+        setSelectedProviderIds(new Set(filteredProviders.map((p) => p.id)));
+      } else {
+        setSelectedProviderIds(new Set());
+      }
+    },
+    [filteredProviders]
+  );
+
+  const handleInvertSelection = useCallback(() => {
+    const currentIds = filteredProviders.map((p) => p.id);
+    const inverted = new Set(currentIds.filter((id) => !selectedProviderIds.has(id)));
+    setSelectedProviderIds(inverted);
+  }, [filteredProviders, selectedProviderIds]);
+
+  const handleSelectProvider = useCallback((providerId: number, checked: boolean) => {
+    setSelectedProviderIds((prev) => {
+      const next = new Set(prev);
+      if (checked) {
+        next.add(providerId);
+      } else {
+        next.delete(providerId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleEnterMultiSelectMode = useCallback(() => {
+    setIsMultiSelectMode(true);
+  }, []);
+
+  const handleExitMultiSelectMode = useCallback(() => {
+    setIsMultiSelectMode(false);
+    setSelectedProviderIds(new Set());
+  }, []);
+
+  const handleOpenBatchEdit = useCallback(() => {
+    setBatchActionMode("edit");
+    setBatchDialogOpen(true);
+  }, []);
+
+  const handleBatchAction = useCallback((mode: BatchActionMode) => {
+    if (mode === "test") {
+      setBatchTestOpen(true);
+      return;
+    }
+    setBatchActionMode(mode);
+    setBatchDialogOpen(true);
+  }, []);
+
+  // 批量测试基于全量列表取已选项：筛选条件变化不会丢失已勾选的供应商
+  const selectedProviders = useMemo(
+    () => providers.filter((p) => selectedProviderIds.has(p.id)),
+    [providers, selectedProviderIds]
+  );
+
+  const handleSelectByType = useCallback(
+    (type: ProviderType) => {
+      setSelectedProviderIds((prev) => {
+        const next = new Set(prev);
+        for (const p of filteredProviders) {
+          if (p.providerType === type) {
+            next.add(p.id);
+          }
+        }
+        return next;
+      });
+    },
+    [filteredProviders]
+  );
+
+  const handleSelectByGroup = useCallback(
+    (group: string) => {
+      setSelectedProviderIds((prev) => {
+        const next = new Set(prev);
+        for (const p of filteredProviders) {
+          const tags = resolveProviderGroupsWithDefault(p.groupTag);
+          if (tags.includes(group)) {
+            next.add(p.id);
+          }
+        }
+        return next;
+      });
+    },
+    [filteredProviders]
+  );
+
+  const handleBatchSuccess = useCallback(() => {
+    setSelectedProviderIds(new Set());
+    setIsMultiSelectMode(false);
+  }, []);
+
+  const handleOpenProviderEditor = useCallback((provider: ProviderDisplay) => {
+    setEditingProviderId(provider.id);
+  }, []);
+
+  const handleRequestEditProvider = useCallback(
+    (providerId: number) => {
+      const provider = providers.find((item) => item.id === providerId);
+      if (!provider) return;
+      handleOpenProviderEditor(provider);
+    },
+    [handleOpenProviderEditor, providers]
+  );
+
+  const allSelected =
+    filteredProviders.length > 0 && selectedProviderIds.size === filteredProviders.length;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <ProviderBatchToolbar
+          isMultiSelectMode={isMultiSelectMode}
+          allSelected={allSelected}
+          selectedCount={selectedProviderIds.size}
+          totalCount={filteredProviders.length}
+          onEnterMode={handleEnterMultiSelectMode}
+          onExitMode={handleExitMultiSelectMode}
+          onSelectAll={handleSelectAll}
+          onInvertSelection={handleInvertSelection}
+          onOpenBatchEdit={handleOpenBatchEdit}
+          providers={filteredProviders}
+          onSelectByType={handleSelectByType}
+          onSelectByGroup={handleSelectByGroup}
+        />
+        {addDialogSlot ? <div className="ml-auto">{addDialogSlot}</div> : null}
+      </div>
+      {/* Filter section */}
+      <div className="flex flex-col gap-3">
+        {/* Mobile: search + filter toggle button */}
+        <div className="flex items-center gap-2 md:hidden">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="search"
+              placeholder={t("placeholder")}
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-9"
+              disabled={loading}
+            />
+          </div>
+          <Button
+            variant="outline"
+            size="default"
+            className="flex-shrink-0"
+            onClick={() => setMobileFilterOpen((prev) => !prev)}
+          >
+            <Filter className="mr-1.5 h-4 w-4" />
+            {activeFilterCount > 0
+              ? tFilter("mobileFilterCount", { count: activeFilterCount })
+              : tFilter("mobileFilter")}
+          </Button>
+        </div>
+
+        {/* Mobile: collapsible filter panel */}
+        <Collapsible open={mobileFilterOpen} onOpenChange={setMobileFilterOpen}>
+          <CollapsibleContent className="md:hidden">
+            <div className="flex flex-col gap-3 p-3 border rounded-lg bg-muted/30">
+              <ProviderTypeFilter value={typeFilter} onChange={setTypeFilter} disabled={loading} />
+              <Select
+                value={statusFilter}
+                onValueChange={(value) => setStatusFilter(value as "all" | "active" | "inactive")}
+                disabled={loading}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">{tFilter("status.all")}</SelectItem>
+                  <SelectItem value="active">{tFilter("status.active")}</SelectItem>
+                  <SelectItem value="inactive">{tFilter("status.inactive")}</SelectItem>
+                </SelectContent>
+              </Select>
+              <ProviderSortDropdown value={sortBy} onChange={setSortBy} disabled={loading} />
+              {allGroups.length > 0 && (
+                <div className="flex flex-wrap gap-2 items-center">
+                  <span className="text-sm text-muted-foreground">{tFilter("groups.label")}</span>
+                  <Button
+                    variant={groupFilter.length === 0 ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setGroupFilter([])}
+                    disabled={loading}
+                    className="h-7"
+                  >
+                    {tFilter("groups.all")}
+                  </Button>
+                  {allGroups.map((group) => (
+                    <Button
+                      key={group}
+                      variant={groupFilter.includes(group) ? "default" : "outline"}
+                      size="sm"
+                      onClick={() =>
+                        setGroupFilter((prev) =>
+                          prev.includes(group) ? prev.filter((g) => g !== group) : [...prev, group]
+                        )
+                      }
+                      disabled={loading}
+                      className="h-7"
+                    >
+                      {group}
+                    </Button>
+                  ))}
+                </div>
+              )}
+              {circuitBrokenCount > 0 && (
+                <div className="flex items-center gap-2">
+                  <AlertTriangle
+                    className={`h-4 w-4 ${circuitBrokenFilter ? "text-destructive" : "text-muted-foreground"}`}
+                  />
+                  <Label
+                    htmlFor="circuit-broken-filter-mobile"
+                    className={`text-sm cursor-pointer select-none ${circuitBrokenFilter ? "text-destructive font-medium" : "text-muted-foreground"}`}
+                  >
+                    {tFilter("circuitBroken")} ({circuitBrokenCount})
+                  </Label>
+                  <Switch
+                    id="circuit-broken-filter-mobile"
+                    aria-label={tFilter("circuitBroken")}
+                    checked={circuitBrokenFilter}
+                    onCheckedChange={setCircuitBrokenFilter}
+                    disabled={loading}
+                  />
+                </div>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setTypeFilter("all");
+                  setStatusFilter("all");
+                  setGroupFilter([]);
+                  setCircuitBrokenFilter(false);
+                  setSortBy("priority");
+                }}
+                className="self-end"
+              >
+                {tFilter("resetFilters")}
+              </Button>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+
+        {/* Desktop: original filter layout */}
+        <div className="hidden md:flex flex-col gap-3">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            {/* View Mode Toggle */}
+            <div className="flex items-center border rounded-md bg-muted/50 p-1">
+              <Button
+                variant={viewMode === "list" ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 px-2 gap-1.5 text-xs"
+                onClick={() => setViewMode("list")}
+                title={tStrings("viewModeList")}
+              >
+                <LayoutList className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{tStrings("viewModeList")}</span>
+              </Button>
+              <Button
+                variant={viewMode === "vendor" ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 px-2 gap-1.5 text-xs"
+                onClick={() => setViewMode("vendor")}
+                title={tStrings("viewModeVendor")}
+              >
+                <LayoutGrid className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{tStrings("viewModeVendor")}</span>
+              </Button>
+              <Button
+                variant={viewMode === "groups" ? "secondary" : "ghost"}
+                size="sm"
+                className="h-7 px-2 gap-1.5 text-xs"
+                onClick={() => setViewMode("groups")}
+                title={tStrings("viewModeGroups")}
+              >
+                <Layers className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">{tStrings("viewModeGroups")}</span>
+              </Button>
+            </div>
+
+            <ProviderTypeFilter value={typeFilter} onChange={setTypeFilter} disabled={loading} />
+
+            <Select
+              value={statusFilter}
+              onValueChange={(value) => setStatusFilter(value as "all" | "active" | "inactive")}
+              disabled={loading}
+            >
+              <SelectTrigger className="w-full sm:w-[140px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">{tFilter("status.all")}</SelectItem>
+                <SelectItem value="active">{tFilter("status.active")}</SelectItem>
+                <SelectItem value="inactive">{tFilter("status.inactive")}</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <ProviderSortDropdown value={sortBy} onChange={setSortBy} disabled={loading} />
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder={t("placeholder")}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-9"
+                disabled={loading}
+              />
+            </div>
+          </div>
+
+          {/* Group filter */}
+          {allGroups.length > 0 && (
+            <div className="flex flex-wrap gap-2 items-center">
+              <span className="text-sm text-muted-foreground">{tFilter("groups.label")}</span>
+              <Button
+                variant={groupFilter.length === 0 ? "default" : "outline"}
+                size="sm"
+                onClick={() => setGroupFilter([])}
+                disabled={loading}
+                className="h-7"
+              >
+                {tFilter("groups.all")}
+              </Button>
+              {allGroups.map((group) => (
+                <Button
+                  key={group}
+                  variant={groupFilter.includes(group) ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    setGroupFilter((prev) =>
+                      prev.includes(group) ? prev.filter((g) => g !== group) : [...prev, group]
+                    );
+                  }}
+                  disabled={loading}
+                  className="h-7"
+                >
+                  {group}
+                </Button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Search result count + Circuit Breaker filter (both mobile and desktop) */}
+        <div className="flex items-center justify-between">
+          {debouncedSearchTerm ? (
+            <p className="text-sm text-muted-foreground">
+              {loading
+                ? tCommon("loading")
+                : filteredProviders.length > 0
+                  ? t("found", { count: filteredProviders.length })
+                  : t("notFound")}
+            </p>
+          ) : (
+            <div className="text-sm text-muted-foreground">
+              {loading
+                ? tCommon("loading")
+                : t("showing", { filtered: filteredProviders.length, total: providers.length })}
+            </div>
+          )}
+
+          {/* Circuit Breaker toggle - only show if there are broken providers */}
+          {circuitBrokenCount > 0 && (
+            <div className="hidden md:flex items-center gap-2">
+              <AlertTriangle
+                className={`h-4 w-4 ${circuitBrokenFilter ? "text-destructive" : "text-muted-foreground"}`}
+              />
+              <Label
+                htmlFor="circuit-broken-filter"
+                className={`text-sm cursor-pointer select-none ${circuitBrokenFilter ? "text-destructive font-medium" : "text-muted-foreground"}`}
+              >
+                {tFilter("circuitBroken")}
+              </Label>
+              <Switch
+                id="circuit-broken-filter"
+                aria-label={tFilter("circuitBroken")}
+                checked={circuitBrokenFilter}
+                onCheckedChange={setCircuitBrokenFilter}
+                disabled={loading}
+              />
+              <span
+                className={`text-sm tabular-nums ${circuitBrokenFilter ? "text-destructive font-medium" : "text-muted-foreground"}`}
+              >
+                ({circuitBrokenCount})
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Provider list / vendor view / groups tab */}
+      {viewMode === "groups" ? (
+        <ProviderGroupTab
+          providers={providers}
+          isAdmin={isAdmin}
+          onRequestEditProvider={handleRequestEditProvider}
+        />
+      ) : loading && providers.length === 0 ? (
+        <ProviderListSkeleton label={tCommon("loading")} />
+      ) : (
+        <div className="space-y-3">
+          {refreshing ? <InlineLoading label={tCommon("loading")} /> : null}
+
+          {viewMode === "list" ? (
+            <ProviderList
+              providers={filteredProviders}
+              currentUser={currentUser}
+              healthStatus={healthStatus}
+              endpointCircuitInfo={endpointCircuitInfo}
+              statistics={statistics}
+              statisticsLoading={statisticsLoading}
+              currencyCode={currencyCode}
+              enableMultiProviderTypes={enableMultiProviderTypes}
+              activeGroupFilter={groupFilter.length === 1 ? groupFilter[0] : null}
+              isMultiSelectMode={isMultiSelectMode}
+              selectedProviderIds={selectedProviderIds}
+              onSelectProvider={handleSelectProvider}
+              onEditProvider={handleOpenProviderEditor}
+              allGroups={allGroups}
+              userGroups={userGroups}
+              isAdmin={isAdmin}
+            />
+          ) : (
+            <ProviderVendorView
+              providers={filteredProviders}
+              currentUser={currentUser}
+              enableMultiProviderTypes={enableMultiProviderTypes}
+              healthStatus={healthStatus}
+              statistics={statistics}
+              statisticsLoading={statisticsLoading}
+              currencyCode={currencyCode}
+            />
+          )}
+        </div>
+      )}
+
+      <ProviderBatchActions
+        selectedCount={selectedProviderIds.size}
+        isVisible={isMultiSelectMode}
+        onAction={handleBatchAction}
+        onClose={handleExitMultiSelectMode}
+      />
+
+      <ProviderBatchDialog
+        open={batchDialogOpen}
+        mode={batchActionMode}
+        onOpenChange={setBatchDialogOpen}
+        selectedProviderIds={selectedProviderIds}
+        providers={filteredProviders}
+        onSuccess={handleBatchSuccess}
+      />
+
+      <BatchTestDialog
+        open={batchTestOpen}
+        onOpenChange={setBatchTestOpen}
+        providers={selectedProviders}
+      />
+
+      <Dialog
+        open={editingProvider != null}
+        onOpenChange={(open) => !open && setEditingProviderId(null)}
+      >
+        <ProviderFormDialogContent className="max-w-6xl">
+          <VisuallyHidden>
+            <DialogTitle>{tStrings("editProvider")}</DialogTitle>
+          </VisuallyHidden>
+          {editingProvider ? (
+            <ProviderForm
+              mode="edit"
+              provider={editingProvider}
+              enableMultiProviderTypes={enableMultiProviderTypes}
+              onSuccess={() => {
+                setEditingProviderId(null);
+              }}
+            />
+          ) : null}
+        </ProviderFormDialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+export type { ProviderDisplay } from "@/types/provider";
+
+function InlineLoading({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+      <Loader2 className="h-3 w-3 animate-spin" />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function ProviderListSkeleton({ label }: { label: string }) {
+  return (
+    <div className="space-y-3" aria-busy="true">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="rounded-lg border bg-card p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <Skeleton className="h-5 w-40" />
+            <Skeleton className="h-5 w-20" />
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+          </div>
+          <Skeleton className="h-8 w-full" />
+        </div>
+      ))}
+      <InlineLoading label={label} />
+    </div>
+  );
+}

@@ -1,0 +1,265 @@
+/**
+ * 用户数据库实体类型
+ */
+export interface User {
+  id: number;
+  name: string;
+  description: string;
+  role: "admin" | "user";
+  rpm: number | null; // 每分钟请求数限制，null = 无限制
+  dailyQuota: number | null; // 每日额度限制（美元），null = 无限制
+  providerGroup: string | null; // 供应商分组
+  tags?: string[]; // 用户标签（可选）
+  createdAt: Date;
+  updatedAt: Date;
+  deletedAt?: Date;
+  // User-level quota fields
+  limit5hUsd?: number; // 5小时消费上限（美元）
+  limit5hResetMode: "fixed" | "rolling"; // 5小时限额重置模式
+  limitWeeklyUsd?: number; // 周消费上限（美元）
+  limitMonthlyUsd?: number; // 月消费上限（美元）
+  limitTotalUsd?: number | null; // 总消费上限（美元）
+  costResetAt?: Date | null; // Cost reset timestamp for limits-only reset
+  limit5hCostResetAt?: Date | null; // Rolling 5h reset boundary timestamp
+  limitConcurrentSessions?: number; // 并发 Session 上限
+  // Daily quota reset mode
+  dailyResetMode: "fixed" | "rolling"; // 每日限额重置模式
+  dailyResetTime: string; // 每日重置时间 (HH:mm)
+  // User status and expiry management
+  isEnabled: boolean; // 用户启用状态
+  expiresAt?: Date | null; // 用户过期时间
+  // Allowed clients (CLI/IDE restrictions)
+  allowedClients?: string[]; // 允许的客户端模式（空数组=无限制）
+  blockedClients?: string[]; // Blocked client patterns (blacklist, checked before allowedClients)
+  // Allowed models (AI model restrictions)
+  allowedModels?: string[]; // 允许的AI模型（空数组=无限制）
+}
+
+/**
+ * 用户创建数据
+ */
+export interface CreateUserData {
+  name: string;
+  description: string;
+  rpm?: number | null; // 可选，null = 无限制
+  dailyQuota?: number | null; // 可选，null = 无限制
+  providerGroup?: string | null; // 可选，供应商分组
+  tags?: string[]; // 可选，用户标签
+  // User-level quota fields
+  limit5hUsd?: number;
+  limit5hResetMode?: "fixed" | "rolling";
+  limitWeeklyUsd?: number;
+  limitMonthlyUsd?: number;
+  limitTotalUsd?: number | null;
+  limitConcurrentSessions?: number;
+  // Daily quota reset mode
+  dailyResetMode?: "fixed" | "rolling";
+  dailyResetTime?: string;
+  // User status and expiry management
+  isEnabled?: boolean;
+  expiresAt?: Date | null;
+  // Allowed clients (CLI/IDE restrictions)
+  allowedClients?: string[];
+  blockedClients?: string[]; // Blocked client patterns (blacklist, checked before allowedClients)
+  // Allowed models (AI model restrictions)
+  allowedModels?: string[];
+}
+
+/**
+ * 用户更新数据
+ */
+export interface UpdateUserData {
+  name?: string;
+  description?: string;
+  rpm?: number | null;
+  dailyQuota?: number | null;
+  providerGroup?: string | null; // 可选，供应商分组
+  tags?: string[]; // 可选，用户标签
+  // User-level quota fields
+  limit5hUsd?: number | null;
+  limit5hResetMode?: "fixed" | "rolling";
+  limitWeeklyUsd?: number | null;
+  limitMonthlyUsd?: number | null;
+  limitTotalUsd?: number | null;
+  limitConcurrentSessions?: number | null;
+  // Daily quota reset mode
+  dailyResetMode?: "fixed" | "rolling";
+  dailyResetTime?: string;
+  // User status and expiry management
+  isEnabled?: boolean;
+  expiresAt?: Date | null;
+  // Allowed clients (CLI/IDE restrictions)
+  allowedClients?: string[];
+  blockedClients?: string[]; // Blocked client patterns (blacklist, checked before allowedClients)
+  // Allowed models (AI model restrictions)
+  allowedModels?: string[];
+}
+
+/**
+ * 用户密钥显示对象
+ */
+export interface UserKeyDisplay {
+  id: number;
+  name: string;
+  maskedKey: string;
+  /**
+   * 当前查看者是否被允许查看 / 复制完整密钥（前端据此显示按钮）。
+   * 实际密钥不再下发到列表 payload，需通过 GET /api/v1/keys/{id}:reveal 获取。
+   */
+  canReveal: boolean;
+  canCopy: boolean; // 是否可以复制完整密钥
+  expiresAt: string; // 格式化后的日期字符串或"永不过期"
+  status: "enabled" | "disabled";
+  todayUsage: number; // 今日消耗金额（美元）
+  todayCallCount: number; // 今日调用次数
+  todayTokens: number; // 今日消耗Token数
+  lastUsedAt: Date | null; // 最后使用时间
+  lastProviderName: string | null; // 最后调用的供应商名称
+  modelStats: Array<{
+    model: string;
+    callCount: number;
+    totalCost: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+  }>; // 各模型统计（当天）
+  createdAt: Date; // 创建时间
+  createdAtFormatted: string; // 格式化后的具体时间
+  // Web UI 登录权限控制
+  canLoginWebUi: boolean; // 是否允许使用该 Key 登录 Web UI
+  // 限额配置
+  limit5hUsd: number | null; // 5小时消费上限（美元）
+  limit5hResetMode: "fixed" | "rolling"; // 5小时重置模式
+  limitDailyUsd: number | null; // 每日消费上限
+  dailyResetMode: "fixed" | "rolling"; // 每日重置模式
+  dailyResetTime: string; // 每日重置时间
+  limitWeeklyUsd: number | null; // 周消费上限（美元）
+  limitMonthlyUsd: number | null; // 月消费上限（美元）
+  limitTotalUsd?: number | null; // 总消费上限（美元）
+  limitConcurrentSessions: number; // 并发 Session 上限
+  costResetAt?: string | null; // 软重置时间
+  // Provider group override (null = inherit from user)
+  providerGroup?: string | null;
+}
+
+/**
+ * 用户显示对象（用于前端组件）
+ */
+export interface UserDisplay {
+  id: number;
+  name: string;
+  note?: string;
+  role: "admin" | "user";
+  rpm: number | null;
+  dailyQuota: number | null;
+  providerGroup?: string | null;
+  tags?: string[]; // 用户标签
+  keys: UserKeyDisplay[];
+  // User-level quota fields
+  limit5hUsd?: number | null;
+  limit5hResetMode?: "fixed" | "rolling";
+  limitWeeklyUsd?: number | null;
+  limitMonthlyUsd?: number | null;
+  limitTotalUsd?: number | null;
+  costResetAt?: Date | null; // Cost reset timestamp for limits-only reset
+  limitConcurrentSessions?: number | null;
+  // Daily quota reset mode
+  dailyResetMode?: "fixed" | "rolling";
+  dailyResetTime?: string;
+  // User status and expiry management
+  isEnabled: boolean; // 用户启用状态
+  expiresAt?: Date | null; // 用户过期时间
+  // Allowed clients (CLI/IDE restrictions)
+  allowedClients?: string[]; // 允许的客户端模式（空数组=无限制）
+  blockedClients?: string[]; // Blocked client patterns (blacklist, checked before allowedClients)
+  // Allowed models (AI model restrictions)
+  allowedModels?: string[]; // 允许的AI模型（空数组=无限制）
+}
+
+/**
+ * Key Dialog 所需的用户上下文（精简版）
+ * 用于 AddKeyDialog/EditKeyDialog 组件，只包含限额相关字段
+ */
+export interface KeyDialogUserContext {
+  id: number;
+  providerGroup?: string | null;
+  limit5hUsd?: number;
+  limit5hResetMode?: "fixed" | "rolling";
+  limitWeeklyUsd?: number;
+  limitMonthlyUsd?: number;
+  limitTotalUsd?: number | null;
+  limitConcurrentSessions?: number;
+  allowedClients?: string[];
+  blockedClients?: string[]; // Blocked client patterns (blacklist, checked before allowedClients)
+  allowedModels?: string[];
+}
+
+/**
+ * 用户表单数据
+ */
+
+// ---- 2026-09 node 退役迁移（原 actions/users） ----
+/**
+ * 批量更新用户的请求参数。
+ */
+export interface BatchUpdateUsersParams {
+  userIds: number[];
+  updates: {
+    note?: string;
+    tags?: string[];
+    rpm?: number | null;
+    dailyQuota?: number | null;
+    limit5hUsd?: number | null;
+    limit5hResetMode?: "fixed" | "rolling";
+    limitWeeklyUsd?: number | null;
+    limitMonthlyUsd?: number | null;
+  };
+}
+
+/**
+ * 批量获取用户列表的查询参数（用于用户管理列表页）。
+ */
+export interface GetUsersBatchParams {
+  cursor?: string;
+  limit?: number;
+  searchTerm?: string;
+  query?: string;
+  keyword?: string;
+  page?: number;
+  offset?: number;
+  tagFilters?: string[];
+  keyGroupFilters?: string[];
+  statusFilter?: "all" | "active" | "expired" | "expiringSoon" | "enabled" | "disabled";
+  sortBy?:
+    | "name"
+    | "tags"
+    | "expiresAt"
+    | "rpm"
+    | "limit5hUsd"
+    | "limitDailyUsd"
+    | "limitWeeklyUsd"
+    | "limitMonthlyUsd"
+    | "createdAt";
+  sortOrder?: "asc" | "desc";
+}
+
+/**
+ * Usage data for a single key (lazy-loaded separately from core user data).
+ */
+export interface KeyUsageData {
+  todayUsage: number;
+  todayCallCount: number;
+  todayTokens: number;
+  lastUsedAt: Date | null;
+  lastProviderName: string | null;
+  modelStats: Array<{
+    model: string;
+    callCount: number;
+    totalCost: number;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+  }>;
+}

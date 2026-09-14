@@ -1,0 +1,36 @@
+{
+  "constName": "RESTORE_LEGACY_PROVIDER_IF_ABSENT",
+  "file": "restore-legacy-provider-if-absent.lua",
+  "sha256": "41e102f861f5bfc07efa0c6883818dd26503ea36ef55bfc3ea918f290925172c",
+  "calls": [
+    {
+      "id": "key-absent",
+      "keys": ["cchgolden:session:1:provider"],
+      "argv": ["7", "60"],
+      "setup": [],
+      "returned": 1,
+      "after": {
+        "cchgolden:session:1:provider": {
+          "type": "string",
+          "value": "7",
+          "ttl": 60
+        }
+      }
+    },
+    {
+      "id": "key-present",
+      "keys": ["cchgolden:session:1:provider"],
+      "argv": ["7", "60"],
+      "setup": [["SET", "cchgolden:session:1:provider", "9"]],
+      "returned": 0,
+      "after": {
+        "cchgolden:session:1:provider": {
+          "type": "string",
+          "value": "9",
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

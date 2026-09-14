@@ -1,0 +1,1486 @@
+"use client";
+
+import {
+  AlertCircle,
+  ArrowRight,
+  Check,
+  CheckCircle,
+  Clock,
+  Copy,
+  Database,
+  DatabaseZap,
+  Filter,
+  GitBranch,
+  Globe,
+  Layers,
+  Link2,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+  XCircle,
+  Zap,
+} from "lucide-react";
+import { useTranslations } from "next-intl";
+import { useState } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Link } from "@/i18n/routing";
+import { getSessionOriginChain } from "@/lib/api-client/v1/actions/session-origin-chain";
+import { cn, formatTokenAmount } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils/currency";
+import { findHedgeLoserCost, summarizeHedgeBilling } from "@/lib/utils/hedge-billing";
+import { formatProbability, formatProviderTimeline } from "@/lib/utils/provider-chain-formatter";
+import type { ConsideredCandidate, ProviderChainItem } from "@/types/message";
+import { normalizeRoutingTrace } from "@/types/routing-trace";
+import { type LogicTraceTabProps, parseBlockedReason } from "../types";
+import { CachePerformance } from "./CachePerformance";
+import { ConsideredCandidatesList } from "./ConsideredCandidatesList";
+import { DiscoveryTraceView, RoutingModeBanner } from "./DiscoveryTraceView";
+import { buildLogsFilterHref } from "./logs-filter-href";
+import { StepCard, type StepStatus } from "./StepCard";
+
+/**
+ * 亲和命中条目（决策链里的「Sticky 探测」）本身是**选路条目**，按契约不写 errorMessage，
+ * 故它天生没有失败详情——详情在后继的**尝试条目**上。本函数找出该亲和提名对应的那次尝试。
+ *
+ * 判据：链上位于亲和条目**之后**的首个**同一供应商**且具尝试特征（带 attemptNumber，
+ * 或已带 statusCode / errorMessage）的条目。找不到返回 null。
+ */
+export function findAffinityProbeAttempt(
+  chain: ProviderChainItem[],
+  affinityIndex: number
+): ProviderChainItem | null {
+  const affinity = chain[affinityIndex];
+  if (!affinity || affinity.id == null) return null;
+  const providerId = affinity.id;
+  for (let i = affinityIndex + 1; i < chain.length; i += 1) {
+    const candidate = chain[i];
+    if (candidate.id !== providerId) continue;
+    const looksLikeAttempt =
+      candidate.attemptNumber != null ||
+      candidate.statusCode != null ||
+      (candidate.errorMessage != null && candidate.errorMessage !== "");
+    if (looksLikeAttempt) return candidate;
+  }
+  return null;
+}
+
+function getRequestStatus(item: ProviderChainItem): StepStatus {
+  // Check for session reuse first
+  if (item.reason === "session_reuse" || item.selectionMethod === "session_reuse") {
+    return "session_reuse";
+  }
+  // Affinity hit is a reuse-style nomination step: same visual family as session reuse
+  if (item.reason === "affinity_hit" || item.selectionMethod === "prefix_affinity") {
+    return "session_reuse";
+  }
+  if (
+    item.reason === "request_success" ||
+    item.reason === "retry_success" ||
+    item.reason === "hedge_winner"
+  ) {
+    return "success";
+  }
+  if (
+    item.reason === "retry_failed" ||
+    item.reason === "response_incomplete" ||
+    item.reason === "system_error" ||
+    item.reason === "resource_not_found" ||
+    item.reason === "client_error_non_retryable" ||
+    item.reason === "endpoint_pool_exhausted" ||
+    item.reason === "concurrent_limit_failed" ||
+    item.reason === "hedge_loser_cancelled" ||
+    item.reason === "hedge_loser_billed" ||
+    item.reason === "client_abort" ||
+    item.reason === "client_abort_no_first_byte"
+  ) {
+    return "failure";
+  }
+  // hedge_triggered, http2_fallback and other retry-related reasons are treated as pending/in-progress
+  return "pending";
+}
+
+type DecisionContext = NonNullable<ProviderChainItem["decisionContext"]>;
+
+/**
+ * 本轮**参与池**：跨两条选路路径统一读 `consideredCandidates`。
+ *
+ * 为何还要回退读 `survivingCandidates`：2026-09-14 之前落库的亲和行只有后者（生产 3 小时窗口里
+ * 1549 行 `affinity_hit` 的 considered 计数为 0、surviving 合计 5108），只读前者会让这些历史行的
+ * 清单**静默消失**。两个键由同一次计算投影而来（成员与顺序完全相同），故回退不会给出不同成员集；
+ * 待旧行退尽，这个回退即可删。
+ */
+export function consideredPool(context: DecisionContext): ConsideredCandidate[] {
+  return context.consideredCandidates ?? context.survivingCandidates ?? [];
+}
+
+/**
+ * 亲和短路行里「未参与竞争」的那批 id。
+ *
+ * 只取 `affinitySkipped` 这一位——成员集**不**从这里来：两个键同源同序，各渲染一遍就会把同一批
+ * 供应商列两遍。非亲和行为空数组（该路径不写 `survivingCandidates`）。
+ */
+export function affinitySkippedIds(context: DecisionContext): number[] {
+  return (context.survivingCandidates ?? [])
+    .filter((candidate) => candidate.affinitySkipped)
+    .map((candidate) => candidate.id);
+}
+
+export function LogicTraceTab({
+  statusCode: _statusCode,
+  providerChain,
+  routingTrace,
+  sessionId,
+  sourceSessionId,
+  sessionIdentityKind,
+  blockedBy,
+  blockedReason,
+  isReplay,
+  replaySourceRequestId,
+  requestSequence,
+  hedgeLosers,
+  costUsd,
+  inputTokens,
+  outputTokens,
+  cacheCreationInputTokens,
+  cacheReadInputTokens,
+  cacheInputTotal,
+  actualCacheRate,
+  theoreticalCacheRate,
+  theoreticalCacheTokens,
+  requestCacheCoefficientBp,
+  requestCacheMetricAvailability,
+  initialExpandedChainIndex,
+}: LogicTraceTabProps) {
+  const t = useTranslations("dashboard.logs.details");
+  const tChain = useTranslations("provider-chain");
+  // Winner cost is the request total minus every billed loser; only present
+  // when this request actually billed hedge losers.
+  const hedgeSummary = summarizeHedgeBilling(costUsd, hedgeLosers);
+
+  // Render the reclaimed token usage + billed cost for one hedge attempt
+  // (winner or loser) inside its decision-chain step.
+  const renderHedgeAttemptUsage = (params: {
+    accent: "winner" | "loser";
+    costUsd: string;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    cacheCreationInputTokens?: number | null;
+    cacheReadInputTokens?: number | null;
+  }) => {
+    const isLoser = params.accent === "loser";
+    const hasTokens =
+      (params.inputTokens ?? 0) > 0 ||
+      (params.outputTokens ?? 0) > 0 ||
+      (params.cacheCreationInputTokens ?? 0) > 0 ||
+      (params.cacheReadInputTokens ?? 0) > 0;
+    const tokenParts = [
+      `${t("billingDetails.input")} ${formatTokenAmount(params.inputTokens ?? 0)}`,
+      `${t("billingDetails.output")} ${formatTokenAmount(params.outputTokens ?? 0)}`,
+    ];
+    if ((params.cacheCreationInputTokens ?? 0) > 0) {
+      tokenParts.push(
+        `${t("billingDetails.hedgeColCacheWrite")} ${formatTokenAmount(params.cacheCreationInputTokens ?? 0)}`
+      );
+    }
+    if ((params.cacheReadInputTokens ?? 0) > 0) {
+      tokenParts.push(
+        `${t("billingDetails.hedgeColCacheRead")} ${formatTokenAmount(params.cacheReadInputTokens ?? 0)}`
+      );
+    }
+    return (
+      <div className="space-y-1">
+        {isLoser && (
+          <div className="text-[11px] text-muted-foreground">
+            {t("billingDetails.hedgeReclaimedNotDelivered")}
+          </div>
+        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          {hasTokens && (
+            <span className="font-mono text-[11px] text-muted-foreground">
+              {tokenParts.join(" · ")}
+            </span>
+          )}
+          <Badge
+            variant="outline"
+            className={cn(
+              "text-[10px]",
+              isLoser
+                ? "bg-rose-50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300"
+                : "bg-emerald-50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300"
+            )}
+          >
+            {isLoser ? t("billingDetails.hedgeLoser") : t("billingDetails.hedgeWinner")}:{" "}
+            {formatCurrency(params.costUsd, "USD", 6)}
+          </Badge>
+        </div>
+      </div>
+    );
+  };
+  const [timelineCopied, setTimelineCopied] = useState(false);
+  const [originOpen, setOriginOpen] = useState(false);
+  const [originChain, setOriginChain] = useState<ProviderChainItem[] | null | undefined>(undefined);
+  const [originLoading, setOriginLoading] = useState(false);
+
+  const handleCopyTimeline = async () => {
+    if (!providerChain) return;
+    const { timeline } = formatProviderTimeline(providerChain, tChain);
+    try {
+      await navigator.clipboard.writeText(timeline);
+      setTimelineCopied(true);
+      setTimeout(() => setTimelineCopied(false), 2000);
+    } catch {
+      // Clipboard write failed - ignore silently
+    }
+  };
+
+  const isWarmupSkipped = blockedBy === "warmup";
+  const isBlocked = !!blockedBy && !isWarmupSkipped && !isReplay;
+  const parsedBlockedReason = parseBlockedReason(blockedReason);
+
+  // Check if this is a session reuse flow (provider reused from session cache)
+  const isSessionReuseFlow =
+    providerChain?.[0]?.reason === "session_reuse" ||
+    providerChain?.[0]?.selectionMethod === "session_reuse";
+
+  // Extract session reuse context from first chain item
+  const sessionReuseContext = isSessionReuseFlow ? providerChain?.[0]?.decisionContext : undefined;
+  const sessionReuseProvider = isSessionReuseFlow ? providerChain?.[0] : undefined;
+
+  // F3a: prefix affinity hit flow (cache-reuse nomination replaces initial selection)
+  const isAffinityHitFlow =
+    providerChain?.[0]?.reason === "affinity_hit" ||
+    providerChain?.[0]?.selectionMethod === "prefix_affinity";
+
+  // Extract decision context from first chain item (not used for reuse-style flows,
+  // whose first item carries an empty placeholder context)
+  const decisionContext =
+    isSessionReuseFlow || isAffinityHitFlow ? undefined : providerChain?.[0]?.decisionContext;
+
+  // Extract filtered providers from all chain items (not applicable for session reuse)
+  const filteredProviders = isSessionReuseFlow
+    ? []
+    : providerChain?.flatMap((item) => item.decisionContext?.filteredProviders || []) || [];
+
+  // Get base timestamp for relative time calculations
+  const baseTimestamp = providerChain?.[0]?.timestamp || 0;
+
+  // Count providers at each stage
+  const totalProviders = decisionContext?.totalProviders || 0;
+  const afterHealthCheck = decisionContext?.afterHealthCheck || 0;
+  const normalizedRoutingTrace = normalizeRoutingTrace(routingTrace);
+  const isLeaseConflictProtection =
+    normalizedRoutingTrace?.mode === "single_upstream" &&
+    normalizedRoutingTrace.bypassReason === "lease_conflict";
+
+  // Calculate step offset for session reuse flow
+  const sessionReuseStepOffset = isSessionReuseFlow ? 1 : 0;
+
+  if (
+    normalizedRoutingTrace?.mode === "discovery" ||
+    normalizedRoutingTrace?.mode === "legacy_hedge"
+  ) {
+    return (
+      <div className="space-y-5">
+        <RoutingModeBanner trace={normalizedRoutingTrace} />
+        <DiscoveryTraceView
+          trace={normalizedRoutingTrace}
+          providerChain={providerChain ?? []}
+          hedgeLosers={hedgeLosers}
+          costUsd={costUsd}
+          winnerUsage={{
+            inputTokens,
+            outputTokens,
+            cacheCreationInputTokens,
+            cacheReadInputTokens,
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Warmup Skip Info */}
+      {isWarmupSkipped && (
+        <div className="rounded-lg border bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800 p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <CheckCircle className="h-4 w-4 text-blue-600" />
+            <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
+              {t("skipped.title")}
+            </span>
+            <Badge variant="outline" className="border-blue-600 text-blue-700">
+              {t("skipped.warmup")}
+            </Badge>
+          </div>
+          <p className="text-xs text-blue-800 dark:text-blue-200">{t("skipped.desc")}</p>
+        </div>
+      )}
+
+      {/* Replay audit info (served without a new upstream charge) */}
+      {isReplay && (
+        <div className="rounded-lg border bg-teal-50 dark:bg-teal-950/20 border-teal-200 dark:border-teal-800 p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <DatabaseZap className="h-4 w-4 text-teal-600" />
+            <span className="text-sm font-medium text-teal-900 dark:text-teal-100">
+              {t("replayServe.title")}
+            </span>
+            {parsedBlockedReason?.source && (
+              <Badge variant="outline" className="border-teal-600 text-teal-700 dark:text-teal-300">
+                {tChain.has(`replayServe.sources.${parsedBlockedReason.source}`)
+                  ? tChain(`replayServe.sources.${parsedBlockedReason.source}`)
+                  : parsedBlockedReason.source}
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-teal-800 dark:text-teal-200">{t("replayServe.desc")}</p>
+          {parsedBlockedReason?.replayId && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-teal-900 dark:text-teal-100">{t("replayServe.replayId")}:</span>
+              <code className="bg-teal-100 dark:bg-teal-900/50 px-2 py-0.5 rounded font-mono">
+                {parsedBlockedReason.replayId}
+              </code>
+            </div>
+          )}
+          {replaySourceRequestId != null && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-teal-900 dark:text-teal-100">
+                {t("replayServe.sourceRequestId")}:
+              </span>
+              <code className="bg-teal-100 dark:bg-teal-900/50 px-2 py-0.5 rounded font-mono">
+                {replaySourceRequestId}
+              </code>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Block Info */}
+      {isBlocked && blockedBy && (
+        <div className="rounded-lg border bg-orange-50 dark:bg-orange-950/20 border-orange-200 dark:border-orange-800 p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-orange-600" />
+            <span className="text-sm font-medium text-orange-900 dark:text-orange-100">
+              {t("blocked.title")}
+            </span>
+            <Badge variant="outline" className="border-orange-600 text-orange-600">
+              {blockedBy === "sensitive_word" ? t("blocked.sensitiveWord") : blockedBy}
+            </Badge>
+          </div>
+          {parsedBlockedReason && (
+            <div className="space-y-1 text-xs">
+              {parsedBlockedReason.word && (
+                <div className="flex items-center gap-2">
+                  <span className="text-orange-900 dark:text-orange-100">{t("blocked.word")}:</span>
+                  <code className="bg-orange-100 dark:bg-orange-900/50 px-2 py-0.5 rounded">
+                    {parsedBlockedReason.word}
+                  </code>
+                </div>
+              )}
+              {parsedBlockedReason.matchedText && (
+                <div className="mt-2">
+                  <span className="text-orange-900 dark:text-orange-100">
+                    {t("blocked.matchedText")}:
+                  </span>
+                  <pre className="bg-orange-100 dark:bg-orange-900/50 px-2 py-1 rounded mt-1 whitespace-pre-wrap break-words">
+                    {parsedBlockedReason.matchedText}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {normalizedRoutingTrace && <RoutingModeBanner trace={normalizedRoutingTrace} />}
+
+      {/* Decision Chain Header */}
+      {providerChain && providerChain.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-semibold flex items-center gap-2">
+              {isLeaseConflictProtection ? (
+                <ShieldCheck className="h-4 w-4 text-amber-600" />
+              ) : isSessionReuseFlow ? (
+                <Link2 className="h-4 w-4 text-violet-600" />
+              ) : isAffinityHitFlow ? (
+                <DatabaseZap className="h-4 w-4 text-teal-600" />
+              ) : (
+                <GitBranch className="h-4 w-4 text-blue-600" />
+              )}
+              {isLeaseConflictProtection
+                ? t("logicTrace.singleRouteSelectionTitle")
+                : t("logicTrace.title")}
+            </h4>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              {isSessionReuseFlow ? (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] bg-violet-50 dark:bg-violet-950/20 border-violet-200 dark:border-violet-800 text-violet-700 dark:text-violet-300"
+                >
+                  {t("logicTrace.sessionReuse")}
+                </Badge>
+              ) : isAffinityHitFlow ? (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] bg-teal-50 dark:bg-teal-950/20 border-teal-200 dark:border-teal-800 text-teal-700 dark:text-teal-300"
+                >
+                  {tChain("reasons.affinity_hit")}
+                </Badge>
+              ) : (
+                <>
+                  <Badge variant="outline" className="text-[10px]">
+                    {t("logicTrace.providersCount", { count: totalProviders })}
+                  </Badge>
+                  {afterHealthCheck > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] bg-emerald-50 dark:bg-emerald-950/20"
+                    >
+                      {t("logicTrace.healthyCount", { count: afterHealthCheck })}
+                    </Badge>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Decision Steps */}
+      {providerChain && providerChain.length > 0 && (
+        <div className="space-y-0">
+          {/* Session Reuse Step (Step 1 for session reuse flow) */}
+          {isSessionReuseFlow && sessionReuseProvider && (
+            <StepCard
+              step={1}
+              icon={Link2}
+              title={t("logicTrace.sessionReuseSelection")}
+              subtitle={t("logicTrace.sessionReuseSelectionDesc")}
+              status="session_reuse"
+              details={
+                <div className="space-y-3 text-xs">
+                  {/* Session Information */}
+                  <div>
+                    <div className="flex items-center gap-1 text-violet-600 dark:text-violet-400 mb-2">
+                      <Database className="h-3 w-3" />
+                      <span className="font-medium">{t("logicTrace.sessionInfo")}</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pl-4 min-w-0">
+                      {sessionReuseContext?.sessionId && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">
+                            {sessionIdentityKind === "prefix_affinity"
+                              ? t("metadata.prefixId")
+                              : t("logicTrace.sessionIdLabel")}
+                            :
+                          </span>
+                          <Link
+                            href={buildLogsFilterHref(sessionReuseContext.sessionId)}
+                            className="text-[10px] px-1.5 py-0.5 bg-violet-100 dark:bg-violet-900/30 rounded font-mono break-all underline-offset-2 hover:underline"
+                          >
+                            {sessionReuseContext.sessionId}
+                          </Link>
+                        </div>
+                      )}
+                      {sourceSessionId && sourceSessionId !== sessionReuseContext?.sessionId && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">{t("metadata.sessionId")}:</span>
+                          <Link
+                            href={buildLogsFilterHref(sourceSessionId)}
+                            className="text-[10px] px-1.5 py-0.5 bg-violet-100 dark:bg-violet-900/30 rounded font-mono break-all underline-offset-2 hover:underline"
+                          >
+                            {sourceSessionId}
+                          </Link>
+                        </div>
+                      )}
+                      {requestSequence !== undefined && requestSequence !== null && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">
+                            {t("logicTrace.requestSequence")}:
+                          </span>
+                          <span className="font-mono">#{requestSequence}</span>
+                        </div>
+                      )}
+                      {sessionReuseContext?.sessionAge !== undefined && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-muted-foreground">
+                            {t("logicTrace.sessionAge")}:
+                          </span>
+                          <span className="font-mono">{sessionReuseContext.sessionAge}s</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Reused Provider Information */}
+                  <div className="pt-2 border-t border-muted/50">
+                    <div className="flex items-center gap-1 text-violet-600 dark:text-violet-400 mb-2">
+                      <Server className="h-3 w-3" />
+                      <span className="font-medium">{t("logicTrace.reusedProvider")}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5 pl-4 min-w-0">
+                      <div className="min-w-0">
+                        <span className="text-muted-foreground">Provider:</span>{" "}
+                        <span className="font-medium break-all">{sessionReuseProvider.name}</span>
+                      </div>
+                      <div className="min-w-0">
+                        <span className="text-muted-foreground">ID:</span>{" "}
+                        <span className="font-mono break-all">{sessionReuseProvider.id}</span>
+                      </div>
+                      {sessionReuseProvider.priority !== undefined && (
+                        <div>
+                          <span className="text-muted-foreground">
+                            {tChain("details.priority")}:
+                          </span>{" "}
+                          <span className="font-mono">P{sessionReuseProvider.priority}</span>
+                        </div>
+                      )}
+                      {sessionReuseProvider.costMultiplier !== undefined && (
+                        <div>
+                          <span className="text-muted-foreground">
+                            {tChain("details.costMultiplier")}:
+                          </span>{" "}
+                          <span className="font-mono">x{sessionReuseProvider.costMultiplier}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-muted/50">
+                    <CachePerformance
+                      actualCacheRate={actualCacheRate ?? null}
+                      theoreticalCacheRate={theoreticalCacheRate ?? null}
+                      requestCacheCoefficientBp={requestCacheCoefficientBp ?? null}
+                      requestCacheMetricAvailability={requestCacheMetricAvailability}
+                      cacheInputTotal={cacheInputTotal ?? null}
+                      cacheReadInputTokens={cacheReadInputTokens ?? null}
+                      theoreticalCacheTokens={theoreticalCacheTokens ?? null}
+                      compact
+                    />
+                  </div>
+                </div>
+              }
+            />
+          )}
+
+          {isSessionReuseFlow && sessionId && (
+            <Collapsible
+              open={originOpen}
+              onOpenChange={(open) => {
+                setOriginOpen(open);
+                if (open && originChain === undefined && !originLoading) {
+                  setOriginLoading(true);
+                  getSessionOriginChain(
+                    sessionId,
+                    requestSequence ?? undefined,
+                    sourceSessionId ?? undefined
+                  )
+                    .then((result) => {
+                      setOriginChain(result.ok ? result.data : null);
+                    })
+                    .catch(() => {
+                      setOriginChain(null);
+                    })
+                    .finally(() => {
+                      setOriginLoading(false);
+                    });
+                }
+              }}
+            >
+              <CollapsibleTrigger className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground w-full py-1 px-2">
+                <span>{t("logicTrace.originDecisionExpand")}</span>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                {originLoading && (
+                  <div className="text-xs text-muted-foreground px-2 py-1">
+                    {t("logicTrace.originDecisionLoading")}
+                  </div>
+                )}
+                {!originLoading && originChain === null && (
+                  <div className="text-xs text-muted-foreground px-2 py-1">
+                    {t("logicTrace.originDecisionUnavailable")}
+                  </div>
+                )}
+                {!originLoading &&
+                  originChain &&
+                  originChain.length > 0 &&
+                  (() => {
+                    const originItem = originChain.find(
+                      (item) => item.reason === "initial_selection"
+                    );
+                    const ctx = originItem?.decisionContext;
+                    const originFilteredProviders = originChain.flatMap(
+                      (item) => item.decisionContext?.filteredProviders || []
+                    );
+                    return (
+                      <div className="space-y-2 px-2 py-1">
+                        <div className="text-xs font-medium text-muted-foreground">
+                          {t("logicTrace.originDecisionTitle")}
+                        </div>
+                        {ctx && (
+                          <StepCard
+                            step={1}
+                            icon={Database}
+                            title={t("logicTrace.initialSelection")}
+                            subtitle={`${ctx.totalProviders} -> ${ctx.afterModelFilter || ctx.afterHealthCheck}`}
+                            status="success"
+                            details={
+                              <div className="grid grid-cols-2 gap-2 text-xs min-w-0">
+                                <div className="min-w-0">
+                                  <span className="text-muted-foreground">Total:</span>{" "}
+                                  <span className="font-mono">{ctx.totalProviders}</span>
+                                </div>
+                                <div className="min-w-0">
+                                  <span className="text-muted-foreground">Enabled:</span>{" "}
+                                  <span className="font-mono">{ctx.enabledProviders}</span>
+                                </div>
+                                {ctx.afterGroupFilter !== undefined && (
+                                  <div className="min-w-0">
+                                    <span className="text-muted-foreground">After Group:</span>{" "}
+                                    <span className="font-mono">{ctx.afterGroupFilter}</span>
+                                  </div>
+                                )}
+                                {ctx.afterModelFilter !== undefined && (
+                                  <div className="min-w-0">
+                                    <span className="text-muted-foreground">After Model:</span>{" "}
+                                    <span className="font-mono">{ctx.afterModelFilter}</span>
+                                  </div>
+                                )}
+                              </div>
+                            }
+                          />
+                        )}
+                        {originFilteredProviders.length > 0 && (
+                          <StepCard
+                            step={2}
+                            icon={Filter}
+                            title={t("logicTrace.healthCheck")}
+                            subtitle={`${originFilteredProviders.length} providers filtered`}
+                            status="warning"
+                            details={
+                              <div className="space-y-1 min-w-0">
+                                {originFilteredProviders.map((p, idx) => (
+                                  <div
+                                    key={`${p.id}-${idx}`}
+                                    className="flex items-center gap-2 text-xs flex-wrap min-w-0"
+                                  >
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[10px] shrink-0 max-w-[120px] truncate"
+                                    >
+                                      {p.name}
+                                    </Badge>
+                                    <span className="text-rose-600 break-all">
+                                      {tChain(`filterReasons.${p.reason}`)}
+                                    </span>
+                                    {p.details && (
+                                      <span className="text-muted-foreground break-all">
+                                        (
+                                        {tChain.has(`filterDetails.${p.details}`)
+                                          ? tChain(`filterDetails.${p.details}`)
+                                          : p.details}
+                                        )
+                                      </span>
+                                    )}
+                                    {p.clientRestrictionContext && (
+                                      <div className="ml-4 mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+                                        {p.clientRestrictionContext.matchedPattern && (
+                                          <div>
+                                            {tChain(
+                                              `filterDetails.${p.clientRestrictionContext.matchType}`,
+                                              { pattern: p.clientRestrictionContext.matchedPattern }
+                                            )}
+                                          </div>
+                                        )}
+                                        {!p.clientRestrictionContext.matchedPattern && (
+                                          <div>
+                                            {tChain(
+                                              `filterDetails.${p.clientRestrictionContext.matchType}`
+                                            )}
+                                          </div>
+                                        )}
+                                        {p.clientRestrictionContext.detectedClient && (
+                                          <div>
+                                            {tChain("filterDetails.detectedClient", {
+                                              client: p.clientRestrictionContext.detectedClient,
+                                            })}
+                                          </div>
+                                        )}
+                                        {p.clientRestrictionContext.providerAllowlist.length >
+                                          0 && (
+                                          <div>
+                                            {tChain("filterDetails.providerAllowlist", {
+                                              list: p.clientRestrictionContext.providerAllowlist.join(
+                                                ", "
+                                              ),
+                                            })}
+                                          </div>
+                                        )}
+                                        {p.clientRestrictionContext.providerBlocklist.length >
+                                          0 && (
+                                          <div>
+                                            {tChain("filterDetails.providerBlocklist", {
+                                              list: p.clientRestrictionContext.providerBlocklist.join(
+                                                ", "
+                                              ),
+                                            })}
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            }
+                          />
+                        )}
+                        {ctx?.priorityLevels && ctx.priorityLevels.length > 0 && (
+                          <StepCard
+                            step={originFilteredProviders.length > 0 ? 3 : 2}
+                            icon={Layers}
+                            title={t("logicTrace.prioritySelection")}
+                            subtitle={`Priority ${ctx.selectedPriority}`}
+                            status="success"
+                            details={
+                              <div className="space-y-2">
+                                <div className="flex gap-1 flex-wrap">
+                                  {ctx.priorityLevels.map((p) => (
+                                    <Badge
+                                      key={p}
+                                      variant={p === ctx?.selectedPriority ? "default" : "outline"}
+                                      className="text-[10px]"
+                                    >
+                                      P{p}
+                                    </Badge>
+                                  ))}
+                                </div>
+                                {ctx.candidatesAtPriority &&
+                                  ctx.candidatesAtPriority.length > 0 && (
+                                    <div className="space-y-1 mt-2">
+                                      {ctx.candidatesAtPriority.map((c, idx) => {
+                                        const formattedProbability = formatProbability(
+                                          c.probability
+                                        );
+                                        return (
+                                          <div
+                                            key={`${c.id}-${idx}`}
+                                            className="flex items-center justify-between text-xs"
+                                          >
+                                            <span className="font-medium">{c.name}</span>
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-muted-foreground">
+                                                W:{c.weight}
+                                              </span>
+                                              <span className="text-muted-foreground">
+                                                x{c.costMultiplier}
+                                              </span>
+                                              {formattedProbability && (
+                                                <Badge variant="secondary" className="text-[10px]">
+                                                  {formattedProbability}
+                                                </Badge>
+                                              )}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                              </div>
+                            }
+                          />
+                        )}
+                      </div>
+                    );
+                  })()}
+              </CollapsibleContent>
+            </Collapsible>
+          )}
+
+          {/* Step 1: Initial Selection (only for non-session-reuse flow) */}
+          {decisionContext && (
+            <StepCard
+              step={1}
+              icon={Database}
+              title={t("logicTrace.initialSelection")}
+              subtitle={`${decisionContext.totalProviders} -> ${decisionContext.afterModelFilter || decisionContext.afterHealthCheck}`}
+              status="success"
+              details={
+                <div className="grid grid-cols-2 gap-2 text-xs min-w-0">
+                  <div className="min-w-0">
+                    <span className="text-muted-foreground">Total:</span>{" "}
+                    <span className="font-mono">{decisionContext.totalProviders}</span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-muted-foreground">Enabled:</span>{" "}
+                    <span className="font-mono">{decisionContext.enabledProviders}</span>
+                  </div>
+                  {decisionContext.afterGroupFilter !== undefined && (
+                    <div className="min-w-0">
+                      <span className="text-muted-foreground">After Group:</span>{" "}
+                      <span className="font-mono">{decisionContext.afterGroupFilter}</span>
+                    </div>
+                  )}
+                  {decisionContext.afterModelFilter !== undefined && (
+                    <div className="min-w-0">
+                      <span className="text-muted-foreground">After Model:</span>{" "}
+                      <span className="font-mono">{decisionContext.afterModelFilter}</span>
+                    </div>
+                  )}
+                </div>
+              }
+            />
+          )}
+
+          {/* Step 2: Health Check (if there are filtered providers) */}
+          {filteredProviders.length > 0 && (
+            <StepCard
+              step={2}
+              icon={Filter}
+              title={t("logicTrace.healthCheck")}
+              subtitle={`${filteredProviders.length} providers filtered`}
+              status="warning"
+              details={
+                <div className="space-y-1 min-w-0">
+                  {filteredProviders.map((p, idx) => (
+                    <div
+                      key={`${p.id}-${idx}`}
+                      className="flex items-center gap-2 text-xs flex-wrap min-w-0"
+                    >
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] shrink-0 max-w-[120px] truncate"
+                      >
+                        {p.name}
+                      </Badge>
+                      <span className="text-rose-600 break-all">
+                        {tChain(`filterReasons.${p.reason}`)}
+                      </span>
+                      {p.details && (
+                        <span className="text-muted-foreground break-all">
+                          (
+                          {tChain.has(`filterDetails.${p.details}`)
+                            ? tChain(`filterDetails.${p.details}`)
+                            : p.details}
+                          )
+                        </span>
+                      )}
+                      {p.clientRestrictionContext && (
+                        <div className="ml-4 mt-1 space-y-0.5 text-[10px] text-muted-foreground">
+                          {p.clientRestrictionContext.matchedPattern && (
+                            <div>
+                              {tChain(`filterDetails.${p.clientRestrictionContext.matchType}`, {
+                                pattern: p.clientRestrictionContext.matchedPattern,
+                              })}
+                            </div>
+                          )}
+                          {!p.clientRestrictionContext.matchedPattern && (
+                            <div>
+                              {tChain(`filterDetails.${p.clientRestrictionContext.matchType}`)}
+                            </div>
+                          )}
+                          {p.clientRestrictionContext.detectedClient && (
+                            <div>
+                              {tChain("filterDetails.detectedClient", {
+                                client: p.clientRestrictionContext.detectedClient,
+                              })}
+                            </div>
+                          )}
+                          {p.clientRestrictionContext.providerAllowlist.length > 0 && (
+                            <div>
+                              {tChain("filterDetails.providerAllowlist", {
+                                list: p.clientRestrictionContext.providerAllowlist.join(", "),
+                              })}
+                            </div>
+                          )}
+                          {p.clientRestrictionContext.providerBlocklist.length > 0 && (
+                            <div>
+                              {tChain("filterDetails.providerBlocklist", {
+                                list: p.clientRestrictionContext.providerBlocklist.join(", "),
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              }
+            />
+          )}
+
+          {/* Step 3: Priority Selection */}
+          {decisionContext?.priorityLevels && decisionContext.priorityLevels.length > 0 && (
+            <StepCard
+              step={filteredProviders.length > 0 ? 3 : 2}
+              icon={Layers}
+              title={t("logicTrace.prioritySelection")}
+              subtitle={`Priority ${decisionContext.selectedPriority}`}
+              status="success"
+              details={
+                <div className="space-y-2">
+                  <div className="flex gap-1 flex-wrap">
+                    {decisionContext.priorityLevels.map((p) => (
+                      <Badge
+                        key={p}
+                        variant={p === decisionContext?.selectedPriority ? "default" : "outline"}
+                        className="text-[10px]"
+                      >
+                        P{p}
+                      </Badge>
+                    ))}
+                  </div>
+                  {decisionContext.candidatesAtPriority &&
+                    decisionContext.candidatesAtPriority.length > 0 && (
+                      <div className="space-y-1 mt-2">
+                        {decisionContext.candidatesAtPriority.map((c, idx) => {
+                          const formattedProbability = formatProbability(c.probability);
+                          return (
+                            <div
+                              key={`${c.id}-${idx}`}
+                              className="flex items-center justify-between text-xs"
+                            >
+                              <span className="font-medium">{c.name}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-muted-foreground">W:{c.weight}</span>
+                                <span className="text-muted-foreground">x{c.costMultiplier}</span>
+                                {formattedProbability && (
+                                  <Badge variant="secondary" className="text-[10px]">
+                                    {formattedProbability}
+                                  </Badge>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  {/* 本轮参与池（与链项那边同一读取口径，见 consideredPool）。 */}
+                  <ConsideredCandidatesList
+                    candidates={consideredPool(decisionContext)}
+                    selectedPriority={decisionContext.selectedPriority}
+                  />
+                </div>
+              }
+            />
+          )}
+
+          {/* Request Execution Steps */}
+          {providerChain.map((item, index) => {
+            // For session reuse flow, step numbering starts from 2 (session reuse is step 1)
+            // For normal flow, calculate based on decision steps
+            const stepNum = isSessionReuseFlow
+              ? sessionReuseStepOffset + index + 1
+              : (decisionContext ? 1 : 0) +
+                (filteredProviders.length > 0 ? 1 : 0) +
+                (decisionContext?.priorityLevels?.length ? 1 : 0) +
+                index +
+                1;
+
+            const status = getRequestStatus(item);
+            const isRetry = item.attemptNumber && item.attemptNumber > 1;
+            const isSessionReuse =
+              item.reason === "session_reuse" || item.selectionMethod === "session_reuse";
+            const isAffinityHit =
+              item.reason === "affinity_hit" || item.selectionMethod === "prefix_affinity";
+
+            // Determine icon based on type
+            const isHedgeTriggered = item.reason === "hedge_triggered";
+            const isHedgeWinner = item.reason === "hedge_winner";
+            const isHedgeLoser = item.reason === "hedge_loser_cancelled";
+            const isHedgeLoserBilled = item.reason === "hedge_loser_billed";
+            const isClientAbort =
+              item.reason === "client_abort" || item.reason === "client_abort_no_first_byte";
+            // Resolved hedge losers (cancelled or billed) carry billing detail when
+            // their reclaimed upstream response was charged to the request total.
+            const hedgeLoserBilling =
+              isHedgeLoser || isHedgeLoserBilled
+                ? findHedgeLoserCost(hedgeLosers, item.id, item.attemptNumber)
+                : null;
+            const stepIcon = isSessionReuse
+              ? Link2
+              : isAffinityHit
+                ? DatabaseZap
+                : isHedgeTriggered
+                  ? GitBranch
+                  : isHedgeLoser || isHedgeLoserBilled || isClientAbort
+                    ? XCircle
+                    : isRetry
+                      ? RefreshCw
+                      : status === "success"
+                        ? CheckCircle
+                        : status === "failure"
+                          ? XCircle
+                          : Server;
+
+            // Determine title based on type
+            // For session reuse flow, show simplified "Execute Request" title for the first item
+            const stepTitle = isSessionReuse
+              ? t("logicTrace.executeRequest")
+              : isAffinityHit
+                ? tChain("reasons.affinity_hit")
+                : isHedgeTriggered
+                  ? tChain("timeline.hedgeTriggered")
+                  : isHedgeLoser
+                    ? tChain("timeline.hedgeLoserCancelled")
+                    : isHedgeLoserBilled
+                      ? tChain("timeline.hedgeLoserBilled")
+                      : isClientAbort
+                        ? item.reason === "client_abort_no_first_byte"
+                          ? tChain("reasons.client_abort_no_first_byte")
+                          : tChain("timeline.clientAbort")
+                        : isRetry
+                          ? t("logicTrace.retryAttempt", { number: item.attemptNumber ?? 1 })
+                          : item.reason === "hedge_winner"
+                            ? tChain("timeline.hedgeWinner")
+                            : t("logicTrace.attemptProvider", { provider: item.name });
+
+            return (
+              <StepCard
+                key={`${item.id}-${index}`}
+                step={stepNum}
+                icon={stepIcon}
+                title={stepTitle}
+                subtitle={
+                  isSessionReuse || isAffinityHit
+                    ? item.statusCode
+                      ? t("logicTrace.httpStatus", {
+                          code: item.statusCode,
+                          inferredSuffix: item.statusCodeInferred
+                            ? ` ${t("statusCodeInferredSuffix")}`
+                            : "",
+                        })
+                      : item.name
+                    : item.statusCode
+                      ? t("logicTrace.httpStatus", {
+                          code: item.statusCode,
+                          inferredSuffix: item.statusCodeInferred
+                            ? ` ${t("statusCodeInferredSuffix")}`
+                            : "",
+                        })
+                      : item.reason
+                        ? tChain(`reasons.${item.reason}`)
+                        : undefined
+                }
+                status={status}
+                timestamp={item.timestamp}
+                baseTimestamp={baseTimestamp}
+                isLast={index === providerChain.length - 1}
+                defaultExpanded={initialExpandedChainIndex === index}
+                details={
+                  <div className="space-y-2 text-xs">
+                    {/* Hedge winner reclaimed usage + billed cost (only on a race
+                        that actually billed losers, so non-hedge steps are unaffected) */}
+                    {isHedgeWinner &&
+                      hedgeSummary &&
+                      renderHedgeAttemptUsage({
+                        accent: "winner",
+                        costUsd: hedgeSummary.winnerCost,
+                        inputTokens,
+                        outputTokens,
+                        cacheCreationInputTokens,
+                        cacheReadInputTokens,
+                      })}
+
+                    {/* Hedge loser reclaimed usage + billed cost */}
+                    {hedgeLoserBilling &&
+                      renderHedgeAttemptUsage({
+                        accent: "loser",
+                        costUsd: hedgeLoserBilling.costUsd,
+                        inputTokens: hedgeLoserBilling.inputTokens,
+                        outputTokens: hedgeLoserBilling.outputTokens,
+                        cacheCreationInputTokens: hedgeLoserBilling.cacheCreationInputTokens,
+                        cacheReadInputTokens: hedgeLoserBilling.cacheReadInputTokens,
+                      })}
+
+                    {/* Session Reuse Info */}
+                    {isSessionReuse && item.decisionContext && (
+                      <div className="pb-2 border-b border-muted/50">
+                        <div className="flex items-center gap-1 text-violet-600 dark:text-violet-400 mb-2">
+                          <Link2 className="h-3 w-3" />
+                          <span className="font-medium">{t("logicTrace.sessionReuseTitle")}</span>
+                        </div>
+                        <div className="grid grid-cols-1 gap-1.5 min-w-0">
+                          {item.decisionContext.sessionId && (
+                            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                              <span className="text-muted-foreground shrink-0">
+                                {tChain("timeline.sessionId", { id: "" }).replace(": ", ":")}
+                              </span>
+                              <code className="text-[10px] px-1.5 py-0.5 bg-violet-100 dark:bg-violet-900/30 rounded font-mono break-all">
+                                {item.decisionContext.sessionId}
+                              </code>
+                            </div>
+                          )}
+                          <div className="text-muted-foreground text-[10px] mt-1">
+                            {tChain("timeline.basedOnCache")}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* F3a Affinity Hit Info */}
+                    {isAffinityHit && (
+                      <div className="pb-2 border-b border-muted/50">
+                        <div className="flex items-center gap-1 text-teal-600 dark:text-teal-400 mb-2">
+                          <DatabaseZap className="h-3 w-3" />
+                          <span className="font-medium">{tChain("reasons.affinity_hit")}</span>
+                        </div>
+                        {(sessionId || sourceSessionId) && (
+                          <div className="mb-2 grid grid-cols-1 gap-1.5 min-w-0">
+                            {sessionId && (
+                              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                <span className="text-muted-foreground shrink-0">
+                                  {sessionIdentityKind === "prefix_affinity"
+                                    ? t("metadata.prefixId")
+                                    : t("metadata.sessionId")}
+                                  :
+                                </span>
+                                <Link
+                                  href={buildLogsFilterHref(sessionId)}
+                                  className="text-[10px] px-1.5 py-0.5 bg-teal-100 dark:bg-teal-900/30 rounded font-mono break-all underline-offset-2 hover:underline"
+                                >
+                                  {sessionId}
+                                </Link>
+                              </div>
+                            )}
+                            {sourceSessionId && sourceSessionId !== sessionId && (
+                              <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                                <span className="text-muted-foreground shrink-0">
+                                  {t("metadata.sessionId")}:
+                                </span>
+                                <Link
+                                  href={buildLogsFilterHref(sourceSessionId)}
+                                  className="text-[10px] px-1.5 py-0.5 bg-teal-100 dark:bg-teal-900/30 rounded font-mono break-all underline-offset-2 hover:underline"
+                                >
+                                  {sourceSessionId}
+                                </Link>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 min-w-0 text-[11px]">
+                          {item.affinity?.matchedDepth != null && (
+                            <div className="min-w-0">
+                              <span className="text-muted-foreground">
+                                {tChain("affinity.matchedDepth")}:
+                              </span>{" "}
+                              <span className="font-mono">{item.affinity.matchedDepth}</span>
+                            </div>
+                          )}
+                          {item.affinity?.matchedPrefixBytes != null && (
+                            <div className="min-w-0">
+                              <span className="text-muted-foreground">
+                                {tChain("affinity.matchedPrefixBytes")}:
+                              </span>{" "}
+                              <span className="font-mono">{item.affinity.matchedPrefixBytes}</span>
+                            </div>
+                          )}
+                          {item.affinity?.matchedFp && (
+                            <div className="col-span-2 min-w-0">
+                              <span className="text-muted-foreground">
+                                {tChain("affinity.matchedFp")}:
+                              </span>{" "}
+                              <code className="text-[10px] px-1.5 py-0.5 bg-teal-100 dark:bg-teal-900/30 rounded font-mono break-all">
+                                {item.affinity.matchedFp}
+                              </code>
+                            </div>
+                          )}
+                        </div>
+                        {(() => {
+                          const probe = findAffinityProbeAttempt(providerChain, index);
+                          if (!probe) return null;
+                          const probeFailed =
+                            (probe.statusCode != null &&
+                              (probe.statusCode < 200 || probe.statusCode >= 300)) ||
+                            (probe.errorMessage != null && probe.errorMessage !== "");
+                          if (!probeFailed) return null;
+                          return (
+                            <div
+                              className="pt-2 mt-2 border-t border-muted/50"
+                              data-testid="affinity-probe-failure"
+                            >
+                              <div className="flex items-center gap-1 text-rose-600 dark:text-rose-400 mb-1">
+                                <AlertCircle className="h-3 w-3" />
+                                <span>{tChain("affinity.probeResult")}</span>
+                                {probe.statusCode != null && (
+                                  <span className="font-mono">
+                                    {tChain("affinity.probeStatus", { code: probe.statusCode })}
+                                  </span>
+                                )}
+                              </div>
+                              {probe.errorMessage && (
+                                <pre className="text-[10px] bg-rose-50 dark:bg-rose-950/20 p-2 rounded whitespace-pre-wrap break-words">
+                                  {probe.errorMessage}
+                                </pre>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        <div className="pt-2 mt-2 border-t border-muted/50">
+                          <CachePerformance
+                            actualCacheRate={actualCacheRate ?? null}
+                            theoreticalCacheRate={theoreticalCacheRate ?? null}
+                            requestCacheCoefficientBp={requestCacheCoefficientBp ?? null}
+                            requestCacheMetricAvailability={requestCacheMetricAvailability}
+                            cacheInputTotal={cacheInputTotal ?? null}
+                            cacheReadInputTokens={cacheReadInputTokens ?? null}
+                            theoreticalCacheTokens={theoreticalCacheTokens ?? null}
+                            compact
+                          />
+                        </div>
+                        {/* 本轮参与池（统一读 consideredCandidates；仅亲和短路行有「未参与竞争」位）。
+                            只在本行确有被跳过的候选时挂载：非亲和行的参与池由「优先级选择」那一步
+                            呈现，两处都挂就会把同一批供应商列两遍。 */}
+                        {(() => {
+                          const context = item.decisionContext;
+                          if (!context) return null;
+                          const skipped = affinitySkippedIds(context);
+                          if (skipped.length === 0) return null;
+                          return (
+                            <ConsideredCandidatesList
+                              candidates={consideredPool(context)}
+                              selectedPriority={context.selectedPriority}
+                              affinitySkippedIds={skipped}
+                              matchedProviderName={item.name}
+                            />
+                          );
+                        })()}
+                      </div>
+                    )}
+
+                    {/* F1 Stream Gate Commit Marker */}
+                    {item.streamGate && (
+                      <div className="pb-2 border-b border-muted/50">
+                        <div className="flex items-center gap-1 text-rose-600 dark:text-rose-400 mb-2">
+                          <Filter className="h-3 w-3" />
+                          <span className="font-medium">{tChain("streamGate.title")}</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-3 gap-y-1 min-w-0 text-[11px]">
+                          <div className="min-w-0">
+                            <span className="text-muted-foreground">
+                              {tChain("streamGate.frameIndex")}:
+                            </span>{" "}
+                            <span className="font-mono">#{item.streamGate.frameIndex}</span>
+                          </div>
+                          <div className="min-w-0">
+                            <span className="text-muted-foreground">
+                              {tChain("streamGate.chunkIndex")}:
+                            </span>{" "}
+                            <span className="font-mono">#{item.streamGate.chunkIndex}</span>
+                          </div>
+                          {item.streamGate.eventName && (
+                            <div className="col-span-2 min-w-0">
+                              <span className="text-muted-foreground">
+                                {tChain("streamGate.eventName")}:
+                              </span>{" "}
+                              <code className="text-[10px] px-1.5 py-0.5 bg-rose-100 dark:bg-rose-900/30 rounded font-mono break-all">
+                                {item.streamGate.eventName}
+                              </code>
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <span className="text-muted-foreground">
+                              {tChain("streamGate.bufferedBytes")}:
+                            </span>{" "}
+                            <span className="font-mono">{item.streamGate.bufferedBytes}</span>
+                          </div>
+                          {item.streamGate.echoExcludedBytes > 0 && (
+                            <div className="min-w-0">
+                              <span className="text-muted-foreground">
+                                {tChain("streamGate.echoExcludedBytes")}:
+                              </span>{" "}
+                              <span className="font-mono">{item.streamGate.echoExcludedBytes}</span>
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <span className="text-muted-foreground">
+                              {tChain("streamGate.gateWaitMs")}:
+                            </span>{" "}
+                            <span className="font-mono">{item.streamGate.gateWaitMs}ms</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Basic Info */}
+                    <div className="grid grid-cols-2 gap-2 min-w-0">
+                      <div className="min-w-0">
+                        <span className="text-muted-foreground">Provider ID:</span>{" "}
+                        <span className="font-mono break-all">{item.id}</span>
+                      </div>
+                      {item.selectionMethod && !isSessionReuse && (
+                        <div className="min-w-0">
+                          <span className="text-muted-foreground">
+                            {tChain("details.selectionMethod")}:
+                          </span>{" "}
+                          <span className="font-mono break-all">{item.selectionMethod}</span>
+                        </div>
+                      )}
+                      {isSessionReuse && (
+                        <div className="min-w-0">
+                          <span className="text-muted-foreground">Provider:</span>{" "}
+                          <span className="font-mono break-all">{item.name}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Endpoint */}
+                    {(item.endpointId || item.endpointUrl) && (
+                      <div className="pt-2 border-t border-muted/50">
+                        <div className="flex items-center gap-1 text-muted-foreground mb-1">
+                          <Globe className="h-3 w-3" />
+                          <span>{tChain("details.endpoint")}</span>
+                        </div>
+                        {item.endpointUrl && (
+                          <code className="text-[10px] break-all">{item.endpointUrl}</code>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Circuit Breaker */}
+                    {(item.circuitState || item.circuitFailureCount !== undefined) && (
+                      <div className="pt-2 border-t border-muted/50">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-center gap-1 text-muted-foreground">
+                            <Zap className="h-3 w-3" />
+                            <span>{tChain("details.circuitBreaker")}:</span>
+                          </div>
+                          {item.circuitState && (
+                            <Badge
+                              variant={
+                                item.circuitState === "closed"
+                                  ? "default"
+                                  : item.circuitState === "open"
+                                    ? "destructive"
+                                    : "secondary"
+                              }
+                              className="text-[10px]"
+                            >
+                              {item.circuitState}
+                            </Badge>
+                          )}
+                          {item.circuitFailureCount !== undefined &&
+                            item.circuitFailureThreshold !== undefined && (
+                              <span className="font-mono text-muted-foreground">
+                                {item.circuitFailureThreshold === 0
+                                  ? tChain("details.circuitDisabled")
+                                  : `${item.circuitFailureCount}/${item.circuitFailureThreshold} ${tChain("details.failures")}`}
+                              </span>
+                            )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Model Redirect */}
+                    {item.modelRedirect && (
+                      <div className="pt-2 border-t border-muted/50">
+                        <div className="flex items-center gap-1 text-muted-foreground mb-1">
+                          <ArrowRight className="h-3 w-3" />
+                          <span>{tChain("details.modelRedirect")}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <code className="text-[10px] px-1 py-0.5 bg-muted rounded">
+                            {item.modelRedirect.originalModel}
+                          </code>
+                          <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                          <code className="text-[10px] px-1 py-0.5 bg-muted rounded">
+                            {item.modelRedirect.redirectedModel}
+                          </code>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Error Message */}
+                    {item.errorMessage && (
+                      <div className="pt-2 border-t border-muted/50">
+                        <div className="flex items-center gap-1 text-rose-600 mb-1">
+                          <AlertCircle className="h-3 w-3" />
+                          <span>{tChain("details.error")}</span>
+                        </div>
+                        <pre className="text-[10px] bg-rose-50 dark:bg-rose-950/20 p-2 rounded whitespace-pre-wrap break-words">
+                          {item.errorMessage}
+                        </pre>
+                      </div>
+                    )}
+
+                    {/* Error Details */}
+                    {/* 后端 buildRequestDetails 已根据 STORE_SESSION_MESSAGES 配置进行脱敏 */}
+                    {item.errorDetails && (
+                      <Collapsible>
+                        <CollapsibleTrigger className="flex items-center gap-1 text-muted-foreground hover:text-foreground text-[10px]">
+                          <span>{tChain("details.errorDetails")}</span>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-1">
+                          <pre className="text-[10px] bg-rose-50 dark:bg-rose-950/20 p-2 rounded whitespace-pre-wrap break-words font-mono">
+                            {JSON.stringify(item.errorDetails, null, 2)}
+                          </pre>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    )}
+                  </div>
+                }
+              />
+            );
+          })}
+        </div>
+      )}
+
+      {/* No Data */}
+      {(!providerChain || providerChain.length === 0) && !isWarmupSkipped && !isBlocked && (
+        <div className="text-center py-8 text-muted-foreground">
+          <GitBranch className="h-8 w-8 mx-auto mb-2 opacity-50" />
+          <p className="text-sm">{t("logicTrace.noDecisionData")}</p>
+        </div>
+      )}
+
+      {/* Technical Timeline */}
+      {providerChain && providerChain.length > 0 && (
+        <div className="space-y-2 mt-6 pt-6 border-t">
+          <h4 className="text-sm font-semibold flex items-center gap-2">
+            <Clock className="h-4 w-4 text-slate-600" />
+            {t("metadata.technicalTimeline")}
+          </h4>
+          <Collapsible defaultOpen>
+            <CollapsibleTrigger className="text-xs text-muted-foreground hover:text-foreground">
+              {tChain("technicalTimeline")}
+            </CollapsibleTrigger>
+            <CollapsibleContent className="mt-2">
+              {(() => {
+                const { timeline, totalDuration } = formatProviderTimeline(providerChain, tChain);
+                return (
+                  <>
+                    <div className="rounded-lg border bg-muted/50 p-4 max-h-[400px] overflow-y-auto overflow-x-hidden relative group">
+                      <button
+                        type="button"
+                        onClick={handleCopyTimeline}
+                        className={cn(
+                          "absolute top-2 right-2 p-1.5 rounded-md bg-background/80 border transition-opacity hover:bg-muted",
+                          timelineCopied ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                        )}
+                        title={t("metadata.copyTimeline")}
+                      >
+                        {timelineCopied ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-600" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                      <pre className="text-xs whitespace-pre-wrap break-words font-mono leading-relaxed">
+                        {timeline}
+                      </pre>
+                    </div>
+                    {totalDuration > 0 && (
+                      <div className="text-xs text-muted-foreground text-right mt-1">
+                        {t("providerChain.totalDuration", { duration: totalDuration })}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </CollapsibleContent>
+          </Collapsible>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,292 @@
+name: Release
+
+# 推 tag（形如 v1.6.0）即发版：出**六个平台目标**的静态二进制（UI 已 embed 进二进制）与校验和。
+#
+# 目标矩阵：linux/darwin/windows × amd64/arm64。Linux 与 macOS 双架构，Windows 出 .exe（zip 包）。
+#
+# 版本真源是 tag：它与 package.json 的 version 必须一致，否则下面的门禁直接失败。
+# 为什么用 package.json 当锚点：Go 侧 appversion.Fallback 与它同值，且那份相等关系由
+# internal/appversion 的用例钉住，于是「tag / 二进制自报版本 / 页面页脚」三者不可能分叉。
+#
+# 注意：本仓约定版本号**不带 v 前缀**（镜像 tag、APP_VERSION、package.json 皆如此），
+# 故下面一律用 `${GITHUB_REF_NAME#v}` 去掉 tag 上的 v。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # 建 Release 并上传产物
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # UI 产物：两个平台的内嵌界面完全相同，故只构建一次、用 artifact 分发给矩阵各路，
+  # 避免同一份 next build 跑两遍（也避免两遍都失败时报两处噪音）。
+  # ---------------------------------------------------------------------------
+  ui:
+    name: UI 产物（导出 + 压缩嵌入）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 版本一致性门禁（tag ↔ package.json）
+        id: ver
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          echo "tag=v${version}  package.json=${pkg}"
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::版本不一致：tag v${version} ≠ package.json ${pkg}。版本号只有一个真源，请先把 package.json（以及 appversion.Fallback）同步到 ${version} 再打 tag。"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+
+      - name: UI 导出（next build）+ 压缩嵌入
+        env:
+          # 页脚版本随产物落盘：注入 tag 版本，使界面与二进制自报值一致。
+          APP_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          bun scripts/build-ui-export.mjs
+          bun scripts/build-ui-embed.mjs
+
+      - name: 断言 UI 产物已收编
+        # 为什么断言：`go:embed all:assets` 只要求目录存在（`.gitkeep` 即可匹配），
+        # 缺产物时**编译照样成功**，但二进制会是个没有界面的壳。所以这里必须拦。
+        run: |
+          test -f go/internal/uiapp/assets/MANIFEST.json || {
+            echo "::error::UI 产物未收编（缺 MANIFEST.json）"; exit 1; }
+          n="$(find go/internal/uiapp/assets -type f | wc -l)"
+          echo "assets 文件数：${n}（压缩态实测约 500）"
+          if [ "$n" -lt 300 ]; then
+            echo "::error::UI 产物文件数过少（${n} < 300），疑似导出失败"; exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uiapp-assets
+          path: go/internal/uiapp/assets
+          include-hidden-files: true
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # 二进制：原生交叉编译（runner 是 amd64，其余靠 GOOS/GOARCH 交叉编译，不走模拟）。
+  # ---------------------------------------------------------------------------
+  build:
+    name: 二进制 ${{ matrix.os }}/${{ matrix.arch }}
+    needs: ui
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux, arch: amd64, ext: "", kind: tar }
+          - { os: linux, arch: arm64, ext: "", kind: tar }
+          - { os: darwin, arch: amd64, ext: "", kind: tar }
+          - { os: darwin, arch: arm64, ext: "", kind: tar }
+          - { os: windows, arch: amd64, ext: ".exe", kind: zip }
+          - { os: windows, arch: arm64, ext: ".exe", kind: zip }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: uiapp-assets
+          path: go/internal/uiapp/assets
+
+      - name: 断言 UI 产物在位
+        run: |
+          test -f go/internal/uiapp/assets/MANIFEST.json || {
+            echo "::error::UI 产物缺失，二进制将没有界面"; exit 1; }
+          echo "assets 文件数：$(find go/internal/uiapp/assets -type f | wc -l)"
+
+      - name: 编译（CGO_ENABLED=0，纯静态）
+        working-directory: go
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p ../dist
+          go build -trimpath -ldflags="-s -w" -o "../dist/cchd${{ matrix.ext }}" ./cmd/cchd
+
+      - name: 断言产物形态（文件格式 + 目标架构）
+        # 为什么用脚本而不是 `file(1)`：`file` 的输出措辞随版本变过（Mach-O 既有
+        # "Mach-O 64-bit executable x86_64" 也有 "Mach-O 64-bit x86_64 executable"），
+        # 拿它当判据会随 runner 镜像升级而假红。脚本直接读头部魔数与机器字段，
+        # 判据与任何外部工具版本无关。
+        run: |
+          bin="dist/cchd${{ matrix.ext }}"
+          [ -f "$bin" ] || { echo "::error::未产出 $bin"; exit 1; }
+          python3 scripts/check-binary-format.py "$bin" "${{ matrix.os }}" "${{ matrix.arch }}"
+          if command -v file >/dev/null 2>&1; then file "$bin"; fi
+
+      - name: 断言静态链接（Linux）
+        # 为什么断言：动态链接的二进制放进 alpine 会 `exec: /usr/local/bin/cchd: no such
+        # file or directory`（缺 /lib64/ld-linux-*.so.2），容器随即 crash loop。
+        # 本仓在生产上真实踩过此坑，故发布前必须拦。用 readelf 看动态段（可跨架构检查，
+        # 不需要执行该二进制）。
+        # 只有 Linux 有这条语义：macOS 的 Mach-O / Windows 的 PE 在 Linux runner 上没有
+        # 等价的动态依赖检查工具，其自足性由 CGO_ENABLED=0 保证。
+        run: |
+          if [ "${{ matrix.os }}" != linux ]; then
+            echo "${{ matrix.os }}：无 readelf 语义，跳过（自足性由 CGO_ENABLED=0 保证）"
+            exit 0
+          fi
+          # fail-closed：断言工具缺失时不得静默通过（否则这道门等于没有）。
+          if ! command -v readelf >/dev/null 2>&1; then
+            echo "::error::readelf 不可用（缺 binutils），无法验证静态链接"; exit 1
+          fi
+          if readelf -d dist/cchd 2>/dev/null | grep -q '(NEEDED)'; then
+            echo "::error::二进制是动态链接（有 NEEDED 段），进 alpine 会 ENOENT"
+            readelf -d dist/cchd | head -20
+            exit 1
+          fi
+          if command -v file >/dev/null 2>&1; then
+            file dist/cchd
+            if file dist/cchd | grep -q 'dynamically linked'; then
+              echo "::error::file(1) 判定为动态链接"; exit 1
+            fi
+          fi
+          echo "静态链接检查：通过（无 NEEDED 段）"
+
+      - name: 打包（二进制 + LICENSE + README）
+        run: |
+          d="cchd-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$d"
+          cp "dist/cchd${{ matrix.ext }}" "$d/cchd${{ matrix.ext }}"
+          cp LICENSE README.md "$d/"
+          if [ "${{ matrix.kind }}" = zip ]; then
+            # zip 用 Python 标准库生成：runner 是否预装 `zip` 随镜像变化，而 python3 必然在。
+            python3 -m zipfile -c "${d}.zip" "$d"
+            sha256sum "${d}.zip" > "${d}.zip.sha256"
+            ls -l "${d}.zip"
+          else
+            tar -czf "${d}.tar.gz" "$d"
+            sha256sum "${d}.tar.gz" > "${d}.tar.gz.sha256"
+            ls -l "${d}.tar.gz"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            cchd-*.tar.gz
+            cchd-*.tar.gz.sha256
+            cchd-*.zip
+            cchd-*.zip.sha256
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # 汇总发布
+  # ---------------------------------------------------------------------------
+  release:
+    name: 发布 Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 取版本号（去 v 前缀）
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 汇总校验和并自检
+        # 跨 job 传过 artifact 后再核一次：确认压缩包在传输后仍完整。
+        run: |
+          cd artifacts
+          cat cchd-*.sha256 > SHA256SUMS
+          # 自检的判据：六目标一个不能少（少一个就说明某路 artifact 没传过来）。
+          n="$(grep -c . SHA256SUMS)"
+          echo "校验和条目数：$n（期望 6）"
+          if [ "$n" -ne 6 ]; then echo "::error::校验和条目数为 $n，期望 6（六目标矩阵不全）"; ls -l; exit 1; fi
+          sha256sum -c SHA256SUMS
+          ls -l
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+            artifacts/SHA256SUMS
+          draft: false
+          prerelease: false
+          body: |
+            ## CC Hub Go v${{ steps.ver.outputs.version }}
+
+            **CC Hub Go** 是 [claude-code-hub](https://github.com/ding113/claude-code-hub) 的二开：
+            后端由 Node 重写为 Go 的**单一静态二进制** `cchd`（数据面 + 管理面 + 内嵌 UI），
+            运行只需一个进程。
+
+            ### 产物
+
+            | 文件 | 平台 | 说明 |
+            | --- | --- | --- |
+            | `cchd-linux-amd64.tar.gz` | Linux x86-64 | 静态二进制（内嵌 UI）+ `LICENSE` + `README.md` |
+            | `cchd-linux-arm64.tar.gz` | Linux arm64 | 同上 |
+            | `cchd-darwin-amd64.tar.gz` | macOS Intel | 同上 |
+            | `cchd-darwin-arm64.tar.gz` | macOS Apple Silicon | 同上 |
+            | `cchd-windows-amd64.zip` | Windows x64 | 内含 `cchd.exe` + `LICENSE` + `README.md` |
+            | `cchd-windows-arm64.zip` | Windows on Arm | 同上 |
+            | `SHA256SUMS` | — | 六目标校验和：`sha256sum -c SHA256SUMS` |
+
+            二进制不需要额外安装运行时（无第三方动态依赖；UI 已 embed），但**需要 PostgreSQL 与 Redis**。
+            Linux 为纯静态（不依赖 libc）；macOS 只链接系统自带的 `libSystem`/`CoreFoundation`/`Security`（macOS 不允许静态链接 libSystem）；Windows 仅导入系统自带的 `kernel32.dll`。
+
+            ### 容器镜像（仅 Linux）
+
+            - Docker Hub：`fanxcv/claude-code-hub-go:${{ steps.ver.outputs.version }}`
+            - GHCR：`ghcr.io/fanxcv/claude-code-hub-go:${{ steps.ver.outputs.version }}`
+
+            ### 快速开始
+
+            ```bash
+            # Linux / macOS（下例为 Linux x86-64；macOS 换成 darwin-amd64 或 darwin-arm64）
+            tar -xzf cchd-linux-amd64.tar.gz && cd cchd-linux-amd64
+            chmod +x cchd
+
+            DSN='postgres://user:pass@127.0.0.1:5432/claude_code_hub' \
+            REDIS_URL='redis://127.0.0.1:6379' \
+            ADMIN_TOKEN='<你的管理口令>' \
+            ./cchd
+            ```
+
+            ```powershell
+            # Windows（PowerShell）
+            Expand-Archive cchd-windows-amd64.zip -DestinationPath .
+            cd cchd-windows-amd64
+            $env:DSN='postgres://user:pass@127.0.0.1:5432/claude_code_hub'
+            $env:REDIS_URL='redis://127.0.0.1:6379'
+            $env:ADMIN_TOKEN='<你的管理口令>'
+            .\cchd.exe
+            ```
+
+            启动后：界面在 `http://127.0.0.1:23000`（默认 `PORT=23000`），
+            `/readyz` 自检 PG、Redis、规则快照与内嵌页面数，`/api/health` 报告版本与运行态。
+            首次启动会自动应用数据库迁移（`AUTO_MIGRATE`）。
+
+            二进制不注入任何变量时，自报版本号即本次 tag（内部的兜底常量与 `package.json` 同值,
+            该相等关系由 `internal/appversion` 的用例钉住）；部署时也可用
+            `APP_VERSION=${{ steps.ver.outputs.version }}` 显式覆盖。

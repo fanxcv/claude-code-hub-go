@@ -1,0 +1,1 @@
+ALTER TABLE "providers" ADD COLUMN "protocol_conversion_enabled" boolean DEFAULT false NOT NULL;

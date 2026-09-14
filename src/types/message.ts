@@ -1,0 +1,505 @@
+import type { Numeric } from "decimal.js-light";
+import type { CacheTtlApplied } from "./cache";
+import type { HedgeLoserBilling } from "./cost-breakdown";
+import type { ProviderType } from "./provider";
+import type { RoutingTraceV1 } from "./routing-trace";
+import type { SpecialSetting } from "./special-settings";
+
+/**
+ * 一家通过全部硬校验、进入本轮候选池的供应商（Go 侧 ConsideredCandidate）。
+ *
+ * 存在的理由（生产实证，2026-09-14）：`priorityLevels` 只说「有哪些档位」，
+ * `candidatesAtPriority` 只记**最高档**的候选。于是「档位更低而落选」的家在链上完全不可见——
+ * 用户看着链里只有一家，报「我看这个会话的决策链，还是看不到 opencode 那几个渠道参与呢？」，
+ * 而那几家其实全部通过了硬校验、进了候选池，只是档位更低没被选中。两种完全不同的结局
+ * （「这家不行」与「这家行，只是这一档没轮到它」）在界面上被压成了一个。
+ *
+ * 两个优先级数字都要读，它们回答的问题不同：
+ * - `effectivePriority` 是**分层依据**（决定它落在第几档），也是唯一能与 `selectedPriority`
+ *   比较、从而说出「为何落选」的数；
+ * - `priority` 是**配置值**。两者不同时正说明「分组覆盖改写了这家的档位」——生产实证：
+ *   CommandCode 在 `fan` 组下配置值 4、分层值 0，只看配置值就会把「选了某档」读成
+ *   「选了低优先级」，从而把一次正确选择误判成缺陷。
+ */
+export interface ConsideredCandidate {
+  id: number;
+  name: string;
+  /** 未做分组覆盖的配置优先级（providers.priority），与链项自身的 priority 同一口径。 */
+  priority: number;
+  /** 分组覆盖后的分层值（Go 的 resolveEffectivePriority）。**数值小 = 更优先**。 */
+  effectivePriority: number;
+  weight: number;
+  costMultiplier: number;
+  /** 本次最终选中该家。 */
+  selected: boolean;
+}
+
+/**
+ * 供应商信息（用于决策链）
+ * 记录详细的选择决策过程和上下文
+ */
+export interface ProviderChainItem {
+  id: number;
+  name: string;
+
+  // 仅用于只读日志脱敏：标记该链路是否走了 raw 跨供应商 fallback。
+  rawCrossProviderFallbackEnabled?: boolean;
+
+  // 供应商维度（便于日志审计，无需额外 join）
+  vendorId?: number;
+  providerType?: ProviderType;
+
+  // 端点维度（记录本次请求实际使用的 baseUrl）
+  endpointId?: number | null;
+  endpointUrl?: string;
+
+  // === 选择原因（细化） ===
+  reason?:
+    | "session_reuse" // 会话复用
+    | "initial_selection" // 首次选择（成功）
+    | "concurrent_limit_failed" // 并发限制失败
+    | "request_success" // 修复：请求成功（首次）
+    | "retry_success" // 重试成功
+    | "response_incomplete" // 上游按协议返回 incomplete，可计费但不是成功完成
+    | "retry_failed" // 重试失败（供应商错误，已计入熔断器）
+    | "system_error" // 系统/网络错误（不计入熔断器）
+    | "resource_not_found" // 资源不存在（404），触发故障转移但不计入熔断器
+    | "retry_with_official_instructions" // Codex instructions 自动重试（官方）
+    | "retry_with_cached_instructions" // Codex instructions 智能重试（缓存）
+    | "client_error_non_retryable" // 不可重试的客户端错误（Prompt 超限、内容过滤、PDF 限制、Thinking 格式）
+    | "http2_fallback" // HTTP/2 协议错误，回退到 HTTP/1.1（不切换供应商、不计入熔断器）
+    | "responses_ws_attempted" // 已尝试与上游建立 OpenAI Responses WebSocket 连接（信息性，无论最终成功或降级）
+    | "responses_ws_fallback" // 上游 WebSocket 不支持或握手/首帧前失败，回退到 HTTP（不切换供应商、不计入熔断器）
+    | "endpoint_pool_exhausted" // 端点池耗尽（所有端点熔断或不可用，严格模式阻止降级）
+    | "vendor_type_all_timeout" // 供应商类型全端点超时（524），触发 vendor-type 临时熔断
+    | "client_restriction_filtered" // Provider skipped due to client restriction (neutral, no circuit breaker)
+    | "hedge_triggered" // Hedge 计时器触发，启动备选供应商
+    | "hedge_launched" // Hedge 备选供应商已启动（信息性记录，不算实际请求）
+    | "hedge_winner" // 该供应商赢得 Hedge 竞速（最先收到首字节）
+    | "hedge_loser_cancelled" // 该供应商输掉 Hedge 竞速，请求被取消（未对输家计费）
+    | "hedge_loser_billed" // 该供应商输掉 Hedge 竞速，但其上游响应被后台拿回并计费
+    | "client_abort" // 客户端在响应完成前断开连接
+    | "client_abort_no_first_byte" // 客户端在阈值后断开且该供应商未返回首字节
+    | "affinity_hit"; // 最长前缀亲和命中（软提名，已通过全套硬校验）
+
+  // === 选择方法（细化） ===
+  selectionMethod?:
+    | "session_reuse" // 会话复用
+    | "weighted_random" // 加权随机
+    | "group_filtered" // 分组筛选后随机
+    | "fail_open_fallback" // Fail Open 降级
+    | "prefix_affinity"; // 最长前缀亲和
+
+  // 供应商配置（决策依据）
+  priority?: number;
+  weight?: number;
+  costMultiplier?: number;
+  groupTag?: string | null;
+
+  // 健康状态快照
+  circuitState?: "closed" | "open" | "half-open";
+
+  // 修复：新增熔断计数信息（用于显示距离熔断还有多少次）
+  circuitFailureCount?: number; // 失败计数（包含本次失败）
+  circuitFailureThreshold?: number; // 熔断阈值
+
+  // 端点池耗尽详情（endpoint_pool_exhausted 专用）
+  strictBlockCause?: "selector_error" | "no_endpoint_candidates"; // 严格模式阻止降级的原因
+  endpointFilterStats?: {
+    total: number; // 总端点数
+    enabled: number; // 启用的端点数
+    circuitOpen: number; // 熔断的端点数
+    available: number; // 可用的端点数（通过熔断检查后）
+  };
+
+  // 时间戳和尝试信息
+  timestamp?: number;
+  attemptNumber?: number; // 第几次尝试（用于标识重试）
+
+  // 修复：新增成功时的状态码
+  statusCode?: number;
+  /**
+   * 标记 statusCode 是否为“基于响应体内容推断”的结果（而非上游真实返回的 HTTP 状态码）。
+   *
+   * 典型场景：上游返回 HTTP 200，但 body 为错误页/错误 JSON（假 200）。
+   * 此时为了让熔断/故障转移/会话绑定与“真实错误语义”保持一致，CCH 会推断更合理的 4xx/5xx。
+   *
+   * 该字段用于在决策链 / 技术时间线 / UI 中显著提示“此状态码为推断”，避免误读。
+   */
+  statusCodeInferred?: boolean;
+
+  // 模型重定向信息（在供应商级别记录）
+  modelRedirect?: {
+    originalModel: string; // 用户请求的模型（计费依据）
+    redirectedModel: string; // 实际转发的模型
+    billingModel: string; // 计费模型（通常等于 originalModel）
+    matchedRule?: {
+      matchType: "exact" | "prefix" | "suffix" | "contains" | "regex";
+      source: string;
+      target: string;
+    };
+  };
+
+  // 错误信息（记录失败时的上游报错）
+  errorMessage?: string;
+
+  // 结构化错误详情（便于格式化显示）
+  errorDetails?: {
+    // 供应商错误（HTTP 4xx/5xx）
+    provider?: {
+      id: number;
+      name: string;
+      statusCode: number;
+      statusText: string; // 如 "Internal Server Error"
+      upstreamBody?: string; // 原始响应体
+      upstreamParsed?: unknown; // 解析后的 JSON
+    };
+
+    // Codex Instructions 重试来源（用于智能重试）
+    instructionsSource?: "cache" | "official";
+
+    // 系统/网络错误（fetch 异常）
+    system?: {
+      errorType: string; // 如 "TypeError"
+      errorName: string; // 如 "fetch failed"
+      errorMessage?: string; // 完整错误消息（如 "fetch failed: connect ETIMEDOUT 192.168.1.1:443"）
+      errorCode?: string; // 如 "ENOTFOUND"
+      errorSyscall?: string; // 如 "getaddrinfo"
+      errorStack?: string; // 堆栈前3行
+    };
+
+    // 客户端输入错误（不可重试）
+    clientError?: string; // 详细的客户端错误消息（包含匹配的白名单模式）
+
+    // 匹配到的错误规则（用于排查不可重试的客户端错误）
+    matchedRule?: {
+      ruleId: number;
+      pattern: string;
+      matchType: "regex" | "contains" | "exact" | string;
+      category: string;
+      description?: string;
+      hasOverrideResponse: boolean;
+      hasOverrideStatusCode: boolean;
+    };
+
+    // 新增：请求详情（用于问题排查）
+    request?: {
+      url: string; // 完整请求 URL（已脱敏查询参数中的 key）
+      method: string; // HTTP 方法
+      headers: string; // 请求头（已脱敏敏感信息）
+      body?: string; // 请求体（优化格式，已截断）
+      bodyTruncated?: boolean; // 标记请求体是否被截断
+    };
+  };
+
+  // === 决策上下文（完整记录） ===
+  decisionContext?: {
+    // --- 供应商池状态 ---
+    totalProviders: number; // 系统总供应商数
+    enabledProviders: number; // 启用的供应商数
+    targetType: "claude" | "codex" | "openai-compatible" | "gemini" | "gemini-cli"; // 目标类型（基于请求格式推断）
+    requestedModel?: string; // 请求的模型名称（用于追踪）
+
+    // --- 用户分组筛选 ---
+    userGroup?: string; // 用户分组（如果有）
+    afterGroupFilter?: number; // 分组筛选后数量
+    groupFilterApplied: boolean; // 是否应用了分组筛选
+
+    // --- 模型白名单过滤 ---
+    afterModelFilter?: number; // 模型白名单筛选后数量
+
+    // --- 健康检查过滤 ---
+    beforeHealthCheck: number; // 健康检查前数量
+    afterHealthCheck: number; // 健康检查后数量
+    filteredProviders?: Array<{
+      // 被过滤的供应商
+      id: number;
+      name: string;
+      reason:
+        | "circuit_open"
+        | "rate_limited"
+        | "excluded"
+        | "format_type_mismatch" // 请求格式与供应商类型不兼容
+        | "protocol_conversion_disabled" // 请求格式与供应商类型跨协议、本可转换，但该供应商未开启协议转换
+        | "type_mismatch"
+        | "model_not_allowed"
+        | "schedule_inactive" // 供应商不在调度时间窗口内
+        | "disabled"
+        | "client_restriction"; // Provider filtered due to client restriction
+      details?: string; // 额外信息（如费用：$15.2/$15）
+      clientRestrictionContext?: {
+        matchType: "blocklist_hit" | "allowlist_miss";
+        matchedPattern?: string;
+        detectedClient?: string;
+        providerAllowlist: string[];
+        providerBlocklist: string[];
+      };
+    }>;
+
+    // --- 优先级分层 ---
+    priorityLevels: number[]; // 所有优先级值（降序）
+    selectedPriority: number; // 选定的最高优先级
+    candidatesAtPriority: Array<{
+      // 该优先级的候选列表
+      id: number;
+      name: string;
+      weight: number;
+      costMultiplier: number;
+      probability?: number; // 被选中的概率（加权后）
+    }>;
+
+    /**
+     * 本次**通过全部硬校验、进入候选池**的全部供应商（含最终选中者）。
+     *
+     * 与两个既有键的分工：`priorityLevels` 说「有哪些档位」，`candidatesAtPriority` 说「选中
+     * 那一档里有谁、各自命中概率多少」，本字段说「**谁参与了、各自哪一档、有没有被选中**」——
+     * 只有它能让用户看出「优先级更低而落选」的家（见 ConsideredCandidate）。
+     *
+     * 未选中者的落选原因由 `effectivePriority` 与 `selectedPriority` 比较得出：
+     * 更大 ⇒ 档位更低；相等 ⇒ 同档未被抽中。
+     *
+     * 只在**确有落选候选**时才下发（唯一候选必然被选中，没有可说之事）。
+     */
+    consideredCandidates?: ConsideredCandidate[];
+
+    /**
+     * 通过全部硬校验、却**未参与竞争**的候选（仅前缀亲和短路时出现）。
+     *
+     * 亲和一旦命中就短路整场选路，`priorityLevels` 与 `candidatesAtPriority` 只记被选中的那
+     * 一家；于是「支持本模型、已通过全部硬校验、只是没轮到它」的家在界面上完全不可见，与
+     * `filteredProviders`（真被滤、带 reason）呈现成同一种观感。这个数组就是为了把两者分开：
+     * `affinitySkipped` 为真即「这家行，只是本次没参与竞争」。
+     *
+     * 与上面的 `consideredCandidates` 同形（Go 侧 SurvivingCandidate 内嵌 ConsideredCandidate）：
+     * 两个数组描述的是同一批通过者，字段必须一致，前端才能共用一套读取与渲染。
+     */
+    survivingCandidates?: Array<
+      ConsideredCandidate & {
+        /** 为真表示：本次系前缀亲和命中，该候选虽通过全部硬校验，但未参与竞争。 */
+        affinitySkipped: boolean;
+      }
+    >;
+
+    // --- 会话复用特有 ---
+    sessionId?: string; // 复用的 session ID
+    sessionAge?: number; // 会话年龄（秒）
+
+    // --- 并发限制特有 ---
+    concurrentLimit?: number; // 并发限制
+    currentConcurrent?: number; // 当前并发数
+
+    // --- 重试特有 ---
+    excludedProviderIds?: number[]; // 已排除的供应商 ID 列表
+    retryReason?: string; // 重试原因
+
+    // --- OpenAI Responses WebSocket 特有（clientTransport==="websocket" 时相关） ---
+    // 客户端进入本次请求使用的传输层
+    clientTransport?: "http" | "websocket";
+    // 是否尝试了上游 WebSocket 建连（仅当 clientTransport==="websocket" 且供应商为 codex 且全局开关开启时才会为 true）
+    upstreamWsAttempted?: boolean;
+    // 上游 WebSocket 是否至少建连并收到一个事件
+    upstreamWsConnected?: boolean;
+    // 是否最终降级到 HTTP Responses（不计入熔断器）
+    downgradedToHttp?: boolean;
+    // 降级原因（仅当 downgradedToHttp===true 时填充）
+    downgradeReason?:
+      | "setting_disabled"
+      | "provider_not_codex"
+      | "endpoint_ws_unsupported_cached"
+      | "ws_upgrade_rejected"
+      | "ws_closed_before_first_event"
+      | "ws_module_unavailable"
+      | "ws_not_yet_implemented"
+      | "ws_error_pre_first_event";
+  };
+
+  // === F1 流式内容门控提交标记（enforce 提交成功时记录；高并发模式下省略） ===
+  streamGate?: {
+    frameIndex: number; // 触发提交的帧序号（1-based，含中性前缀帧）
+    chunkIndex: number; // 触发提交的帧所在网络 chunk 序号（1-based）
+    eventName: string | null; // 触发提交的 SSE event 名
+    bufferedBytes: number; // 提交时已缓冲的前缀字节数
+    echoExcludedBytes: number; // 被排除出字节计数的请求回显帧字节数
+    gateWaitMs: number; // 门控等待时长（首字节到提交）
+  };
+
+  // === F3a 亲和命中详情（reason === "affinity_hit" 时记录） ===
+  affinity?: {
+    matchedDepth: number | null; // 命中边界的消息深度（null = 无法定位）
+    matchedPrefixBytes: number | null; // 命中边界的规范化前缀字节数
+    matchedFp: string; // 命中的链式指纹（截断哈希）
+  };
+}
+
+/**
+ * 消息请求数据库实体类型
+ */
+export interface MessageRequest {
+  id: number;
+  providerId: number;
+  userId: number;
+  key: string;
+  model?: string;
+  durationMs?: number;
+  ttftMs?: number | null; // 首 Token 时间（DB 列名为历史遗留的 ttfb_ms）
+  firstByteMs?: number | null; // 首字节时间（真 TTFB）
+  costUsd?: string; // 单次请求费用（美元），保持高精度字符串表示
+
+  // 供应商倍率（记录该请求使用的 cost_multiplier）
+  costMultiplier?: number;
+
+  // Session ID（用于会话粘性和日志追踪）
+  sessionId?: string;
+
+  // 活跃 Session 聚合 identity；保留 sessionId 作为物理请求/快照主键
+  sessionIdentity?: string;
+  sessionIdentityKind?: "session_id" | "prefix_affinity";
+  affinityScopeTag?: string | null;
+  affinityFingerprint?: string | null;
+  affinityFingerprintChain?: string[];
+
+  // Replay 审计标记与来源请求 provenance
+  isReplay?: boolean;
+  replaySourceRequestId?: number | null;
+
+  // Request Sequence（Session 内请求序号）
+  requestSequence?: number;
+
+  // 上游决策链（记录尝试的供应商列表）
+  providerChain?: ProviderChainItem[];
+
+  // 请求路由轨迹（Discovery/legacy 模式及调度生命周期）
+  routingTrace?: RoutingTraceV1 | null;
+
+  // HTTP 状态码
+  statusCode?: number;
+
+  // 模型重定向：原始模型名称（用户请求的模型）
+  originalModel?: string;
+
+  // 上游响应中实际返回的模型名（audit 用途，不影响计费）
+  actualResponseModel?: string | null;
+
+  // Token 使用信息
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreation5mInputTokens?: number;
+  cacheCreation1hInputTokens?: number;
+  cacheTtlApplied?: CacheTtlApplied | null;
+
+  // 错误信息
+  errorMessage?: string;
+
+  // User-Agent（用于客户端类型分析）
+  userAgent?: string;
+
+  // 客户端 IP（IPv4/IPv6；由统一 IP 提取中间件写入）
+  clientIp?: string | null;
+
+  // 请求的 API endpoint（例如：/v1/messages），从 URL.pathname 提取
+  endpoint?: string;
+
+  // Messages 数量（用于短请求检测和分析）
+  messagesCount?: number;
+
+  // 1M 上下文窗口是否已应用
+  context1mApplied?: boolean;
+
+  // Swap Cache TTL Billing: whether cache TTL inversion was active for this request
+  swapCacheTtlApplied?: boolean;
+
+  // 特殊设置（用于记录各类"特殊行为/覆写"的命中与生效情况，便于审计与展示）
+  specialSettings?: SpecialSetting[] | null;
+
+  // Hedge 竞速输家计费明细（每个输家一条，费用已累加进 costUsd）
+  hedgeLosers?: HedgeLoserBilling[] | null;
+
+  createdAt: Date;
+  updatedAt: Date;
+  deletedAt?: Date;
+}
+
+/**
+ * 创建消息请求数据
+ */
+export interface CreateMessageRequestData {
+  provider_id: number;
+  user_id: number;
+  key: string;
+  model?: string;
+  duration_ms?: number;
+  cost_usd?: Numeric; // 单次请求费用（美元），支持高精度
+
+  // 供应商倍率（记录该请求使用的 cost_multiplier）
+  cost_multiplier?: number;
+
+  // 供应商分组倍率（记录该请求使用的 group_cost_multiplier）
+  group_cost_multiplier?: number;
+
+  // Session ID（用于会话粘性和日志追踪）
+  session_id?: string;
+
+  // 活跃 Session 聚合 identity；保留 session_id 作为物理请求/快照主键
+  session_identity?: string;
+  session_identity_kind?: "session_id" | "prefix_affinity";
+  affinity_scope_tag?: string | null;
+  affinity_fingerprint?: string | null;
+  affinity_fingerprint_chain?: string[];
+  is_replay?: boolean;
+  replay_source_request_id?: number | null;
+
+  // Request Sequence（Session 内请求序号，用于区分同一 Session 的不同请求）
+  request_sequence?: number;
+
+  // 上游决策链
+  provider_chain?: ProviderChainItem[];
+
+  // 请求路由轨迹
+  routing_trace?: RoutingTraceV1 | null;
+
+  // HTTP 状态码
+  status_code?: number;
+
+  // 模型重定向：原始模型名称（用户请求的模型）
+  original_model?: string;
+
+  // 上游响应中实际返回的模型名（audit 用途，不影响计费）
+  actual_response_model?: string | null;
+
+  // Token 使用信息
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_5m_input_tokens?: number;
+  cache_creation_1h_input_tokens?: number;
+  cache_ttl_applied?: CacheTtlApplied | null;
+
+  // 错误信息
+  error_message?: string;
+
+  // User-Agent（用于客户端类型分析）
+  user_agent?: string;
+
+  // 客户端 IP（IPv4/IPv6）
+  client_ip?: string;
+
+  // 请求的 API endpoint（例如：/v1/messages），从 URL.pathname 提取
+  endpoint?: string;
+
+  // Messages 数量（用于短请求检测和分析）
+  messages_count?: number;
+
+  // 特殊设置（用于审计与展示；JSONB）
+  special_settings?: SpecialSetting[] | null;
+}
+
+/**
+ * SSE 解析后的事件数据
+ */
+export interface ParsedSSEEvent {
+  event: string;
+  data: Record<string, unknown> | string;
+}

@@ -1,0 +1,120 @@
+"use client";
+import { useQuery } from "@tanstack/react-query";
+import { Globe } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { useMemo } from "react";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { getProviderVendors } from "@/lib/api-client/v1/actions/provider-endpoints";
+import type { CurrencyCode } from "@/lib/utils/currency";
+import type {
+  ProviderCircuitHealth,
+  ProviderDisplay,
+  ProviderStatisticsMap,
+} from "@/types/provider";
+import type { EndpointCircuitInfoMap } from "./provider-manager";
+import { ProviderRichListItem } from "./provider-rich-list-item";
+import type { ProviderViewer } from "./provider-viewer";
+
+// Stable default references to avoid re-creating on every render (defeats React.memo)
+const EMPTY_STRING_ARRAY: string[] = [];
+const EMPTY_OBJECT: Record<string, never> = {};
+const EMPTY_SET = new Set<number>();
+
+interface ProviderListProps {
+  providers: ProviderDisplay[];
+  currentUser?: ProviderViewer;
+  // 用共享类型而不是在这里再写一份：这份字面量类型曾经漏掉熔断的新字段，
+  // 于是服务端多回的字段到不了列表项（一处「两处声明、一处分叉」的老毛病）。
+  healthStatus: Record<number, ProviderCircuitHealth>;
+  /** Endpoint-level circuit breaker info, keyed by provider ID */
+  endpointCircuitInfo?: EndpointCircuitInfoMap;
+  statistics?: ProviderStatisticsMap;
+  statisticsLoading?: boolean;
+  currencyCode?: CurrencyCode;
+  enableMultiProviderTypes: boolean;
+  activeGroupFilter?: string | null;
+  isMultiSelectMode?: boolean;
+  selectedProviderIds?: Set<number>;
+  onSelectProvider?: (providerId: number, checked: boolean) => void;
+  onEditProvider?: (provider: ProviderDisplay) => void;
+  allGroups?: string[];
+  userGroups?: string[];
+  isAdmin?: boolean;
+}
+
+export function ProviderList({
+  providers,
+  currentUser,
+  healthStatus,
+  endpointCircuitInfo = EMPTY_OBJECT,
+  statistics = EMPTY_OBJECT,
+  statisticsLoading = false,
+  currencyCode = "USD",
+  enableMultiProviderTypes,
+  activeGroupFilter = null,
+  isMultiSelectMode = false,
+  selectedProviderIds = EMPTY_SET,
+  onSelectProvider,
+  onEditProvider,
+  allGroups = EMPTY_STRING_ARRAY,
+  userGroups = EMPTY_STRING_ARRAY,
+  isAdmin = false,
+}: ProviderListProps) {
+  const t = useTranslations("settings.providers");
+
+  const { data: vendors = [] } = useQuery({
+    queryKey: ["provider-vendors"],
+    queryFn: getProviderVendors,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const vendorById = useMemo(() => {
+    return new Map(vendors.map((vendor) => [vendor.id, vendor]));
+  }, [vendors]);
+
+  if (providers.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 px-4">
+        <div className="w-12 h-12 rounded-full bg-muted/50 flex items-center justify-center mb-3">
+          <Globe className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <h3 className="font-medium text-foreground mb-1">{t("noProviders")}</h3>
+        <p className="text-sm text-muted-foreground text-center">{t("noProvidersDesc")}</p>
+      </div>
+    );
+  }
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <div className="grid gap-3 md:block md:border md:rounded-lg md:overflow-hidden md:gap-0">
+        {providers.map((provider) => (
+          <ProviderRichListItem
+            key={provider.id}
+            provider={provider}
+            vendor={
+              provider.providerVendorId ? vendorById.get(provider.providerVendorId) : undefined
+            }
+            currentUser={currentUser}
+            healthStatus={healthStatus[provider.id]}
+            endpointCircuitInfo={endpointCircuitInfo[provider.id]}
+            statistics={statistics[provider.id]}
+            statisticsLoading={statisticsLoading}
+            currencyCode={currencyCode}
+            enableMultiProviderTypes={enableMultiProviderTypes}
+            activeGroupFilter={activeGroupFilter}
+            isMultiSelectMode={isMultiSelectMode}
+            isSelected={selectedProviderIds.has(provider.id)}
+            onSelectChange={
+              onSelectProvider ? (checked) => onSelectProvider(provider.id, checked) : undefined
+            }
+            onEdit={onEditProvider ? () => onEditProvider(provider) : undefined}
+            allGroups={allGroups}
+            userGroups={userGroups}
+            isAdmin={isAdmin}
+          />
+        ))}
+      </div>
+    </TooltipProvider>
+  );
+}

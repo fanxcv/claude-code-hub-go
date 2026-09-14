@@ -1,0 +1,110 @@
+import type { ActiveSessionInfo } from "@/types/session";
+import type { ApiFetchOptions } from "../fetcher";
+import {
+  apiDelete,
+  apiGet,
+  apiPost,
+  searchParams,
+  toActionResult,
+  toVoidActionResult,
+  unwrapItems,
+} from "./_compat";
+
+export function getActiveSessions() {
+  return toActionResult(
+    apiGet<{ items?: ActiveSessionInfo[] }>("/api/v1/sessions").then(unwrapItems)
+  );
+}
+
+export function getAllSessions(
+  activePage?: number,
+  inactivePage?: number,
+  pageSize?: number,
+  options?: ApiFetchOptions
+) {
+  return toActionResult(
+    apiGet(
+      `/api/v1/sessions${searchParams({
+        state: "all",
+        activePage,
+        inactivePage,
+        pageSize,
+      })}`,
+      options
+    )
+  );
+}
+
+export function getSessionMessages(
+  sessionId: string,
+  requestSequence?: number,
+  sourceSessionId?: string
+) {
+  return toActionResult(
+    apiGet(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages${searchParams({
+        requestSequence,
+        sourceSessionId,
+      })}`
+    )
+  );
+}
+
+export function hasSessionMessages(
+  sessionId: string,
+  requestSequence?: number,
+  sourceSessionId?: string,
+  requestId?: number
+) {
+  return toActionResult(
+    apiGet<{ exists: boolean }>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/exists${searchParams({
+        requestSequence,
+        sourceSessionId,
+        requestId,
+      })}`
+    ).then((body) => body.exists)
+  );
+}
+
+export function getSessionDetails(
+  sessionId: string,
+  requestSequence?: number,
+  sourceSessionId?: string,
+  requestId?: number
+) {
+  return toActionResult(
+    apiGet(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}${searchParams({
+        requestSequence,
+        sourceSessionId,
+        requestId,
+      })}`
+    )
+  );
+}
+
+export function getSessionRequests(
+  sessionId: string,
+  page?: number,
+  pageSize?: number,
+  order?: string
+) {
+  return toActionResult(
+    apiGet(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/requests${searchParams({
+        page,
+        pageSize,
+        order,
+      })}`
+    )
+  );
+}
+
+export function terminateActiveSession(sessionId: string) {
+  return toVoidActionResult(apiDelete(`/api/v1/sessions/${encodeURIComponent(sessionId)}`));
+}
+
+export function terminateActiveSessionsBatch(sessionIds: string[]) {
+  return toActionResult(apiPost("/api/v1/sessions:batchTerminate", { sessionIds }));
+}

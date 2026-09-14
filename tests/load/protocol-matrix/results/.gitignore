@@ -1,0 +1,4 @@
+# 带时间戳的逐轮读数不入库；保留两份 canonical：
+#   results/matrix.json                —— enable 模式（9/9 通过）
+#   results/matrix-modelredirect.json  —— model 模式（3/9，模型重定向缺陷的证据）
+matrix-20*.json

@@ -1,0 +1,63 @@
+{
+  "constName": "CLEAR_SESSION_BINDING",
+  "file": "clear-session-binding.lua",
+  "sha256": "c1b97cc3e11ae7c258817d4d99986b2c7a17baaefef814d73aa5cb3c5fd19edf",
+  "calls": [
+    {
+      "id": "cleared-with-cooldown",
+      "keys": [
+        "cchgolden:bundle:1",
+        "cchgolden:session:1:provider",
+        "cchgolden:session:1:key",
+        "cchgolden:cooldown:1"
+      ],
+      "argv": ["1", "100", "101", "7", "60", "7", "300"],
+      "setup": [
+        ["HSET", "cchgolden:bundle:1", "key_id", "1", "generation", "100", "provider_id", "7"],
+        ["SET", "cchgolden:session:1:key", "1"],
+        ["SET", "cchgolden:session:1:provider", "7"]
+      ],
+      "returned": ["ok", "cleared", "101", ""],
+      "after": {
+        "cchgolden:bundle:1": {
+          "type": "hash",
+          "value": {
+            "key_id": "1",
+            "generation": "101"
+          },
+          "ttl": 60
+        },
+        "cchgolden:session:1:provider": null,
+        "cchgolden:session:1:key": {
+          "type": "string",
+          "value": "1",
+          "ttl": 60
+        },
+        "cchgolden:cooldown:1": {
+          "type": "string",
+          "value": "101",
+          "ttl": 300
+        }
+      }
+    },
+    {
+      "id": "canonical-missing",
+      "keys": [
+        "cchgolden:bundle:1",
+        "cchgolden:session:1:provider",
+        "cchgolden:session:1:key",
+        "cchgolden:cooldown:1"
+      ],
+      "argv": ["1", "100", "101", "", "60", "", "0"],
+      "setup": [],
+      "returned": ["conflict", "canonical_missing"],
+      "after": {
+        "cchgolden:bundle:1": null,
+        "cchgolden:session:1:provider": null,
+        "cchgolden:session:1:key": null,
+        "cchgolden:cooldown:1": null
+      }
+    }
+  ],
+  "uncollected": []
+}

@@ -1,0 +1,768 @@
+package forward
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
+)
+
+// 转发路径的不可恢复错误。
+var (
+	// ErrNoProviderAvailable 表示选路没有给出任何候选。
+	ErrNoProviderAvailable = errors.New("forward: 无可用供应商")
+	// ErrProvidersExhausted 表示所有候选都已尝试并失败。
+	ErrProvidersExhausted = errors.New("forward: 所有供应商均尝试失败")
+)
+
+// Candidate 是一次尝试的候选：供应商 + 端点候选 + 本次尝试的策略开关。
+type Candidate struct {
+	Provider Provider
+	// Endpoints 是端点候选，按尝试顺序排列；为空时退化为 Provider.URL 单端点。
+	Endpoints []Endpoint
+	// ConversionEnabled 对应 provider.protocol_conversion_enabled。
+	ConversionEnabled bool
+	// RawPassthrough 为真表示该端点属原始透传策略。
+	RawPassthrough bool
+	// RawCrossProviderFallback 为真表示原始透传也允许跨供应商回退。
+	RawCrossProviderFallback bool
+}
+
+// endpoints 返回实际参与尝试的端点列表。
+func (c *Candidate) endpoints() []Endpoint {
+	if len(c.Endpoints) > 0 {
+		return c.Endpoints
+	}
+	if c.Provider.URL == "" {
+		return nil
+	}
+	return []Endpoint{{URL: c.Provider.URL}}
+}
+
+// SelectFunc 选出下一个候选供应商。excludeIDs 是已失败供应商列表。
+//
+// 返回 (nil, nil) 表示没有候选了；返回错误表示选路本身失败（例如选路数据源不可用）。
+type SelectFunc func(ctx context.Context, excludeIDs []int64) (*Candidate, error)
+
+// PlanFacts 是构造计划时与供应商无关的会话级事实。
+type PlanFacts struct {
+	// Client 是入站事实；Body 必须是最多被读一次的正文快照。
+	Client ClientRequest
+	// Overrides 为 nil 时不做供应商级参数覆写。
+	Overrides OverrideApplier
+	// CacheTTL1h 为真时补齐 anthropic-beta 的 1h 缓存标记。
+	CacheTTL1h bool
+	// ClientUserAgent / FilteredUserAgent / UserAgentModified 决定 codex 供应商的出站 UA。
+	ClientUserAgent   string
+	FilteredUserAgent string
+	UserAgentModified bool
+}
+
+// Deps 是转发主干的外部依赖。除 Dial 外都可为空，空的语义见各字段。
+type Deps struct {
+	// Dial 是上游拨号器，必填。
+	Dial *dial.Client
+	// Select 在需要切换供应商时选出下一个候选；nil 表示不切换（首次候选失败即终止）。
+	Select SelectFunc
+	// Sleep 是可注入的等待函数；nil 时用 time.Sleep（受 ctx 取消约束）。
+	Sleep func(ctx context.Context, d time.Duration) error
+	// Now 是可注入时钟；nil 时用 time.Now。
+	Now func() time.Time
+	// Logger 为 nil 时写 stderr。
+	Logger *logx.Logger
+	// Limits 是路径上限；零值取默认。
+	Limits Limits
+	// Rules 为 nil 时跳过错误规则匹配。
+	Rules RuleMatcher
+	// Detector 为 nil 时跳过 fake-200 检测（缺口记录在 Result.DetectorMissing）。
+	Detector BodyErrorDetector
+	// CountNetworkFailureTowardCircuit 对应 ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS。
+	CountNetworkFailureTowardCircuit bool
+	// RecordFailure 计一次供应商熔断失败；nil 时跳过。仅在分类计入熔断时调用。
+	RecordFailure func(ctx context.Context, failure *Failure)
+	// RecordSuccess 计一次供应商成功（响应已被接受）；nil 时跳过。
+	//
+	// 与 RecordFailure 成对：只记失败不记成功会让熔断器再也归不了闭（Node 侧
+	// recordSuccess 承担半开计数与闭态清零，见 src/lib/circuit-breaker.ts:640）。
+	// endpointID <= 0 表示本次尝试没有端点（端点级记账由接线层跳过）。
+	RecordSuccess func(ctx context.Context, providerID int64, endpointID int64)
+	// Settle 对最终结果做一次终态入账；nil 时跳过（数据面未接线时使用）。
+	//
+	// 调用纪律：整次 Forward **只调用一次**，且只在产生最终结果的路径上（成功、或已放弃的
+	// 失败）；中间失败不落库——否则重试会把同一条请求记多次账。
+	// 返回值只记日志，不改变本函数的成功/失败结论：上游的响应已经拿到，不能因为入账失败
+	// 就把它丢掉（Node 侧同样把结算错误降级为日志）。
+	Settle func(ctx context.Context, pc *pctx.Context, result *Result, failure *Failure) error
+	// Facts 是构造计划的会话级事实。
+	Facts PlanFacts
+}
+
+func (d Deps) logger() *logx.Logger {
+	if d.Logger != nil {
+		return d.Logger
+	}
+	return sharedLogger()
+}
+
+func (d Deps) now() time.Time {
+	if d.Now != nil {
+		return d.Now()
+	}
+	return time.Now()
+}
+
+func (d Deps) sleep(ctx context.Context, duration time.Duration) error {
+	if d.Sleep != nil {
+		return d.Sleep(ctx, duration)
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// AttemptOutcome 是一次尝试的留痕，供落 provider_chain。
+//
+// 字段刻意保持中立：把 AttemptOutcome 映射为落库结构（route.ChainItem）是接线层的职责，
+// 本包不引入选路包的类型依赖。
+type AttemptOutcome struct {
+	ProviderID   int64
+	ProviderName string
+	EndpointID   int64
+	EndpointURL  string
+	Attempt      int
+	StatusCode   int
+	Category     Category
+	// Reason 与 Node 的 provider_chain[].reason 同值。
+	Reason  string
+	Message string
+	// DurationMS 是本次尝试的耗时。
+	DurationMS int64
+	// StartedAt / FinishedAt 是本次尝试的**真实测量**起止时刻，供 routing_trace 用。
+	//
+	// 与 DurationMS 同源（同一对 now() 读数），但保留绝对时刻：`routing_trace` 的事件
+	// 必须带真实时间戳，否则只能靠累加推算——那是编造时间线。零值表示本次尝试未记录
+	// 时刻（例如 hedge 在途输家在胜者裁决时被批量落链），此时 trace 侧**不产出该事件**，
+	// 而不是拿别的时刻顶替。
+	StartedAt  time.Time
+	FinishedAt time.Time
+	// Redirected 为真表示本次尝试改写了模型名。
+	Redirected bool
+	// ModelRedirect 是本次尝试实际生效的模型重定向快照，对应 Node 链项上的
+	// `modelRedirect`（由 `model-redirector.ts` 的 redirectInfo 产出，最终由
+	// `addProviderToChain` 落到 `provider_chain[].modelRedirect`）。
+	//
+	// nil 表示本次尝试没有施加重定向——**链上就不写这个键**，与 Node 的
+	// `modelRedirect: metadata?.modelRedirect ?? getCurrentModelRedirect(id)` 一致
+	// （没规则时两者都是 undefined，JSON 序列化后该键不存在）。
+	ModelRedirect *AttemptModelRedirect
+	// SkippedRetryAndSwitch 为真表示该端点策略禁止重试与切换。
+	SkippedRetryAndSwitch bool
+}
+
+// AttemptModelRedirect 是一次尝试上的模型重定向快照（链项字段的领域侧形式）。
+//
+// 为什么不直接引 plan 里的类型：落链只需要这几个字段，而 `Plan` 持有正文；
+// 让留痕引用 Plan 会把请求正文的生存期拖到结算之后（破坏流式驻留有界这条不变量）。
+type AttemptModelRedirect struct {
+	// OriginalModel 是用户请求的模型名（Node 的 originalModel，也是计费依据）。
+	OriginalModel string
+	// RedirectedModel 是实际发往上游的模型名（Node 的 redirectedModel）。
+	RedirectedModel string
+	// BillingModel 是计费模型名。Node 恒等于 originalModel
+	// （`model-redirector.ts`：`billingModel: originalModel`），Go 照写以保持逐字一致。
+	BillingModel string
+	// MatchType / Source / Target 是命中规则的详情（Node 的 matchedRule）。
+	MatchType string
+	Source    string
+	Target    string
+}
+
+// attemptModelRedirect 把 plan 上的重定向转成留痕用的快照；无重定向时返回 nil。
+func attemptModelRedirect(plan *Plan) *AttemptModelRedirect {
+	if plan == nil || plan.Redirect == nil {
+		return nil
+	}
+	redirect := plan.Redirect
+	return &AttemptModelRedirect{
+		OriginalModel:   redirect.Original,
+		RedirectedModel: redirect.Target,
+		// 与 Node 同一口径：计费名是**用户请求的模型**，不是转发目标。
+		BillingModel: redirect.Original,
+		MatchType:    redirect.Rule,
+		Source:       redirect.Source,
+		Target:       redirect.Target,
+	}
+}
+
+// Result 是一次成功转发的产出。
+type Result struct {
+	Provider Provider
+	Endpoint Endpoint
+	Plan     *Plan
+
+	StatusCode int
+	Status     string
+	Headers    http.Header
+	// Body 是非流式正文。超过 Limits.MaxResponseBytes 的响应不会被接收（见下），
+	// 故这里的正文恒为完整正文：残缺 JSON 绝不能流向下游。
+	Body []byte
+
+	Attempts                []AttemptOutcome
+	TotalProvidersAttempted []int64
+	// DetectorMissing 为真表示本次走了 200 响应但未做 fake-200 检测（Detector 为空）。
+	DetectorMissing bool
+	// Settled 为真表示已在 pctx 上完成一次性结算断言。
+	Settled bool
+	// DeferredToStream 为真表示本次转发的终态推迟到流终态处理（见 ForwardStream）。
+	//
+	// 为什么必须显式标出：流式尝试一旦提交，就**不能**再走非流式的结算缝——那条缝拿不到
+	// 用量与 TTFT，会把行先钉成「无用量」的终态，而真正带用量的流终态结算随后会被
+	// store 的终态谓词挡住（一行只允许一次终态写）。见 forwardLoop 的 defer。
+	DeferredToStream bool
+
+	StartedAt time.Time
+	EndedAt   time.Time
+}
+
+// Duration 返回本次转发耗时。
+func (r *Result) Duration() time.Duration {
+	if r == nil {
+		return 0
+	}
+	return r.EndedAt.Sub(r.StartedAt)
+}
+
+// Forward 执行一次非流式转发：外层按供应商切换，内层按供应商重试上限重试。
+//
+// 返回值语义：
+//   - 成功：Result 非 nil，error 为 nil。
+//   - 全部耗尽：Result 非 nil（含完整尝试留痕），error 是可 errors.As 成 *Failure 的最终失败。
+//   - 尝试开始前即失败（无候选、计划构造失败）：Result 为 nil，error 说明原因。
+//
+// 结算纪律：无论尝试了多少次，本函数只在最终结果上调用一次 pctx.MarkSettled——
+// 中间失败不做任何终态落库，否则重试会导致同一条请求被结算多次（重复计费）。
+func Forward(ctx context.Context, pc *pctx.Context, initial *Candidate, deps Deps) (*Result, error) {
+	return forwardLoop(ctx, pc, initial, deps, deps.executeAttempt,
+		func(result *Result, response *attemptResponse) {
+			result.Body = response.Body
+			settleNonStream(pc, result, response.StatusCode)
+		})
+}
+
+// settleNonStream 在最终结果上做一次即时结算。
+//
+// 非流式正文已经在手上，成功与否当场可知，所以结算就地完成；流式路径不走这里，
+// 它的结算推迟到流终态（见 Stream.settleTerminal）。
+func settleNonStream(pc *pctx.Context, result *Result, statusCode int) {
+	if pc == nil {
+		return
+	}
+	result.Settled = pc.MarkSettled(pctx.Settlement{
+		StatusCode: statusCode,
+		Success:    true,
+		At:         result.EndedAt,
+	})
+}
+
+// attemptExecutor 是「执行一次上游尝试」的策略。
+//
+// 非流式实现读完整正文（executeAttempt）；流式实现只做到「门控提交」为止，
+// 把还活着的上游正文交回调用方（executeStreamAttempt，见 stream.go）。
+// 两者共用同一份重试/切换决策，避免两条路径的失败语义漂移。
+type attemptExecutor func(
+	ctx context.Context,
+	provider Provider,
+	plan *Plan,
+	outcome *AttemptOutcome,
+) (*attemptResponse, *Failure)
+
+// onAttemptSuccess 把某条路径特有的成功产物落到 Result 上（含该路径的结算纪律）。
+type onAttemptSuccess func(result *Result, response *attemptResponse)
+
+// forwardLoop 是流式与非流式共用的尝试循环。
+//
+// 公共字段（供应商、端点、计划、状态码、状态行、headers、结束时刻）由本函数填；
+// 正文与结算由 onSuccess 按路径填：非流式即时结算，流式推迟到流的终态。
+func forwardLoop(
+	ctx context.Context,
+	pc *pctx.Context,
+	initial *Candidate,
+	deps Deps,
+	execute attemptExecutor,
+	onSuccess onAttemptSuccess,
+) (*Result, error) {
+	if deps.Dial == nil {
+		return nil, errors.New("forward: 未提供拨号器")
+	}
+	limits := deps.Limits.withDefaults()
+	startedAt := deps.now()
+
+	current := initial
+	if current == nil {
+		if deps.Select == nil {
+			return nil, ErrNoProviderAvailable
+		}
+		selected, err := deps.Select(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		if selected == nil {
+			return nil, ErrNoProviderAvailable
+		}
+		current = selected
+	}
+
+	result := &Result{StartedAt: startedAt, DetectorMissing: deps.Detector == nil}
+	failedProviders := make([]int64, 0, 4)
+	var lastFailure *Failure
+
+	// 终态入账只在本函数退出时发生一次：三个提前返回点（客户端中断、禁重试切换、重试等待被
+	// 取消）与两个穷尽点共用同一条路径，不会因为新增返回点而漏账或多账。
+	// 没有任何尝试时（计划构造失败、选路失败且无候选）不入账：与上游从未接触，也就没有终态。
+	defer func() {
+		if deps.Settle == nil || len(result.Attempts) == 0 {
+			return
+		}
+		if result.DeferredToStream {
+			// 流已提交：终态（含用量、TTFT、断线归因）属流终态结算缝。
+			return
+		}
+		if err := deps.Settle(ctx, pc, result, lastFailure); err != nil {
+			deps.logger().Warn("forward.settle.failed", map[string]any{
+				"status_code": result.StatusCode,
+				"error":       err.Error(),
+			})
+		}
+	}()
+
+	for totalProvidersAttempted := 0; totalProvidersAttempted < limits.MaxProviderSwitches; totalProvidersAttempted++ {
+		result.TotalProvidersAttempted = append(result.TotalProvidersAttempted, current.Provider.ID)
+
+		skipRetryAndSwitch := current.RawPassthrough && !current.RawCrossProviderFallback
+		maxAttempts := ResolveMaxAttempts(current.Provider, limits)
+		if skipRetryAndSwitch {
+			maxAttempts = 1
+		}
+
+		endpoints := current.endpoints()
+		endpointIndex := 0
+
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			if pc != nil {
+				pc.SetProvider(pctx.ProviderSelection{
+					ProviderID: current.Provider.ID,
+					Name:       current.Provider.Name,
+					Type:       string(current.Provider.Type),
+				})
+			}
+
+			endpoint := Endpoint{}
+			if len(endpoints) > 0 {
+				index := endpointIndex
+				if index > len(endpoints)-1 {
+					index = len(endpoints) - 1
+				}
+				endpoint = endpoints[index]
+			}
+
+			attemptStartedAt := deps.now()
+			plan, err := BuildPlan(PlanInput{
+				Client:            deps.Facts.Client,
+				Target:            Target{Provider: current.Provider, Endpoint: endpoint},
+				ConversionEnabled: current.ConversionEnabled,
+				Overrides:         deps.Facts.Overrides,
+				CacheTTL1h:        deps.Facts.CacheTTL1h,
+				ClientUserAgent:   deps.Facts.ClientUserAgent,
+				FilteredUserAgent: deps.Facts.FilteredUserAgent,
+				UserAgentModified: deps.Facts.UserAgentModified,
+			})
+			if err != nil {
+				// 计划构造失败属本地配置/请求问题：重试同一供应商或换供应商都不会变好。
+				return nil, err
+			}
+
+			outcome := AttemptOutcome{
+				ProviderID:            current.Provider.ID,
+				ProviderName:          current.Provider.Name,
+				EndpointID:            endpoint.ID,
+				EndpointURL:           plan.URL,
+				Attempt:               attempt,
+				Redirected:            plan.Redirect != nil,
+				ModelRedirect:         attemptModelRedirect(plan),
+				SkippedRetryAndSwitch: skipRetryAndSwitch,
+			}
+
+			response, failure := execute(ctx, current.Provider, plan, &outcome)
+			if failure == nil {
+				// 成功记账：与失败记账同层，保证「开闸之后一定有机会归闭」。
+				if deps.RecordSuccess != nil {
+					deps.RecordSuccess(ctx, current.Provider.ID, endpoint.ID)
+				}
+				outcome.Reason = ReasonRequestSuccess
+				finishedAt := deps.now()
+				outcome.StatusCode = response.StatusCode
+				outcome.DurationMS = finishedAt.Sub(attemptStartedAt).Milliseconds()
+				outcome.StartedAt = attemptStartedAt
+				outcome.FinishedAt = finishedAt
+				result.Attempts = append(result.Attempts, outcome)
+				result.Provider = current.Provider
+				result.Endpoint = endpoint
+				result.Plan = plan
+				result.StatusCode = response.StatusCode
+				result.Status = response.Status
+				result.Headers = response.Header
+				result.EndedAt = deps.now()
+				// 路径特有的产物与结算纪律（非流式即时结算，流式推迟到流的终态）。
+				onSuccess(result, response)
+				return result, nil
+			}
+
+			lastFailure = failure
+			finishedAt := deps.now()
+			outcome.StatusCode = failure.StatusCode
+			outcome.Category = failure.Category
+			outcome.Message = failure.Message
+			outcome.Reason = reasonForCategory(failure.Category, failure.StatusCode)
+			outcome.DurationMS = finishedAt.Sub(attemptStartedAt).Milliseconds()
+			outcome.StartedAt = attemptStartedAt
+			outcome.FinishedAt = finishedAt
+			result.Attempts = append(result.Attempts, outcome)
+			deps.logger().Warn("forward: 尝试失败", map[string]any{
+				"provider_id":   failure.ProviderID,
+				"endpoint_id":   failure.EndpointID,
+				"endpoint_url":  failure.EndpointURL,
+				"attempt":       failure.Attempt,
+				"status_code":   failure.StatusCode,
+				"category":      failure.Category.String(),
+				"provider_type": string(current.Provider.Type),
+			})
+
+			// 客户端中断、客户端输入错误与本地过载：不重试、不切换，立即终止。
+			if !failure.Category.RetriesSameProvider() && !failure.Category.SwitchesProvider() {
+				result.EndedAt = deps.now()
+				return result, failure
+			}
+
+			if skipRetryAndSwitch {
+				result.EndedAt = deps.now()
+				return result, failure
+			}
+
+			// 网络错误与上游超时（524）推进端点索引：这两种失败往往与具体端点相关。
+			if failure.Category == CategorySystemError || failure.StatusCode == statusUpstreamTimeout {
+				endpointIndex++
+			}
+
+			if attempt < maxAttempts {
+				if err := deps.sleep(ctx, limits.RetryDelay); err != nil {
+					result.EndedAt = deps.now()
+					return result, &Failure{
+						Category:     CategoryClientAbort,
+						Message:      "等待重试期间请求被取消",
+						ProviderID:   current.Provider.ID,
+						ProviderName: current.Provider.Name,
+						EndpointID:   endpoint.ID,
+						EndpointURL:  plan.URL,
+						Attempt:      attempt,
+						Err:          err,
+					}
+				}
+				continue
+			}
+
+			// 重试耗尽：按分类决定是否计入熔断器，然后切换供应商。
+			// 请求作用域失败（由请求内容决定，见 Failure.RequestScoped）不计健康度。
+			if !failure.RequestScoped &&
+				(failure.Category.CountsTowardCircuit() || (failure.Category == CategorySystemError && deps.CountNetworkFailureTowardCircuit)) {
+				if deps.RecordFailure != nil {
+					deps.RecordFailure(ctx, failure)
+				}
+			}
+			// 内层循环只可能因重试耗尽而走到这里：其余分类都在循环内直接返回。
+			failedProviders = append(failedProviders, current.Provider.ID)
+			break
+		}
+
+		if deps.Select == nil {
+			break
+		}
+		next, err := deps.Select(ctx, failedProviders)
+		if err != nil {
+			result.EndedAt = deps.now()
+			return result, err
+		}
+		if next == nil {
+			break
+		}
+		current = next
+	}
+
+	result.EndedAt = deps.now()
+	if lastFailure == nil {
+		return result, fmt.Errorf("%w: provider#%d", ErrProvidersExhausted, initial.Provider.ID)
+	}
+	return result, fmt.Errorf("%w: %w", ErrProvidersExhausted, lastFailure)
+}
+
+// statusUpstreamTimeout 是上游超时的合成状态码（524 = A Timeout Occurred）。
+const statusUpstreamTimeout = 524
+
+// reasonForCategory 把失败分类映射为 provider_chain 的 reason，取值与 Node 一致。
+func reasonForCategory(category Category, statusCode int) string {
+	switch category {
+	case CategoryProviderError:
+		if statusCode == statusUpstreamTimeout {
+			return ReasonVendorTypeAllTimeout
+		}
+		return ReasonRetryFailed
+	case CategorySystemError:
+		return ReasonSystemError
+	case CategoryClientAbort:
+		return ReasonClientAbort
+	case CategoryNonRetryableClientError:
+		return ReasonClientErrorNonRetryable
+	case CategoryResourceNotFound:
+		return ReasonResourceNotFound
+	case CategoryLocalOverload:
+		return ReasonLocalOverload
+	default:
+		return ReasonRetryFailed
+	}
+}
+
+// attemptResponse 是 executeAttempt 的成功产出。
+type attemptResponse struct {
+	StatusCode int
+	Status     string
+	Header     http.Header
+	Body       []byte
+	// Stream 非空表示这是流式路径的成功产物：上游响应还活着，正文所有权已交给调用方。
+	// 此时 Body 必为空——正文不再完整驻留。
+	Stream *streamAttempt
+}
+
+// dialAttempt 发起一次上游调用并返回仍活着的响应。
+//
+// streaming 为真时不施加非流式总超时：流式请求的边界由首字节/静默超时与客户端生命周期
+// 决定，一个总时限会把长回答腰斩（Node 侧 provider.requestTimeout 同样只作用于非流式）。
+// 返回的 cancel 非 nil 时必须由调用方调用，它是非流式总超时的取消函数。
+func (d Deps) dialAttempt(
+	ctx context.Context,
+	plan *Plan,
+	outcome *AttemptOutcome,
+	streaming bool,
+) (*dial.Response, context.CancelFunc, *Failure) {
+	attemptCtx := ctx
+	cancel := context.CancelFunc(func() {})
+	if !streaming && plan.RequestTimeout > 0 {
+		attemptCtx, cancel = context.WithTimeout(ctx, plan.RequestTimeout)
+	}
+
+	response, err := d.Dial.RoundTrip(attemptCtx, plan.Request())
+	if err != nil {
+		cancel()
+		return nil, func() {}, d.transportFailure(err, plan, outcome, attemptCtx)
+	}
+	return response, cancel, nil
+}
+
+// executeAttempt 发起一次上游调用并读回正文；返回 (成功响应, 失败归因)，两者恰有一个非 nil。
+//
+// 正文只驻留一份：读到的是上游未经解压的原始字节（拨号层强制 identity 编码），
+// 本函数不做任何二次复制，也不为日志额外保留副本。
+func (d Deps) executeAttempt(
+	ctx context.Context,
+	_ Provider,
+	plan *Plan,
+	outcome *AttemptOutcome,
+) (*attemptResponse, *Failure) {
+	response, cancel, failure := d.dialAttempt(ctx, plan, outcome, false)
+	if failure != nil {
+		return nil, failure
+	}
+	defer cancel()
+	defer func() {
+		_ = response.Body.Close()
+	}()
+	return d.completeResponse(response, plan, outcome)
+}
+
+// completeResponse 把一个已拿到响应头的上游响应按非流式语义处理完：
+// 读完整正文（有硬上限）、空响应判定、fake-200 检测、非 2xx 分类。
+//
+// 流式路径在判定「本次响应不是流」时复用它，两条路径共享同一份状态码/错误规则口径。
+func (d Deps) completeResponse(
+	response *dial.Response,
+	plan *Plan,
+	outcome *AttemptOutcome,
+) (*attemptResponse, *Failure) {
+	limits := d.Limits.withDefaults()
+
+	body, oversized, readErr := readAllBounded(response.Body, limits.MaxResponseBytes)
+	if readErr != nil {
+		if errors.Is(readErr, context.DeadlineExceeded) {
+			return nil, &Failure{
+				Category:     CategoryProviderError,
+				StatusCode:   statusUpstreamTimeout,
+				Message:      timeoutFailureMessage(plan.RequestTimeout, false),
+				Body:         timeoutFailureBody(plan.RequestTimeout, false),
+				ProviderID:   outcome.ProviderID,
+				ProviderName: outcome.ProviderName,
+				EndpointID:   outcome.EndpointID,
+				EndpointURL:  plan.URL,
+				Attempt:      outcome.Attempt,
+				Err:          readErr,
+			}
+		}
+		return nil, &Failure{
+			Category:     CategorySystemError,
+			StatusCode:   response.StatusCode,
+			Message:      fmt.Sprintf("读取上游正文失败: %v", readErr),
+			ProviderID:   outcome.ProviderID,
+			ProviderName: outcome.ProviderName,
+			EndpointID:   outcome.EndpointID,
+			EndpointURL:  plan.URL,
+			Attempt:      outcome.Attempt,
+			Err:          readErr,
+		}
+	}
+
+	// 正文超过上限：整次尝试判为失败。
+	//
+	// Node 侧无上限，这里刻意收紧——超限时截断后当成功返回会把残缺 JSON 交给下游，
+	// 那是静默的数据损坏；宁可换成「换一个供应商再试」。
+	if oversized {
+		return nil, &Failure{
+			Category:     CategoryProviderError,
+			StatusCode:   response.StatusCode,
+			Message:      fmt.Sprintf("上游响应正文超过上限 %d 字节", limits.MaxResponseBytes),
+			ProviderID:   outcome.ProviderID,
+			ProviderName: outcome.ProviderName,
+			EndpointID:   outcome.EndpointID,
+			EndpointURL:  plan.URL,
+			Attempt:      outcome.Attempt,
+		}
+	}
+
+	// 上游声明零长度正文：Node 视为空响应错误（供应商故障），不进入成功分支。
+	if response.StatusCode >= 200 && response.StatusCode < 300 && isEmptyBody(response.Header, body) {
+		return nil, &Failure{
+			Category:      CategoryProviderError,
+			StatusCode:    response.StatusCode,
+			Message:       fmt.Sprintf("Empty response from provider %s: Response body is empty", outcome.ProviderName),
+			EmptyResponse: true,
+			ProviderID:    outcome.ProviderID,
+			ProviderName:  outcome.ProviderName,
+			EndpointID:    outcome.EndpointID,
+			EndpointURL:   plan.URL,
+			Attempt:       outcome.Attempt,
+		}
+	}
+
+	if response.StatusCode >= 200 && response.StatusCode < 300 {
+		if d.Detector != nil {
+			if detected, message, ok := d.Detector.Detect(string(plan.Protocol), false, string(body)); ok {
+				truncatedBody, _ := truncateBody(body, limits.MaxErrorBodyBytes)
+				return nil, &Failure{
+					Category:     classifyForStatus(detected, true, d.Rules, truncatedBody),
+					StatusCode:   detected,
+					Message:      message,
+					Body:         truncatedBody,
+					Synthetic:    true,
+					ProviderID:   outcome.ProviderID,
+					ProviderName: outcome.ProviderName,
+					EndpointID:   outcome.EndpointID,
+					EndpointURL:  plan.URL,
+					Attempt:      outcome.Attempt,
+				}
+			}
+		}
+		return &attemptResponse{
+			StatusCode: response.StatusCode,
+			Status:     response.Status,
+			Header:     response.Header,
+			Body:       body,
+		}, nil
+	}
+
+	errorBody, _ := truncateBody(body, limits.MaxErrorBodyBytes)
+	message := messageFromErrorBody(errorBody)
+	if message == "" {
+		message = fmt.Sprintf("Provider returned %d: %s", response.StatusCode, response.Status)
+	}
+	return nil, &Failure{
+		Category:     classifyForStatus(response.StatusCode, false, d.Rules, errorBody),
+		StatusCode:   response.StatusCode,
+		Message:      message,
+		Body:         errorBody,
+		ProviderID:   outcome.ProviderID,
+		ProviderName: outcome.ProviderName,
+		EndpointID:   outcome.EndpointID,
+		EndpointURL:  plan.URL,
+		Attempt:      outcome.Attempt,
+	}
+}
+
+// transportFailure 把拨号层错误归因。
+//
+// 两级超时在这里分开：本包自己的非流式总超时（plan.RequestTimeout）对应 Node 的
+// ProxyError(524)，分类为供应商故障；拨号层的 headers/body 空闲超时是传输层限制，
+// 对应 Node 的 undici 超时（fetch failed），分类为系统错误。两者不可混为一谈，
+// 否则熔断归因与端点推进都会漂移。
+func (d Deps) transportFailure(err error, plan *Plan, outcome *AttemptOutcome, attemptCtx context.Context) *Failure {
+	timedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded)
+
+	failure := &Failure{
+		Category:     Classify(ClassifyInput{Err: err, Rules: d.Rules}),
+		Message:      err.Error(),
+		ProviderID:   outcome.ProviderID,
+		ProviderName: outcome.ProviderName,
+		EndpointID:   outcome.EndpointID,
+		EndpointURL:  plan.URL,
+		Attempt:      outcome.Attempt,
+		Err:          err,
+	}
+	if timedOut {
+		failure.Category = CategoryProviderError
+		failure.StatusCode = statusUpstreamTimeout
+		failure.Message = timeoutFailureMessage(plan.RequestTimeout, false)
+		failure.Body = timeoutFailureBody(plan.RequestTimeout, false)
+	}
+	if errors.Is(err, dial.ErrUnsupportedUpstreamTransport) || errors.Is(err, dial.ErrRequestBuild) {
+		failure.Internal = true
+	}
+	return failure
+}
+
+// classifyForStatus 按状态码与错误规则分类，供非流式路径复用。
+func classifyForStatus(statusCode int, synthetic bool, rules RuleMatcher, body string) Category {
+	return Classify(ClassifyInput{
+		StatusCode: statusCode,
+		Synthetic:  synthetic,
+		Body:       body,
+		Rules:      rules,
+	})
+}
+
+// isEmptyBody 复刻 Node 的空响应判定：Content-Length 为 0，或读完为空且非分块。
+func isEmptyBody(header http.Header, body []byte) bool {
+	if len(body) > 0 {
+		return false
+	}
+	contentLength := header.Get("content-length")
+	if contentLength != "" && contentLength != "0" {
+		// 声明了长度却读不到内容：属截断，交给上层按读取失败处理。
+		return false
+	}
+	return true
+}

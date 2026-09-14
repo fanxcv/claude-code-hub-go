@@ -1,0 +1,22 @@
+{
+  "constName": "FORCE_TERMINATE_PROVIDER_SESSION",
+  "file": "force-terminate-provider-session.lua",
+  "sha256": "5514103cc56959d8171adfabe3bbd7d881b745d2f99afc18eda903a27f6cae60",
+  "calls": [
+    {
+      "id": "removes-refs-and-member",
+      "keys": ["cchgolden:provider:1:active_sessions", "cchgolden:provider:1:active_session_refs"],
+      "argv": ["session-a"],
+      "setup": [
+        ["ZADD", "cchgolden:provider:1:active_sessions", "1757000000000", "session-a"],
+        ["HSET", "cchgolden:provider:1:active_session_refs", "session-a", "3"]
+      ],
+      "returned": [1, 1],
+      "after": {
+        "cchgolden:provider:1:active_sessions": null,
+        "cchgolden:provider:1:active_session_refs": null
+      }
+    }
+  ],
+  "uncollected": []
+}

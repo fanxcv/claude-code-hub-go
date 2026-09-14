@@ -1,0 +1,28 @@
+{
+  "constName": "GET_COST_5H_ROLLING_WINDOW",
+  "file": "get-cost-5h-rolling-window.lua",
+  "sha256": "f4229a740782eba4045d33b5e5d9a770edbb55b3473fd2dc0e5525b6c6bff51e",
+  "calls": [
+    {
+      "id": "sums-window",
+      "keys": ["cchgolden:key:1:cost_5h_rolling"],
+      "argv": ["1757000000000", "18000000"],
+      "setup": [
+        ["ZADD", "cchgolden:key:1:cost_5h_rolling", "1756999999000", "1756999999000:1.5"],
+        ["ZADD", "cchgolden:key:1:cost_5h_rolling", "1756999998000", "1756999998000:2.5"]
+      ],
+      "returned": "4",
+      "after": {
+        "cchgolden:key:1:cost_5h_rolling": {
+          "type": "zset",
+          "value": {
+            "1756999998000:2.5": "1756999998000",
+            "1756999999000:1.5": "1756999999000"
+          },
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

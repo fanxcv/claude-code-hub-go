@@ -1,0 +1,571 @@
+{
+  "caseCount": 60,
+  "cases": [
+    {
+      "clientFormat": "claude",
+      "compat": "native",
+      "conversionEnabled": false,
+      "id": "selection.claude.claude.off",
+      "plan": null,
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "native",
+      "conversionEnabled": true,
+      "id": "selection.claude.claude.on",
+      "plan": null,
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "native",
+      "conversionEnabled": false,
+      "id": "selection.claude.claude-auth.off",
+      "plan": null,
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "native",
+      "conversionEnabled": true,
+      "id": "selection.claude.claude-auth.on",
+      "plan": null,
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.claude.codex.off",
+      "plan": null,
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "convertible",
+      "conversionEnabled": true,
+      "id": "selection.claude.codex.on",
+      "plan": {
+        "clientProtocol": "anthropic-messages",
+        "targetProtocol": "openai-responses"
+      },
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.claude.openai-compatible.off",
+      "plan": null,
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "convertible",
+      "conversionEnabled": true,
+      "id": "selection.claude.openai-compatible.on",
+      "plan": {
+        "clientProtocol": "anthropic-messages",
+        "targetProtocol": "openai-chat"
+      },
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.claude.gemini.off",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.claude.gemini.on",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.claude.gemini-cli.off",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "claude",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.claude.gemini-cli.on",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.openai.claude.off",
+      "plan": null,
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "convertible",
+      "conversionEnabled": true,
+      "id": "selection.openai.claude.on",
+      "plan": {
+        "clientProtocol": "openai-chat",
+        "targetProtocol": "anthropic-messages"
+      },
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.openai.claude-auth.off",
+      "plan": null,
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "convertible",
+      "conversionEnabled": true,
+      "id": "selection.openai.claude-auth.on",
+      "plan": {
+        "clientProtocol": "openai-chat",
+        "targetProtocol": "anthropic-messages"
+      },
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.openai.codex.off",
+      "plan": null,
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "convertible",
+      "conversionEnabled": true,
+      "id": "selection.openai.codex.on",
+      "plan": {
+        "clientProtocol": "openai-chat",
+        "targetProtocol": "openai-responses"
+      },
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "native",
+      "conversionEnabled": false,
+      "id": "selection.openai.openai-compatible.off",
+      "plan": null,
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "native",
+      "conversionEnabled": true,
+      "id": "selection.openai.openai-compatible.on",
+      "plan": null,
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.openai.gemini.off",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.openai.gemini.on",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.openai.gemini-cli.off",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "openai",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.openai.gemini-cli.on",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "response",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.response.claude.off",
+      "plan": null,
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "response",
+      "compat": "convertible",
+      "conversionEnabled": true,
+      "id": "selection.response.claude.on",
+      "plan": {
+        "clientProtocol": "openai-responses",
+        "targetProtocol": "anthropic-messages"
+      },
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "response",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.response.claude-auth.off",
+      "plan": null,
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "response",
+      "compat": "convertible",
+      "conversionEnabled": true,
+      "id": "selection.response.claude-auth.on",
+      "plan": {
+        "clientProtocol": "openai-responses",
+        "targetProtocol": "anthropic-messages"
+      },
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "response",
+      "compat": "native",
+      "conversionEnabled": false,
+      "id": "selection.response.codex.off",
+      "plan": null,
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "response",
+      "compat": "native",
+      "conversionEnabled": true,
+      "id": "selection.response.codex.on",
+      "plan": null,
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "response",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.response.openai-compatible.off",
+      "plan": null,
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "response",
+      "compat": "convertible",
+      "conversionEnabled": true,
+      "id": "selection.response.openai-compatible.on",
+      "plan": {
+        "clientProtocol": "openai-responses",
+        "targetProtocol": "openai-chat"
+      },
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "response",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.response.gemini.off",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "response",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.response.gemini.on",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "response",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.response.gemini-cli.off",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "response",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.response.gemini-cli.on",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini.claude.off",
+      "plan": null,
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini.claude.on",
+      "plan": null,
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini.claude-auth.off",
+      "plan": null,
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini.claude-auth.on",
+      "plan": null,
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini.codex.off",
+      "plan": null,
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini.codex.on",
+      "plan": null,
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini.openai-compatible.off",
+      "plan": null,
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini.openai-compatible.on",
+      "plan": null,
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "native",
+      "conversionEnabled": false,
+      "id": "selection.gemini.gemini.off",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "native",
+      "conversionEnabled": true,
+      "id": "selection.gemini.gemini.on",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini.gemini-cli.off",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "gemini",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini.gemini-cli.on",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini-cli.claude.off",
+      "plan": null,
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini-cli.claude.on",
+      "plan": null,
+      "providerType": "claude",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini-cli.claude-auth.off",
+      "plan": null,
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini-cli.claude-auth.on",
+      "plan": null,
+      "providerType": "claude-auth",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini-cli.codex.off",
+      "plan": null,
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini-cli.codex.on",
+      "plan": null,
+      "providerType": "codex",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini-cli.openai-compatible.off",
+      "plan": null,
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini-cli.openai-compatible.on",
+      "plan": null,
+      "providerType": "openai-compatible",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": false,
+      "id": "selection.gemini-cli.gemini.off",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "incompatible",
+      "conversionEnabled": true,
+      "id": "selection.gemini-cli.gemini.on",
+      "plan": null,
+      "providerType": "gemini",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "native",
+      "conversionEnabled": false,
+      "id": "selection.gemini-cli.gemini-cli.off",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    },
+    {
+      "clientFormat": "gemini-cli",
+      "compat": "native",
+      "conversionEnabled": true,
+      "id": "selection.gemini-cli.gemini-cli.on",
+      "plan": null,
+      "providerType": "gemini-cli",
+      "targetProtocol": null
+    }
+  ],
+  "description": "选路判定（resolveProtocolCompat / planConversion / resolveTargetProtocol）",
+  "generatedBy": "scripts/export-conformance-corpus.ts"
+}

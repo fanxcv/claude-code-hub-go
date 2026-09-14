@@ -1,0 +1,100 @@
+{
+  "constName": "CHECK_AND_TRACK_KEY_USER_SESSION",
+  "file": "check-and-track-key-user-session.lua",
+  "sha256": "590b009f3bbc9af2232b9d594721ad56be8ade6bf1dbc32a2371283bcd54b3fc",
+  "calls": [
+    {
+      "id": "fresh-within-limits",
+      "keys": [
+        "cchgolden:{active_sessions}:global:active_sessions",
+        "cchgolden:{active_sessions}:key:1:active_sessions",
+        "cchgolden:{active_sessions}:user:1:active_sessions"
+      ],
+      "argv": ["session-a", "10", "10", "1757000000000", "300000"],
+      "setup": [],
+      "returned": [1, 0, 1, 1, 1, 1],
+      "after": {
+        "cchgolden:{active_sessions}:global:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-a": "1757000000000"
+          },
+          "ttl": 3600
+        },
+        "cchgolden:{active_sessions}:key:1:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-a": "1757000000000"
+          },
+          "ttl": 3600
+        },
+        "cchgolden:{active_sessions}:user:1:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-a": "1757000000000"
+          },
+          "ttl": 3600
+        }
+      }
+    },
+    {
+      "id": "key-limit-rejects",
+      "keys": [
+        "cchgolden:{active_sessions}:global:active_sessions",
+        "cchgolden:{active_sessions}:key:1:active_sessions",
+        "cchgolden:{active_sessions}:user:1:active_sessions"
+      ],
+      "argv": ["session-b", "1", "10", "1757000000000", "300000"],
+      "setup": [
+        [
+          "ZADD",
+          "cchgolden:{active_sessions}:key:1:active_sessions",
+          "1757000000000",
+          "session-other"
+        ]
+      ],
+      "returned": [0, 1, 1, 0, 0, 0],
+      "after": {
+        "cchgolden:{active_sessions}:global:active_sessions": null,
+        "cchgolden:{active_sessions}:key:1:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-other": "1757000000000"
+          },
+          "ttl": -1
+        },
+        "cchgolden:{active_sessions}:user:1:active_sessions": null
+      }
+    },
+    {
+      "id": "user-limit-rejects",
+      "keys": [
+        "cchgolden:{active_sessions}:global:active_sessions",
+        "cchgolden:{active_sessions}:key:1:active_sessions",
+        "cchgolden:{active_sessions}:user:1:active_sessions"
+      ],
+      "argv": ["session-c", "10", "1", "1757000000000", "300000"],
+      "setup": [
+        [
+          "ZADD",
+          "cchgolden:{active_sessions}:user:1:active_sessions",
+          "1757000000000",
+          "session-other"
+        ]
+      ],
+      "returned": [0, 2, 0, 0, 1, 0],
+      "after": {
+        "cchgolden:{active_sessions}:global:active_sessions": null,
+        "cchgolden:{active_sessions}:key:1:active_sessions": null,
+        "cchgolden:{active_sessions}:user:1:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-other": "1757000000000"
+          },
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

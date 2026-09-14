@@ -1,0 +1,42 @@
+event: response.created
+data: {"response":{"background":false,"completed_at":null,"created_at":1789266874,"error":null,"frequency_penalty":0,"id":"resp_270759","incomplete_details":null,"instructions":null,"max_output_tokens":16,"max_tool_calls":null,"metadata":{},"model":"deepseek-v4.1-flash","object":"response","output":[],"parallel_tool_calls":true,"presence_penalty":0,"previous_response_id":null,"prompt_cache_key":null,"reasoning":null,"safety_identifier":null,"service_tier":"default","status":"in_progress","store":false,"temperature":1,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_logprobs":0,"top_p":1,"truncation":"disabled","usage":null},"sequence_number":0,"type":"response.created"}
+
+event: response.in_progress
+data: {"response":{"background":false,"completed_at":null,"created_at":1789266874,"error":null,"frequency_penalty":0,"id":"resp_270759","incomplete_details":null,"instructions":null,"max_output_tokens":16,"max_tool_calls":null,"metadata":{},"model":"deepseek-v4.1-flash","object":"response","output":[],"parallel_tool_calls":true,"presence_penalty":0,"previous_response_id":null,"prompt_cache_key":null,"reasoning":null,"safety_identifier":null,"service_tier":"default","status":"in_progress","store":false,"temperature":1,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_logprobs":0,"top_p":1,"truncation":"disabled","usage":null},"sequence_number":1,"type":"response.in_progress"}
+
+event: response.output_item.added
+data: {"item":{"id":"rs_616773","summary":[],"type":"reasoning"},"output_index":0,"sequence_number":2,"type":"response.output_item.added"}
+
+event: response.reasoning_summary_text.delta
+data: {"delta":"The","item_id":"rs_616773","output_index":0,"sequence_number":3,"summary_index":0,"type":"response.reasoning_summary_text.delta"}
+
+event: response.reasoning_summary_text.delta
+data: {"delta":" user just","item_id":"rs_616773","output_index":0,"sequence_number":4,"summary_index":0,"type":"response.reasoning_summary_text.delta"}
+
+event: response.reasoning_summary_text.delta
+data: {"delta":" says","item_id":"rs_616773","output_index":0,"sequence_number":5,"summary_index":0,"type":"response.reasoning_summary_text.delta"}
+
+event: response.reasoning_summary_text.delta
+data: {"delta":" \"say hi\". I","item_id":"rs_616773","output_index":0,"sequence_number":6,"summary_index":0,"type":"response.reasoning_summary_text.delta"}
+
+event: response.reasoning_summary_text.delta
+data: {"delta":" should respond simply","item_id":"rs_616773","output_index":0,"sequence_number":7,"summary_index":0,"type":"response.reasoning_summary_text.delta"}
+
+event: response.reasoning_summary_text.delta
+data: {"delta":" and","item_id":"rs_616773","output_index":0,"sequence_number":8,"summary_index":0,"type":"response.reasoning_summary_text.delta"}
+
+event: response.reasoning_summary_text.delta
+data: {"delta":" friendly","item_id":"rs_616773","output_index":0,"sequence_number":9,"summary_index":0,"type":"response.reasoning_summary_text.delta"}
+
+event: response.reasoning_summary_text.delta
+data: {"delta":".","item_id":"rs_616773","output_index":0,"sequence_number":10,"summary_index":0,"type":"response.reasoning_summary_text.delta"}
+
+event: response.reasoning_summary_text.done
+data: {"item_id":"rs_616773","output_index":0,"sequence_number":11,"summary_index":0,"text":"The user just says \"say hi\". I should respond simply and friendly.","type":"response.reasoning_summary_text.done"}
+
+event: response.output_item.done
+data: {"item":{"encrypted_content":"The user just says \"say hi\". I should respond simply and friendly.","id":"rs_616773","summary":[{"text":"The user just says \"say hi\". I should respond simply and friendly.","type":"summary_text"}],"type":"reasoning"},"output_index":0,"sequence_number":12,"type":"response.output_item.done"}
+
+event: response.incomplete
+data: {"response":{"background":false,"completed_at":null,"created_at":1789266874,"error":null,"frequency_penalty":0,"id":"resp_270759","incomplete_details":{"reason":"max_output_tokens"},"instructions":null,"max_output_tokens":16,"max_tool_calls":null,"metadata":{},"model":"deepseek-v4.1-flash","object":"response","output":[{"encrypted_content":"The user just says \"say hi\". I should respond simply and friendly.","id":"rs_616773","summary":[{"text":"The user just says \"say hi\". I should respond simply and friendly.","type":"summary_text"}],"type":"reasoning"}],"parallel_tool_calls":true,"presence_penalty":0,"previous_response_id":null,"prompt_cache_key":null,"reasoning":null,"safety_identifier":null,"service_tier":"default","status":"incomplete","store":false,"temperature":1,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_logprobs":0,"top_p":1,"truncation":"disabled","usage":{"input_tokens":32,"input_tokens_details":{"cached_tokens":0},"output_tokens":16,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":48}},"sequence_number":13,"type":"response.incomplete"}
+

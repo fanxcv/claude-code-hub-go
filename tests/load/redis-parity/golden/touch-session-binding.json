@@ -1,0 +1,66 @@
+{
+  "constName": "TOUCH_SESSION_BINDING",
+  "file": "touch-session-binding.lua",
+  "sha256": "83a3a41091d2bb16a35e59c194817d241fa747be4efa9dfec2ef7a6a66e15436",
+  "calls": [
+    {
+      "id": "touched-null-binding",
+      "keys": ["cchgolden:bundle:1", "cchgolden:session:1:provider", "cchgolden:session:1:key"],
+      "argv": ["1", "100", "", "60"],
+      "setup": [
+        ["HSET", "cchgolden:bundle:1", "key_id", "1", "generation", "100"],
+        ["SET", "cchgolden:session:1:key", "1"]
+      ],
+      "returned": ["ok", "touched", "100", ""],
+      "after": {
+        "cchgolden:bundle:1": {
+          "type": "hash",
+          "value": {
+            "key_id": "1",
+            "generation": "100"
+          },
+          "ttl": 60
+        },
+        "cchgolden:session:1:provider": null,
+        "cchgolden:session:1:key": {
+          "type": "string",
+          "value": "1",
+          "ttl": 60
+        }
+      }
+    },
+    {
+      "id": "provider-mismatch",
+      "keys": ["cchgolden:bundle:1", "cchgolden:session:1:provider", "cchgolden:session:1:key"],
+      "argv": ["1", "100", "", "60"],
+      "setup": [
+        ["HSET", "cchgolden:bundle:1", "key_id", "1", "generation", "100", "provider_id", "7"],
+        ["SET", "cchgolden:session:1:key", "1"],
+        ["SET", "cchgolden:session:1:provider", "7"]
+      ],
+      "returned": ["conflict", "provider_mismatch"],
+      "after": {
+        "cchgolden:bundle:1": {
+          "type": "hash",
+          "value": {
+            "key_id": "1",
+            "generation": "100",
+            "provider_id": "7"
+          },
+          "ttl": -1
+        },
+        "cchgolden:session:1:provider": {
+          "type": "string",
+          "value": "7",
+          "ttl": -1
+        },
+        "cchgolden:session:1:key": {
+          "type": "string",
+          "value": "1",
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

@@ -1,0 +1,59 @@
+{
+  "constName": "RELEASE_PROVIDER_SESSION",
+  "file": "release-provider-session.lua",
+  "sha256": "899fab3df77f9078bf06a8f4a115438b5704a3da6d963bfedce5351f680e3d17",
+  "calls": [
+    {
+      "id": "last-ref-removes-member",
+      "keys": ["cchgolden:provider:1:active_sessions", "cchgolden:provider:1:active_session_refs"],
+      "argv": ["session-a"],
+      "setup": [
+        ["ZADD", "cchgolden:provider:1:active_sessions", "1757000000000", "session-a"],
+        ["HSET", "cchgolden:provider:1:active_session_refs", "session-a", "1"]
+      ],
+      "returned": [1, 0],
+      "after": {
+        "cchgolden:provider:1:active_sessions": null,
+        "cchgolden:provider:1:active_session_refs": null
+      }
+    },
+    {
+      "id": "remaining-refs-keeps-member",
+      "keys": ["cchgolden:provider:1:active_sessions", "cchgolden:provider:1:active_session_refs"],
+      "argv": ["session-a"],
+      "setup": [
+        ["ZADD", "cchgolden:provider:1:active_sessions", "1757000000000", "session-a"],
+        ["HSET", "cchgolden:provider:1:active_session_refs", "session-a", "2"]
+      ],
+      "returned": [0, 1],
+      "after": {
+        "cchgolden:provider:1:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-a": "1757000000000"
+          },
+          "ttl": -1
+        },
+        "cchgolden:provider:1:active_session_refs": {
+          "type": "hash",
+          "value": {
+            "session-a": "1"
+          },
+          "ttl": -1
+        }
+      }
+    },
+    {
+      "id": "no-refs-is-noop",
+      "keys": ["cchgolden:provider:1:active_sessions", "cchgolden:provider:1:active_session_refs"],
+      "argv": ["session-a"],
+      "setup": [],
+      "returned": [0, 0],
+      "after": {
+        "cchgolden:provider:1:active_sessions": null,
+        "cchgolden:provider:1:active_session_refs": null
+      }
+    }
+  ],
+  "uncollected": []
+}

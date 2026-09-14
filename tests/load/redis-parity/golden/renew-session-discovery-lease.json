@@ -1,0 +1,36 @@
+{
+  "constName": "RENEW_SESSION_DISCOVERY_LEASE",
+  "file": "renew-session-discovery-lease.lua",
+  "sha256": "129622d9207177a4c0ffbd209f98d8164c340cd1c97700159f62e8eb627d355b",
+  "calls": [
+    {
+      "id": "renewed-by-owner",
+      "keys": ["cchgolden:discovery:lease:session-1"],
+      "argv": ["owner-token", "60"],
+      "setup": [["SET", "cchgolden:discovery:lease:session-1", "owner-token"]],
+      "returned": 1,
+      "after": {
+        "cchgolden:discovery:lease:session-1": {
+          "type": "string",
+          "value": "owner-token",
+          "ttl": 60
+        }
+      }
+    },
+    {
+      "id": "not-owner",
+      "keys": ["cchgolden:discovery:lease:session-1"],
+      "argv": ["owner-token", "60"],
+      "setup": [["SET", "cchgolden:discovery:lease:session-1", "other-token"]],
+      "returned": 0,
+      "after": {
+        "cchgolden:discovery:lease:session-1": {
+          "type": "string",
+          "value": "other-token",
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

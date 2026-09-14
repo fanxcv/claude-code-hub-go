@@ -1,0 +1,2505 @@
+{
+  "actions": {
+    "copy": "Copy",
+    "download": "Download",
+    "copied": "Copied"
+  },
+  "title": {
+    "costRanking": "Cost Leaderboard",
+    "costRankingDescription": "View user cost rankings, data updates every 5 minutes",
+    "usageLogs": "Usage Logs",
+    "usageLogsDescription": "View API call logs and usage statistics",
+    "clients": "Clients",
+    "userAndKeyManagement": "User and Key Management",
+    "requestMessages": "Request Messages",
+    "activeSessions": "Active Sessions (Last 5 Minutes)",
+    "sessionMonitoring": "Session Monitoring",
+    "sessionMonitoringDescription": "Real-time display of active and inactive sessions (auto-refresh every 3 seconds)",
+    "inactiveSessions": "Inactive Sessions (Over 5 Minutes, View Only)",
+    "quotasManagement": "Quotas",
+    "quotasManagementDescription": "View and manage quotas at all levels",
+    "usersQuotas": "User Quota Statistics",
+    "keysQuotas": "Key Quota Statistics",
+    "providersQuotas": "Provider Quota Statistics",
+    "filterCriteria": "Filter Criteria",
+    "filterCriteriaDescription": "Narrow down logs by time, user, provider, and more"
+  },
+  "description": {
+    "viewApiCallLogs": "View API call logs and usage statistics",
+    "dashboard": "View system statistics and monitoring information",
+    "quotas": "View and manage quotas at all levels",
+    "clientInfo": "User-Agent request header",
+    "requestMessagesDescription": "Message content sent by the client",
+    "responseBodyDescription": "Complete server response (5-minute TTL)"
+  },
+  "overview": {
+    "title": "Overview",
+    "totalRequests": "Total Requests",
+    "totalCost": "Total Cost",
+    "totalUsers": "Total Users",
+    "totalProviders": "Total Providers",
+    "activeUsers": "Active Users",
+    "activeSessions": "Active Sessions",
+    "errorRate": "Error Rate",
+    "avgResponseTime": "Average Response Time"
+  },
+  "stats": {
+    "title": "Statistics",
+    "requests": "Requests",
+    "cost": "Cost",
+    "tokens": "Tokens",
+    "period": {
+      "hour": "Last Hour",
+      "day": "Today",
+      "week": "This Week",
+      "month": "This Month"
+    }
+  },
+  "logs": {
+    "title": "Usage Logs",
+    "description": "View and analyze API call records",
+    "filters": {
+      "user": "User",
+      "provider": "Provider",
+      "sessionId": "Session / Prefix ID",
+      "searchUser": "Search users...",
+      "searchProvider": "Search providers...",
+      "searchSessionId": "Search Session or Prefix IDs...",
+      "noUserFound": "No matching users found",
+      "noProviderFound": "No matching providers found",
+      "noSessionFound": "No matching Session or Prefix IDs found",
+      "model": "Model",
+      "actualResponseModelMismatch": "Billing/actual model mismatch",
+      "endpoint": "Endpoint",
+      "status": "Status",
+      "timeRange": "Time Range",
+      "dateRange": "Date Range",
+      "startTime": "Start Time",
+      "endTime": "End Time",
+      "allUsers": "All Users",
+      "allKeys": "All Keys",
+      "selectUserFirst": "Please select a user first",
+      "allProviders": "All Providers",
+      "allModels": "All Models",
+      "allEndpoints": "All Endpoints",
+      "allStatusCodes": "All Status Codes",
+      "apiKey": "API Key",
+      "statusCode": "Status Code",
+      "minRetryCount": "Retry Count ≥",
+      "minRetryCountPlaceholder": "Enter minimum retries",
+      "enabled": "On",
+      "replay": {
+        "label": "Replay",
+        "all": "All requests",
+        "only": "Replay only",
+        "exclude": "Exclude Replay"
+      },
+      "apply": "Apply Filter",
+      "reset": "Reset",
+      "last7days": "7d",
+      "last30days": "30d",
+      "customRange": "Custom Range",
+      "export": "Export",
+      "exporting": "Exporting...",
+      "exportSuccess": "Export completed successfully",
+      "exportError": "Export failed",
+      "exportPreparing": "Preparing export...",
+      "exportProgress": "Exported {current} / {total}",
+      "exportAsCsv": "Export as CSV",
+      "exportAsXlsx": "Export as XLSX (with summary)",
+      "quickFilters": {
+        "today": "Today",
+        "thisWeek": "This Week",
+        "errorsOnly": "Errors Only",
+        "showRetries": "With Retries"
+      },
+      "activeFilters": {
+        "title": "Active Filters",
+        "remove": "Remove filter",
+        "clearAll": "Clear all"
+      },
+      "groups": {
+        "time": "Time Range",
+        "timeDesc": "Filter by date and time",
+        "identity": "Identity",
+        "identityDesc": "Filter by user and key",
+        "request": "Request",
+        "requestDesc": "Filter by provider, model, endpoint",
+        "status": "Status",
+        "statusDesc": "Filter by status code and retry"
+      }
+    },
+    "columns": {
+      "time": "Time",
+      "user": "User",
+      "key": "Key",
+      "sessionId": "Session ID",
+      "ip": "IP",
+      "provider": "Provider",
+      "model": "Billing Model",
+      "reasoningEffort": "Reasoning Effort",
+      "reasoningEffortTooltip": "Thinking effort of the model request",
+      "protocolConversion": "Protocol Conversion",
+      "protocolConversionTooltip": "Whether the request was converted to another protocol before being sent upstream",
+      "endpoint": "Endpoint",
+      "inputTokens": "Input",
+      "outputTokens": "Output",
+      "tokens": "Tokens",
+      "cacheWrite": "Cache Write",
+      "cacheRead": "Cache Read",
+      "cache": "Cache",
+      "cost": "Cost",
+      "duration": "Duration",
+      "performance": "Perf",
+      "status": "Status"
+    },
+    "stats": {
+      "title": "Statistics Summary",
+      "description": "Aggregated statistics for the current filters",
+      "totalRequests": "Total Requests",
+      "totalAmount": "Total Consumption",
+      "totalTokens": "Total Tokens",
+      "cacheTokens": "Cached Tokens",
+      "input": "Input",
+      "output": "Output",
+      "write": "Write",
+      "read": "Read",
+      "loading": "Loading..."
+    },
+    "table": {
+      "noData": "No Data",
+      "pagination": "Total {total} records, Page {page} / {totalPages}",
+      "prevPage": "Previous Page",
+      "nextPage": "Next Page",
+      "blocked": "Blocked",
+      "replay": "Replay",
+      "nonBilling": "Non-Billing",
+      "skipped": "Skipped",
+      "specialSettings": "Special",
+      "anthropicEffort": "Effort: {effort}",
+      "times": "times",
+      "loadedCount": "Loaded {count} records",
+      "loadingMore": "Loading more...",
+      "noMoreData": "All records loaded",
+      "scrollToTop": "Back to top",
+      "hideProviderColumn": "Hide Provider Column",
+      "showProviderColumn": "Show Provider Column",
+      "columnVisibility": "Column Visibility"
+    },
+    "actions": {
+      "refresh": "Refresh",
+      "refreshing": "Refreshing...",
+      "stopAutoRefresh": "Stop Auto-Refresh",
+      "startAutoRefresh": "Start Auto-Refresh",
+      "view": "View",
+      "fullscreen": "Fullscreen",
+      "exitFullscreen": "Exit Fullscreen"
+    },
+    "error": {
+      "loadFailed": "Load Failed",
+      "loadKeysFailed": "Failed to load keys"
+    },
+    "protocolConversion": {
+      "badge": "Converted",
+      "tooltip": "Client protocol and upstream protocol",
+      "failedBadge": "Conversion failed",
+      "failedTooltip": "Protocol conversion was required but failed; the request fell back to native passthrough (the request itself was unaffected)",
+      "phaseLabel": "Failure stage",
+      "phase": {
+        "path_resolution": "Upstream path mapping failed (no endpoint for the target protocol line)",
+        "body_conversion": "Body conversion failed (decode or encode rejected it)",
+        "unknown": "Not recorded"
+      },
+      "reasonLabel": "Reason",
+      "reasonUnknown": "No reason recorded",
+      "fallbackNotice": "Fell back to native passthrough per Node semantics; the request completed normally."
+    },
+    "details": {
+      "title": "Request Details",
+      "statusTitle": "Status: {status}",
+      "inProgress": "In Progress",
+      "retrying": "Retrying",
+      "unknown": "Unknown",
+      "success": "Request completed successfully",
+      "error": "Request failed, here are the detailed error messages and provider decision chain",
+      "processing": "Request is in progress, not yet completed",
+      "tabs": {
+        "summary": "Summary",
+        "logicTrace": "Logic Trace",
+        "performance": "Performance",
+        "metadata": "Metadata"
+      },
+      "summary": {
+        "keyMetrics": "Key Metrics",
+        "totalCost": "Total Cost",
+        "totalTokens": "Total Tokens",
+        "duration": "Duration",
+        "outputRate": "Output Rate",
+        "viewFullError": "View full error",
+        "viewSession": "View Session"
+      },
+      "cachePerformance": {
+        "title": "Cache Performance",
+        "actualRate": "Actual Cache Rate",
+        "theoreticalRate": "Theoretical Cache Rate",
+        "coefficient": "Request Cache Coefficient",
+        "rawCoefficient": "Raw single-request coefficient; provider confidence is not applied.",
+        "estimateNote": "The theoretical rate is estimated from the longest normalized prefix (bytes / 4).",
+        "availability": {
+          "available": "Eligible request with a measurable prefix cache estimate.",
+          "no_input": "No input tokens were recorded for this request.",
+          "no_affinity_key": "No Prefix ID was recorded, so the theoretical rate and coefficient are unavailable.",
+          "attempt_failed": "The request attempt failed; the coefficient is excluded.",
+          "not_observable": "Upstream cache usage was not observable; the coefficient is excluded.",
+          "stream_truncated": "The stream was truncated; the coefficient is excluded.",
+          "not_recorded": "Prefix cache metrics were not recorded for this request."
+        }
+      },
+      "specialSettings": {
+        "title": "Special settings"
+      },
+      "skipped": {
+        "title": "Skipped",
+        "reason": "Reason",
+        "warmup": "Warmup Fast Response (CCH)",
+        "desc": "This request was identified as a Warmup probe and was answered directly by CCH without forwarding to upstream providers; it is not billed, not rate-limited, and excluded from statistics."
+      },
+      "blocked": {
+        "title": "Blocking Information",
+        "type": "Blocking Type",
+        "sensitiveWord": "Sensitive Word Blocking",
+        "word": "Sensitive Word",
+        "matchType": "Match Type",
+        "matchTypeContains": "Contains Match",
+        "matchTypeExact": "Exact Match",
+        "matchTypeRegex": "Regular Expression",
+        "matchedText": "Matched Content"
+      },
+      "sessionId": "Session ID",
+      "messagesCount": "Message Count",
+      "messagesLabel": "Messages",
+      "messagesUnit": "items",
+      "clientInfo": "Client Info",
+      "modelRedirect": {
+        "title": "Model Redirection",
+        "requestModel": "Requested Model",
+        "actualModel": "Actual Call",
+        "billing": "Billing Description",
+        "billingDescription": "The system prioritizes billing based on the price of the requested model ({original}). If the model is not found in the price list, the price of the actually called model ({current}) is used.",
+        "billingModel": "Billing Model",
+        "actualModelTooltip": "Actual Model: {model}",
+        "originalModelTooltip": "Original Model: {model}",
+        "billingDescription_original": "Current billing mode: Using original model before redirection ({original}) for billing",
+        "billingDescription_redirected": "Current billing mode: Using actual model after redirection ({current}) for billing",
+        "billingOriginal": "billing: original",
+        "billingRedirected": "billing: redirected"
+      },
+      "modelAudit": {
+        "unifiedLabel": "Model",
+        "requestModelLabel": "Request Model",
+        "responseModelLabel": "Actual Response Model",
+        "mismatchTooltip": "The upstream provider returned a different model than the one requested. Billing is still based on the requested model.",
+        "secondaryLineAriaLabel": "Actual response model: {model}",
+        "arrowPrefix": "↳",
+        "noSignatureBadge": "No thinking signature",
+        "noSignatureTooltip": "Thinking was enabled but no thinking signature was returned in the stream; the actual response model falls back to the plain model field from message_start."
+      },
+      "errorMessage": "Error Message",
+      "fake200ForwardedNotice": "Note: For streaming requests, this failure may be detected only after the stream ends; the response content may already have been forwarded to the client.",
+      "fake200DetectedReason": "Detected reason: {reason}",
+      "fake200RetryTooltipLabel": "Why no server retry?",
+      "fake200RetryTooltipTitle": "Why CCH cannot retry this response on the server",
+      "fake200RetryTooltipServerRetry": "The upstream already returned HTTP 200, so CCH had started forwarding the SSE body before the error appeared in-stream. Once that error is recognized, this response can no longer be retried gracefully on the server.",
+      "fake200RetryTooltipSessionFallback": "Clients can retry on their side; later requests in the same session will avoid this fake-200 provider and continue fallback.",
+      "fake200Reasons": {
+        "emptyBody": "Empty response body",
+        "htmlBody": "HTML document returned (likely an error page)",
+        "jsonErrorNonEmpty": "JSON has a non-empty `error` field",
+        "jsonErrorMessageNonEmpty": "JSON has a non-empty `error.message`",
+        "jsonMessageKeywordMatch": "JSON `message` contains the word \"error\" (heuristic)",
+        "unknown": "Response body indicates an error"
+      },
+      "statusCodeInferredBadge": "Inferred",
+      "statusCodeInferredTooltip": "This status code is inferred from response body content (e.g., fake 200) and may differ from the upstream HTTP status.",
+      "statusCodeInferredSuffix": "(inferred)",
+      "filteredProviders": "Filtered Providers",
+      "providerChain": {
+        "title": "Provider Decision Chain Timeline",
+        "totalDuration": "Total Duration: {duration}ms"
+      },
+      "noError": {
+        "processing": "Request is being processed, awaiting response...",
+        "success": "Request successful, no error message",
+        "default": "No detailed error message available"
+      },
+      "clickStatusCode": "Click status code to view full timeline",
+      "viewDetails": "View Details",
+      "reasons": {
+        "rateLimited": "Provider Cost Limit",
+        "circuitOpen": "Circuit Breaker Open"
+      },
+      "billingDetails": {
+        "title": "Billing Details",
+        "input": "Input",
+        "output": "Output",
+        "cacheWrite": "Cache Write",
+        "cacheWrite5m": "Cache Write (5m)",
+        "cacheWrite1h": "Cache Write (1h)",
+        "cacheRead": "Cache Read",
+        "cacheTtl": "Cache TTL",
+        "cacheTtlSwapped": "Billing TTL (swapped)",
+        "multiplier": "Provider Multiplier",
+        "totalCost": "Total Cost",
+        "fast": "fast",
+        "fastPriority": "Priority service tier (fast mode)",
+        "context1m": "1M Context",
+        "context1mEnabled": "1M context window enabled",
+        "pricingProvider": "Pricing provider",
+        "pricingSourceLabel": "Pricing source",
+        "pricingSource": {
+          "local_manual": "Local manual pricing",
+          "cloud_exact": "Exact cloud provider pricing",
+          "cloud_model_fallback": "Fallback model provider pricing",
+          "cloud_official": "Official cloud pricing",
+          "priority_fallback": "Priority provider fallback pricing",
+          "single_provider_top_level": "Top-level single-provider pricing",
+          "official_fallback": "Official pricing"
+        },
+        "baseCost": "Base Cost",
+        "providerMultiplier": "Provider Multiplier",
+        "groupMultiplier": "Group Multiplier",
+        "baseTotal": "Base Total",
+        "hedgeRacing": "Provider Racing",
+        "hedgeWinner": "Winner",
+        "hedgeLoser": "Loser",
+        "hedgeLosersTotal": "Racing Losers",
+        "hedgeMergedCount": "Merged {count} attempts",
+        "hedgeWinnerShort": "Winner",
+        "hedgeLoserShort": "Loser",
+        "hedgeColAttempt": "Attempt",
+        "hedgeColCacheRead": "Cache R",
+        "hedgeColCacheWrite": "Cache W",
+        "hedgeColCost": "Cost",
+        "hedgeTokenTotal": "Total tokens",
+        "hedgeReclaimedNotDelivered": "Response reclaimed, not delivered to client",
+        "unitPricePer1M": "@ {price} / 1M",
+        "unit": {
+          "tokens": "tokens"
+        }
+      },
+      "performance": {
+        "title": "Performance",
+        "ttfb": "TTFB",
+        "ttft": "TTFT",
+        "ttftShort": "TTFT",
+        "duration": "Total Duration",
+        "outputRate": "Output Rate",
+        "outputTokens": "Output Tokens"
+      },
+      "performanceTab": {
+        "noPerformanceData": "No performance data available",
+        "ttftGauge": "Time to First Token",
+        "outputRateGauge": "Output Rate",
+        "latencyBreakdown": "Latency Breakdown",
+        "generationTime": "Generation Time",
+        "segmentTtfb": "TTFB",
+        "segmentTtft": "Token Wait",
+        "segmentTotal": "Total",
+        "assessment": {
+          "excellent": "Excellent",
+          "good": "Good",
+          "warning": "Warning",
+          "poor": "Poor"
+        }
+      },
+      "metadata": {
+        "noMetadata": "No metadata available",
+        "sessionInfo": "Session Info",
+        "sessionId": "Session ID",
+        "prefixId": "Prefix ID",
+        "canonicalSessionId": "Canonical Session ID",
+        "clientSessionId": "Client Session ID",
+        "clientInfo": "Client Info",
+        "billingInfo": "Billing Info",
+        "technicalTimeline": "Technical Timeline",
+        "copyTimeline": "Copy Timeline"
+      },
+      "effort": {
+        "label": "Effort",
+        "overridden": "Overridden by provider",
+        "tooltip": "Thinking effort requested by the client (output_config.effort), shown verbatim. The proxy does not rename or convert levels."
+      },
+      "routingTrace": {
+        "title": "Routing mode",
+        "modes": {
+          "discovery": "Bounded Discovery",
+          "legacy_hedge": "Legacy Hedge",
+          "legacy_serial": "Legacy serial fallback",
+          "single_upstream": "Single upstream",
+          "lease_conflict": "Single-route protection"
+        },
+        "bypassed": "Discovery was not used: {reason}",
+        "bypassReasons": {
+          "disabled": "Discovery is disabled",
+          "non_streaming": "Non-streaming request",
+          "retry_not_allowed": "This endpoint does not allow retries",
+          "provider_switch_not_allowed": "This endpoint does not allow provider switching",
+          "raw_passthrough": "Raw passthrough request",
+          "unsupported_protocol": "Protocol is not supported by Discovery",
+          "websocket": "WebSocket request",
+          "streaming_hedge_disabled": "Streaming racing is disabled for this request",
+          "raw_cross_provider_fallback": "Raw cross-provider fallback is enabled",
+          "missing_session": "Session identity is missing",
+          "missing_key": "API key identity is missing",
+          "rollout_ineligible": "Request is outside the current rollout",
+          "redis_capability_unavailable": "Redis binding capability is unavailable",
+          "binding_conflict": "Session binding conflict",
+          "lease_conflict": "Another request owns the Discovery lease; this request uses one upstream",
+          "lease_unavailable": "Discovery lease is unavailable",
+          "unknown": "Eligibility requirement was not met"
+        },
+        "discoveryTitle": "Discovery rounds",
+        "discoveryCompact": "{rounds}R · {attempts} tries",
+        "routeMode": "Route mode",
+        "routeModes": {
+          "sticky": "Sticky",
+          "cold_start": "Cold start",
+          "rediscovery": "Rediscovery"
+        },
+        "finalProvider": "Final provider",
+        "roundsLabel": "Rounds",
+        "attemptsLabel": "Attempts",
+        "winnerOrigin": "Winner origin",
+        "viewDetails": "View Discovery details",
+        "stickyPhase": "Sticky probe",
+        "round": "Round {round}",
+        "attempts": "{count} attempts",
+        "noAttempts": "No provider attempts were recorded",
+        "providerFallback": "Provider {id}",
+        "elapsed": "+{elapsed}ms",
+        "priority": "Priority {priority}",
+        "roles": {
+          "sticky": "Sticky",
+          "normal": "Candidate",
+          "fallback": "Fallback"
+        },
+        "winnerSources": {
+          "sticky": "Sticky",
+          "normal": "Normal candidate",
+          "fallback": "Fallback takeover"
+        },
+        "roleTransition": "{from} → {to}",
+        "outcomes": {
+          "success": "Success",
+          "pending": "Pending",
+          "ready": "Ready",
+          "held": "Ready, held",
+          "winner": "Winner",
+          "failed": "Failed",
+          "cancelled": "Cancelled",
+          "timeout": "SLA timeout",
+          "client_abort": "Client aborted",
+          "deadline": "Total deadline"
+        },
+        "terminalOutcome": "Request result",
+        "bindingResult": "Sticky binding",
+        "bindingActions": {
+          "create": "Create",
+          "renew": "Renew",
+          "clear": "Clear",
+          "none": "No change"
+        },
+        "bindingFallbackWinner": "Not written · Fallback winner",
+        "bindingOutcomes": {
+          "updated": "Updated",
+          "cleared": "Cleared",
+          "skipped": "Skipped",
+          "failed": "Failed",
+          "unknown": "Unknown"
+        },
+        "fallbackPromoted": "Promoted to fallback",
+        "winnerCommitted": "Winner committed",
+        "roundStarted": "Round started",
+        "events": {
+          "started": "Request started",
+          "ready": "Valid first content received",
+          "held": "Delivery held by routing policy",
+          "fallbackPromoted": "Promoted to fallback",
+          "winnerCommitted": "Committed as winner",
+          "finished": "Finished: {outcome}"
+        },
+        "traceTruncated": "Some events were omitted because this trace reached its storage limit.",
+        "summary": "{rounds} rounds · {attempts} attempts · max {maxActive} active",
+        "config": "Configuration snapshot",
+        "configConcurrency": "Concurrency",
+        "configLegacyHedgeMaxInFlight": "Legacy hedge cap",
+        "configMaxRounds": "Maximum rounds",
+        "configDiscoverySla": "Round SLA",
+        "configStickySla": "Sticky SLA",
+        "configTotalTimeout": "Total timeout",
+        "configStickyCooldown": "Sticky timeout cooldown",
+        "configStickyBindingTtl": "Sticky binding validity (SESSION_TTL)",
+        "slotSaturation": "Hedge slots saturated ({count})",
+        "slotSaturationEvent": "{provider} · {active}/{cap} active · {elapsed}ms elapsed",
+        "attemptDetails": {
+          "providerId": "Provider ID",
+          "attempt": "Attempt",
+          "status": "HTTP status",
+          "inferred": "inferred",
+          "endpoint": "Endpoint",
+          "error": "Upstream error",
+          "cancellation": "Cancellation reason",
+          "timeline": "Attempt timeline",
+          "billing": "Cost and usage",
+          "billed": "Included in total cost",
+          "billedCost": "Billed cost",
+          "winnerCost": "Winner cost",
+          "notObtained": "Cancelled; usage unavailable"
+        },
+        "cancellationKinds": {
+          "discovery_loser": "Another Discovery attempt won",
+          "discovery_sla_timeout": "Discovery SLA expired",
+          "round_timeout": "Round SLA expired",
+          "sticky_timeout": "Sticky SLA expired",
+          "request_deadline": "Total Discovery deadline reached",
+          "client_abort": "Client disconnected",
+          "winner_committed": "Another provider was committed"
+        }
+      },
+      "reasoningEffort": {
+        "label": "Reasoning effort",
+        "overridden": "Overridden by provider",
+        "tooltip": "Thinking effort in the Codex request (reasoning.effort), shown verbatim."
+      },
+      "reasoningEffortOpenai": {
+        "label": "Reasoning effort",
+        "overridden": "Overridden by provider",
+        "tooltip": "Thinking effort in the OpenAI chat/completions request (reasoning_effort / reasoning.effort), shown verbatim."
+      },
+      "effortConversion": {
+        "dropped": "Dropped",
+        "droppedTooltip": "Protocol conversion dropped this field: the upstream request carries no thinking effort."
+      },
+      "logicTrace": {
+        "title": "Decision Chain",
+        "singleRouteSelectionTitle": "Provider selection under single-route protection",
+        "noDecisionData": "No decision data available",
+        "providersCount": "{count} providers",
+        "healthyCount": "{count} healthy",
+        "initialSelection": "Initial Selection",
+        "healthCheck": "Health Check",
+        "prioritySelection": "Priority Selection",
+        "survivingHint": "Prefix affinity already matched {provider}; the {count} providers below passed every check but did not compete this time.",
+        "survivingSelected": "Selected",
+        "survivingSkipped": "Did not compete",
+        "consideredHint": "{count} providers passed every check and entered the candidate pool; tier P{selected} was selected.",
+        "consideredTier": "P{tier}",
+        "consideredConfigured": "configured P{priority}",
+        "consideredOverride": "A group override rewrote this provider's tier: the tier shown is the effective one, and differs from the configured priority.",
+        "consideredSelected": "Selected",
+        "consideredLowerTier": "Lower tier",
+        "consideredSameTier": "Same tier, not drawn",
+        "attemptProvider": "Attempt: {provider}",
+        "retryAttempt": "Retry #{number}",
+        "httpStatus": "HTTP {code}{inferredSuffix}",
+        "sessionReuse": "Session Reuse",
+        "sessionReuseDesc": "Reusing provider from session cache",
+        "sessionReuseTitle": "Session Binding",
+        "sessionReuseSelection": "Session Reuse Selection",
+        "sessionReuseSelectionDesc": "Provider selected from session cache",
+        "sessionInfo": "Session Information",
+        "sessionIdLabel": "Session ID",
+        "requestSequence": "Request Sequence",
+        "sessionAge": "Session Age",
+        "reusedProvider": "Reused Provider",
+        "executeRequest": "Execute Request",
+        "cacheOptimizationHint": "Session reuse optimizes performance by maintaining provider affinity within the same conversation, reducing selection overhead and improving cache hit rates.",
+        "originDecisionTitle": "Original Selection Decision",
+        "originDecisionDesc": "How this provider was initially chosen for this session",
+        "originDecisionLoading": "Loading original decision...",
+        "originDecisionUnavailable": "Original decision record unavailable",
+        "originDecisionExpand": "View original selection"
+      },
+      "replayServe": {
+        "title": "Served from Replay Cache",
+        "desc": "This request was served from the replay cache (identical request already in flight or completed). No upstream provider call was made and no cost was incurred.",
+        "replayId": "Replay ID",
+        "sourceRequestId": "Source request"
+      }
+    },
+    "providerChain": {
+      "decisionChain": "Provider Decision Chain",
+      "clickItemForDetails": "Click a step to view details"
+    },
+    "modelRedirect": {
+      "redirected": "Redirected",
+      "targetModel": "Target Model"
+    },
+    "statusCodes": {
+      "200": "200 (Success)",
+      "400": "400 (Bad Request)",
+      "401": "401 (Unauthorized)",
+      "429": "429 (Rate Limited)",
+      "500": "500 (Server Error)",
+      "not200": "Non-200 (errors/blocked)"
+    },
+    "billingDetails": {
+      "input": "Input",
+      "output": "Output",
+      "cacheWrite5m": "Cache Write (5m)",
+      "cacheWrite1h": "Cache Write (1h)",
+      "cacheRead": "Cache Read",
+      "cacheTtl": "Cache TTL",
+      "cacheTtlSwapped": "Billing TTL (swapped)",
+      "multiplier": "Provider Multiplier",
+      "totalCost": "Total Cost",
+      "unitPricePer1M": "@ {price} / 1M",
+      "fast": "fast",
+      "combinedFastContext": "{fast} + {context} context",
+      "fastPriority": "Priority service tier (fast mode)",
+      "context1m": "1M Context",
+      "context1mEnabled": "1M context window enabled",
+      "pricingProvider": "Pricing provider",
+      "pricingSourceLabel": "Pricing source",
+      "pricingSource": {
+        "local_manual": "Local manual pricing",
+        "cloud_exact": "Exact cloud provider pricing",
+        "cloud_model_fallback": "Fallback model provider pricing",
+        "cloud_official": "Official cloud pricing",
+        "priority_fallback": "Priority provider fallback pricing",
+        "single_provider_top_level": "Top-level single-provider pricing",
+        "official_fallback": "Official pricing"
+      },
+      "baseCost": "Base Cost",
+      "providerMultiplier": "Provider Multiplier",
+      "groupMultiplier": "Group Multiplier",
+      "baseTotal": "Base Total",
+      "hedgeRacing": "Provider Racing",
+      "hedgeWinner": "Winner",
+      "hedgeLoser": "Loser",
+      "hedgeLosersTotal": "Racing Losers",
+      "hedgeMergedCount": "Merged {count} attempts",
+      "hedgeWinnerShort": "Winner",
+      "hedgeLoserShort": "Loser",
+      "hedgeColAttempt": "Attempt",
+      "hedgeColCacheRead": "Cache R",
+      "hedgeColCacheWrite": "Cache W",
+      "hedgeColCost": "Cost",
+      "hedgeTokenTotal": "Total tokens",
+      "hedgeReclaimedNotDelivered": "Response reclaimed, not delivered to client",
+      "unit": {
+        "tokens": "tokens"
+      }
+    },
+    "refresh": {
+      "modeLabel": "Refresh mode",
+      "modePull": "Polling",
+      "modePush": "Push",
+      "intervalLabel": "Refresh interval",
+      "intervalOff": "Off",
+      "intervalSeconds": "{seconds}s",
+      "streamStatus": {
+        "idle": "Not connected",
+        "connecting": "Connecting",
+        "connected": "Connected",
+        "reconnecting": "Reconnecting",
+        "unauthorized": "Unauthorized"
+      }
+    }
+  },
+  "leaderboard": {
+    "title": "Cost Leaderboard",
+    "description": "View cost statistics rankings for users and keys",
+    "todayTitle": "Today's Leaderboard",
+    "viewAll": "View All",
+    "userRankings": "User Rankings",
+    "providerRankings": "Provider Rankings",
+    "modelRankings": "Model Rankings",
+    "noData": "No data for today",
+    "requests": "requests",
+    "tokens": "tokens",
+    "tabs": {
+      "users": "User Rankings",
+      "keys": "Key Rankings",
+      "userRanking": "User Rankings",
+      "userCacheHitRateRanking": "User Cache Hit Rate",
+      "providerRanking": "Provider Rankings",
+      "providerCacheHitRateRanking": "Provider Cache Hit Rate",
+      "modelRanking": "Model Rankings",
+      "primaryUser": "Users",
+      "primaryProvider": "Providers",
+      "primaryModel": "Models",
+      "secondaryCost": "Cost",
+      "secondaryCacheHit": "Cache Hit Rate",
+      "dailyRanking": "Today",
+      "weeklyRanking": "This Week",
+      "monthlyRanking": "This Month",
+      "allTimeRanking": "All Time"
+    },
+    "dateRange": {
+      "to": "to",
+      "prevPeriod": "Previous period",
+      "nextPeriod": "Next period",
+      "customRange": "Custom date range"
+    },
+    "columns": {
+      "rank": "Rank",
+      "name": "Name",
+      "totalCost": "Total Cost",
+      "totalRequests": "Total Requests",
+      "avgCost": "Average Cost",
+      "lastActive": "Last Active",
+      "user": "User",
+      "requests": "Requests",
+      "tokens": "Tokens",
+      "consumedAmount": "Consumed Amount",
+      "provider": "Provider",
+      "model": "Model",
+      "cost": "Cost",
+      "cacheHitRequests": "Cache-eligible Requests",
+      "cacheHitRate": "Cache Hit Rate",
+      "cacheCoefficient": "Cache Coefficient",
+      "cacheCoefficientTooltip": "A higher cache coefficient means fewer provider account switches and less noticeable cache degradation. 0.9+ is excellent, 0.8+ is good.",
+      "cacheReadTokens": "Cache Read Tokens",
+      "totalTokens": "Total Tokens",
+      "cacheCreationConsumedAmount": "Cache Creation Spend",
+      "totalConsumedAmount": "Total Spend",
+      "successRate": "Success Rate",
+      "avgResponseTime": "Avg Response Time",
+      "avgTtftMs": "Avg TTFT",
+      "avgTokensPerSecond": "Avg tok/s",
+      "avgCostPerRequest": "Avg Cost/Req",
+      "avgCostPerMillionTokens": "Avg Cost/1M Tokens",
+      "unknownModel": "Unknown",
+      "successRateUnavailable": "N/A",
+      "successRateBasisDisclosure": "No countable success/failure outcomes were recorded for this model in the selected period."
+    },
+    "expandModelStats": "Expand model details",
+    "collapseModelStats": "Collapse model details",
+    "states": {
+      "loading": "Loading...",
+      "noData": "No data available",
+      "todayNoData": "No data available for today",
+      "weekNoData": "No data available for this week",
+      "monthNoData": "No data available for this month",
+      "fetchFailed": "Failed to fetch leaderboard data"
+    },
+    "permission": {
+      "title": "Permission Required",
+      "restricted": "Access Restricted",
+      "description": "The leaderboard feature requires administrators to enable the \"Allow Global Usage View\" permission.",
+      "adminAction": "Enable this permission.",
+      "userAction": "Please contact an administrator to enable this permission.",
+      "systemSettings": "System Settings"
+    },
+    "filters": {
+      "userTagsPlaceholder": "Filter by user tags...",
+      "userGroupsPlaceholder": "Filter by user groups..."
+    },
+    "userInsights": {
+      "title": "User Insights",
+      "backToLeaderboard": "Back to Leaderboard",
+      "overview": "Overview",
+      "keyTrend": "Key Usage Trend",
+      "modelBreakdown": "Model Breakdown",
+      "requests": "Requests",
+      "cost": "Cost",
+      "avgResponseTime": "Avg Response Time",
+      "errorRate": "Error Rate",
+      "timeRange": {
+        "today": "Today",
+        "7days": "Last 7 Days",
+        "30days": "Last 30 Days",
+        "thisMonth": "This Month"
+      },
+      "unknownModel": "Unknown Model",
+      "noData": "No data available",
+      "dateRange": "Date Range",
+      "allTime": "All Time",
+      "providerBreakdown": "Provider Breakdown",
+      "unknownProvider": "Unknown Provider",
+      "apiKey": "API Key",
+      "provider": "Provider",
+      "model": "Model",
+      "allKeys": "All Keys",
+      "allProviders": "All Providers",
+      "allModels": "All Models",
+      "dimensions": "Dimensions",
+      "filters": "Filters",
+      "loadError": "Failed to load data"
+    }
+  },
+  "sessions": {
+    "title": "Active Sessions",
+    "description": "Monitor current active API sessions in real-time",
+    "monitoring": "Session Monitoring",
+    "monitoringDescription": "Real-time display of active and inactive sessions (auto-refresh every 3 seconds)",
+    "activeSessions": "Active Sessions (Last 5 Minutes)",
+    "inactiveSessions": "Inactive Sessions (Over 5 Minutes, View Only)",
+    "columns": {
+      "sessionId": "Session ID",
+      "user": "User",
+      "key": "Key",
+      "provider": "Provider",
+      "model": "Model",
+      "startTime": "Start Time",
+      "lastActivity": "Last Activity",
+      "requestCount": "Requests",
+      "totalInput": "Total Input",
+      "totalOutput": "Total Output",
+      "totalCost": "Total Cost",
+      "totalDuration": "Total Duration",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "table": {
+      "count": "Total {count} {type} Sessions",
+      "active": "Active",
+      "inactive": "Inactive",
+      "notCountedInConcurrency": "(Not counted in concurrency)",
+      "refreshing": "Refreshing...",
+      "noActiveSessions": "No active sessions"
+    },
+    "pagination": {
+      "total": "total"
+    },
+    "details": {
+      "title": "Session Messages",
+      "canonicalSessionId": "Canonical Session ID",
+      "clientSessionId": "Client Session ID",
+      "messages": "Messages",
+      "info": "Session Info",
+      "timeline": "Timeline",
+      "overview": "Session Overview",
+      "overviewDescription": "Aggregated statistics",
+      "providersAndModels": "Providers & Models",
+      "providersAndModelsDescription": "Providers and models used",
+      "tokenUsage": "Token Usage (Total)",
+      "tokenUsageDescription": "Cumulative statistics for all requests",
+      "costInfo": "Cost Information (Total)",
+      "costInfoDescription": "Cumulative cost for all requests",
+      "totalRequests": "Total Requests",
+      "firstRequest": "First Request",
+      "lastRequest": "Last Request",
+      "totalDuration": "Total Duration",
+      "totalInput": "Total Input",
+      "totalOutput": "Total Output",
+      "cacheCreation": "Cache Creation",
+      "cacheTtlMixed": "Mixed",
+      "cacheRead": "Cache Read",
+      "total": "Total",
+      "totalFee": "Total Fee",
+      "providers": "Providers",
+      "models": "Models",
+      "noDetailedData": "No detailed data available",
+      "storageTip": "No detailed data found. Possible reasons: Redis is disabled/unavailable (REDIS_URL + ENABLE_RATE_LIMIT=true), the data expired (SESSION_TTL, default 300s), or response body storage is disabled (STORE_SESSION_RESPONSE_BODY=false, affects response body only). To store unredacted messages, set STORE_SESSION_MESSAGES=true.",
+      "clientInfo": "Client Info",
+      "requestHeaders": "Request Headers",
+      "requestBody": "Request Body",
+      "requestMessages": "Request Messages",
+      "viewMode": "View",
+      "before": "Before",
+      "after": "After",
+      "viewModeTooltip": "Before shows the request and response snapshots CCH recorded before its final upstream forwarding or final client-response rewrite. After shows the final request CCH sent upstream and the final response CCH returned to the client.",
+      "viewModeTooltipLabel": "Explain before and after views",
+      "snapshotSourceClient": "Client",
+      "snapshotSourceUpstream": "Upstream",
+      "specialSettings": "Special",
+      "specialSettingsStaticNote": "Special settings are derived audit results and do not switch between before and after.",
+      "requestMessagesDescription": "Message content sent by the client",
+      "afterRequestMessagesEmpty": "The processed request body has no root-level messages field. Check {requestBodyLabel} instead.",
+      "specialSettingsEmpty": "No special settings were recorded for this request.",
+      "responseHeaders": "Response Headers",
+      "responseBody": "Response Body",
+      "responseBodyDescription": "Complete server response (5-minute TTL)",
+      "noHeaders": "No data",
+      "noData": "No Data",
+      "prevRequest": "Previous",
+      "nextRequest": "Next"
+    },
+    "actions": {
+      "back": "Back",
+      "view": "View",
+      "copy": "Copy",
+      "download": "Download",
+      "copyMessages": "Copy Request (Headers + Body)",
+      "downloadMessages": "Download Request (Headers + Body)",
+      "copied": "Copied",
+      "copyResponse": "Copy Response",
+      "terminate": "Terminate",
+      "terminateTitle": "Terminate Session",
+      "terminateDescription": "Are you sure you want to terminate this session? After termination, the provider binding for this session will be cleared, and the next request will reselect a provider.",
+      "sessionIdLabel": "Session ID: {sessionId}",
+      "cancel": "Cancel",
+      "confirmTerminate": "Confirm Termination",
+      "terminating": "Terminating...",
+      "terminateSuccess": "Session terminated successfully",
+      "terminateFailed": "Failed to terminate session",
+      "terminateSelected": "Terminate Selected",
+      "selectedCount": "{count} selected",
+      "selectAll": "Select All",
+      "selectSessionLabel": "Select session",
+      "multiSelect": "Multi Select",
+      "cancelMultiSelect": "Cancel",
+      "terminateSessionTitle": "Terminate Session",
+      "terminateSessionDescription": "Are you sure you want to terminate this session? This action cannot be undone.",
+      "batchTerminateSuccess": "Terminated {count} session(s)",
+      "batchTerminatePartial": "Unauthorized: {unauthorized} · Missing: {missing}",
+      "batchTerminateAllowedFailed": "Failed to terminate {count} authorized session(s)",
+      "batchTerminateNone": "No sessions were terminated",
+      "noSelection": "Please select at least one session"
+    },
+    "codeDisplay": {
+      "raw": "Raw",
+      "pretty": "Pretty",
+      "searchPlaceholder": "Search",
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "themeAuto": "Auto",
+      "themeLight": "Light",
+      "themeDark": "Dark",
+      "noMatches": "No matches",
+      "onlyMatches": "Only matches",
+      "showAll": "Show all",
+      "prevPage": "Prev",
+      "nextPage": "Next",
+      "pageInfo": "Page {page} / {total}",
+      "sseEvent": "Event",
+      "sseData": "Data",
+      "hardLimit": {
+        "title": "Content too large",
+        "size": "Size: {sizeMB} MB ({sizeBytes} bytes)",
+        "maximum": "Maximum allowed: {maxSizeMB} MB or {maxLines} lines",
+        "hint": "Please download the file to view the full content.",
+        "download": "Download"
+      }
+    },
+    "status": {
+      "loading": "Loading...",
+      "loadError": "Load failed",
+      "fetchFailed": "Fetch Failed",
+      "unknownError": "Unknown Error",
+      "error": "Session details could not be loaded",
+      "storageNotEnabled": "Not Stored",
+      "storageNotEnabledHint": "Tip: Check REDIS_URL and ENABLE_RATE_LIMIT=true (session details cache). To store unredacted messages, set STORE_SESSION_MESSAGES=true."
+    },
+    "errors": {
+      "copyFailed": "Copy Failed",
+      "fetchSessionsFailed": "Failed to load sessions",
+      "fetchSessionsTimeout": "The sessions request timed out",
+      "fetchSettingsFailed": "Failed to load system settings",
+      "retry": "Retry"
+    },
+    "requestList": {
+      "title": "Requests",
+      "noRequests": "No requests found",
+      "fetchFailed": "Failed to fetch requests",
+      "unknownError": "Unknown error occurred",
+      "searchPlaceholder": "Search requests...",
+      "prev": "Prev",
+      "next": "Next",
+      "orderAsc": "Switch to ascending order (oldest first)",
+      "orderDesc": "Switch to descending order (newest first)",
+      "itemTitle": "Request #{sequence} - {model}",
+      "unknownModel": "Unknown model"
+    },
+    "back": "Back",
+    "loadingError": "Loading failed"
+  },
+  "quotas": {
+    "title": "Quota Management",
+    "description": "Manage user, key, and provider usage quotas",
+    "tabs": {
+      "overview": "Overview",
+      "users": "User Quotas",
+      "keys": "Key Quotas",
+      "providers": "Provider Quotas"
+    },
+    "columns": {
+      "name": "Name",
+      "limit": "Limit",
+      "used": "Used",
+      "remaining": "Remaining",
+      "resetTime": "Reset Time",
+      "status": "Status"
+    },
+    "labels": {
+      "byName": "By Name",
+      "byUsageRate": "By Usage Rate",
+      "all": "All",
+      "warning": "Near Limit (>60%)",
+      "exceeded": "Exceeded (≥100%)"
+    },
+    "users": {
+      "title": "User Quota Statistics",
+      "totalUsers": "Total {count} users"
+    },
+    "keys": {
+      "title": "Key Quota Statistics",
+      "totalKeysInfo": "Total {userCount} users, {keyCount} keys",
+      "setKeyQuota": "Set Key Quota",
+      "setUserQuota": "Set User Quota",
+      "onlyKeyQuota": "Key Quota Only",
+      "onlyUserQuota": "User Quota Only",
+      "success": "User quota set successfully"
+    },
+    "providers": {
+      "title": "Provider Quota Statistics",
+      "totalProviders": "Total {count} providers"
+    }
+  },
+  "labels": {
+    "byName": "By Name",
+    "byUsageRate": "By Usage Rate"
+  },
+  "nav": {
+    "mobileMenuTitle": "Navigation Menu",
+    "dashboard": "Dashboard",
+    "usageLogs": "Usage Logs",
+    "leaderboard": "Leaderboard",
+    "availability": "Availability",
+    "myQuota": "My Quota",
+    "quotasManagement": "Quotas",
+    "userManagement": "Users",
+    "providers": "Providers",
+    "auditLogs": "Audit logs",
+    "documentation": "Docs",
+    "systemSettings": "Settings",
+    "feedback": "Feedback",
+    "login": "Login",
+    "logout": "Logout"
+  },
+  "statistics": {
+    "title": "Usage Statistics",
+    "cost": "Consumption Amount",
+    "calls": "API Calls",
+    "totalCost": "Total Consumption Amount",
+    "totalCalls": "Total API Calls",
+    "timeRange": {
+      "today": "Today",
+      "todayDescription": "Today's usage",
+      "7days": "Last 7 Days",
+      "7daysDescription": "Usage for the last 7 days",
+      "30days": "Last 30 Days",
+      "30daysDescription": "Usage for the last 30 days",
+      "thisMonth": "This Month",
+      "thisMonthDescription": "Usage for this month",
+      "default": "Usage"
+    },
+    "mode": {
+      "keys": "Only display usage statistics for your keys",
+      "mixed": "Display your key details and aggregated data from other users",
+      "users": "Display usage statistics for all users"
+    },
+    "legend": {
+      "selectAll": "Select All",
+      "deselectAll": "Clear",
+      "selected": "Selected"
+    },
+    "chartMode": {
+      "label": "Display Mode",
+      "overlay": "Overlay",
+      "stacked": "Stacked"
+    },
+    "states": {
+      "noData": "No statistics data available",
+      "fetchFailed": "Failed to fetch statistics"
+    },
+    "othersAggregate": "Other Users"
+  },
+  "errors": {
+    "fetchSystemSettingsFailed": "Failed to fetch system settings",
+    "fetchFailed": "Fetch failed",
+    "fetchSessionListFailed": "Failed to fetch session list"
+  },
+  "keyList": {
+    "columns": {
+      "name": "Name",
+      "key": "Key",
+      "todayCalls": "Today's Calls",
+      "todayCost": "Today's Cost",
+      "lastUsed": "Last Used",
+      "actions": "Actions"
+    },
+    "detailsButton": "Details",
+    "modelStats": "Model Statistics",
+    "modelStatsColumns": {
+      "model": "Model",
+      "calls": "Calls",
+      "cost": "Cost"
+    },
+    "limitUsage": "Limit Usage",
+    "copyKeyTooltip": "Copy full key",
+    "showKeyTooltip": "Show full key",
+    "hideKeyTooltip": "Hide key",
+    "copyFailed": "Copy failed:",
+    "timesUnit": "times",
+    "provider": "Provider",
+    "neverUsed": "Never used",
+    "viewLogsTooltip": "View detailed logs",
+    "logsButton": "Logs",
+    "emptyState": {
+      "title": "No Keys",
+      "description": "Click the \"Add Key\" button in the top right corner to add a key"
+    }
+  },
+  "userList": {
+    "title": "User List",
+    "badge": "{count} Keys",
+    "activeKeys": "Active Keys",
+    "totalKeys": "Total Keys",
+    "expiresAt": "Expiration",
+    "status": {
+      "active": "Active",
+      "expiringSoon": "Expiring Soon",
+      "expired": "Expired",
+      "disabled": "Disabled"
+    },
+    "actions": {
+      "renew": "Renew",
+      "renew30d": "Renew for 30 days",
+      "renew90d": "Renew for 90 days",
+      "renew1y": "Renew for 1 year",
+      "renewCustom": "Custom...",
+      "customRenewTitle": "Custom Renewal",
+      "customRenewDescription": "Set a new expiration date for user {userName}",
+      "expirationDate": "Expiration Date",
+      "enableOnRenew": "Enable user on renewal",
+      "cancel": "Cancel",
+      "confirm": "Confirm",
+      "customPrompt": "Enter a new expiry date (YYYY-MM-DD). Leave empty to cancel.",
+      "invalidDate": "Please enter a valid date",
+      "enable": "Enable",
+      "disable": "Disable",
+      "success": "Operation succeeded",
+      "failed": "Operation failed, please try again"
+    },
+    "emptyState": {
+      "title": "No Users",
+      "description": "You haven't created any users yet. Users are the foundation for managing API keys and usage quotas. Create your first user to get started!",
+      "action": "Create Your First User"
+    },
+    "addUser": "Add User"
+  },
+  "keyListHeader": {
+    "todayUsage": "Today's Usage",
+    "userStatus": {
+      "disabled": "Disabled",
+      "expired": "Expired",
+      "expiringSoon": "Expiring soon",
+      "active": "Enabled"
+    },
+    "allowedModels": {
+      "label": "Allowed Models",
+      "noRestrictions": "Allowed Models: No restrictions"
+    },
+    "expiresAt": "Expires",
+    "proxyStatus": {
+      "loading": "Loading proxy status",
+      "fetchFailed": "Failed to fetch proxy status",
+      "noStatus": "No proxy status",
+      "activeRequests": "Active Requests",
+      "lastRequest": "Last Request",
+      "noRecord": "No record",
+      "timeAgo": {
+        "justNow": "Just now",
+        "secondsAgo": "{count}s ago",
+        "minutesAgo": "{count} min ago",
+        "hoursAgo": "{count}h ago",
+        "daysAgo": "{count}d ago"
+      }
+    },
+    "addKey": "Add Key",
+    "keyCreatedDialog": {
+      "title": "Key Created Successfully",
+      "description": "Your API key has been created successfully. Copy and store it securely, and keep it confidential. You can view the full key again in the key list at any time.",
+      "apiKeyLabel": "API Key",
+      "warningText": "Keep this key secure and do not share it. You can view the full key again in the key list whenever needed.",
+      "httpWarningText": "HTTP access detected. Browser restrictions prevent clipboard access. Click the eye icon to reveal the key and copy manually.",
+      "copyTooltip": "Copy to clipboard",
+      "showTooltip": "Show full key",
+      "hideTooltip": "Hide key",
+      "closeButton": "Close"
+    },
+    "allowedClients": {
+      "label": "Clients allowed",
+      "noRestrictions": "Clients allowed: no restrictions"
+    }
+  },
+  "keyLimitUsage": {
+    "loading": "Loading...",
+    "error": "Fetch failed",
+    "networkError": "Network error",
+    "cost5h": "5-Hour Cost",
+    "costDaily": "Daily Cost",
+    "costWeekly": "Weekly Cost",
+    "costMonthly": "Monthly Cost",
+    "costTotal": "Total Cost",
+    "concurrentSessions": "Concurrent Sessions",
+    "noLimit": "No quota limits"
+  },
+  "addKeyForm": {
+    "title": "Add Key",
+    "description": "Create a new API key for the current user. The key value will be auto-generated.",
+    "submitText": "Create Key",
+    "loadingText": "Creating...",
+    "keyName": {
+      "label": "Key Name",
+      "placeholder": "Enter key name"
+    },
+    "expiresAt": {
+      "label": "Expiration Time",
+      "placeholder": "Select expiration time",
+      "description": "Leave blank for never expires"
+    },
+    "canLoginWebUi": {
+      "label": "Allow Web UI Login",
+      "description": "When disabled, this key can only be used for API calls and cannot login to the admin panel"
+    },
+    "limit5hUsd": {
+      "label": "5-Hour Cost Limit (USD)",
+      "placeholder": "Leave blank for unlimited",
+      "description": "Maximum cost within 5 hours",
+      "descriptionWithUserLimit": "Maximum cost within 5 hours (User limit: {limit})"
+    },
+    "limitDailyUsd": {
+      "label": "Daily Cost Limit (USD)",
+      "placeholder": "Leave blank for unlimited",
+      "description": "Maximum cost per day"
+    },
+    "dailyResetMode": {
+      "label": "Daily Reset Mode",
+      "options": {
+        "fixed": "Fixed Time Reset",
+        "rolling": "Rolling Window (24h)"
+      },
+      "desc": {
+        "fixed": "Reset quota at a specific time each day",
+        "rolling": "24-hour rolling window from first request"
+      }
+    },
+    "dailyResetTime": {
+      "label": "Daily Reset Time",
+      "placeholder": "HH:mm",
+      "description": "When the daily limit resets (uses system timezone)"
+    },
+    "limitWeeklyUsd": {
+      "label": "Weekly Cost Limit (USD)",
+      "placeholder": "Leave blank for unlimited",
+      "description": "Maximum cost per week",
+      "descriptionWithUserLimit": "Maximum cost per week (User limit: {limit})"
+    },
+    "limitMonthlyUsd": {
+      "label": "Monthly Cost Limit (USD)",
+      "placeholder": "Leave blank for unlimited",
+      "description": "Maximum cost per month",
+      "descriptionWithUserLimit": "Maximum cost per month (User limit: {limit})"
+    },
+    "limitTotalUsd": {
+      "label": "Total Cost Limit (USD)",
+      "placeholder": "Leave blank for unlimited",
+      "description": "Maximum cumulative spending (no reset)",
+      "descriptionWithUserLimit": "Cannot exceed user total limit ({limit})"
+    },
+    "limitConcurrentSessions": {
+      "label": "Concurrent Session Limit",
+      "placeholder": "0 means unlimited",
+      "description": "Number of simultaneous conversations",
+      "descriptionWithUserLimit": "Maximum sessions (User limit: {limit})"
+    },
+    "providerGroup": {
+      "label": "Provider Group",
+      "placeholder": "Enter provider group tags, press Enter to add",
+      "description": "Provider groups for this key (default: default).",
+      "defaultDescription": "default includes providers without groupTag.",
+      "descriptionWithUserGroup": "Provider groups for this key (user groups: {group}; default: default)."
+    },
+    "cacheTtl": {
+      "label": "Cache TTL Override",
+      "description": "Force Anthropic prompt cache TTL for requests containing cache_control.",
+      "options": {
+        "inherit": "No override (follow provider/client)",
+        "5m": "5m",
+        "1h": "1h"
+      }
+    },
+    "successTitle": "Key Created Successfully",
+    "successDescription": "Your API key has been created successfully.",
+    "generatedKey": {
+      "label": "Generated Key",
+      "hint": "You can manage this key in the key list (enable/disable, quotas, etc.) and view the full key again at any time. Keep it secure."
+    },
+    "errors": {
+      "userIdMissing": "User ID does not exist",
+      "createFailed": "Failed to create, please try again later",
+      "noKeyReturned": "Created successfully but key was not returned"
+    },
+    "limit5hResetMode": {
+      "label": "5-Hour Reset Mode",
+      "options": {
+        "fixed": "Fixed window",
+        "rolling": "Rolling Window (5h)"
+      },
+      "desc": {
+        "fixed": "Start a fixed 5-hour window from the first successful charge",
+        "rolling": "Use a rolling 5-hour window from the latest usage"
+      }
+    }
+  },
+  "userForm": {
+    "title": {
+      "add": "Add User",
+      "edit": "Edit User"
+    },
+    "description": {
+      "add": "Create a new user. The system will automatically generate a default key.",
+      "edit": "Modify user's basic information."
+    },
+    "submitText": {
+      "add": "Create User",
+      "edit": "Save Changes"
+    },
+    "loadingText": {
+      "add": "Creating...",
+      "edit": "Saving..."
+    },
+    "username": {
+      "label": "Username",
+      "placeholder": "Enter username"
+    },
+    "note": {
+      "label": "Note",
+      "placeholder": "Enter note (optional)",
+      "description": "Used to describe the user's purpose or notes"
+    },
+    "providerGroup": {
+      "label": "Provider Group",
+      "placeholder": "e.g., default or premium,economy",
+      "description": "User provider groups (default: default). Providers without groupTag belong to default."
+    },
+    "tags": {
+      "label": "User Tags",
+      "placeholder": "Enter tag (press Enter to add)",
+      "description": "Add tags for categorization and filtering (max 20 tags, 32 characters each)"
+    },
+    "rpm": {
+      "label": "RPM Limit",
+      "placeholder": "Requests per minute limit",
+      "description": "Default: {default}, Range: 1-10000"
+    },
+    "dailyQuota": {
+      "label": "Daily Quota",
+      "placeholder": "Daily consumption quota limit",
+      "helperText": "Set to 0 for unlimited",
+      "description": "Default: ${default}, Range: $0.01-$1000"
+    },
+    "limit5hUsd": {
+      "label": "5-Hour Quota (USD)",
+      "placeholder": "Leave empty for unlimited",
+      "description": "Maximum spending in 5 hours"
+    },
+    "limitWeeklyUsd": {
+      "label": "Weekly Quota (USD)",
+      "placeholder": "Leave empty for unlimited",
+      "description": "Maximum weekly spending"
+    },
+    "limitMonthlyUsd": {
+      "label": "Monthly Quota (USD)",
+      "placeholder": "Leave empty for unlimited",
+      "description": "Maximum monthly spending"
+    },
+    "limitTotalUsd": {
+      "label": "Total Quota (USD)",
+      "placeholder": "Leave empty for unlimited",
+      "description": "Maximum lifetime spending"
+    },
+    "limitConcurrentSessions": {
+      "label": "Concurrent Sessions Limit",
+      "placeholder": "0 means unlimited",
+      "description": "Number of simultaneous conversations"
+    },
+    "isEnabled": {
+      "label": "Enable User",
+      "description": "Disabled users cannot access the API"
+    },
+    "expiresAt": {
+      "label": "Expiration Date",
+      "placeholder": "Leave empty for never expires",
+      "description": "User will be automatically disabled after expiration",
+      "pastWarning": "Selected date is in the past. The user will expire and be disabled immediately after saving."
+    },
+    "allowedClients": {
+      "label": "Allowed Clients",
+      "description": "Restrict which CLI/IDE clients can use this account. Leave empty for no restrictions.",
+      "customLabel": "Custom Client Patterns",
+      "customPlaceholder": "Enter pattern (e.g., 'my-ide', 'codex-*')"
+    },
+    "allowedModels": {
+      "label": "Allowed Models",
+      "placeholder": "Enter model name (press Enter to add)",
+      "description": "Restrict this user to specific AI models. Leave empty for no restrictions (max 50 models, 64 chars each)"
+    }
+  },
+  "deleteKeyConfirm": {
+    "title": "Confirm Delete Key",
+    "description": "Are you sure you want to delete key \"{name}\"?\n{maskedKey}\nThis action cannot be undone. All applications using this key will lose access.",
+    "cancel": "Cancel",
+    "confirm": "Confirm Delete",
+    "confirmLoading": "Deleting...",
+    "errors": {
+      "deleteFailed": "Delete failed",
+      "retryError": "Delete failed, please try again later"
+    }
+  },
+  "keyActions": {
+    "edit": "Edit",
+    "delete": "Delete",
+    "editAriaLabel": "Edit key",
+    "deleteAriaLabel": "Delete key"
+  },
+  "userActions": {
+    "edit": "Edit user",
+    "delete": "Delete user",
+    "editAriaLabel": "Edit user",
+    "deleteAriaLabel": "Delete user"
+  },
+  "availability": {
+    "title": "Provider Availability Monitor",
+    "description": "Real-time monitoring of provider availability and performance metrics",
+    "nav": "Availability Monitor",
+    "tabs": {
+      "provider": "Provider Availability",
+      "endpoint": "Endpoint Health"
+    },
+    "overview": {
+      "systemAvailability": "System Availability",
+      "avgLatency": "Avg Latency",
+      "errorRate": "Error Rate",
+      "activeProbes": "Active Probes",
+      "load": "Load"
+    },
+    "status": {
+      "green": "Healthy",
+      "red": "Unhealthy",
+      "unknown": "Unknown"
+    },
+    "statusDescription": {
+      "green": "Service is healthy, requests successful",
+      "red": "Service unavailable or error",
+      "unknown": "No data available"
+    },
+    "metrics": {
+      "systemAvailability": "System Availability",
+      "totalRequests": "Total Requests",
+      "successRate": "Success Rate",
+      "avgLatency": "Avg Latency",
+      "p50Latency": "P50 Latency",
+      "p95Latency": "P95 Latency",
+      "p99Latency": "P99 Latency",
+      "lastRequest": "Last Request",
+      "requestCount": "Request Count"
+    },
+    "timeRange": {
+      "label": "Time Range",
+      "15min": "15 min",
+      "1h": "1 hour",
+      "6h": "6 hours",
+      "24h": "24 hours",
+      "7d": "7 days",
+      "last15min": "Last 15 minutes",
+      "last1h": "Last 1 hour",
+      "last6h": "Last 6 hours",
+      "last24h": "Last 24 hours",
+      "last7d": "Last 7 days",
+      "custom": "Custom"
+    },
+    "filters": {
+      "provider": "Provider",
+      "allProviders": "All Providers",
+      "includeDisabled": "Include Disabled"
+    },
+    "sort": {
+      "label": "Sort By",
+      "availability": "Availability",
+      "name": "Name",
+      "requests": "Requests"
+    },
+    "columns": {
+      "provider": "Provider",
+      "type": "Type",
+      "status": "Status",
+      "availability": "Availability",
+      "requests": "Requests",
+      "successRate": "Success Rate",
+      "avgLatency": "Avg Latency",
+      "lastRequest": "Last Request",
+      "actions": "Actions"
+    },
+    "chart": {
+      "title": "Availability Trend",
+      "description": "Availability changes over time periods",
+      "availabilityScore": "Availability Score",
+      "requestVolume": "Request Volume",
+      "latencyTrend": "Latency Trend",
+      "noData": "No Data"
+    },
+    "details": {
+      "title": "Provider Details",
+      "overview": "Overview",
+      "timeBuckets": "Time Buckets",
+      "greenCount": "Successful Requests",
+      "redCount": "Failed Requests"
+    },
+    "actions": {
+      "refresh": "Refresh",
+      "refreshing": "Refreshing...",
+      "autoRefresh": "Auto Refresh",
+      "stopAutoRefresh": "Stop Auto Refresh",
+      "viewDetails": "View Details",
+      "testProvider": "Test Provider",
+      "retry": "Retry",
+      "probeNow": "Probe Now",
+      "probing": "Probing...",
+      "probeAll": "Probe All",
+      "probeSuccess": "Probe successful",
+      "probeFailed": "Probe failed"
+    },
+    "states": {
+      "loading": "Loading...",
+      "error": "Load Failed",
+      "noProviders": "No Providers",
+      "noData": "No availability data",
+      "fetchFailed": "Failed to fetch availability data"
+    },
+    "legend": {
+      "green": "Excellent (95%+ availability)",
+      "lime": "Good (80-95% availability)",
+      "orange": "Warning (50-80% availability)",
+      "red": "Unhealthy (<50% availability)",
+      "noData": "No Data"
+    },
+    "summary": {
+      "title": "Availability Summary",
+      "healthyProviders": "Healthy Providers",
+      "unhealthyProviders": "Unhealthy Providers",
+      "unknownProviders": "No Data",
+      "totalProviders": "Total Providers"
+    },
+    "heatmap": {
+      "bucketSize": "Bucket Size",
+      "minutes": "min",
+      "requests": "requests",
+      "noData": "No Data",
+      "noRequests": "No Requests"
+    },
+    "probeHistory": {
+      "title": "Endpoint Probe History",
+      "description": "View probe logs and manually trigger probes for specific endpoints",
+      "selectVendor": "Select Vendor",
+      "selectType": "Select Provider Type",
+      "selectEndpoint": "Select Endpoint",
+      "noEndpoints": "No endpoints found",
+      "probeNow": "Probe Now",
+      "probing": "Probing...",
+      "columns": {
+        "time": "Time",
+        "method": "Method",
+        "status": "Status",
+        "latency": "Latency",
+        "error": "Error"
+      },
+      "success": "Success",
+      "manual": "Manual Probe",
+      "auto": "Auto Probe",
+      "probeSuccess": "Probe successful",
+      "probeFailed": "Probe failed"
+    },
+    "laneChart": {
+      "title": "Provider Availability Timeline",
+      "noData": "No data available",
+      "requests": "{count} requests",
+      "availability": "{value}% available",
+      "noRequests": "No requests",
+      "denseData": "Dense",
+      "sparseData": "Sparse",
+      "latency": "Latency"
+    },
+    "latencyChart": {
+      "title": "Latency Distribution",
+      "p50": "P50",
+      "p95": "P95",
+      "p99": "P99",
+      "noData": "No latency data available"
+    },
+    "latencyCurve": {
+      "title": "Latency Trend",
+      "noData": "No latency data available",
+      "avg": "Avg",
+      "min": "Min",
+      "max": "Max",
+      "latency": "Latency"
+    },
+    "terminal": {
+      "title": "Probe Logs",
+      "live": "LIVE",
+      "download": "Download logs",
+      "noLogs": "No probe logs available",
+      "manual": "MANUAL",
+      "auto": "AUTO",
+      "filterPlaceholder": "Filter logs..."
+    },
+    "probeGrid": {
+      "title": "Endpoint Status",
+      "noEndpoints": "No endpoints configured",
+      "lastProbe": "Last probe",
+      "status": {
+        "unknown": "Unknown",
+        "healthy": "Healthy",
+        "unhealthy": "Unhealthy"
+      }
+    },
+    "endpoint": {
+      "selectVendor": "Select vendor",
+      "selectType": "Select type"
+    },
+    "confidence": {
+      "low": "Low",
+      "medium": "Medium",
+      "high": "High",
+      "lowTooltip": "Less than {count} requests. Data may not be representative.",
+      "mediumTooltip": "Moderate request volume. Data is reasonably reliable.",
+      "highTooltip": "High request volume. Data is reliable."
+    },
+    "toast": {
+      "refreshSuccess": "Availability data refreshed",
+      "refreshFailed": "Refresh failed, please retry"
+    }
+  },
+  "rateLimits": {
+    "title": "Rate Limit Event Statistics",
+    "description": "View and analyze statistics for rate limit events",
+    "loading": "Loading...",
+    "error": "Load Failed",
+    "totalEvents": "Total Events",
+    "avgUsage": "Avg Usage",
+    "affectedUsers": "Affected Users",
+    "noData": "No Data",
+    "noDataHint": "No rate limit events in the selected time range",
+    "filters": {
+      "startTime": "Start Time",
+      "endTime": "End Time",
+      "user": "User",
+      "provider": "Provider",
+      "limitType": "Limit Type",
+      "allUsers": "All Users",
+      "allProviders": "All Providers",
+      "allLimitTypes": "All Types",
+      "apply": "Apply Filters",
+      "reset": "Reset",
+      "loading": "Loading...",
+      "limitTypes": {
+        "rpm": "RPM Limit",
+        "usd_5h": "5h Spend Limit",
+        "usd_weekly": "Weekly Spend Limit",
+        "usd_monthly": "Monthly Spend Limit",
+        "concurrent_sessions": "Concurrent Session Limit",
+        "daily_quota": "Daily Quota Limit"
+      }
+    },
+    "chart": {
+      "title": "Rate Limit Timeline",
+      "description": "Hourly trend of rate limit events",
+      "total": "Total",
+      "events": "Events"
+    },
+    "breakdown": {
+      "title": "Rate Limit Type Breakdown",
+      "description": "Share of events by rate limit type",
+      "total": "Total",
+      "count": "Events",
+      "percentage": "Percentage",
+      "noData": "No Data",
+      "types": {
+        "rpm": "RPM",
+        "usd_5h": "5h Spend",
+        "usd_weekly": "Weekly Spend",
+        "usd_monthly": "Monthly Spend",
+        "concurrent_sessions": "Concurrent Sessions",
+        "daily_quota": "Daily Quota"
+      }
+    },
+    "topUsers": {
+      "title": "Top Affected Users",
+      "description": "Users who triggered rate limits most frequently",
+      "total": "Total",
+      "rank": "Rank",
+      "username": "Username",
+      "eventCount": "Events",
+      "percentage": "Percentage",
+      "loading": "Loading...",
+      "noData": "No Data"
+    }
+  },
+  "users": {
+    "title": "User Management",
+    "description": "Showing {count} users",
+    "toolbar": {
+      "searchPlaceholder": "Search name, note, tags, keys...",
+      "groupFilter": "Filter by Group",
+      "allGroups": "All Groups",
+      "tagFilter": "Filter by Tag",
+      "allTags": "All Tags",
+      "keyGroupFilter": "Key Group",
+      "allKeyGroups": "All Key Groups",
+      "sortBy": "Sort by",
+      "sortOrder": "Sort order",
+      "sortByName": "Name",
+      "sortByTags": "Tags",
+      "sortByExpiresAt": "Expires at",
+      "sortByRpm": "RPM Limit",
+      "sortByLimit5h": "5h limit",
+      "sortByLimitDaily": "Daily limit",
+      "sortByLimitWeekly": "Weekly limit",
+      "sortByLimitMonthly": "Monthly limit",
+      "sortByCreatedAt": "Created at",
+      "ascending": "Ascending",
+      "descending": "Descending",
+      "statusFilter": "Status",
+      "allStatus": "All statuses",
+      "statusActive": "Active",
+      "statusExpired": "Expired",
+      "statusExpiringSoon": "Expiring soon",
+      "statusEnabled": "Enabled",
+      "statusDisabled": "Disabled",
+      "createUser": "Create User",
+      "createKey": "Create Key"
+    },
+    "dialog": {
+      "userProviderGroup": "Your Provider Groups",
+      "userProviderGroupHint": "New keys can only use your existing provider groups."
+    }
+  },
+  "userManagement": {
+    "table": {
+      "columns": {
+        "username": "Username",
+        "note": "Note",
+        "expiresAt": "Expires at",
+        "expiresAtHint": "Click to quick renew",
+        "limitRpm": "RPM",
+        "limit5h": "5h limit",
+        "limitDaily": "Daily limit",
+        "limitWeekly": "Weekly limit",
+        "limitMonthly": "Monthly limit",
+        "limitTotal": "Total limit",
+        "limitSessions": "Concurrent sessions"
+      },
+      "keyRow": {
+        "name": "Key name",
+        "key": "Key",
+        "group": "Group",
+        "todayUsage": "Requests today",
+        "todayCost": "Today's cost",
+        "todayTokens": "Tokens today",
+        "lastUsed": "Last used",
+        "actions": "Actions",
+        "quotaButton": "View Quota Usage",
+        "fields": {
+          "callsLabel": "Requests",
+          "tokensLabel": "Tokens",
+          "costLabel": "Cost"
+        }
+      },
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "refresh": "Refresh",
+      "noKeys": "No keys",
+      "defaultGroup": "default",
+      "userStatus": {
+        "disabled": "Disabled"
+      },
+      "actions": {
+        "addKey": "Add Key"
+      }
+    },
+    "keyFullDisplay": {
+      "title": "Full Key",
+      "copySuccess": "Key copied to clipboard",
+      "copyFailed": "Copy failed",
+      "show": "Show key",
+      "hide": "Hide key",
+      "copied": "Copied",
+      "copy": "Copy key"
+    },
+    "keyStatsDialog": {
+      "title": "Today's Model Statistics",
+      "columns": {
+        "model": "Model",
+        "calls": "Calls",
+        "tokens": "Tokens",
+        "cost": "Cost"
+      },
+      "modal": {
+        "requests": "Requests",
+        "totalTokens": "Total Tokens",
+        "cost": "Cost",
+        "inputTokens": "Input Tokens",
+        "outputTokens": "Output Tokens",
+        "cacheWrite": "Cache Write",
+        "cacheRead": "Cache Read",
+        "cacheHitRate": "Cache Hit Rate",
+        "cacheTokens": "Cache Tokens",
+        "performanceHigh": "High",
+        "performanceMedium": "Medium",
+        "performanceLow": "Low"
+      },
+      "noData": "No usage records today",
+      "totalCalls": "Total Calls",
+      "totalCost": "Total Cost"
+    },
+    "keyQuotaUsageDialog": {
+      "title": "Key Quota Usage",
+      "fetchFailed": "Failed to fetch quota usage",
+      "noLimit": "No limit",
+      "modeFixed": "Fixed time",
+      "modeRolling": "Rolling 24h",
+      "retry": "Retry",
+      "labels": {
+        "limit5h": "5 Hours",
+        "limitDaily": "Daily",
+        "limitWeekly": "Weekly",
+        "limitMonthly": "Monthly",
+        "limitTotal": "Total",
+        "limitSessions": "Concurrent"
+      }
+    },
+    "quickRenew": {
+      "title": "Quick Renew",
+      "description": "Set a new expiration date for user {userName}",
+      "currentExpiry": "Current Expiration",
+      "neverExpires": "Never expires",
+      "expired": "Expired",
+      "quickExtensionLabel": "Quick Extension",
+      "quickExtensionHint": "Extend from current expiry (or from now if expired)",
+      "customDateLabel": "Set Expiry Date",
+      "customDateHint": "Directly specify an expiry date",
+      "quickOptions": {
+        "7days": "7 Days",
+        "30days": "30 Days",
+        "90days": "90 Days",
+        "1year": "1 Year"
+      },
+      "customDate": "Custom Date",
+      "enableOnRenew": "Also enable user",
+      "enableKeyOnRenew": "Also enable key",
+      "cancel": "Cancel",
+      "confirm": "Confirm Renewal",
+      "confirming": "Renewing...",
+      "success": "Renewal successful",
+      "failed": "Renewal failed"
+    },
+    "dialog": {
+      "createKeyTitle": "Create Key",
+      "editKeyTitle": "Edit Key"
+    },
+    "editDialog": {
+      "title": "Edit user",
+      "description": "Edit user information",
+      "userSection": "User settings",
+      "keysSection": "Key settings",
+      "scrollToKey": "Scroll to key",
+      "saveFailed": "Failed to save user",
+      "keySaveFailed": "Failed to save key",
+      "keyDeleteFailed": "Failed to delete key",
+      "saveSuccess": "Changes saved successfully",
+      "atLeastOneKeyEnabled": "At least one key must be enabled",
+      "operationFailed": "Operation failed",
+      "userDisabled": "User has been disabled",
+      "userEnabled": "User has been enabled",
+      "deleteFailed": "Failed to delete user",
+      "userDeleted": "User has been deleted",
+      "saving": "Saving...",
+      "resetSection": {
+        "title": "Reset Options"
+      },
+      "resetLimits": {
+        "title": "Reset All Limits",
+        "description": "Reset accumulated cost counters for all limits (5h, daily, weekly, monthly, total). Request logs and statistics are preserved.",
+        "button": "Reset All Limits",
+        "confirmTitle": "Reset All Limits?",
+        "confirmDescription": "This will reset all accumulated cost counters (5h, daily, weekly, monthly, total) to zero. Request logs and usage statistics will be preserved.",
+        "confirm": "Yes, Reset All Limits",
+        "loading": "Resetting...",
+        "error": "Failed to reset all limits",
+        "success": "All limits have been reset",
+        "lastResetAt": "Last full reset: {date}"
+      },
+      "reset5h": {
+        "button": "Reset 5H Limit",
+        "confirm": "Yes, Reset 5H Limit",
+        "confirmDescriptionFixed": "This will clear only this user's current fixed 5-hour window. Daily, weekly, monthly, total, and child key usage are not affected.",
+        "confirmDescriptionRolling": "This will reset only this user's aggregated rolling 5-hour usage from now on. Daily, weekly, monthly, total, and child key usage are not affected.",
+        "confirmTitle": "Reset 5H Limit?",
+        "error": "Failed to reset 5H limit",
+        "loading": "Resetting...",
+        "successFixed": "The user's fixed 5H limit window has been reset",
+        "successRolling": "The user's rolling 5H limit has been reset",
+        "unavailableReason": "Available only when a user-level 5H limit is configured."
+      },
+      "resetData": {
+        "title": "Reset Statistics",
+        "description": "Delete all request logs and usage data for this user. This action is irreversible.",
+        "error": "Failed to reset data",
+        "button": "Reset Statistics",
+        "confirmTitle": "Reset All Statistics?",
+        "confirmDescription": "This will permanently delete all request logs and usage statistics for this user. This action cannot be undone.",
+        "confirm": "Yes, Reset All",
+        "loading": "Resetting...",
+        "queued": "Reset queued",
+        "running": "Reset in progress",
+        "completed": "Reset completed",
+        "failed": "Reset failed. You can retry.",
+        "statusUnavailable": "Unable to refresh the reset status",
+        "retryStatus": "Retry status",
+        "success": "All statistics have been reset"
+      }
+    },
+    "batchEdit": {
+      "enterMode": "Batch Edit",
+      "exitMode": "Exit",
+      "selectAll": "Select All",
+      "selectedCount": "Selected {users} users, {keys} keys",
+      "editSelected": "Edit Selected",
+      "dialog": {
+        "title": "Batch Edit",
+        "description": "Will affect {users} users and {keys} keys",
+        "cancel": "Cancel",
+        "next": "Next",
+        "noFieldEnabled": "Please enable at least one field to override",
+        "noUpdate": "No updates to execute",
+        "noSelection": "Please select users or keys to batch edit first."
+      },
+      "confirm": {
+        "title": "Confirm Batch Update",
+        "description": "This will update {users} users and {keys} keys. This action cannot be undone.",
+        "userFields": "User Fields",
+        "keyFields": "Key Fields",
+        "goBack": "Go Back",
+        "update": "Confirm Update",
+        "updating": "Updating..."
+      },
+      "toast": {
+        "usersUpdated": "Updated {count} users",
+        "keysUpdated": "Updated {count} keys",
+        "usersFailed": "User update failed: {error}",
+        "keysFailed": "Key update failed: {error}",
+        "batchFailed": "Batch update failed"
+      },
+      "validation": {
+        "invalidNumber": "Please enter a valid number",
+        "negativeNumber": "Value cannot be negative"
+      },
+      "aria": {
+        "selectUser": "Select user",
+        "selectKey": "Select key"
+      },
+      "user": {
+        "title": "User Settings",
+        "affected": "Will affect {count} users",
+        "enableFieldAria": "Enable field: {title}",
+        "fields": {
+          "note": "Note",
+          "tags": "Tags",
+          "rpm": "RPM Limit",
+          "limit5h": "5h Limit (USD)",
+          "limitDaily": "Daily Limit (USD)",
+          "limitWeekly": "Weekly Limit (USD)",
+          "limitMonthly": "Monthly Limit (USD)"
+        },
+        "placeholders": {
+          "emptyToClear": "Leave empty to clear",
+          "tagsPlaceholder": "Press enter to add, comma-separated",
+          "emptyNoLimit": "Leave empty for no limit"
+        }
+      },
+      "key": {
+        "title": "Key Settings",
+        "affected": "Will affect {count} keys",
+        "fields": {
+          "providerGroup": "Group (providerGroup)",
+          "limit5h": "5h Limit (USD)",
+          "limitDaily": "Daily Limit (USD)",
+          "limitWeekly": "Weekly Limit (USD)",
+          "limitMonthly": "Monthly Limit (USD)",
+          "canLoginWebUi": "Independent Personal Usage Page",
+          "keyEnabled": "Key Enabled Status"
+        },
+        "placeholders": {
+          "groupPlaceholder": "Leave empty to clear, comma-separated for multiple",
+          "emptyNoLimit": "Leave empty for no limit"
+        },
+        "targetValue": "Target Value"
+      }
+    },
+    "createDialog": {
+      "title": "Create user",
+      "description": "Create a new user and configure API keys",
+      "saveFailed": "Failed to create user",
+      "keyCreateFailed": "Failed to create key",
+      "rollbackFailed": "Rollback failed. The user may have been created without a key. Please delete the user manually (userId: {userId}) and try again.",
+      "createSuccess": "User created successfully",
+      "successTitle": "Created Successfully",
+      "successDescription": "User and key have been created",
+      "generatedKey": "Generated Key",
+      "keyHint": "You can manage this key from the user management page (enable/disable, quotas, etc.) and view the full key again at any time. Keep it secure.",
+      "keysSection": "Keys",
+      "addKey": "Add key",
+      "removeKey": "Remove key",
+      "cannotDeleteLastKey": "Cannot delete the last key",
+      "confirmRemoveKeyTitle": "Remove key",
+      "confirmRemoveKeyDescription": "Are you sure you want to remove the key \"{name}\"?",
+      "creating": "Creating...",
+      "create": "Create"
+    },
+    "limitRules": {
+      "addRule": "Add limit rule",
+      "title": "Add Limit Rule",
+      "description": "Select limit type and set value",
+      "cancel": "Cancel",
+      "confirm": "Save",
+      "fields": {
+        "type": {
+          "label": "Limit Type",
+          "placeholder": "Select"
+        },
+        "value": {
+          "label": "Value",
+          "placeholder": "Enter"
+        }
+      },
+      "daily": {
+        "mode": {
+          "label": "Daily Reset Mode",
+          "fixed": "Fixed time reset",
+          "rolling": "Rolling window (24h)",
+          "helperRolling": "Rolling 24-hour window from first request"
+        },
+        "time": {
+          "label": "Reset Time",
+          "placeholder": "HH:mm"
+        }
+      },
+      "limitTypes": {
+        "limitRpm": "RPM Limit",
+        "limit5h": "5-Hour Limit",
+        "limitDaily": "Daily Limit",
+        "limitWeekly": "Weekly Limit",
+        "limitMonthly": "Monthly Limit",
+        "limitTotal": "Total Limit",
+        "limitSessions": "Concurrent Sessions"
+      },
+      "ruleTypes": {
+        "limitRpm": "RPM limit",
+        "limit5h": "5-hour limit",
+        "limitDaily": "Daily limit",
+        "limitWeekly": "Weekly limit",
+        "limitMonthly": "Monthly limit",
+        "limitTotal": "Total limit",
+        "limitSessions": "Concurrent sessions"
+      },
+      "errors": {
+        "missingType": "Please select a limit type",
+        "invalidValue": "Please enter a valid value",
+        "invalidTime": "Please enter a valid time (HH:mm)"
+      },
+      "overwriteHint": "This type already exists, saving will overwrite the existing value",
+      "dailyMode": {
+        "fixed": "Fixed reset time",
+        "rolling": "Rolling window (24h)"
+      },
+      "quickValues": {
+        "10": "$10",
+        "50": "$50",
+        "100": "$100",
+        "500": "$500",
+        "unlimited": "Unlimited"
+      },
+      "alreadySet": "Configured",
+      "confirmAdd": "Add"
+    },
+    "quickExpire": {
+      "oneWeek": "In 1 week",
+      "oneMonth": "In 1 month",
+      "threeMonths": "In 3 months",
+      "oneYear": "In 1 year"
+    },
+    "providerGroupSelect": {
+      "providersSuffix": "providers",
+      "loadFailed": "Failed to load provider groups"
+    },
+    "providerGroup": {
+      "label": "Provider group",
+      "placeholder": "Select provider group",
+      "noRestriction": "No restriction (all providers)",
+      "providerCount": "{count} providers"
+    },
+    "dangerZone": {
+      "title": "Danger Zone",
+      "description": "The following actions are irreversible, proceed with caution",
+      "enable": {
+        "title": "Enable User",
+        "description": "After enabling, this user and their keys will resume normal operation",
+        "trigger": "Enable",
+        "confirm": "Confirm Enable",
+        "confirmDescription": "Are you sure you want to enable user \"{userName}\"?",
+        "loading": "Processing..."
+      },
+      "disable": {
+        "title": "Disable User",
+        "description": "After disabling, this user and their keys will no longer be usable",
+        "trigger": "Disable",
+        "confirm": "Confirm Disable",
+        "confirmDescription": "Are you sure you want to disable user \"{userName}\"?",
+        "loading": "Processing..."
+      },
+      "delete": {
+        "title": "Delete User",
+        "description": "This will delete all associated data for this user, this action cannot be undone",
+        "trigger": "Delete",
+        "confirm": "Confirm Delete",
+        "confirmDescription": "This action will delete all associated data for user \"{userName}\" and cannot be undone.",
+        "confirmLabel": "Secondary Confirmation",
+        "confirmHint": "Please type \"{userName}\" to confirm deletion",
+        "loading": "Deleting..."
+      },
+      "actions": {
+        "cancel": "Cancel"
+      },
+      "errors": {
+        "enableFailed": "Failed to enable user, please try again later",
+        "disableFailed": "Failed to disable user, please try again later",
+        "deleteFailed": "Failed to delete user, please try again later"
+      }
+    },
+    "limitIndicator": {
+      "notSet": "Not set",
+      "unlimited": "Unlimited"
+    },
+    "keySettings": {
+      "balanceQueryPage": {
+        "label": "Enable dedicated balance page",
+        "description": "Allow users to view their balance via a dedicated page",
+        "descriptionEnabled": "When enabled, this key will access an independent personal usage page upon login. However, it cannot modify its own key's provider group.",
+        "descriptionDisabled": "When disabled, the user cannot access the personal usage page UI. Instead, they will use the restricted Web UI."
+      },
+      "cacheTtlOverride": {
+        "label": "Cache TTL override",
+        "inherit": "No override (follow provider/client)",
+        "5m": "5 minutes",
+        "1h": "1 hour"
+      }
+    },
+    "pagination": {
+      "previous": "Previous",
+      "next": "Next",
+      "page": "Page {current}",
+      "of": "of {total}"
+    },
+    "toolbar": {
+      "expandAll": "Expand all",
+      "collapseAll": "Collapse all"
+    },
+    "keyStatus": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "active": "Active",
+      "expired": "Expired",
+      "expiringSoon": "Expiring Soon",
+      "keyEnabled": "Key enabled",
+      "keyDisabled": "Key disabled",
+      "toggleKeyStatus": "Toggle key status",
+      "clickToDisableKey": "Click to disable key",
+      "clickToEnableKey": "Click to enable key",
+      "operationFailed": "Operation failed",
+      "clickToQuickRenew": "Click to quick renew"
+    },
+    "userStatus": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "active": "Active",
+      "expired": "Expired",
+      "expiringSoon": "Expiring Soon",
+      "userEnabled": "User enabled",
+      "userDisabled": "User disabled",
+      "toggleUserStatus": "Toggle user status",
+      "clickToDisableUser": "Click to disable user",
+      "clickToEnableUser": "Click to enable user",
+      "operationFailed": "Operation failed",
+      "deleteFailed": "Delete failed",
+      "deleteSuccess": "Delete successful",
+      "daysLeft": "{days, plural, =0 {Expires today} =1 {1 day left} other {# days left}}"
+    },
+    "userEditSection": {
+      "sections": {
+        "basicInfo": "Basic Information",
+        "expireTime": "Expiration Time",
+        "limitRules": "Limit Rules",
+        "accessRestrictions": "Access Restrictions"
+      },
+      "fields": {
+        "username": {
+          "label": "Username",
+          "placeholder": "Enter username"
+        },
+        "description": {
+          "label": "Note",
+          "placeholder": "Enter note (optional)"
+        },
+        "tags": {
+          "label": "User Tags",
+          "placeholder": "Enter tag (press Enter to add)"
+        },
+        "providerGroup": {
+          "label": "Provider Group",
+          "placeholder": "default"
+        },
+        "allowedClients": {
+          "label": "Client Restrictions",
+          "description": "Restrict which CLI/IDE clients can use this account. Empty = no restriction.",
+          "customLabel": "Custom Client Pattern",
+          "customPlaceholder": "Enter pattern (e.g., 'my-ide', 'codex-*')",
+          "customHelp": "Without '*': case-insensitive substring match ('-'/'_' ignored). With '*': glob pattern match from start of UA (use *foo* to match anywhere; case-insensitive, characters are literal)."
+        },
+        "blockedClients": {
+          "label": "Blocked Clients",
+          "description": "Clients matching these patterns will be rejected, even if they match allowed clients.",
+          "customLabel": "Custom Block Pattern",
+          "customPlaceholder": "Enter pattern (e.g., 'my-ide', 'codex-*')",
+          "customHelp": "Without '*': case-insensitive substring match ('-'/'_' ignored). With '*': glob pattern match from start of UA (use *foo* to match anywhere; case-insensitive, characters are literal)."
+        },
+        "allowedModels": {
+          "label": "Model Restrictions",
+          "placeholder": "Enter model name or select from dropdown",
+          "description": "Restrict which AI models this user can access. Empty = no restriction."
+        },
+        "enableStatus": {
+          "label": "Enable Status",
+          "enabledDescription": "Currently enabled. Disabling will prevent this user and their keys from being used.",
+          "disabledDescription": "Currently disabled. Enabling will restore normal access for this user and their keys.",
+          "confirmDisable": "Confirm Disable",
+          "confirmEnable": "Confirm Enable",
+          "confirmEnableTitle": "Confirm Enable User",
+          "confirmDisableTitle": "Confirm Disable User",
+          "confirmEnableDescription": "Enabling will restore normal access for this user and their keys.",
+          "confirmDisableDescription": "Disabling will prevent this user and their keys from being used.",
+          "cancel": "Cancel",
+          "processing": "Processing..."
+        }
+      },
+      "actions": {
+        "allow": "Allow",
+        "block": "Block"
+      },
+      "presetClients": {
+        "claude-cli": "Claude Code CLI",
+        "gemini-cli": "Gemini CLI",
+        "factory-cli": "Droid CLI",
+        "codex-cli": "Codex CLI",
+        "claude-code": "Claude Code (all)",
+        "claude-code-cli": "Claude Code CLI (builtin)",
+        "claude-code-cli-sdk": "Claude Code CLI SDK",
+        "claude-code-vscode": "Claude Code VSCode",
+        "claude-code-sdk-ts": "Claude Code SDK (TypeScript)",
+        "claude-code-sdk-py": "Claude Code SDK (Python)",
+        "claude-code-gh-action": "Claude Code GitHub Action"
+      },
+      "subClients": {
+        "all": "All",
+        "cli": "CLI",
+        "vscode": "VS Code",
+        "sdk-ts": "SDK (TypeScript)",
+        "sdk-py": "SDK (Python)",
+        "cli-sdk": "CLI SDK",
+        "gh-action": "GitHub Action",
+        "codex-cli-core": "CLI / TUI",
+        "desktop": "Desktop",
+        "exec": "Exec"
+      },
+      "nSelected": "{count} selected"
+    },
+    "keyEditSection": {
+      "sections": {
+        "basicInfo": "Basic Information",
+        "expireTime": "Expiration Time",
+        "limitRules": "Limit Rules",
+        "specialFeatures": "Special Features"
+      },
+      "fields": {
+        "keyName": {
+          "label": "Key Name",
+          "placeholder": "Enter key name"
+        },
+        "enableStatus": {
+          "label": "Enable Status",
+          "description": "Disabled keys cannot be used",
+          "cannotDisableTooltip": "Cannot disable the last enabled key"
+        },
+        "balanceQueryPage": {
+          "label": "Independent Personal Usage Page",
+          "description": "When enabled, this key can access an independent personal usage page",
+          "descriptionEnabled": "When enabled, this key will access an independent personal usage page upon login. However, it cannot modify its own key's provider group.",
+          "descriptionDisabled": "When disabled, the user cannot access the personal usage page UI. Instead, they will use the restricted Web UI."
+        },
+        "providerGroup": {
+          "label": "Provider Group",
+          "placeholder": "Default: default",
+          "selectHint": "Select the provider group(s) this key can use (default: default).",
+          "editHint": "Provider group cannot be changed for existing keys.",
+          "allGroups": "Use all groups",
+          "noGroupHint": "default includes providers without groupTag."
+        },
+        "cacheTtl": {
+          "label": "Cache TTL Override",
+          "description": "Force Anthropic prompt cache TTL for requests containing cache_control.",
+          "options": {
+            "inherit": "No override (follow provider/client)",
+            "5m": "5m",
+            "1h": "1h"
+          }
+        }
+      },
+      "limitRules": {
+        "title": "Add limit rule",
+        "actions": {
+          "add": "Add rule",
+          "remove": "Remove"
+        },
+        "daily": {
+          "mode": {
+            "fixed": "Fixed time reset",
+            "rolling": "Rolling window (24h)"
+          }
+        },
+        "overwriteHint": "This type already exists, saving will overwrite the existing value"
+      },
+      "accessRestrictions": {
+        "title": "Access Restrictions",
+        "models": "Allowed Models",
+        "clients": "Allowed Clients",
+        "noRestrictions": "No restrictions",
+        "inheritedFromUser": "Inherited from user settings"
+      }
+    }
+  },
+  "webhookMigration": {
+    "title": "Webhook System Upgrade",
+    "description": "We have launched a new Webhook notification system with multi-target delivery, independent configuration, and improved reliability.",
+    "step1": {
+      "title": "Legacy Webhook Configuration Detected",
+      "description": "The system detected that you are using legacy Webhook configuration. The new system offers more powerful features, and we recommend migrating."
+    },
+    "step2": {
+      "title": "Select Platform Type",
+      "description": "The following Webhook URLs could not be automatically identified. Please select the platform manually:"
+    },
+    "platformOptions": {
+      "wechat": "WeChat Work",
+      "feishu": "Feishu",
+      "dingtalk": "DingTalk",
+      "telegram": "Telegram",
+      "custom": "Custom"
+    },
+    "migrateButton": "Start Migration",
+    "skipButton": "Maybe Later",
+    "nextButton": "Next",
+    "goToSettingsButton": "Go to Settings",
+    "migrating": "Migrating...",
+    "success": "Migration Complete",
+    "successDescription": "Your Webhook configuration has been successfully migrated to the new system.",
+    "error": "Migration Failed",
+    "errorGeneric": "Migration failed. Please try again later.",
+    "detectedWebhooks": "Detected Webhooks",
+    "notificationTypes": {
+      "circuit_breaker": "Circuit Breaker Alert",
+      "daily_leaderboard": "Daily Leaderboard",
+      "cost_alert": "Cost Alert"
+    },
+    "urlLabel": "Webhook URL",
+    "platformLabel": "Platform Type",
+    "autoDetected": "Auto-detected",
+    "selectPlatform": "Select platform",
+    "successStats": "Created {targets} targets, {bindings} bindings"
+  },
+  "limitRules": {
+    "addRule": "Add limit rule",
+    "title": "Add Limit Rule",
+    "description": "Select limit type and set value",
+    "cancel": "Cancel",
+    "confirm": "Save",
+    "fields": {
+      "type": {
+        "label": "Limit Type",
+        "placeholder": "Select"
+      },
+      "value": {
+        "label": "Value",
+        "placeholder": "Enter"
+      }
+    },
+    "limit5h": {
+      "mode": {
+        "label": "5-Hour Reset Mode",
+        "fixed": "Fixed window",
+        "rolling": "Rolling window (5h)",
+        "helperFixed": "Start a fixed 5-hour window from the first successful charge.",
+        "helperRolling": "Use a rolling 5-hour window from the latest usage."
+      }
+    },
+    "daily": {
+      "mode": {
+        "label": "Daily Reset Mode",
+        "fixed": "Fixed time reset",
+        "rolling": "Rolling window (24h)",
+        "helperFixed": "Reset quota at a specific time each day.",
+        "helperRolling": "Rolling 24-hour window from first request"
+      },
+      "time": {
+        "label": "Reset Time",
+        "placeholder": "HH:mm"
+      }
+    },
+    "limitTypes": {
+      "limitRpm": "RPM Limit",
+      "limit5h": "5-Hour Limit",
+      "limitDaily": "Daily Limit",
+      "limitWeekly": "Weekly Limit",
+      "limitMonthly": "Monthly Limit",
+      "limitTotal": "Total Limit",
+      "limitSessions": "Concurrent Sessions"
+    },
+    "ruleTypes": {
+      "limitRpm": "RPM limit",
+      "limit5h": "5-hour limit",
+      "limitDaily": "Daily limit",
+      "limitWeekly": "Weekly limit",
+      "limitMonthly": "Monthly limit",
+      "limitTotal": "Total limit",
+      "limitSessions": "Concurrent sessions"
+    },
+    "errors": {
+      "missingType": "Please select a limit type",
+      "invalidValue": "Please enter a valid value",
+      "invalidTime": "Please enter a valid time (HH:mm)"
+    },
+    "overwriteHint": "This type already exists, saving will overwrite the existing value",
+    "quickValues": {
+      "10": "$10",
+      "50": "$50",
+      "100": "$100",
+      "500": "$500",
+      "unlimited": "Unlimited"
+    },
+    "alreadySet": "Configured",
+    "confirmAdd": "Add"
+  }
+}

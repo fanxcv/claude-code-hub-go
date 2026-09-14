@@ -1,0 +1,121 @@
+# ---------------------------------------------------------------------------
+# 冻结的 Node 限流错误文案（messages/ja/errors.json）
+# ---------------------------------------------------------------------------
+#
+# 冻结时点：7f39ec64（tag: pre-node-removal，删该词表前最后一个含它的提交）。
+#           实测该提交与删除前 HEAD 的 errors.json 逐字节一致（sha256 前 16 字节 564c0873af4d0daa，9451 字节）。
+# 生成方式：git show 7f39ec64:messages/ja/errors.json 的输出原样附在本文件头之后，
+#           正文未做任何手工编辑（另附 sha256 供复核）。
+# 冻结理由：UI 语种裁到 zh-CN + en（2026-09-13），该词表已从仓库删除；而
+#           go/internal/limit 的九条限流文案仍按 Accept-Language 提供 5 个语种——
+#           那是 **API 行为**，不在「UI 语言只留两语种」的范围内，故其 golden 不能
+#           随词表一起退役。
+#
+# 语义变化（重要）：闸门由「对 UI 词表漂移」降级为「对冻结快照漂移」。
+#   · 仍能抓到：Go 侧 messages.go 的文案被误改。文案是对客户端可见的事实，改一个字
+#     就是改产品行为，而它不会让任何形状断言变红（字段照在、类型照对，只是措辞变了）。
+#   · 不再能抓到：UI 词表将来的变动（该语种的词表已删，不存在「将来」）。
+#
+{
+  "_comment": "Error messages for Japanese",
+
+  "REQUIRED_FIELD": "{field}は必須です",
+  "USER_NAME_REQUIRED": "ユーザー名は必須です",
+  "API_KEY_REQUIRED": "APIキーは必須です",
+  "PROVIDER_NAME_REQUIRED": "プロバイダー名は必須です",
+  "PROVIDER_URL_REQUIRED": "プロバイダーURLは必須です",
+
+  "MIN_LENGTH": "{field}は{min}文字以上である必要があります",
+  "MAX_LENGTH": "{field}は{max}文字を超えることはできません",
+  "INVALID_EMAIL": "有効なメールアドレスを入力してください",
+  "INVALID_URL": "有効なURLを入力してください",
+
+  "MIN_VALUE": "{field}は{min}以上である必要があります",
+  "MAX_VALUE": "{field}は{max}を超えることはできません",
+  "MUST_BE_INTEGER": "{field}は整数である必要があります",
+  "MUST_BE_POSITIVE": "{field}は正の数である必要があります",
+
+  "INVALID_TYPE": "{field}のタイプが無効です",
+  "INVALID_FORMAT": "{field}の形式が無効です",
+
+  "DUPLICATE_NAME": "名前'{name}'は既に存在します",
+  "INVALID_RANGE": "{field}は{min}から{max}の間である必要があります",
+  "EMPTY_UPDATE": "更新するフィールドがありません",
+
+  "UNAUTHORIZED": "未承認です。ログインしてください",
+  "INVALID_CREDENTIALS": "無効なユーザー名またはパスワード",
+  "SESSION_EXPIRED": "セッションが期限切れです。再度ログインしてください",
+  "PERMISSION_DENIED": "アクセス権限がありません",
+  "TOKEN_REQUIRED": "認証トークンが必要です",
+  "INVALID_TOKEN": "無効な認証トークン",
+  "SESSION_REQUEST_SOURCE_MISMATCH": "リクエスト元はこの Session に属していません",
+  "SESSION_REQUEST_SELECTOR_INCOMPLETE": "プレフィックス Session のリクエストでは、物理ソースとリクエスト番号の両方を指定する必要があります",
+  "PROXY_INVALID_API_KEY": "API キーが無効です。指定されたキーは存在しないか、削除されています。",
+  "PROXY_API_KEY_DISABLED": "この API キーは無効化されています。管理者に再有効化を依頼するか、別のキーをご使用ください。",
+  "PROXY_API_KEY_EXPIRED": "この API キーは期限切れです。管理者に更新を依頼するか、新しいキーへ切り替えてください。",
+
+  "INTERNAL_ERROR": "内部サーバーエラー、後でもう一度お試しください",
+  "DATABASE_ERROR": "データベースエラー",
+  "INVALID_NORMALIZED_BODY": "正規化されたリクエスト本文をシリアル化できません",
+  "NOT_FOUND": "リソースが見つかりません",
+  "OPERATION_FAILED": "操作に失敗しました",
+  "USER_5H_FIXED_RESET_REQUIRES_REDIS": "固定 5H 制限のリセットには Redis が必要です",
+  "USER_5H_FIXED_RESET_CLEANUP_FAILED": "固定 5H リセットで Redis の実行状態を消去できませんでした",
+  "USER_LIMITS_RESET_PARTIAL_FAILURE": "制限リセットの DB 更新は完了しましたが、Redis の実行状態のクリーンアップが残っています",
+  "USER_STATS_RESET_PARTIAL_FAILURE": "統計リセットの DB 変更は完了しましたが、Redis の実行状態のクリーンアップが残っています",
+  "USER_5H_RESET_COMPENSATION_REQUIRED": "Redis クリーンアップ失敗後に 5H リセットを完全にロールバックできませんでした。状態を確認してください",
+  "USER_5H_RESET_REQUIRES_REDIS": "5H 制限のリセットには Redis が必要です",
+  "USER_5H_LIMIT_NOT_CONFIGURED": "このユーザーにはユーザーレベルの 5H 制限が設定されていません",
+  "CREATE_FAILED": "作成に失敗しました。後でもう一度お試しください",
+  "UPDATE_FAILED": "更新に失敗しました。後でもう一度お試しください",
+  "DELETE_FAILED": "削除に失敗しました。後でもう一度お試しください",
+
+  "CONNECTION_FAILED": "接続に失敗しました",
+  "TIMEOUT": "リクエストがタイムアウトしました",
+  "NETWORK_ERROR": "ネットワークエラー",
+
+  "QUOTA_EXCEEDED": "クォータを超過しました",
+  "BATCH_SIZE_EXCEEDED": "一括操作は {max} 件を超えることはできません",
+  "RATE_LIMIT_EXCEEDED": "リクエストが多すぎます。後でもう一度お試しください",
+  "RATE_LIMIT_RPM_EXCEEDED": "リクエストレート制限を超過しました：現在 {current} 回/分（制限：{limit} 回/分）。{resetTime} にリセットされます",
+  "RATE_LIMIT_5H_EXCEEDED": "5時間コスト制限を超過しました：${current} USD（制限：${limit} USD）。{resetTime} にリセットされます",
+  "RATE_LIMIT_5H_ROLLING_EXCEEDED": "5時間ローリングウィンドウのコスト制限を超過しました：${current} USD（制限：${limit} USD）。使用量は過去5時間で徐々に解放されます",
+  "RATE_LIMIT_DAILY_QUOTA_EXCEEDED": "日次クォータを超過しました：${current} USD（制限：${limit} USD）。{resetTime} にリセットされます",
+  "RATE_LIMIT_DAILY_ROLLING_EXCEEDED": "24時間ローリングウィンドウのコスト制限を超過しました：${current} USD（制限：${limit} USD）。使用量は過去24時間で徐々に解放されます",
+  "RATE_LIMIT_WEEKLY_EXCEEDED": "週次コスト制限を超過しました：${current} USD（制限：${limit} USD）。{resetTime} にリセットされます",
+  "RATE_LIMIT_MONTHLY_EXCEEDED": "月次コスト制限を超過しました：${current} USD（制限：${limit} USD）。{resetTime} にリセットされます",
+  "RATE_LIMIT_TOTAL_EXCEEDED": "総支出制限を超過しました：${current} / ${limit} USD",
+  "RATE_LIMIT_CONCURRENT_SESSIONS_EXCEEDED": "同時セッション制限を超過しました：現在 {current} セッション（制限：{limit}）。アクティブなセッションが完了するまでお待ちください",
+  "RESOURCE_BUSY": "リソースは現在使用中です",
+  "INVALID_STATE": "現在の状態では操作が許可されていません",
+  "CONFLICT": "操作の競合",
+  "ENDPOINT_REFERENCED_BY_ENABLED_PROVIDERS": "このエンドポイントは {count} 件の有効なプロバイダーから参照されています: {providers}",
+
+  "USER_NOT_FOUND": "ユーザーが見つかりません",
+  "USER_CANNOT_MODIFY_SENSITIVE_FIELDS": "一般ユーザーはクォータ制限とプロバイダーグループを変更できません",
+  "CREATE_USER_FAILED": "ユーザーの作成に失敗しました。後でもう一度お試しください",
+  "UPDATE_USER_FAILED": "ユーザーの更新に失敗しました。後でもう一度お試しください",
+  "DELETE_USER_FAILED": "ユーザーの削除に失敗しました。後でもう一度お試しください",
+  "GET_USER_QUOTA_FAILED": "ユーザークォータ情報の取得に失敗しました",
+
+  "KEY_NOT_FOUND": "キーが見つかりません",
+  "CREATE_KEY_FAILED": "キーの作成に失敗しました。後でもう一度お試しください",
+  "UPDATE_KEY_FAILED": "キーの更新に失敗しました。後でもう一度お試しください",
+  "DELETE_KEY_FAILED": "キーの削除に失敗しました。後でもう一度お試しください",
+  "CANNOT_DISABLE_LAST_KEY": "最後のアクティブなキーを無効にすることはできません。ユーザーには少なくとも1つの有効なキーが必要です",
+  "CANNOT_DELETE_LAST_KEY": "最後の有効なキーは削除できません。ユーザーには少なくとも1つの有効なキーが必要です",
+  "CANNOT_DELETE_LAST_GROUP_KEY": "このキーは削除できません。削除すると利用可能なプロバイダーグループがなくなります。先にグループを含む別のキーを作成するか、管理者にお問い合わせください",
+  "KEY_LIMIT_5H_EXCEEDS_USER_LIMIT": "キーの5時間上限（{keyLimit}）はユーザー上限（{userLimit}）を超えられません",
+  "KEY_LIMIT_DAILY_EXCEEDS_USER_LIMIT": "キーの日次上限（{keyLimit}）はユーザー上限（{userLimit}）を超えられません",
+  "KEY_LIMIT_WEEKLY_EXCEEDS_USER_LIMIT": "キーの週次上限（{keyLimit}）はユーザー上限（{userLimit}）を超えられません",
+  "KEY_LIMIT_MONTHLY_EXCEEDS_USER_LIMIT": "キーの月次上限（{keyLimit}）はユーザー上限（{userLimit}）を超えられません",
+  "KEY_LIMIT_TOTAL_EXCEEDS_USER_LIMIT": "キーの総上限（{keyLimit}）はユーザー上限（{userLimit}）を超えられません",
+  "KEY_LIMIT_CONCURRENT_EXCEEDS_USER_LIMIT": "キーの同時セッション上限（{keyLimit}）はユーザー上限（{userLimit}）を超えられません",
+  "EXPIRES_AT_FIELD": "有効期限",
+  "IP_ADDRESS_FIELD": "IP アドレス",
+  "EXPIRES_AT_MUST_BE_FUTURE": "有効期限は将来の日付である必要があります",
+  "EXPIRES_AT_TOO_FAR": "有効期限は10年を超えることはできません",
+  "CANNOT_DISABLE_SELF": "自分のアカウントを無効にすることはできません",
+  "NO_DEFAULT_GROUP_PERMISSION": "defaultグループを使用する権限がありません。defaultグループのキーを持っていません",
+  "NO_GROUP_PERMISSION": "以下のグループを使用する権限がありません: {groups}"
+}

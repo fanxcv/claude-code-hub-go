@@ -1,0 +1,169 @@
+{
+  "caseCount": 27,
+  "cases": [
+    {
+      "clientPathname": "/v1/messages",
+      "expected": "/v1/messages",
+      "id": "path.anthropic-messages./v1/messages",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientPathname": "/v1/messages/count_tokens",
+      "expected": "/v1/messages/count_tokens",
+      "id": "path.anthropic-messages./v1/messages/count_tokens",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientPathname": "/v1/chat/completions",
+      "expected": "/v1/messages",
+      "id": "path.anthropic-messages./v1/chat/completions",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientPathname": "/v1/embeddings",
+      "expected": null,
+      "id": "path.anthropic-messages./v1/embeddings",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientPathname": "/v1/responses",
+      "expected": "/v1/messages",
+      "id": "path.anthropic-messages./v1/responses",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientPathname": "/v1/responses/compact",
+      "expected": null,
+      "id": "path.anthropic-messages./v1/responses/compact",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientPathname": "/v1/Messages/",
+      "expected": "/v1/messages",
+      "id": "path.anthropic-messages./v1/Messages/",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientPathname": "/v1/messages?beta=1",
+      "expected": "/v1/messages",
+      "id": "path.anthropic-messages./v1/messages?beta=1",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientPathname": "/v2/unknown",
+      "expected": null,
+      "id": "path.anthropic-messages./v2/unknown",
+      "targetProtocol": "anthropic-messages"
+    },
+    {
+      "clientPathname": "/v1/messages",
+      "expected": "/v1/chat/completions",
+      "id": "path.openai-chat./v1/messages",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientPathname": "/v1/messages/count_tokens",
+      "expected": null,
+      "id": "path.openai-chat./v1/messages/count_tokens",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientPathname": "/v1/chat/completions",
+      "expected": "/v1/chat/completions",
+      "id": "path.openai-chat./v1/chat/completions",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientPathname": "/v1/embeddings",
+      "expected": "/v1/embeddings",
+      "id": "path.openai-chat./v1/embeddings",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientPathname": "/v1/responses",
+      "expected": "/v1/chat/completions",
+      "id": "path.openai-chat./v1/responses",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientPathname": "/v1/responses/compact",
+      "expected": null,
+      "id": "path.openai-chat./v1/responses/compact",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientPathname": "/v1/Messages/",
+      "expected": "/v1/chat/completions",
+      "id": "path.openai-chat./v1/Messages/",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientPathname": "/v1/messages?beta=1",
+      "expected": "/v1/chat/completions",
+      "id": "path.openai-chat./v1/messages?beta=1",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientPathname": "/v2/unknown",
+      "expected": null,
+      "id": "path.openai-chat./v2/unknown",
+      "targetProtocol": "openai-chat"
+    },
+    {
+      "clientPathname": "/v1/messages",
+      "expected": "/v1/responses",
+      "id": "path.openai-responses./v1/messages",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientPathname": "/v1/messages/count_tokens",
+      "expected": null,
+      "id": "path.openai-responses./v1/messages/count_tokens",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientPathname": "/v1/chat/completions",
+      "expected": "/v1/responses",
+      "id": "path.openai-responses./v1/chat/completions",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientPathname": "/v1/embeddings",
+      "expected": null,
+      "id": "path.openai-responses./v1/embeddings",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientPathname": "/v1/responses",
+      "expected": "/v1/responses",
+      "id": "path.openai-responses./v1/responses",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientPathname": "/v1/responses/compact",
+      "expected": "/v1/responses/compact",
+      "id": "path.openai-responses./v1/responses/compact",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientPathname": "/v1/Messages/",
+      "expected": "/v1/responses",
+      "id": "path.openai-responses./v1/Messages/",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientPathname": "/v1/messages?beta=1",
+      "expected": "/v1/responses",
+      "id": "path.openai-responses./v1/messages?beta=1",
+      "targetProtocol": "openai-responses"
+    },
+    {
+      "clientPathname": "/v2/unknown",
+      "expected": null,
+      "id": "path.openai-responses./v2/unknown",
+      "targetProtocol": "openai-responses"
+    }
+  ],
+  "description": "上游路径映射（resolveUpstreamPath，含跨线不可转与未知路径）",
+  "generatedBy": "scripts/export-conformance-corpus.ts"
+}

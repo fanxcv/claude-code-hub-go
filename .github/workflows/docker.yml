@@ -1,0 +1,146 @@
+name: Docker Image
+
+# 推 tag 即发多架构镜像（linux/amd64 + linux/arm64）；也可手动触发（用 package.json 的版本）。
+#
+# 推两个 registry：
+#   - Docker Hub  fanxcv/claude-code-hub-go        （需要 secrets：DOCKERHUB_USERNAME / DOCKERHUB_TOKEN）
+#   - GHCR        ghcr.io/fanxcv/claude-code-hub-go（用内置 GITHUB_TOKEN，零配置）
+# 若 Docker Hub 的两个 secret 未配置，本工作流**只推 GHCR 并给出 notice**，不失败。
+#
+# 改镜像名/换命名空间：改下面 IMAGE_DOCKERHUB / IMAGE_GHCR 两行即可（必须小写）。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（不带 v；留空则用 tag，非 tag 触发时退到 package.json）"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write # 推 GHCR
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_DOCKERHUB: fanxcv/claude-code-hub-go
+  IMAGE_GHCR: ghcr.io/fanxcv/claude-code-hub-go
+
+jobs:
+  build:
+    name: 多架构镜像（amd64 + arm64）
+    runs-on: ubuntu-latest
+    env:
+      # secrets 不能直接出现在 `if:` 里（该位置的可用上下文不含 secrets），
+      # 故先在这一层折算成布尔串，供下面各步的 `if:` 使用。
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 解析版本与镜像标签
+        id: meta
+        env:
+          # 经 env 传入而不是直接插值进 shell：人工输入不进命令行，免去注入面。
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION}"
+          if [ -z "$version" ] && [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if [ -z "$version" ]; then
+            version="$(node -p "require('./package.json').version")"
+          fi
+          version="${version#v}"
+
+          tags="${IMAGE_GHCR}:${version},${IMAGE_GHCR}:latest"
+          if [ "${HAS_DOCKERHUB}" = "true" ]; then
+            tags="${tags},${IMAGE_DOCKERHUB}:${version},${IMAGE_DOCKERHUB}:latest"
+            echo "Docker Hub：已配置凭据，将同时推送"
+          else
+            echo "::notice::未配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，本次只推 GHCR（ghcr.io）"
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
+          echo "镜像标签："
+          echo "${tags}" | tr ',' '\n' | sed 's/^/  /'
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+
+      - name: UI 导出（next build）+ 压缩嵌入
+        # 必须在 docker build **之前**跑：产物目录被 .gitignore 忽略，Dockerfile 的
+        # `COPY go/ ./` 直接从工作区取，docker context 里没有它就等于没有界面。
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          bun scripts/build-ui-export.mjs
+          bun scripts/build-ui-embed.mjs
+
+      - name: 断言 UI 产物在位（否则镜像会没有界面）
+        run: |
+          test -f go/internal/uiapp/assets/MANIFEST.json || {
+            echo "::error::UI 产物未收编（缺 MANIFEST.json）"; exit 1; }
+          n="$(find go/internal/uiapp/assets -type f | wc -l)"
+          echo "assets 文件数：${n}（压缩态实测约 500）"
+          if [ "$n" -lt 300 ]; then
+            echo "::error::UI 产物文件数过少（${n} < 300），疑似导出失败"; exit 1
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: go/deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          # GO_IMAGE/RUNTIME_IMAGE 必须显式覆盖：Dockerfile 的默认值是国内镜像（本地/国内
+          # 构建用），GitHub runner 上要用官方镜像。
+          build-args: |
+            APP_VERSION=${{ steps.meta.outputs.version }}
+            GO_IMAGE=golang:1.25-alpine
+            RUNTIME_IMAGE=alpine:3.20
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 小结
+        run: |
+          {
+            echo "### 已推送镜像"
+            echo
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}" | tr ',' '\n'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

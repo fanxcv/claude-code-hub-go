@@ -1,0 +1,1179 @@
+package forward
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/gate"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
+)
+
+// 本文件实现流式竞速（hedge），对齐 Node forwarder.ts 的 sendStreamingWithHedge。
+//
+// 竞速语义要点：
+//   - 首个供应商立即拨号，并带「首字节阈值」计时器（provider.firstByteTimeoutMs）。
+//     阈值到期且并发未满时，从候选里启动下一个供应商。
+//   - 胜者 = 首条「有效内容」到达的 attempt（门控提交的首个有效内容帧，
+//     或未门控路径的首个可读块）。胜者立即提交给客户端，其余 attempt 变为输家。
+//   - 输家二选一：开启输家计费时后台 drain 输家正文拿回用量并累加成本；
+//     否则直接取消连接，绝不为一条输掉的流占着本地资源。
+//   - 「同一请求只结算一次」不变量仍成立：只有胜者走 Stream 终态结算；
+//     输家只经 LoserBiller 接缝把成本累加回既有 message_request 行
+//     （接线层用 store.AddHedgeLoserCost 的幂等谓词保证不重复）。
+
+// HedgeOptions 是竞速模式的配置。
+type HedgeOptions struct {
+	// MaxInFlight 是同时活跃的竞速 attempt 上限；0 取 DefaultHedgeMaxInFlight。
+	// 初始 attempt 不受此限；达到上限的候选启动被拒并留痕 hedge_slot_saturated。
+	MaxInFlight int
+	// BillLosers 为真时输家正文被后台 drain 以拿回用量并计费；为假直接取消。
+	BillLosers bool
+	// LoserBiller 是输家计费接缝；nil 时即使 BillLosers 也不计费。
+	LoserBiller HedgeLoserBiller
+	// LoserDrainTimeout 是单个输家 drain 的绝对上限；0 取默认（对齐 120s）。
+	LoserDrainTimeout time.Duration
+	// LoserMaxDrainBytes 是单个输家 drain 的字节上限；0 取默认 64 MiB。
+	LoserMaxDrainBytes int64
+	// After 是阈值计时器工厂（测试注入用）；nil 用 time.AfterFunc。
+	After func(d time.Duration, fn func()) hedgeTimer
+	// Now 是时钟注入；nil 用 deps 的时钟。
+	Now func() time.Time
+	// WinnerDetached 是观测接缝：胜者交接后携带该次尝试的传输上下文（生产不接，
+	// 供测试断言「胜者 ctx 随流终态取消、而非随 attempt 返回取消」）。
+	WinnerDetached func(providerID int64, attemptCtx context.Context)
+	// TraceSink 是竞速过程的观测接缝（可选）。
+	//
+	// 为何需要：饱和这类**信息性事实**没有 provider_chain 词条——`hedge_slot_saturated`
+	// 写进链会被公开状态分类器判成失败（未知 reason 的兜底分支），污染可用率。
+	// Node 把它们记进 `routing_trace`；本接缝就是那条通路。nil 时只留 debug 日志。
+	TraceSink HedgeTraceSink
+}
+
+// HedgeTraceSink 接收竞速过程中**不入 provider_chain** 的事实。
+//
+// 生产实现是数据面的 routing_trace 构造器（见 dataplane/routing_trace.go）；
+// 接口定义放在本包，以免 forward 反向依赖数据面。
+type HedgeTraceSink interface {
+	// HedgeSlotSaturated 记录一次「并发已满、候选未启动」。
+	// active 与 configuredCap 是**当时实测**的并发数与配置上限。
+	HedgeSlotSaturated(providerID int64, providerName string, active, configuredCap int, at time.Time)
+}
+
+// Hedge 相关默认值。
+const (
+	// DefaultHedgeMaxInFlight 是竞速并发的出厂上限。
+	DefaultHedgeMaxInFlight = 2
+	// DefaultHedgeLoserDrainTimeout 对齐 HEDGE_LOSER_DRAIN_TIMEOUT_MS 默认值。
+	DefaultHedgeLoserDrainTimeout = 120 * time.Second
+	// DefaultHedgeLoserMaxDrainBytes 是输家 drain 字节上限（与 MaxResponseBytes 同档）。
+	DefaultHedgeLoserMaxDrainBytes int64 = 64 * 1024 * 1024
+)
+
+// hedgeTimer 是可停的阈值计时器（*time.Timer 实现之；测试注入手动触发版本）。
+type hedgeTimer interface {
+	Stop() bool
+}
+
+func hedgeTimerAfter(d time.Duration, fn func()) hedgeTimer {
+	return time.AfterFunc(d, fn)
+}
+
+// HedgeLoserBiller 是竞速输家计费的接缝。
+//
+// 实现方（接线层）拿到输家引流后的用量证据，用与胜者相同的计价口径计算成本，
+// 调用 store.AddHedgeLoserCost 累加到 message_request 行——该语句的
+// `NOT (hedge_losers @> [{providerId, attemptNumber}])` 谓词保证同一输家只计一次。
+type HedgeLoserBiller interface {
+	BillLoser(ctx context.Context, bill HedgeLoserBill) error
+}
+
+// HedgeLoserBill 是一条竞速输家的计费证据。
+type HedgeLoserBill struct {
+	RequestID  int64
+	ProviderID int64
+	// ProviderName / Sequence 用于 HedgeLoserEntry 的展示与去重键。
+	ProviderName string
+	Sequence     int
+	// UpstreamStatusCode 是输家的上游状态码。
+	UpstreamStatusCode int
+	// Usage 是输家流内可解析到的用量（枢纽口径）。
+	Usage convert.Usage
+	// Model 是输家流内最后一次声明的模型名。
+	Model string
+	// DrainComplete 为真表示输家正文读到自然结束或见到终态标记。
+	DrainComplete bool
+	// At 是 drain 完成时刻。
+	At time.Time
+}
+
+// hedgeVerdict 是协调器对某个 attempt 的终态裁决。
+type hedgeVerdict int
+
+const (
+	verdictWinner hedgeVerdict = iota
+	verdictLoserCancel
+	verdictLoserBill
+)
+
+// hedgeAttempt 是一次竞速 attempt 的协调状态。
+type hedgeAttempt struct {
+	seq      int
+	provider Provider
+	endpoint Endpoint
+	plan     *Plan
+	verdict  chan hedgeVerdict
+	// ctx 是本次 attempt 的传输上下文（胜者交接后供观测断言其生命周期）。
+	ctx context.Context
+	// cancel 取消本次 attempt 的传输上下文；非计费输家用它打断拨号/门控。
+	cancel context.CancelFunc
+	// timer 是首字节阈值计时器。
+	timer hedgeTimer
+	// startedAt 是本 attempt 的**真实启动时刻**（runAttempt 入口），供 routing_trace 用。
+	// 不用 race 起点顶替：后启动的备选会被记成「与首发同时开始」，那是编造时间线。
+	startedAt time.Time
+	// dispatched 为真表示已进入传输调用（阈值从这里起算）。
+	dispatched bool
+	// outcomeRecorded 为真表示本 attempt 的结局留痕已落过一条；必须持有 race.mu 访问。
+	// 胜者裁决时会先给在途输家各落一条（Node 的 abortAttempt 即在此时记录），此后
+	// 输家自身的收尾路径（取消 / 引流计费 / 在途失败）不得再落第二条。
+	outcomeRecorded bool
+}
+
+// hedgeRace 是一次 ForwardStreamHedge 的协调器。
+type hedgeRace struct {
+	ctx     context.Context
+	pc      *pctx.Context
+	deps    Deps
+	options StreamOptions
+	cfg     HedgeOptions
+	now     func() time.Time
+
+	// drainTimeout / maxDrainBytes 是输家 drain 的绝对上限（从 cfg 解析一次）。
+	drainTimeout  time.Duration
+	maxDrainBytes int64
+
+	mu              sync.Mutex
+	launched        []int64            // 按启动顺序记录供应商 id
+	launchedSet     map[int64]struct{} // 已启动供应商（去重与排除）
+	failed          []int64            // 已判失败的供应商（Select 排除）
+	attempts        map[int]*hedgeAttempt
+	active          int
+	winnerCommitted bool
+	settled         bool
+	noMoreProviders bool
+	lastFailure     *Failure
+	launching       bool
+	outcomes        []AttemptOutcome
+	resultCh        chan hedgeResult
+}
+
+// hedgeResult 是竞速的终局。
+type hedgeResult struct {
+	result *StreamResult
+	err    error
+}
+
+// ForwardStreamHedge 执行一次带竞速的流式转发。
+//
+// 行为对齐 sendStreamingWithHedge：initial 立即启动并带首字节阈值；
+// 阈值到期且并发未满时启动备选供应商；首个有效内容者胜，其余输家按配置取消或计费。
+//
+// 返回值语义与 ForwardStream 一致：
+//   - 胜者产生 Stream 时返回非 nil 的 result.Stream。
+//   - 全部耗尽时返回 result（含尝试留痕）与可 errors.As 成 *Failure 的错误。
+func ForwardStreamHedge(
+	ctx context.Context,
+	pc *pctx.Context,
+	initial *Candidate,
+	deps Deps,
+	options StreamOptions,
+	cfg HedgeOptions,
+) (*StreamResult, error) {
+	if deps.Dial == nil {
+		return nil, errors.New("forward: 未提供拨号器")
+	}
+	if initial == nil {
+		return nil, ErrNoProviderAvailable
+	}
+	if options.StartedAt.IsZero() {
+		options.StartedAt = deps.now()
+	}
+	if cfg.After == nil {
+		cfg.After = hedgeTimerAfter
+	}
+	if cfg.Now == nil {
+		cfg.Now = deps.now
+	}
+	maxInFlight := cfg.MaxInFlight
+	if maxInFlight <= 0 {
+		maxInFlight = DefaultHedgeMaxInFlight
+	}
+	drainTimeout := cfg.LoserDrainTimeout
+	if drainTimeout <= 0 {
+		drainTimeout = DefaultHedgeLoserDrainTimeout
+	}
+	maxDrainBytes := cfg.LoserMaxDrainBytes
+	if maxDrainBytes <= 0 {
+		maxDrainBytes = DefaultHedgeLoserMaxDrainBytes
+	}
+
+	race := &hedgeRace{
+		ctx:           ctx,
+		pc:            pc,
+		deps:          deps,
+		options:       options,
+		cfg:           cfg,
+		now:           cfg.Now,
+		drainTimeout:  drainTimeout,
+		maxDrainBytes: maxDrainBytes,
+		launchedSet:   make(map[int64]struct{}),
+		attempts:      make(map[int]*hedgeAttempt),
+		resultCh:      make(chan hedgeResult, 1),
+	}
+
+	race.launchAttempt(initial, maxInFlight)
+
+	select {
+	case <-ctx.Done():
+		// 请求被客户端取消：若胜者同时到达，让胜者胜出。
+		select {
+		case result := <-race.resultCh:
+			return result.result, result.err
+		default:
+		}
+		return nil, &Failure{
+			Category:   CategoryClientAbort,
+			Message:    "Request aborted by client",
+			StatusCode: 499,
+			Err:        ctx.Err(),
+		}
+	case result := <-race.resultCh:
+		return result.result, result.err
+	}
+}
+
+// launchAttempt 启动一次竞速 attempt（协程），在 mu 保护下完成准入登记。
+func (r *hedgeRace) launchAttempt(c *Candidate, maxInFlight int) {
+	r.mu.Lock()
+	if r.winnerCommitted || r.settled {
+		r.mu.Unlock()
+		return
+	}
+	if len(r.launchedSet) > 0 && r.active >= maxInFlight {
+		// 饱和**不写链**：Node 把它记为 routing-trace 事件（`type: "hedge_slot_saturated"`），
+		// provider_chain 里没有这个词；而链上任何未知 reason 都会被公开状态分类器判成
+		// **失败**（ClassifyRequestOutcomeSignal 的兜底分支只要求 reason 非空），
+		// 即「一条信息性记录污染可用率」。Go 暂无数据面 trace 构造器，
+		// 故用 debug 日志保留可观测性，同时保持链词表与 Node 逐词一致（见 chainreason.go）。
+		providerID := c.Provider.ID
+		providerName := c.Provider.Name
+		active := len(r.launchedSet)
+		at := r.now()
+		r.mu.Unlock()
+		r.deps.logger().Debug("forward.hedge.slot_saturated", map[string]any{
+			"provider_id":   providerID,
+			"provider_name": providerName,
+			"max_in_flight": maxInFlight,
+			"active":        active,
+			"effect":        "candidate_not_launched",
+		})
+		// 与 debug 日志同源的事实交给 trace 构造器：Node 把饱和记为 routing-trace 事件，
+		// 链词表里没有它（见上面的说明）。
+		if r.cfg.TraceSink != nil {
+			r.cfg.TraceSink.HedgeSlotSaturated(providerID, providerName, active, maxInFlight, at)
+		}
+		return
+	}
+	seq := len(r.launched) + 1
+	if len(r.launchedSet) > 0 {
+		// hedge_launched 是「备选已启动」的信息性记录：此刻该 attempt 的 plan **尚未编译**
+		// （plan 在 runAttempt 里成形），故没有重定向快照可写；Node 侧此处也只传
+		// circuitState，不传 modelRedirect/statusCode。两项都留空。
+		r.appendOutcomeLocked(AttemptOutcome{
+			ProviderID:   c.Provider.ID,
+			ProviderName: c.Provider.Name,
+			Reason:       ReasonHedgeLaunched,
+			Attempt:      seq,
+		})
+	}
+	r.launched = append(r.launched, c.Provider.ID)
+	r.launchedSet[c.Provider.ID] = struct{}{}
+	r.active++
+	r.mu.Unlock()
+
+	go r.runAttempt(c, seq, maxInFlight)
+}
+
+// runAttempt 执行一次竞速 attempt。
+func (r *hedgeRace) runAttempt(c *Candidate, seq int, maxInFlight int) {
+	attemptCtx, cancel := context.WithCancel(r.ctx)
+	attempt := &hedgeAttempt{
+		seq:       seq,
+		provider:  c.Provider,
+		verdict:   make(chan hedgeVerdict, 1),
+		ctx:       attemptCtx,
+		cancel:    cancel,
+		startedAt: r.now(),
+	}
+	// 取消权的归属：默认随本函数返回释放（失败与输家路径）。
+	// 胜者路径把它转交给正文生命周期（见 detachWinnerContext）：上游请求是用 attemptCtx
+	// 拨的，在这里取消会腰斩尚未读完的正文（下游表现为胜者流截断 + local_error）。
+	transferred := false
+	defer func() {
+		if !transferred {
+			cancel()
+		}
+	}()
+	r.registerAttempt(attempt)
+
+	endpoint := Endpoint{}
+	if endpoints := c.endpoints(); len(endpoints) > 0 {
+		endpoint = endpoints[0]
+	}
+	attempt.endpoint = endpoint
+
+	plan, err := BuildPlan(PlanInput{
+		Client:            r.deps.Facts.Client,
+		Target:            Target{Provider: c.Provider, Endpoint: endpoint},
+		ConversionEnabled: c.ConversionEnabled,
+		Overrides:         r.deps.Facts.Overrides,
+		CacheTTL1h:        r.deps.Facts.CacheTTL1h,
+		ClientUserAgent:   r.deps.Facts.ClientUserAgent,
+		FilteredUserAgent: r.deps.Facts.FilteredUserAgent,
+		UserAgentModified: r.deps.Facts.UserAgentModified,
+	})
+	if err != nil {
+		failure := &Failure{
+			Category:   CategorySystemError,
+			Message:    err.Error(),
+			Internal:   true,
+			ProviderID: c.Provider.ID,
+			Attempt:    seq,
+			Err:        err,
+		}
+		r.finishAttemptFailed(attempt, failure)
+		return
+	}
+	attempt.plan = plan
+
+	// 首字节阈值：进入传输调用前装配（对齐 Node armAttemptThreshold）。
+	if c.Provider.FirstByteTimeoutStreamingMS > 0 {
+		attempt.timer = r.cfg.After(time.Duration(c.Provider.FirstByteTimeoutStreamingMS)*time.Millisecond, func() {
+			r.triggerThreshold(c.Provider.ID, c.Provider.Name, maxInFlight)
+		})
+		defer attempt.timer.Stop()
+	}
+
+	outcome := AttemptOutcome{
+		ProviderID:    c.Provider.ID,
+		ProviderName:  c.Provider.Name,
+		EndpointID:    endpoint.ID,
+		EndpointURL:   plan.URL,
+		Attempt:       seq,
+		Redirected:    plan.Redirect != nil,
+		ModelRedirect: attemptModelRedirect(plan),
+	}
+
+	response, cancelDial, failure := r.deps.dialAttempt(attemptCtx, plan, &outcome, true)
+	if failure != nil {
+		r.finishAttemptFailed(attempt, failure)
+		return
+	}
+	defer cancelDial()
+	attempt.dispatched = true
+
+	// 非 2xx：完整读回错误正文，按串行路径同一口径分类。
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		defer func() { _ = response.Body.Close() }()
+		if _, fail := r.deps.completeResponse(response, plan, &outcome); fail != nil {
+			r.finishAttemptFailed(attempt, fail)
+			return
+		}
+		// completeResponse 对非 2xx 不返回成功；此处仅防御兜底。
+		r.finishAttemptFailed(attempt, &Failure{
+			Category:   CategorySystemError,
+			StatusCode: response.StatusCode,
+			Internal:   true,
+			ProviderID: c.Provider.ID,
+			Attempt:    seq,
+		})
+		return
+	}
+
+	// 2xx：跑门控或透传读首块，产出「有效内容」。
+	content, fail := r.runGateOrFirstChunk(attempt, attemptCtx, response, plan, &outcome)
+	if fail != nil {
+		r.finishAttemptFailed(attempt, fail)
+		return
+	}
+
+	// 报告潜在胜者：协调器裁决本 attempt。
+	r.reportContent(attempt, content)
+	switch <-attempt.verdict {
+	case verdictWinner:
+		// 胜者的取消权已在 reportContent 转交给正文（见 detachWinnerContext），
+		// 故本函数返回时不得再取消：那会把还没读完的正文腰斩。
+		transferred = true
+		// 成功记账：**竞速路径原先只记失败**，于是开闸后永远无人推进 half-open 计数
+		// → 熔断再也回不到 closed（生产现象：一批供应商永远显示「熔断恢复中」）。
+		//
+		// 位置选在胜者裁决处而非 reportContent：裁决只发生一次，故天然幂等；
+		// 若放在 reportContent 里，每个「潜在胜者」都会记一次，多路竞速时会计出多份成功。
+		//
+		// 输家不记成功也不记失败：它们是被主动取消/引流的，不是上游失败（与串行路径
+		// 只在 failure==nil 时记成功、只在计入熔断的分类上记失败同口径）。
+		if r.deps.RecordSuccess != nil {
+			// 用 race 级 ctx（而非 attempt 级）：胜者的 attempt ctx 刚被交接给正文生命周期，
+			// 用它可以避免「交接瞬间取消」导致记账被 ctx 取消掉。
+			r.deps.RecordSuccess(r.ctx, attempt.provider.ID, attempt.endpoint.ID)
+		}
+		r.decrement()
+	case verdictLoserCancel:
+		// 输家：归还门控租约并切断连接。
+		if content.Lease != nil {
+			content.Lease.Release()
+		}
+		if content.Source != nil {
+			_ = content.Source.Close()
+		}
+		r.appendLoserOutcome(attempt, "hedge_loser_cancelled")
+		r.decrement()
+	case verdictLoserBill:
+		r.billLoser(attempt, content, r.drainTimeout, r.maxDrainBytes)
+	}
+}
+
+// detachWinnerContext 把胜者 attempt 的取消权交给正文生命周期。
+//
+// 胜者 ctx 的生命周期 = 该次尝试的 stream 生命周期：泵在终态关闭正文时取消它。
+// 取消早于最后一次读，就会把上游连接提前提断（胜者流截断）；完全不取消，则 attempt
+// 的子 ctx 会活到请求 ctx 结束。正文已读尽（JSON 路径或门控读到 EOF 后无 Source）时
+// 没有可截断的正文，当场取消。
+func (r *hedgeRace) detachWinnerContext(content *streamAttempt, cancel context.CancelFunc) {
+	if content.Source == nil {
+		cancel()
+		return
+	}
+	content.Source = &winnerCtxBody{source: content.Source, cancel: cancel}
+}
+
+// winnerCtxBody 把胜者 attempt 的 ctx 绑到正文上：正文关闭（流终态）时取消它。
+type winnerCtxBody struct {
+	source io.ReadCloser
+	cancel context.CancelFunc
+	once   sync.Once
+}
+
+func (b *winnerCtxBody) Read(buffer []byte) (int, error) { return b.source.Read(buffer) }
+
+func (b *winnerCtxBody) Close() error {
+	err := b.source.Close()
+	b.once.Do(b.cancel)
+	return err
+}
+
+// registerAttempt 登记一次在途 attempt。
+func (r *hedgeRace) registerAttempt(attempt *hedgeAttempt) {
+	r.mu.Lock()
+	r.attempts[attempt.seq] = attempt
+	r.mu.Unlock()
+}
+
+// runGateOrFirstChunk 跑门控或（未门控时）读首个可读块，产出有效内容。
+func (r *hedgeRace) runGateOrFirstChunk(
+	attempt *hedgeAttempt,
+	attemptCtx context.Context,
+	response *dial.Response,
+	plan *Plan,
+	outcome *AttemptOutcome,
+) (*streamAttempt, *Failure) {
+	family, gated := r.options.gateFamily(attempt.provider)
+	if gated && r.options.shouldGate(response.Header, plan) {
+		result, err := r.runGate(attemptCtx, response, plan, outcome, family)
+		if err != nil {
+			_ = response.Body.Close()
+			return nil, r.deps.gateFailure(err, plan, outcome)
+		}
+		return result, nil
+	}
+
+	if !r.options.isStreamShaped(response.Header, plan) && !r.options.ForceGate {
+		// 非流形态（例如 JSON）：完整读回，正文整体作为「成功内容」。
+		response2, fail := r.deps.completeResponse(response, plan, outcome)
+		_ = response.Body.Close()
+		if fail != nil {
+			return nil, fail
+		}
+		return &streamAttempt{
+			StatusCode: response2.StatusCode,
+			Status:     response2.Status,
+			Header:     response2.Header,
+			Prefix:     [][]byte{response2.Body},
+			ReaderDone: true,
+			Gated:      false,
+			Family:     family,
+		}, nil
+	}
+
+	// 未门控的流形态：读第一个可读块判定有效性（空流 = 空响应失败）。
+	buffer := make([]byte, DefaultPumpChunkBytes)
+	n, err := response.Body.Read(buffer)
+	if n > 0 {
+		chunk := make([]byte, n)
+		copy(chunk, buffer[:n])
+		return &streamAttempt{
+			StatusCode: response.StatusCode,
+			Status:     response.Status,
+			Header:     response.Header,
+			Prefix:     [][]byte{chunk},
+			Source:     response.Body,
+			Gated:      false,
+			Family:     family,
+		}, nil
+	}
+	_ = response.Body.Close()
+	if err == nil || errors.Is(err, io.EOF) {
+		return nil, &Failure{
+			Category:      CategoryProviderError,
+			StatusCode:    response.StatusCode,
+			Message:       fmt.Sprintf("Empty response from provider %s: Response body is empty", outcome.ProviderName),
+			EmptyResponse: true,
+			ProviderID:    outcome.ProviderID,
+			ProviderName:  outcome.ProviderName,
+			EndpointID:    outcome.EndpointID,
+			EndpointURL:   plan.URL,
+			Attempt:       outcome.Attempt,
+		}
+	}
+	return nil, &Failure{
+		Category:     CategorySystemError,
+		StatusCode:   response.StatusCode,
+		Message:      fmt.Sprintf("读取上游正文失败: %v", err),
+		ProviderID:   outcome.ProviderID,
+		ProviderName: outcome.ProviderName,
+		EndpointID:   outcome.EndpointID,
+		EndpointURL:  plan.URL,
+		Attempt:      outcome.Attempt,
+		Err:          err,
+	}
+}
+
+// runGate 复用串行路径的门控执行。
+func (r *hedgeRace) runGate(
+	ctx context.Context,
+	response *dial.Response,
+	plan *Plan,
+	outcome *AttemptOutcome,
+	family gate.Family,
+) (*streamAttempt, error) {
+	eventCap := r.options.PrebufferEventCap
+	if eventCap <= 0 {
+		eventCap = DefaultPrebufferEventCap
+	}
+	byteCap := r.options.PrebufferByteCap
+	if byteCap <= 0 {
+		byteCap = DefaultPrebufferByteCap
+	}
+	startedAt := r.options.now()
+	// 与 stream.go 同口径：first_byte_ms 取**上游**首个非空 chunk 的到达时刻，
+	// 而不是前缀交给我们（提交）的时刻。
+	var upstreamFirstByteAt time.Time
+	result, err := gate.Run(ctx, response.Body, gate.Options{
+		Family:              family,
+		ProviderID:          int(outcome.ProviderID),
+		ProviderName:        outcome.ProviderName,
+		PrebufferEventCap:   eventCap,
+		PrebufferByteCap:    byteCap,
+		IdleTimeout:         r.options.idleTimeout(outcome.ProviderID),
+		CaptureCommitMarker: r.options.CaptureCommitMarker,
+		OnFirstByte:         func() { upstreamFirstByteAt = r.options.now() },
+		Budget:              r.options.Budget,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &streamAttempt{
+		StatusCode:          response.StatusCode,
+		Status:              response.Status,
+		Header:              response.Header,
+		Prefix:              result.Prefix,
+		Source:              response.Body,
+		ReaderDone:          result.ReaderDone,
+		UpstreamFirstByteAt: upstreamFirstByteAt,
+		Lease:               result.Lease,
+		Gated:               true,
+		FramesSeen:          result.FramesSeen,
+		Marker:              result.Marker,
+		GateWait:            r.options.now().Sub(startedAt),
+		Family:              family,
+	}, nil
+}
+
+// triggerThreshold 是首字节阈值到期回调：并发未满就启动下一个候选。
+func (r *hedgeRace) triggerThreshold(providerID int64, providerName string, maxInFlight int) {
+	r.mu.Lock()
+	if r.winnerCommitted || r.settled {
+		r.mu.Unlock()
+		return
+	}
+	excluded := r.excludedLocked()
+	saturated := r.active >= maxInFlight
+	// active 必须在**锁内**取：解锁后再读 r.active 会与别的 attempt 协程的
+	// decrementLocked（`r.active--`）构成数据竞争——`-race` 实测报 DATA RACE
+	// （写 hedge.go 的 `r.active--`、读本函数的日志行），且写侧持锁、读侧未持。
+	active := r.active
+	r.mu.Unlock()
+
+	if saturated {
+		// 同 launchAttempt：饱和是路由留痕事件而非链结局，写链会被分类器判成失败。
+		r.deps.logger().Debug("forward.hedge.slot_saturated", map[string]any{
+			"provider_id":   providerID,
+			"provider_name": providerName,
+			"max_in_flight": maxInFlight,
+			"active":        active,
+			"effect":        "candidate_not_launched",
+		})
+		return
+	}
+	r.launchAlternative(excluded)
+}
+
+// excludedLocked 返回当前排除列表（已启动 + 已失败）；必须持有 mu。
+func (r *hedgeRace) excludedLocked() []int64 {
+	excluded := make([]int64, 0, len(r.launchedSet)+len(r.failed))
+	excluded = append(excluded, r.launched...)
+	excluded = append(excluded, r.failed...)
+	return excluded
+}
+
+// launchAlternative 从候选里选下一个供应商启动（同一时刻只有一个启动协程）。
+// excluded 为 nil 时现场从 launched+failed 组装排除列表。
+func (r *hedgeRace) launchAlternative(excluded []int64) {
+	r.mu.Lock()
+	if r.winnerCommitted || r.settled || r.noMoreProviders || r.launching {
+		r.mu.Unlock()
+		return
+	}
+	r.launching = true
+	if excluded == nil {
+		excluded = r.excludedLocked()
+	}
+	r.mu.Unlock()
+
+	defer func() {
+		r.mu.Lock()
+		r.launching = false
+		r.mu.Unlock()
+	}()
+
+	maxInFlight := r.cfg.MaxInFlight
+	if maxInFlight <= 0 {
+		maxInFlight = DefaultHedgeMaxInFlight
+	}
+
+	for {
+		r.mu.Lock()
+		if r.winnerCommitted || r.settled {
+			r.mu.Unlock()
+			return
+		}
+		r.mu.Unlock()
+
+		next, err := r.deps.Select(r.ctx, excluded)
+		if err != nil {
+			r.failSelection(err)
+			return
+		}
+		if next == nil {
+			r.mu.Lock()
+			r.noMoreProviders = true
+			r.mu.Unlock()
+			r.finishIfExhausted()
+			return
+		}
+
+		r.mu.Lock()
+		if r.winnerCommitted || r.settled {
+			r.mu.Unlock()
+			return
+		}
+		if _, already := r.launchedSet[next.Provider.ID]; already {
+			// 防御：Select 未遵守排除列表则跳过该候选并继续选。
+			excluded = append(excluded, next.Provider.ID)
+			r.mu.Unlock()
+			continue
+		}
+		r.mu.Unlock()
+
+		r.launchAttempt(next, maxInFlight)
+		return
+	}
+}
+
+// failSelection 记录选路失败并把整局判定为耗尽。
+func (r *hedgeRace) failSelection(err error) {
+	r.mu.Lock()
+	r.noMoreProviders = true
+	if r.lastFailure == nil {
+		r.lastFailure = &Failure{
+			Category: CategorySystemError,
+			Message:  err.Error(),
+			Internal: true,
+			Err:      err,
+		}
+	}
+	r.mu.Unlock()
+	r.finishIfExhausted()
+}
+
+// reportContent 报告潜在胜者并做胜者仲裁。
+func (r *hedgeRace) reportContent(attempt *hedgeAttempt, content *streamAttempt) {
+	r.mu.Lock()
+	if r.settled || r.winnerCommitted {
+		r.mu.Unlock()
+		if r.billable(attempt) {
+			attempt.verdict <- verdictLoserBill
+		} else {
+			attempt.verdict <- verdictLoserCancel
+		}
+		return
+	}
+	r.winnerCommitted = true
+	headgeWin := len(r.launched) > 1
+	// 其余在途 attempt：非计费的立即取消（拨号/门控随 attempt ctx 停止），
+	// 计费的保留（其正文还要被 drain 拿回用量）。
+	//
+	// 结局留痕在**此刻**就落（对齐 Node 的 abortAttempt：胜者裁决时即写
+	// hedge_loser_billed / hedge_loser_cancelled）：输家往往在胜者的流结束之后才得出
+	// 结论，若等它自己落链，流终态写下的 provider_chain 就会缺掉输家那一段。
+	for _, other := range r.attempts {
+		if other == attempt {
+			continue
+		}
+		r.markLoserOutcomeLocked(other)
+		if !r.billable(other) {
+			other.cancel()
+		}
+	}
+	r.mu.Unlock()
+
+	if headgeWin {
+		r.appendOutcome(AttemptOutcome{
+			ProviderID:    attempt.provider.ID,
+			ProviderName:  attempt.provider.Name,
+			EndpointID:    attempt.endpoint.ID,
+			EndpointURL:   attempt.plan.URL,
+			Attempt:       attempt.seq,
+			Reason:        ReasonHedgeWinner,
+			StatusCode:    content.StatusCode,
+			ModelRedirect: attemptModelRedirect(attempt.plan),
+			DurationMS:    r.now().Sub(r.startedOffset()).Milliseconds(),
+			StartedAt:     attempt.startedAt,
+			FinishedAt:    r.now(),
+		})
+	} else {
+		r.appendOutcome(AttemptOutcome{
+			ProviderID:    attempt.provider.ID,
+			ProviderName:  attempt.provider.Name,
+			EndpointID:    attempt.endpoint.ID,
+			EndpointURL:   attempt.plan.URL,
+			Attempt:       attempt.seq,
+			Reason:        ReasonRequestSuccess,
+			StatusCode:    content.StatusCode,
+			ModelRedirect: attemptModelRedirect(attempt.plan),
+			DurationMS:    r.now().Sub(r.startedOffset()).Milliseconds(),
+			StartedAt:     attempt.startedAt,
+			FinishedAt:    r.now(),
+		})
+	}
+
+	// 其余 attempt：不主动打断它们自己的拨号/门控——它们要么以输家收尾
+	// （读到自己的 verdict），要么在失败路径看到 winnerCommitted 后被静默收尾。
+	attempt.verdict <- verdictWinner
+
+	// 胜者 ctx 的生命周期 = 该次尝试的 stream 生命周期：把取消权交给正文。
+	// 必须早于 newStream 捕获来源——Stream 构造后再换 Source，就没人会去关它了（子 ctx 泄漏）。
+	r.detachWinnerContext(content, attempt.cancel)
+	if r.cfg.WinnerDetached != nil {
+		r.cfg.WinnerDetached(attempt.provider.ID, attempt.ctx)
+	}
+
+	result := &StreamResult{
+		Result: Result{
+			Provider:                attempt.provider,
+			Endpoint:                attempt.endpoint,
+			Plan:                    attempt.plan,
+			StatusCode:              content.StatusCode,
+			Status:                  content.Status,
+			Headers:                 content.Header,
+			Attempts:                r.sortedOutcomes(),
+			TotalProvidersAttempted: r.launchedSnapshot(),
+			DetectorMissing:         r.deps.Detector == nil,
+			StartedAt:               r.options.StartedAt,
+			EndedAt:                 r.now(),
+		},
+	}
+	result.Stream = newStream(r.ctx, content, attempt.provider, attempt.endpoint, attempt.plan, r.pc, r.options, r.sortedOutcomes)
+	// 竞速留痕只在胜者提交时落进 Result；输家条目是随后才追加的，故 Stream 取的是
+	// 「终态那一刻的快照」而不是这里的切片（见 Stream.attempts）。
+	// 注意 sortedOutcomes 自带互斥，可以从输家协程与终态协程并发调用。
+	r.resultCh <- hedgeResult{result: result}
+}
+
+// startedOffset 是报告胜者时的时刻基准（胜者留痕的时长口径）。
+func (r *hedgeRace) startedOffset() time.Time { return r.options.StartedAt }
+
+// launchedSnapshot 返回已启动供应商 id 的副本。
+func (r *hedgeRace) launchedSnapshot() []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]int64(nil), r.launched...)
+}
+
+// billable 判断输家是否开启计费：开关 + 请求行存在 + 计费接缝非空。
+func (r *hedgeRace) billable(attempt *hedgeAttempt) bool {
+	if !r.cfg.BillLosers || r.cfg.LoserBiller == nil {
+		return false
+	}
+	if r.pc == nil {
+		return false
+	}
+	_, ok := r.pc.MessageRequestID()
+	return ok
+}
+
+// billLoser 后台 drain 输家正文拿回用量并计费（幂等守卫在接线层）。
+func (r *hedgeRace) billLoser(
+	attempt *hedgeAttempt,
+	content *streamAttempt,
+	drainTimeout time.Duration,
+	maxDrainBytes int64,
+) {
+	var requestID int64
+	if r.pc != nil {
+		requestID, _ = r.pc.MessageRequestID()
+	}
+	evidence, drained := r.drainLoser(content, drainTimeout, maxDrainBytes)
+
+	r.appendLoserOutcome(attempt, "hedge_loser_billed")
+
+	bill := HedgeLoserBill{
+		RequestID:          requestID,
+		ProviderID:         attempt.provider.ID,
+		ProviderName:       attempt.provider.Name,
+		Sequence:           attempt.seq,
+		UpstreamStatusCode: content.StatusCode,
+		Usage:              evidence.Usage,
+		Model:              evidence.Model,
+		DrainComplete:      drained,
+		At:                 r.now(),
+	}
+	// drain 在后台完成：不给胜者响应让路（对齐 Node 的 fire-and-forget）。
+	ctx := context.WithoutCancel(r.ctx)
+	if err := r.cfg.LoserBiller.BillLoser(ctx, bill); err != nil {
+		r.deps.logger().Warn("forward.hedge.loser_billing_failed", map[string]any{
+			"provider_id":   attempt.provider.ID,
+			"provider_name": attempt.provider.Name,
+			"request_id":    requestID,
+			"error":         err.Error(),
+		})
+	}
+	r.decrement()
+}
+
+// drainLoser 有界地读光输家正文并产出用量证据。
+//
+// 内存不变量：正文只喂进 O(1) 观测器后即丢弃；前缀块（门控缓冲）是唯一的正文驻留，
+// 且已被 prebuffer 租约约束。
+func (r *hedgeRace) drainLoser(
+	content *streamAttempt,
+	drainTimeout time.Duration,
+	maxDrainBytes int64,
+) (Observation, bool) {
+	observer := NewObserver(ObservationOptions{
+		StartedAt:           r.options.StartedAt,
+		UpstreamFirstByteAt: content.UpstreamFirstByteAt,
+		Format:              r.options.Format,
+		HeadBytes:           r.options.HeadBytes,
+		TailBytes:           r.options.TailBytes,
+		Now:                 r.options.Now,
+	})
+	for _, chunk := range content.Prefix {
+		observer.Push(chunk)
+	}
+
+	drained := false
+	if content.Source != nil {
+		defer func() { _ = content.Source.Close() }()
+		deadline := time.After(drainTimeout)
+		buffer := make([]byte, DefaultPumpChunkBytes)
+		var total int64
+		for {
+			select {
+			case <-deadline:
+				goto done
+			default:
+			}
+			if total >= maxDrainBytes {
+				break
+			}
+			n, err := content.Source.Read(buffer)
+			if n > 0 {
+				observer.Push(buffer[:n])
+				total += int64(n)
+			}
+			if err != nil {
+				drained = errors.Is(err, io.EOF)
+				break
+			}
+		}
+	done:
+	} else {
+		// 无 Source（ReaderDone 的 JSON 路径）：前缀即全部，视为自然结束。
+		drained = true
+	}
+
+	snapshot := observer.Snapshot()
+	if snapshot.CompletionMarker || snapshot.ErrorText != "" {
+		// 终态帧意味着没有更多账单；即便没读到 EOF 也视为 drain 完整。
+		drained = true
+	}
+	if content.Lease != nil {
+		content.Lease.Release()
+		content.Lease = nil
+	}
+	return snapshot, drained
+}
+
+// finishAttemptFailed 记录一次失败。若失败分类要求立即终局（客户端中断/本地过载/
+// 不可重试客户端错误），裁掉整局；否则若尚未有胜者则启动新候选、并在耗尽时终局。
+//
+// 若已有胜者（本 attempt 是在途输家），只归零不碰终局。
+func (r *hedgeRace) finishAttemptFailed(attempt *hedgeAttempt, failure *Failure) {
+	outcome := AttemptOutcome{
+		ProviderID:    attempt.provider.ID,
+		ProviderName:  attempt.provider.Name,
+		EndpointID:    attempt.endpoint.ID,
+		Attempt:       attempt.seq,
+		StatusCode:    failure.StatusCode,
+		Category:      failure.Category,
+		Message:       failure.Message,
+		Reason:        reasonForCategory(failure.Category, failure.StatusCode),
+		ModelRedirect: attemptModelRedirect(attempt.plan),
+		StartedAt:     attempt.startedAt,
+		FinishedAt:    r.now(),
+	}
+	if attempt.plan != nil {
+		outcome.EndpointURL = attempt.plan.URL
+	}
+
+	r.mu.Lock()
+	if r.winnerCommitted {
+		// 输家在途失败（多半是赢家提交后本 attempt 被取消）：只留痕归零，不动终局。
+		if failure.Category == CategoryClientAbort {
+			outcome.Reason = ReasonHedgeLoserCancel
+		}
+		if attempt.outcomeRecorded {
+			// 胜者裁决时已落过结局：同一 attempt 不再落第二条（Node 的 attempt.settled 同义）。
+			// 但那条结论未必是**真结论**：裁决与失败观测抢同一把锁，谁先拿到谁定留痕
+			// （见 correctCancelledPlaceholderLocked），故这里做最后一道校正。
+			r.correctCancelledPlaceholderLocked(attempt, outcome)
+			r.active--
+			r.mu.Unlock()
+			return
+		}
+		attempt.outcomeRecorded = true
+		r.appendOutcomeLocked(outcome)
+		r.active--
+		r.mu.Unlock()
+		return
+	}
+
+	if failure.Category == CategoryClientAbort ||
+		failure.Category == CategoryLocalOverload ||
+		failure.Category == CategoryNonRetryableClientError {
+		r.settled = true
+		r.lastFailure = failure
+		attempt.outcomeRecorded = true
+		r.appendOutcomeLocked(outcome)
+		for _, other := range r.attempts {
+			other.cancel()
+		}
+		r.resultCh <- hedgeResult{err: failure}
+		r.mu.Unlock()
+		return
+	}
+
+	r.lastFailure = failure
+	if failure.Category == CategoryProviderError || failure.Category == CategorySystemError {
+		if !failure.RequestScoped &&
+			(failure.Category.CountsTowardCircuit() ||
+				(failure.Category == CategorySystemError && r.deps.CountNetworkFailureTowardCircuit)) {
+			if r.deps.RecordFailure != nil {
+				r.deps.RecordFailure(r.ctx, failure)
+			}
+		}
+		r.failed = append(r.failed, attempt.provider.ID)
+	}
+	// 本次尝试的结局在此落定，必须标记：否则日后胜者裁决时 markLoserOutcomeLocked 仍会
+	// 把它当成**在途**输家，再落一条 hedge_loser_billed / hedge_loser_cancelled。
+	// Node 的 abortAttempt 首行即 `if (attempt.settled) return;`，且已结束的 attempt 会被
+	// 移出 attempts 集合，故失败者不会被标成竞速输家（真实事故：HC_Chat 上游 500/503
+	// 失败，链里却同时出现 retry_failed 与 hedge_loser_billed，让「谁输掉了竞速」失真）。
+	attempt.outcomeRecorded = true
+	r.appendOutcomeLocked(outcome)
+	r.active--
+	r.mu.Unlock()
+
+	r.launchAlternative(nil)
+}
+
+// decrement 归零一条活跃 attempt；耗尽时终局。
+func (r *hedgeRace) decrement() {
+	r.mu.Lock()
+	r.decrementLocked()
+	r.mu.Unlock()
+}
+
+func (r *hedgeRace) decrementLocked() {
+	r.active--
+	r.maybeFinishLocked()
+}
+
+// maybeFinishLocked 在无候选且无在途时终局；必须持有 mu。调用方不释放 mu。
+func (r *hedgeRace) maybeFinishLocked() {
+	if r.settled || r.winnerCommitted || r.active > 0 || !r.noMoreProviders {
+		return
+	}
+	r.settled = true
+	err := r.lastFailure
+	r.resultCh <- hedgeResult{err: err}
+}
+
+// finishIfExhausted 无 mu 版本：拿锁后检查耗尽。
+func (r *hedgeRace) finishIfExhausted() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.maybeFinishLocked()
+}
+
+// appendOutcome 追加一条留痕。
+func (r *hedgeRace) appendOutcome(outcome AttemptOutcome) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appendOutcomeLocked(outcome)
+}
+
+// appendOutcomeLocked 追加一条留痕；必须持有 mu。
+func (r *hedgeRace) appendOutcomeLocked(outcome AttemptOutcome) {
+	r.outcomes = append(r.outcomes, outcome)
+}
+
+// markLoserOutcomeLocked 在胜者裁决时给一条在途 attempt 落输家结局；必须持有 mu。
+//
+// 原因按「此刻能否计费」二选一：与 Node 的 attempt.billAsLoser 同一判定——链上先标记，
+// 真正的引流与成本写回随后在后台发生（无价格等情形仍可能不写库）。
+func (r *hedgeRace) markLoserOutcomeLocked(attempt *hedgeAttempt) {
+	if attempt.outcomeRecorded {
+		return
+	}
+	reason := "hedge_loser_cancelled"
+	if r.billable(attempt) {
+		reason = ReasonHedgeLoserBilled
+	}
+	r.appendLoserOutcomeLocked(attempt, reason)
+}
+
+// correctCancelledPlaceholderLocked 把「胜者裁决时落的取消占位结论」校正为真实失败；必须持有 mu。
+//
+// 为什么需要它：裁决（markLoserOutcomeLocked）与失败观测（finishAttemptFailed）抢同一把
+// mutex，**谁先拿到锁谁定留痕**，于是同一份事实会因调度顺序得出两种结论。实测（2 核 +
+// 后台负载，本用例连跑 25 次）：**18 次**里 attempt 先被标成 hedge_loser_cancelled，随后才
+// 观测到上游真回的 500（`provider_error` / status=500）。那条失败被静默丢弃，链上只留「我们主动取消了它」——把一次真实的上游
+// 故障记成我们自己放弃，诊断信息全丢。
+//
+// 生效条件（三条同时满足，任一不满足都保持原样）：
+//  1. 晚到的失败是**供应商故障且带着真实上游状态码（4xx/5xx）**。
+//     这一条同时排除了两类不该改正的情形：我们自己的取消（`client_abort`，占位结论
+//     本就是最准确的描述）、以及「读正文时被取消」这类只在文案里才看得出归属的系统错误
+//     （它带着 response.StatusCode，但那不是上游对本请求的答复）。
+//  2. 该 attempt 已落的留痕是**非计费**的取消占位（hedge_loser_cancelled）——计费的
+//     hedge_loser_billed 牵着成本写回与引流，改它会与账务口径纠缠，故不碰。
+//  3. 能按 providerID + attempt 序号定位到那条占位留痕。
+//
+// 只**就地改写**那一条，不新增、不重排——同一 attempt 永远只有一条留痕（这是此前那起
+// 「同一供应商同时出现 retry_failed 与 hedge_loser_billed」事故的教训）。
+func (r *hedgeRace) correctCancelledPlaceholderLocked(attempt *hedgeAttempt, outcome AttemptOutcome) {
+	if attempt == nil {
+		return
+	}
+	if outcome.Category != CategoryProviderError {
+		return
+	}
+	if outcome.StatusCode < 400 || outcome.StatusCode > 599 {
+		return
+	}
+	for index := range r.outcomes {
+		entry := &r.outcomes[index]
+		if entry.ProviderID != attempt.provider.ID || entry.Attempt != attempt.seq {
+			continue
+		}
+		if entry.Reason != ReasonHedgeLoserCancel {
+			return
+		}
+		entry.Reason = outcome.Reason
+		entry.StatusCode = outcome.StatusCode
+		entry.Category = outcome.Category
+		entry.Message = outcome.Message
+		entry.FinishedAt = outcome.FinishedAt
+		return
+	}
+}
+
+// appendLoserOutcome 追加一条输家结局留痕（未落过才落）。
+func (r *hedgeRace) appendLoserOutcome(attempt *hedgeAttempt, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.appendLoserOutcomeLocked(attempt, reason)
+}
+
+// appendLoserOutcomeLocked 追加一条输家结局留痕；必须持有 mu。同一 attempt 只落一条。
+func (r *hedgeRace) appendLoserOutcomeLocked(attempt *hedgeAttempt, reason string) {
+	if attempt.outcomeRecorded {
+		return
+	}
+	attempt.outcomeRecorded = true
+	outcome := AttemptOutcome{
+		ProviderID:   attempt.provider.ID,
+		ProviderName: attempt.provider.Name,
+		EndpointID:   attempt.endpoint.ID,
+		Attempt:      attempt.seq,
+		Reason:       reason,
+		// 输家不写 statusCode：Node 在 hedge_loser_billed 上传的是
+		// `attempt.response?.status`（`forwarder.ts:5229`），而它同样**多数时候是 undefined**
+		// ——裁决发生在胜者首字节到达时，输家未必已收到响应头；Go 的输家结局也在同一时刻
+		// 落痕（引流发生在之后的 billLoser），此刻同样无状态码可写。
+		// hedge_loser_cancelled 在 Node 侧本就不传 statusCode（`forwarder.ts:5246`）。
+		ModelRedirect: attemptModelRedirect(attempt.plan),
+	}
+	if attempt.plan != nil {
+		outcome.EndpointURL = attempt.plan.URL
+	}
+	r.appendOutcomeLocked(outcome)
+}
+
+// sortedOutcomes 返回按启动顺序排序的留痕（seq 即启动序号，失败输家无胜者时补一）。
+func (r *hedgeRace) sortedOutcomes() []AttemptOutcome {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := append([]AttemptOutcome(nil), r.outcomes...)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Attempt < out[j].Attempt })
+	return out
+}

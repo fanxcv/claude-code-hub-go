@@ -1,0 +1,1401 @@
+{
+  "generatedAt": "2026-09-12T17:58:04.349Z",
+  "nowIso": "2026-09-13T00:10:00.000Z",
+  "scenarios": {
+    "fresh": {
+      "payload": {
+        "rebuildState": "fresh",
+        "sourceGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "publicGroupSlug": "group-b",
+            "displayName": "Group B",
+            "explanatoryCopy": null,
+            "models": []
+          }
+        ]
+      },
+      "response": {
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "status": "ready",
+        "rebuildState": {
+          "state": "fresh",
+          "hasSnapshot": true,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "hints": [],
+      "hintKeyPresent": false,
+      "hintBody": null,
+      "hintTtlSeconds": null,
+      "manifestAfter": {
+        "configVersion": "cfg-1",
+        "generation": "gen-0",
+        "lastCompleteGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "rebuildState": "idle",
+        "rollupCoverageComplete": true
+      }
+    },
+    "stale": {
+      "payload": {
+        "rebuildState": "stale",
+        "sourceGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "publicGroupSlug": "group-b",
+            "displayName": "Group B",
+            "explanatoryCopy": null,
+            "models": []
+          }
+        ]
+      },
+      "response": {
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "status": "stale",
+        "rebuildState": {
+          "state": "stale",
+          "hasSnapshot": true,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "hints": [
+        {
+          "reason": "stale-generation"
+        }
+      ],
+      "hintKeyPresent": true,
+      "hintBody": {
+        "reason": "stale-generation",
+        "requestedAt": "2026-09-12T17:58:04.350Z",
+        "intervalMinutes": 5,
+        "rangeHours": 24
+      },
+      "hintTtlSeconds": 300,
+      "manifestAfter": {
+        "configVersion": "cfg-1",
+        "lastCompleteGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2026-09-13T00:05:00.000Z",
+        "rebuildState": "rebuilding",
+        "rollupCoverageComplete": true
+      }
+    },
+    "rebuilding-no-complete-generation": {
+      "payload": {
+        "rebuildState": "rebuilding",
+        "sourceGeneration": "",
+        "generatedAt": null,
+        "freshUntil": null,
+        "groups": []
+      },
+      "response": {
+        "generatedAt": null,
+        "freshUntil": null,
+        "status": "no_snapshot",
+        "rebuildState": {
+          "state": "rebuilding",
+          "hasSnapshot": false,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": []
+      },
+      "hints": [
+        {
+          "reason": "manifest-missing"
+        }
+      ],
+      "hintKeyPresent": true,
+      "hintBody": {
+        "reason": "manifest-missing",
+        "requestedAt": "2026-09-12T17:58:04.351Z",
+        "intervalMinutes": 5,
+        "rangeHours": 24
+      },
+      "hintTtlSeconds": 300,
+      "manifestAfter": {
+        "configVersion": "cfg-1",
+        "lastCompleteGeneration": null,
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "rebuildState": "rebuilding"
+      }
+    },
+    "snapshot-missing": {
+      "payload": {
+        "rebuildState": "rebuilding",
+        "sourceGeneration": "",
+        "generatedAt": null,
+        "freshUntil": null,
+        "groups": []
+      },
+      "response": {
+        "generatedAt": null,
+        "freshUntil": null,
+        "status": "no_snapshot",
+        "rebuildState": {
+          "state": "rebuilding",
+          "hasSnapshot": false,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": []
+      },
+      "hints": [
+        {
+          "reason": "snapshot-missing"
+        }
+      ],
+      "hintKeyPresent": true,
+      "hintBody": {
+        "reason": "snapshot-missing",
+        "requestedAt": "2026-09-12T17:58:04.351Z",
+        "intervalMinutes": 5,
+        "rangeHours": 24
+      },
+      "hintTtlSeconds": 300,
+      "manifestAfter": {
+        "configVersion": "cfg-1",
+        "lastCompleteGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "rebuildState": "rebuilding",
+        "rollupCoverageComplete": true
+      }
+    },
+    "manifest-missing": {
+      "payload": {
+        "rebuildState": "rebuilding",
+        "sourceGeneration": "",
+        "generatedAt": null,
+        "freshUntil": null,
+        "groups": []
+      },
+      "response": {
+        "generatedAt": null,
+        "freshUntil": null,
+        "status": "no_snapshot",
+        "rebuildState": {
+          "state": "rebuilding",
+          "hasSnapshot": false,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": []
+      },
+      "hints": [
+        {
+          "reason": "manifest-missing"
+        }
+      ],
+      "hintKeyPresent": true,
+      "hintBody": {
+        "reason": "manifest-missing",
+        "requestedAt": "2026-09-12T17:58:04.351Z",
+        "intervalMinutes": 5,
+        "rangeHours": 24
+      },
+      "hintTtlSeconds": 300,
+      "manifestAfter": null
+    },
+    "legacy-only": {
+      "payload": {
+        "rebuildState": "stale",
+        "sourceGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "publicGroupSlug": "group-b",
+            "displayName": "Group B",
+            "explanatoryCopy": null,
+            "models": []
+          }
+        ]
+      },
+      "response": {
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "status": "stale",
+        "rebuildState": {
+          "state": "stale",
+          "hasSnapshot": true,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "hints": [
+        {
+          "reason": "stale-generation"
+        },
+        {
+          "reason": "legacy-generation"
+        }
+      ],
+      "hintKeyPresent": true,
+      "hintBody": {
+        "reason": "stale-generation",
+        "requestedAt": "2026-09-12T17:58:04.351Z",
+        "intervalMinutes": 5,
+        "rangeHours": 24
+      },
+      "hintTtlSeconds": 300,
+      "manifestAfter": null
+    },
+    "rollup-coverage-incomplete-with-legacy": {
+      "payload": {
+        "rebuildState": "stale",
+        "sourceGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "publicGroupSlug": "group-b",
+            "displayName": "Group B",
+            "explanatoryCopy": null,
+            "models": []
+          }
+        ]
+      },
+      "response": {
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "status": "stale",
+        "rebuildState": {
+          "state": "stale",
+          "hasSnapshot": true,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "hints": [
+        {
+          "reason": "rollup-coverage-incomplete"
+        },
+        {
+          "reason": "legacy-generation"
+        }
+      ],
+      "hintKeyPresent": true,
+      "hintBody": {
+        "reason": "rollup-coverage-incomplete",
+        "requestedAt": "2026-09-12T17:58:04.351Z",
+        "intervalMinutes": 5,
+        "rangeHours": 24
+      },
+      "hintTtlSeconds": 300,
+      "manifestAfter": {
+        "configVersion": "cfg-1",
+        "generation": "gen-0",
+        "lastCompleteGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "rebuildState": "rebuilding",
+        "rollupCoverageComplete": false
+      }
+    },
+    "config-version-mismatch": {
+      "payload": {
+        "rebuildState": "stale",
+        "sourceGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "publicGroupSlug": "group-b",
+            "displayName": "Group B",
+            "explanatoryCopy": null,
+            "models": []
+          }
+        ]
+      },
+      "response": {
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "status": "stale",
+        "rebuildState": {
+          "state": "stale",
+          "hasSnapshot": true,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": [
+          {
+            "publicGroupSlug": "group-a",
+            "displayName": "Group A",
+            "explanatoryCopy": "copy",
+            "models": [
+              {
+                "publicModelKey": "deepseek-v4-flash",
+                "label": "DeepSeek V4 Flash",
+                "vendorIconKey": "deepseek",
+                "requestTypeBadge": "openaiCompatible",
+                "latestState": "operational",
+                "availabilityPct": 99.5,
+                "latestTtftMs": 120,
+                "latestTps": 30.5,
+                "timeline": [
+                  {
+                    "bucketStart": "2026-09-13T00:00:00.000Z",
+                    "bucketEnd": "2026-09-13T00:05:00.000Z",
+                    "state": "operational",
+                    "availabilityPct": 100,
+                    "ttftMs": 110,
+                    "tps": 28,
+                    "sampleCount": 12
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "hints": [
+        {
+          "reason": "config-version-mismatch"
+        }
+      ],
+      "hintKeyPresent": true,
+      "hintBody": {
+        "reason": "config-version-mismatch",
+        "requestedAt": "2026-09-12T17:58:04.351Z",
+        "intervalMinutes": 5,
+        "rangeHours": 24
+      },
+      "hintTtlSeconds": 300,
+      "manifestAfter": {
+        "configVersion": "cfg-0",
+        "generation": "gen-0",
+        "lastCompleteGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "rebuildState": "rebuilding",
+        "rollupCoverageComplete": true
+      }
+    },
+    "redis-unavailable": {
+      "payload": {
+        "rebuildState": "rebuilding",
+        "sourceGeneration": "",
+        "generatedAt": null,
+        "freshUntil": null,
+        "groups": []
+      },
+      "response": {
+        "generatedAt": null,
+        "freshUntil": null,
+        "status": "rebuilding",
+        "rebuildState": {
+          "state": "rebuilding",
+          "hasSnapshot": false,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": []
+      },
+      "hints": [
+        {
+          "reason": "redis-unavailable"
+        }
+      ],
+      "hintKeyPresent": false,
+      "hintBody": null,
+      "hintTtlSeconds": null,
+      "manifestAfter": {
+        "configVersion": "cfg-1",
+        "generation": "gen-0",
+        "lastCompleteGeneration": "gen-1",
+        "generatedAt": "2026-09-13T00:10:00.000Z",
+        "freshUntil": "2099-01-01T00:00:00.000Z",
+        "rebuildState": "idle",
+        "rollupCoverageComplete": true
+      }
+    },
+    "no-configured-groups": {
+      "payload": {
+        "rebuildState": "no-data",
+        "sourceGeneration": "",
+        "generatedAt": null,
+        "freshUntil": null,
+        "groups": []
+      },
+      "response": {
+        "generatedAt": null,
+        "freshUntil": null,
+        "status": "no_data",
+        "rebuildState": {
+          "state": "no-data",
+          "hasSnapshot": false,
+          "reason": null
+        },
+        "defaults": {
+          "intervalMinutes": 5,
+          "rangeHours": 24
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 24,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        },
+        "meta": {
+          "siteTitle": "CC Hub",
+          "siteDescription": "desc",
+          "timeZone": "Asia/Shanghai"
+        },
+        "groups": []
+      },
+      "hints": [],
+      "hintKeyPresent": false,
+      "hintBody": null,
+      "hintTtlSeconds": null,
+      "manifestAfter": null
+    }
+  },
+  "queries": [
+    {
+      "rawQuery": "",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 15,
+        "rangeHours": 72,
+        "filters": {
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null
+        },
+        "include": [
+          "meta",
+          "defaults",
+          "groups",
+          "timeline"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 15,
+          "rangeHours": 72,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "interval=15m&rangeHours=48",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 15,
+        "rangeHours": 48,
+        "filters": {
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null
+        },
+        "include": [
+          "meta",
+          "defaults",
+          "groups",
+          "timeline"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 15,
+          "rangeHours": 48,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "interval=7",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 5,
+        "rangeHours": 72,
+        "filters": {
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null
+        },
+        "include": [
+          "meta",
+          "defaults",
+          "groups",
+          "timeline"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 5,
+          "rangeHours": 72,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "interval=10",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 15,
+        "rangeHours": 72,
+        "filters": {
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null
+        },
+        "include": [
+          "meta",
+          "defaults",
+          "groups",
+          "timeline"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 15,
+          "rangeHours": 72,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "interval=45",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 60,
+        "rangeHours": 72,
+        "filters": {
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null
+        },
+        "include": [
+          "meta",
+          "defaults",
+          "groups",
+          "timeline"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 60,
+          "rangeHours": 72,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "interval=999",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 60,
+        "rangeHours": 72,
+        "filters": {
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null
+        },
+        "include": [
+          "meta",
+          "defaults",
+          "groups",
+          "timeline"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 60,
+          "rangeHours": 72,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "rangeHours=999",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 15,
+        "rangeHours": 168,
+        "filters": {
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null
+        },
+        "include": [
+          "meta",
+          "defaults",
+          "groups",
+          "timeline"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 15,
+          "rangeHours": 168,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "groupSlug=a,b&groupSlugs=b,c&model=m1&models=m2,m1",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 15,
+        "rangeHours": 72,
+        "filters": {
+          "groupSlugs": [
+            "a",
+            "b",
+            "c"
+          ],
+          "models": [
+            "m1",
+            "m2"
+          ],
+          "statuses": [],
+          "q": null
+        },
+        "include": [
+          "meta",
+          "defaults",
+          "groups",
+          "timeline"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 15,
+          "rangeHours": 72,
+          "groupSlugs": [
+            "a",
+            "b",
+            "c"
+          ],
+          "models": [
+            "m1",
+            "m2"
+          ],
+          "statuses": [],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "status=operational,degraded&include=meta,defaults",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 15,
+        "rangeHours": 72,
+        "filters": {
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [
+            "operational",
+            "degraded"
+          ],
+          "q": null
+        },
+        "include": [
+          "meta",
+          "defaults"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 15,
+          "rangeHours": 72,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [
+            "operational",
+            "degraded"
+          ],
+          "q": null,
+          "include": [
+            "meta",
+            "defaults"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "q=%20hello%20",
+      "ok": true,
+      "parsed": {
+        "intervalMinutes": 15,
+        "rangeHours": 72,
+        "filters": {
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": "hello"
+        },
+        "include": [
+          "meta",
+          "defaults",
+          "groups",
+          "timeline"
+        ],
+        "defaults": {
+          "intervalMinutes": 15,
+          "rangeHours": 72
+        },
+        "resolvedQuery": {
+          "intervalMinutes": 15,
+          "rangeHours": 72,
+          "groupSlugs": [],
+          "models": [],
+          "statuses": [],
+          "q": "hello",
+          "include": [
+            "meta",
+            "defaults",
+            "groups",
+            "timeline"
+          ]
+        }
+      }
+    },
+    {
+      "rawQuery": "interval=abc",
+      "ok": false,
+      "issues": [
+        {
+          "field": "interval",
+          "code": "invalid_number",
+          "message": "interval must be a positive integer",
+          "value": "abc"
+        }
+      ]
+    },
+    {
+      "rawQuery": "rangeHours=-3",
+      "ok": false,
+      "issues": [
+        {
+          "field": "rangeHours",
+          "code": "invalid_number",
+          "message": "rangeHours must be a positive integer",
+          "value": "-3"
+        }
+      ]
+    },
+    {
+      "rawQuery": "status=nope",
+      "ok": false,
+      "issues": [
+        {
+          "field": "status",
+          "code": "invalid_enum",
+          "message": "status must be one of: operational, degraded, failed, no_data",
+          "value": "nope"
+        }
+      ]
+    },
+    {
+      "rawQuery": "include=meta,bogus",
+      "ok": false,
+      "issues": [
+        {
+          "field": "include",
+          "code": "invalid_enum",
+          "message": "include must be one of: meta, defaults, groups, timeline",
+          "value": "bogus"
+        }
+      ]
+    },
+    {
+      "rawQuery": "q=a%01b",
+      "ok": false,
+      "issues": [
+        {
+          "field": "q",
+          "code": "invalid_text",
+          "message": "q cannot contain control characters",
+          "value": "a\u0001b"
+        }
+      ]
+    },
+    {
+      "rawQuery": "groupSlug=ab%01cd",
+      "ok": false,
+      "issues": [
+        {
+          "field": "groupSlug",
+          "code": "invalid_text",
+          "message": "groupSlug cannot contain control characters",
+          "value": "ab\u0001cd"
+        }
+      ]
+    }
+  ]
+}

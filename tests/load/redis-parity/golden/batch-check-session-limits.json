@@ -1,0 +1,38 @@
+{
+  "constName": "BATCH_CHECK_SESSION_LIMITS",
+  "file": "batch-check-session-limits.lua",
+  "sha256": "57bdf9729f071e2ce06a079d708288bec7290ab84f55b5879c8a7676f173d35a",
+  "calls": [
+    {
+      "id": "both-under-limit",
+      "keys": ["cchgolden:provider:11:active_sessions", "cchgolden:provider:12:active_sessions"],
+      "argv": ["session-a", "10", "10", "1757000000000"],
+      "setup": [],
+      "returned": [[1, 0], [1, 0]],
+      "after": {
+        "cchgolden:provider:11:active_sessions": null,
+        "cchgolden:provider:12:active_sessions": null
+      }
+    },
+    {
+      "id": "first-over-limit",
+      "keys": ["cchgolden:provider:11:active_sessions", "cchgolden:provider:12:active_sessions"],
+      "argv": ["session-a", "1", "10", "1757000000000"],
+      "setup": [
+        ["ZADD", "cchgolden:provider:11:active_sessions", "1757000000000", "session-other"]
+      ],
+      "returned": [[0, 1], [1, 0]],
+      "after": {
+        "cchgolden:provider:11:active_sessions": {
+          "type": "zset",
+          "value": {
+            "session-other": "1757000000000"
+          },
+          "ttl": -1
+        },
+        "cchgolden:provider:12:active_sessions": null
+      }
+    }
+  ],
+  "uncollected": []
+}

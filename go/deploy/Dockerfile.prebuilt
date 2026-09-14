@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1
+
+# cchd 生产镜像（**离线打包变体**）：只做运行阶段，二进制由构建机预先 `go build` 出来。
+#
+# 何时用它：
+#   1) 构建环境**不允许容器内网络**（本仓库的沙箱即如此：容器内 `socket()` 被拒，
+#      `go mod download` 与 `apk add` 都跑不了）；
+#   2) 内网/离线 CI（模块与包管理器皆不可达）；
+#   3) 需要在多个镜像里复用同一个已校验二进制。
+#
+# 与 go/deploy/Dockerfile 的关系：那个是**权威**的源码构建（builder 阶段编译），
+# 本文件是等价运行阶段的打包。两者运行阶段的内容与加固项（非 root、CA、探针、
+# SIGTERM、只读根文件系统兼容）须保持一致；改动其中一处时另一处同步。
+#
+# 构建（在临时上下文目录里，需包含 cchd 与 ca-certificates.crt）：
+#   mkdir -p .sisyphus/imgctx && cp /path/to/cchd .sisyphus/imgctx/
+#   cp /etc/ssl/certs/ca-certificates.crt .sisyphus/imgctx/
+#   docker build -t cchd:prebuilt -f go/deploy/Dockerfile.prebuilt .sisyphus/imgctx
+#
+# 二进制必须是**含压缩嵌入 UI** 的那一份（先 bun scripts/build-ui-export.mjs &&
+# bun scripts/build-ui-embed.mjs 再 go build ./cmd/cchd）；否则启用
+# CCH_EGRESS_PAGES=embed 时 uiapp 会 fail fast 拒给启动，用 /readyz 的 notes.pages 复核。
+
+ARG RUNTIME_IMAGE=docker.m.daocloud.io/library/alpine:3.20
+FROM ${RUNTIME_IMAGE} AS runtime
+
+ARG APP_VERSION=dev
+# 与 go/deploy/Dockerfile 同步：版本号必须进进程环境，否则 /api/version 与 /api/health
+# 只能退到兜底常量，与镜像 tag 分叉（曾因此把同一台实例误判成两台）。
+ENV APP_VERSION=${APP_VERSION}
+LABEL org.opencontainers.image.title="claude-code-hub-go cchd (prebuilt)" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.description="Go 数据面/管理面后端，内嵌 UI 静态产物（离线打包）"
+
+# 非 root 账号（无 shell）。busybox adduser 即可，无需任何包管理器。
+RUN adduser -D -H -s /sbin/nologin cchd
+
+# CA 根证书：上游 TLS 与 PG TLS 需要。由构建上下文提供，避免构建期网络。
+COPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY cchd /usr/local/bin/cchd
+
+# 默认值与 Go 侧 config 的 PORT 默认值一致（23000）；部署改 PORT 时探针自动跟随。
+ENV PORT=23000
+USER cchd
+# 公共端口由本进程独占（已无「Node 退到内部端口双跑」这回事）。
+EXPOSE 23000
+# Go 侧实现了排空关闭：SIGTERM -> 停止接纳 -> 等在途请求与待结算，故必须让 SIGTERM 生效。
+STOPSIGNAL SIGTERM
+# 探针用 /readyz（校验 PG、Redis、规则快照，排空中会返回 503），不用 /v1/_ping。
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD wget -q -O /dev/null "http://127.0.0.1:${PORT:-23000}/readyz" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/cchd"]

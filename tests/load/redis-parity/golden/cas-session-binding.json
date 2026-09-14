@@ -1,0 +1,77 @@
+{
+  "constName": "CAS_SESSION_BINDING",
+  "file": "cas-session-binding.lua",
+  "sha256": "c1e9eaf7353d3733ac2551b232629dc936510f48c184ca5896c96e470f34950a",
+  "calls": [
+    {
+      "id": "updated-to-next-generation",
+      "keys": ["cchgolden:bundle:1", "cchgolden:session:1:provider", "cchgolden:session:1:key"],
+      "argv": ["1", "100", "101", "7", "60"],
+      "setup": [
+        ["HSET", "cchgolden:bundle:1", "key_id", "1", "generation", "100"],
+        ["SET", "cchgolden:session:1:key", "1"]
+      ],
+      "returned": ["ok", "updated", "101", "7"],
+      "after": {
+        "cchgolden:bundle:1": {
+          "type": "hash",
+          "value": {
+            "key_id": "1",
+            "generation": "101",
+            "provider_id": "7"
+          },
+          "ttl": 60
+        },
+        "cchgolden:session:1:provider": {
+          "type": "string",
+          "value": "7",
+          "ttl": 60
+        },
+        "cchgolden:session:1:key": {
+          "type": "string",
+          "value": "1",
+          "ttl": 60
+        }
+      }
+    },
+    {
+      "id": "canonical-missing",
+      "keys": ["cchgolden:bundle:1", "cchgolden:session:1:provider", "cchgolden:session:1:key"],
+      "argv": ["1", "100", "101", "7", "60"],
+      "setup": [],
+      "returned": ["conflict", "canonical_missing"],
+      "after": {
+        "cchgolden:bundle:1": null,
+        "cchgolden:session:1:provider": null,
+        "cchgolden:session:1:key": null
+      }
+    },
+    {
+      "id": "generation-mismatch",
+      "keys": ["cchgolden:bundle:1", "cchgolden:session:1:provider", "cchgolden:session:1:key"],
+      "argv": ["1", "100", "101", "7", "60"],
+      "setup": [
+        ["HSET", "cchgolden:bundle:1", "key_id", "1", "generation", "999"],
+        ["SET", "cchgolden:session:1:key", "1"]
+      ],
+      "returned": ["conflict", "generation_mismatch"],
+      "after": {
+        "cchgolden:bundle:1": {
+          "type": "hash",
+          "value": {
+            "key_id": "1",
+            "generation": "999"
+          },
+          "ttl": -1
+        },
+        "cchgolden:session:1:provider": null,
+        "cchgolden:session:1:key": {
+          "type": "string",
+          "value": "1",
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": []
+}

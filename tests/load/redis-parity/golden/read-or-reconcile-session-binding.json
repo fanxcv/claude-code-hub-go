@@ -1,0 +1,119 @@
+{
+  "constName": "READ_OR_RECONCILE_SESSION_BINDING",
+  "file": "read-or-reconcile-session-binding.lua",
+  "sha256": "f50c2516690802a736f9101ea4ee170fcc54f1d168b28cd90cfa698bb6cbd58e",
+  "calls": [
+    {
+      "id": "created-from-scratch",
+      "keys": ["cchgolden:bundle:1", "cchgolden:session:1:provider", "cchgolden:session:1:key"],
+      "argv": ["1", "100", "60"],
+      "setup": [],
+      "returned": ["ok", "created", "100", ""],
+      "after": {
+        "cchgolden:bundle:1": {
+          "type": "hash",
+          "value": {
+            "key_id": "1",
+            "generation": "100"
+          },
+          "ttl": 60
+        },
+        "cchgolden:session:1:provider": null,
+        "cchgolden:session:1:key": {
+          "type": "string",
+          "value": "1",
+          "ttl": 60
+        }
+      }
+    },
+    {
+      "id": "existing-canonical",
+      "keys": ["cchgolden:bundle:1", "cchgolden:session:1:provider", "cchgolden:session:1:key"],
+      "argv": ["1", "100", "60"],
+      "setup": [
+        ["HSET", "cchgolden:bundle:1", "key_id", "1", "generation", "100"],
+        ["SET", "cchgolden:session:1:key", "1"]
+      ],
+      "returned": ["ok", "existing", "100", ""],
+      "after": {
+        "cchgolden:bundle:1": {
+          "type": "hash",
+          "value": {
+            "key_id": "1",
+            "generation": "100"
+          },
+          "ttl": 60
+        },
+        "cchgolden:session:1:provider": null,
+        "cchgolden:session:1:key": {
+          "type": "string",
+          "value": "1",
+          "ttl": 60
+        }
+      }
+    },
+    {
+      "id": "legacy-upgraded-with-provider",
+      "keys": ["cchgolden:bundle:1", "cchgolden:session:1:provider", "cchgolden:session:1:key"],
+      "argv": ["1", "100", "60"],
+      "setup": [
+        ["SET", "cchgolden:session:1:key", "1"],
+        ["SET", "cchgolden:session:1:provider", "7"]
+      ],
+      "returned": ["ok", "legacy_upgraded", "100", "7"],
+      "after": {
+        "cchgolden:bundle:1": {
+          "type": "hash",
+          "value": {
+            "key_id": "1",
+            "generation": "100",
+            "provider_id": "7"
+          },
+          "ttl": 60
+        },
+        "cchgolden:session:1:provider": {
+          "type": "string",
+          "value": "7",
+          "ttl": 60
+        },
+        "cchgolden:session:1:key": {
+          "type": "string",
+          "value": "1",
+          "ttl": 60
+        }
+      }
+    },
+    {
+      "id": "canonical-key-mismatch",
+      "keys": ["cchgolden:bundle:1", "cchgolden:session:1:provider", "cchgolden:session:1:key"],
+      "argv": ["1", "100", "60"],
+      "setup": [
+        ["HSET", "cchgolden:bundle:1", "key_id", "2", "generation", "100"],
+        ["SET", "cchgolden:session:1:key", "1"]
+      ],
+      "returned": ["conflict", "canonical_key_mismatch"],
+      "after": {
+        "cchgolden:bundle:1": {
+          "type": "hash",
+          "value": {
+            "key_id": "2",
+            "generation": "100"
+          },
+          "ttl": -1
+        },
+        "cchgolden:session:1:provider": null,
+        "cchgolden:session:1:key": {
+          "type": "string",
+          "value": "1",
+          "ttl": -1
+        }
+      }
+    }
+  ],
+  "uncollected": [
+    {
+      "id": "mirror-missing-after-canonical-write",
+      "reason": "需要规范态存在而 legacy owner 缺失，属滚动升级中的瞬时中间态；单线程脚本调用可构造，但该组合的语义由 session-binding.ts 的调用顺序决定，采集会固化一个并非真实序列的中间态。"
+    }
+  ]
+}

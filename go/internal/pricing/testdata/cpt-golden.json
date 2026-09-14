@@ -1,0 +1,269 @@
+{
+  "source": "src/lib/price-sync/cpt-convert.ts convertCptTable",
+  "fixture": "go/internal/pricing/testdata/cpt-fixture.json",
+  "version": "2026.09.13-test",
+  "currency": "USD",
+  "refreshedAt": "2026-09-13T00:00:00Z",
+  "vendors": [
+    {
+      "vendor": "anthropic",
+      "name": "Anthropic",
+      "icon": "anthropic.svg",
+      "iconMono": true,
+      "modelCount": 2
+    },
+    {
+      "vendor": "openai",
+      "name": "OpenAI",
+      "icon": "openai.svg",
+      "iconMono": true,
+      "modelCount": 1
+    }
+  ],
+  "providers": {
+    "anthropic": {
+      "name": "Anthropic",
+      "icon": "anthropic.svg",
+      "icon_mono": true
+    },
+    "openai": {
+      "name": "OpenAI"
+    }
+  },
+  "models": {
+    "claude-sonnet-test": {
+      "input_cost_per_token": 0.000003,
+      "output_cost_per_token": 0.000015,
+      "cache_read_input_token_cost": 3e-7,
+      "cache_creation_input_token_cost": 0.00000375,
+      "cache_creation_input_token_cost_above_1hr": 0.000006,
+      "input_cost_per_request": 0.01,
+      "input_cost_per_image_token": 0.0000015,
+      "output_cost_per_image": 0.04,
+      "search_context_cost_per_query": {
+        "search_context_size_low": 0.01,
+        "search_context_size_medium": 0.01,
+        "search_context_size_high": 0.01
+      },
+      "file_search_cost_per_1k_calls": 2.5,
+      "input_cost_per_token_above_200k_tokens": 0.000006,
+      "output_cost_per_token_above_200k_tokens": 0.00003,
+      "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+      "cache_creation_input_token_cost_above_200k_tokens": 0.0000075,
+      "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 0.000012,
+      "input_cost_per_token_above_272k_tokens": 0.000009,
+      "output_cost_per_token_above_272k_tokens": 0.00003,
+      "cache_read_input_token_cost_above_272k_tokens": 4.5e-7,
+      "cache_creation_input_token_cost_above_272k_tokens": 0.000005625,
+      "cache_creation_input_token_cost_above_1hr_above_272k_tokens": 0.000009,
+      "input_cost_per_token_priority": 0.0000054,
+      "output_cost_per_token_priority": 0.000027,
+      "cache_read_input_token_cost_priority": 5.4e-7,
+      "input_cost_per_token_above_200k_tokens_priority": 0.0000075,
+      "output_cost_per_token_above_200k_tokens_priority": 0.0000375,
+      "cache_read_input_token_cost_above_200k_tokens_priority": 7.5e-7,
+      "mode": "chat",
+      "display_name": "Claude Sonnet Test",
+      "vendor": "anthropic",
+      "slug": "claude-sonnet-test",
+      "providers": [
+        "anthropic",
+        "openai@us"
+      ],
+      "pricing": {
+        "anthropic": {
+          "input_cost_per_token": 0.000003,
+          "output_cost_per_token": 0.000015,
+          "cache_read_input_token_cost": 3e-7,
+          "cache_creation_input_token_cost": 0.00000375,
+          "cache_creation_input_token_cost_above_1hr": 0.000006,
+          "input_cost_per_request": 0.01,
+          "input_cost_per_image_token": 0.0000015,
+          "output_cost_per_image": 0.04,
+          "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+          },
+          "file_search_cost_per_1k_calls": 2.5,
+          "input_cost_per_token_above_200k_tokens": 0.000006,
+          "output_cost_per_token_above_200k_tokens": 0.00003,
+          "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+          "cache_creation_input_token_cost_above_200k_tokens": 0.0000075,
+          "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 0.000012,
+          "input_cost_per_token_above_272k_tokens": 0.000009,
+          "output_cost_per_token_above_272k_tokens": 0.00003,
+          "cache_read_input_token_cost_above_272k_tokens": 4.5e-7,
+          "cache_creation_input_token_cost_above_272k_tokens": 0.000005625,
+          "cache_creation_input_token_cost_above_1hr_above_272k_tokens": 0.000009,
+          "input_cost_per_token_priority": 0.0000054,
+          "output_cost_per_token_priority": 0.000027,
+          "cache_read_input_token_cost_priority": 5.4e-7,
+          "input_cost_per_token_above_200k_tokens_priority": 0.0000075,
+          "output_cost_per_token_above_200k_tokens_priority": 0.0000375,
+          "cache_read_input_token_cost_above_200k_tokens_priority": 7.5e-7,
+          "official": true,
+          "provider_model_id": "claude-sonnet-4-5"
+        },
+        "openai@us": {
+          "input_cost_per_token": 0.0000025,
+          "output_cost_per_token": 0.00001
+        }
+      },
+      "official_pricing_provider": "anthropic",
+      "vendor_icon": "anthropic.svg",
+      "vendor_icon_mono": true,
+      "aliases": [
+        "claude-sonnet-test-alias"
+      ],
+      "model_family": "claude-4",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "max_tokens": 64000,
+      "deprecated": true,
+      "knowledge_cutoff": "2025-04",
+      "supports_function_calling": true,
+      "supports_tool_choice": true,
+      "supports_reasoning": true,
+      "supports_vision": true
+    },
+    "image-model-test": {
+      "output_cost_per_image": 0.04,
+      "input_cost_per_image": 0.02,
+      "input_cost_per_token": 0.000005,
+      "mode": "image_generation",
+      "display_name": "image-model-test",
+      "vendor": "openai",
+      "slug": "image-model-test",
+      "providers": [
+        "openai"
+      ],
+      "pricing": {
+        "openai": {
+          "output_cost_per_image": 0.04,
+          "input_cost_per_image": 0.02,
+          "input_cost_per_token": 0.000005,
+          "official": true
+        }
+      },
+      "official_pricing_provider": "openai",
+      "vendor_icon": "openai.svg",
+      "vendor_icon_mono": true
+    },
+    "collision-model": {
+      "input_cost_per_token": 0.000001,
+      "mode": "chat",
+      "display_name": "Collision official",
+      "vendor": "anthropic",
+      "slug": "dup-official",
+      "providers": [
+        "anthropic"
+      ],
+      "pricing": {
+        "anthropic": {
+          "input_cost_per_token": 0.000001,
+          "official": true
+        }
+      },
+      "official_pricing_provider": "anthropic",
+      "vendor_icon": "anthropic.svg",
+      "vendor_icon_mono": true
+    },
+    "claude-sonnet-test-alias": {
+      "input_cost_per_token": 0.000003,
+      "output_cost_per_token": 0.000015,
+      "cache_read_input_token_cost": 3e-7,
+      "cache_creation_input_token_cost": 0.00000375,
+      "cache_creation_input_token_cost_above_1hr": 0.000006,
+      "input_cost_per_request": 0.01,
+      "input_cost_per_image_token": 0.0000015,
+      "output_cost_per_image": 0.04,
+      "search_context_cost_per_query": {
+        "search_context_size_low": 0.01,
+        "search_context_size_medium": 0.01,
+        "search_context_size_high": 0.01
+      },
+      "file_search_cost_per_1k_calls": 2.5,
+      "input_cost_per_token_above_200k_tokens": 0.000006,
+      "output_cost_per_token_above_200k_tokens": 0.00003,
+      "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+      "cache_creation_input_token_cost_above_200k_tokens": 0.0000075,
+      "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 0.000012,
+      "input_cost_per_token_above_272k_tokens": 0.000009,
+      "output_cost_per_token_above_272k_tokens": 0.00003,
+      "cache_read_input_token_cost_above_272k_tokens": 4.5e-7,
+      "cache_creation_input_token_cost_above_272k_tokens": 0.000005625,
+      "cache_creation_input_token_cost_above_1hr_above_272k_tokens": 0.000009,
+      "input_cost_per_token_priority": 0.0000054,
+      "output_cost_per_token_priority": 0.000027,
+      "cache_read_input_token_cost_priority": 5.4e-7,
+      "input_cost_per_token_above_200k_tokens_priority": 0.0000075,
+      "output_cost_per_token_above_200k_tokens_priority": 0.0000375,
+      "cache_read_input_token_cost_above_200k_tokens_priority": 7.5e-7,
+      "mode": "chat",
+      "display_name": "Claude Sonnet Test",
+      "vendor": "anthropic",
+      "slug": "claude-sonnet-test",
+      "providers": [
+        "anthropic",
+        "openai@us"
+      ],
+      "pricing": {
+        "anthropic": {
+          "input_cost_per_token": 0.000003,
+          "output_cost_per_token": 0.000015,
+          "cache_read_input_token_cost": 3e-7,
+          "cache_creation_input_token_cost": 0.00000375,
+          "cache_creation_input_token_cost_above_1hr": 0.000006,
+          "input_cost_per_request": 0.01,
+          "input_cost_per_image_token": 0.0000015,
+          "output_cost_per_image": 0.04,
+          "search_context_cost_per_query": {
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01,
+            "search_context_size_high": 0.01
+          },
+          "file_search_cost_per_1k_calls": 2.5,
+          "input_cost_per_token_above_200k_tokens": 0.000006,
+          "output_cost_per_token_above_200k_tokens": 0.00003,
+          "cache_read_input_token_cost_above_200k_tokens": 6e-7,
+          "cache_creation_input_token_cost_above_200k_tokens": 0.0000075,
+          "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 0.000012,
+          "input_cost_per_token_above_272k_tokens": 0.000009,
+          "output_cost_per_token_above_272k_tokens": 0.00003,
+          "cache_read_input_token_cost_above_272k_tokens": 4.5e-7,
+          "cache_creation_input_token_cost_above_272k_tokens": 0.000005625,
+          "cache_creation_input_token_cost_above_1hr_above_272k_tokens": 0.000009,
+          "input_cost_per_token_priority": 0.0000054,
+          "output_cost_per_token_priority": 0.000027,
+          "cache_read_input_token_cost_priority": 5.4e-7,
+          "input_cost_per_token_above_200k_tokens_priority": 0.0000075,
+          "output_cost_per_token_above_200k_tokens_priority": 0.0000375,
+          "cache_read_input_token_cost_above_200k_tokens_priority": 7.5e-7,
+          "official": true,
+          "provider_model_id": "claude-sonnet-4-5"
+        },
+        "openai@us": {
+          "input_cost_per_token": 0.0000025,
+          "output_cost_per_token": 0.00001
+        }
+      },
+      "official_pricing_provider": "anthropic",
+      "vendor_icon": "anthropic.svg",
+      "vendor_icon_mono": true,
+      "aliases": [
+        "claude-sonnet-test-alias"
+      ],
+      "model_family": "claude-4",
+      "max_input_tokens": 200000,
+      "max_output_tokens": 64000,
+      "max_tokens": 64000,
+      "deprecated": true,
+      "knowledge_cutoff": "2025-04",
+      "supports_function_calling": true,
+      "supports_tool_choice": true,
+      "supports_reasoning": true,
+      "supports_vision": true
+    }
+  }
+}
