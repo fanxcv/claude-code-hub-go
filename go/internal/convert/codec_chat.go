@@ -845,6 +845,46 @@ func chatEncodeItems(items []Item, idMap map[string]string, loss *LossCollector,
 	return messages
 }
 
+// backfillTrailingToolCallReasoning 给「末尾 tool 结果所属的那条 assistant(tool_calls) 消息」
+// 补一个空 reasoning_content。
+//
+// 为什么补：上游 Console Go（OpenCode 系）真上游二分实测（2026-09-14，36 次请求）——仅当
+// 「历史以 tool 结果收尾」且「该 tool 结果归属的 assistant(tool_calls) 轮缺 reasoning_content」
+// 时回 400 `The reasoning_content in the thinking mode must be passed back to the API.`；
+// 空串被上游视作「已传回」（同载荷写 reasoning_content:"" 即 200），末尾另加一条 user 也 200。
+// 生产形态见 965278（`/v1/responses` 入站）：客户端 omit 空 thinking 后我方出站即缺该字段。
+//
+// 为什么只补这一条：触发条件只落在末轮（更早轮次缺该字段不报），无差别补全等于往所有历史
+// assistant 轮次写字段；最小改动只覆盖已证实的形态。空串不含信息，故不属伪造思考内容——
+// 无该形态的请求（末条非 tool）一字不动，`TestReasoningAbsentIsNotFabricated` 即其反证。
+func backfillTrailingToolCallReasoning(messages []*Value, loss *LossCollector, direction string) {
+	if len(messages) == 0 {
+		return
+	}
+	if role, _ := stringField(messages[len(messages)-1], "role"); role != "tool" {
+		return
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := messages[index]
+		role, _ := stringField(message, "role")
+		if role == "tool" {
+			continue
+		}
+		if role != "assistant" {
+			return
+		}
+		if _, hasTools := message.Get("tool_calls"); !hasTools {
+			return
+		}
+		if reasoning, present := message.Get("reasoning_content"); present && reasoning != nil {
+			return
+		}
+		message.Set("reasoning_content", NewString(""))
+		loss.Downgraded(LossReasoningReplay, direction, "reasoning_content.empty_backfill")
+		return
+	}
+}
+
 func chatEncodeToolChoice(choice *ToolChoice, ctx ConvertCtx) *Value {
 	if choice.Kind == ChoiceTool {
 		name := choice.Name
@@ -895,6 +935,7 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 		direction: direction, seed: "system", idMap: idMap, loss: loss, toWire: ctx.ToWireToolName,
 	})...)
 	messages = append(messages, chatEncodeItems(request.Items, idMap, loss, ctx)...)
+	backfillTrailingToolCallReasoning(messages, loss, direction)
 	out.Set("messages", NewArray(messages...))
 
 	if len(request.Tools) > 0 {

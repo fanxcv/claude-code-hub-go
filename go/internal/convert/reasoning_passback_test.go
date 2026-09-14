@@ -220,6 +220,73 @@ func TestReasoningAbsentIsNotFabricated(t *testing.T) {
 	}
 }
 
+// TestTrailingToolResultBackfillsReasoningContent 钉住生产 965278 的修复面：历史以 tool 结果收尾时，
+// 其归属的 assistant(tool_calls) 轮必须带 reasoning_content。
+//
+// 上游判据（Console Go 真上游二分实测，2026-09-14）：末条为 tool 结果且该轮缺 reasoning_content
+// → 400 `The reasoning_content in the thinking mode must be passed back to the API.`；写空串即 200。
+// 客户端（pi 的 Responses 回放省略空 thinking）不回传时，我方出站必须自行补上空串——补的是空串，
+// 不是思考内容，故不属伪造。
+func TestTrailingToolResultBackfillsReasoningContent(t *testing.T) {
+	messages := chatMessagesOf(t, `{"model":"deepseek-v4.1-flash","stream":false,
+"instructions":"You are Codex.",
+"input":[
+ {"type":"message","role":"user","content":[{"type":"input_text","text":"调用工具"}]},
+ {"type":"function_call","call_id":"c1","name":"read_file","arguments":"{\"p\":\"a\"}"},
+ {"type":"function_call_output","call_id":"c1","output":"内容"}
+],
+"tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}]}`)
+
+	if len(messages) < 2 {
+		t.Fatalf("出站消息过少：%v", dumpMessages(messages))
+	}
+	if role, _ := stringField(messages[len(messages)-1], "role"); role != "tool" {
+		t.Fatalf("末条应为 tool 结果，实际 %q：%v", role, dumpMessages(messages))
+	}
+	owner := messages[len(messages)-2]
+	if role, _ := stringField(owner, "role"); role != "assistant" {
+		t.Fatalf("tool 结果的前一条应为 assistant，实际 %q：%v", role, dumpMessages(messages))
+	}
+	if _, hasTools := owner.Get("tool_calls"); !hasTools {
+		t.Fatalf("前一条应带 tool_calls：%v", dumpMessages(messages))
+	}
+	reasoning, present := owner.Get("reasoning_content")
+	if !present || reasoning == nil {
+		t.Fatalf("末轮工具调用的 assistant 缺 reasoning_content——上游会回 400：%v", dumpMessages(messages))
+	}
+	if text, _ := reasoning.String(); text != "" {
+		t.Fatalf("reasoning_content = %q，期望空串（不得伪造思考文本）", text)
+	}
+	for _, message := range messages[:len(messages)-2] {
+		if _, present := message.Get("reasoning_content"); present {
+			t.Fatalf("只应补末轮那条，实际多补了：%v", dumpMessages(messages))
+		}
+	}
+}
+
+// TestTrailingToolResultKeepsExistingReasoning 是本修复的反向约束：客户端已经回传了思考时，
+// 补空串不得覆盖原文。
+func TestTrailingToolResultKeepsExistingReasoning(t *testing.T) {
+	messages := chatMessagesOf(t, `{"model":"deepseek-v4.1-flash","stream":false,
+"instructions":"You are Codex.",
+"input":[
+ {"type":"message","role":"user","content":[{"type":"input_text","text":"调用工具"}]},
+ {"type":"reasoning","summary":[{"type":"summary_text","text":"先读文件"}]},
+ {"type":"function_call","call_id":"c1","name":"read_file","arguments":"{\"p\":\"a\"}"},
+ {"type":"function_call_output","call_id":"c1","output":"内容"}
+],
+"tools":[{"type":"function","name":"read_file","parameters":{"type":"object"}}]}`)
+
+	owner := messages[len(messages)-2]
+	reasoning, present := owner.Get("reasoning_content")
+	if !present || reasoning == nil {
+		t.Fatalf("缺 reasoning_content：%v", dumpMessages(messages))
+	}
+	if text, _ := reasoning.String(); text != "先读文件" {
+		t.Fatalf("reasoning_content = %q，期望原样保留客户端回传的思考", text)
+	}
+}
+
 // dumpMessages 把消息数组渲染成便于阅读的一行（断言失败时用）。
 func dumpMessages(messages []*Value) string {
 	parts := make([]string, 0, len(messages))

@@ -19,7 +19,7 @@
     {
       "clientPathname": "/v1/messages",
       "expectError": false,
-      "expected": "{\"model\":\"claude-sonnet-4-5\",\"stream\":false,\"messages\":[{\"role\":\"system\",\"content\":\"你是助手\"},{\"role\":\"user\",\"content\":\"读一下 a.txt\"},{\"role\":\"assistant\",\"content\":\"好的\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}]},{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"文件内容\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"description\":\"读文件\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}}}],\"max_tokens\":1024}",
+      "expected": "{\"model\":\"claude-sonnet-4-5\",\"stream\":false,\"messages\":[{\"role\":\"system\",\"content\":\"你是助手\"},{\"role\":\"user\",\"content\":\"读一下 a.txt\"},{\"role\":\"assistant\",\"content\":\"好的\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}],\"reasoning_content\":\"\"},{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"文件内容\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"description\":\"读文件\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}}}],\"max_tokens\":1024}",
       "expectedEncoding": "utf8",
       "familyFrom": "anthropic-messages",
       "familyTo": "openai-chat",
@@ -439,7 +439,7 @@
     {
       "clientPathname": "/v1/responses",
       "expectError": false,
-      "expected": "{\"model\":\"gpt-5-codex\",\"stream\":false,\"messages\":[{\"role\":\"system\",\"content\":\"你是助手\"},{\"role\":\"user\",\"content\":\"读一下 a.txt\"},{\"role\":\"assistant\",\"content\":\"好的\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}]},{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"文件内容\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"description\":\"读文件\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}}}],\"max_tokens\":1024}",
+      "expected": "{\"model\":\"gpt-5-codex\",\"stream\":false,\"messages\":[{\"role\":\"system\",\"content\":\"你是助手\"},{\"role\":\"user\",\"content\":\"读一下 a.txt\"},{\"role\":\"assistant\",\"content\":\"好的\",\"tool_calls\":[{\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}}],\"reasoning_content\":\"\"},{\"role\":\"tool\",\"tool_call_id\":\"call_1\",\"content\":\"文件内容\"}],\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"description\":\"读文件\",\"parameters\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}}}}}],\"max_tokens\":1024}",
       "expectedEncoding": "utf8",
       "familyFrom": "openai-responses",
       "familyTo": "openai-chat",
