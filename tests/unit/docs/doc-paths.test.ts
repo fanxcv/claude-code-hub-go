@@ -45,7 +45,6 @@ const TOP_LEVEL_DIRS = [
 /** 顶层文件也允许被提到。 */
 const ROOT_FILES = [
   "AGENTS.md",
-  "CLAUDE.md",
   "README.md",
   "README.en.md",
   "package.json",
@@ -213,11 +212,9 @@ describe("AGENTS.md 的路径钉子", () => {
     }
   });
 
-  test("CLAUDE.md 只是指向 AGENTS.md 的指针，不是第二份真源", () => {
-    const pointer = readFileSync(path.join(ROOT, "CLAUDE.md"), "utf8");
-    expect(pointer).toContain("AGENTS.md");
-    // 指针应当很短：一旦有人把整份指南又抄回来，这条会红。
-    expect(pointer.length).toBeLessThan(700);
-    expect(pointer).not.toContain("## 目录地图");
+  test("代理指南只有 AGENTS.md 一份，不得再出现第二份真源", () => {
+    // 原先是 `CLAUDE.md` 指针文件；现已删除——两份指南会在改一处漏一处时互相矛盾，
+    // 而「哪份为准」本身不该成为需要判断的事。这条断言把这个决定钉住。
+    expect(existsSync(path.join(ROOT, "CLAUDE.md")), "CLAUDE.md 已废弃，请勿重新添加").toBe(false);
   });
 });
