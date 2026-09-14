@@ -71,14 +71,14 @@ function allText(): string {
   return document.body.textContent ?? "";
 }
 
-// Real-world payload for a Tailscale / CGN IP (100.64/10). Upstream filled
-// what it could — carrier/NAT org + hostname — and nulled the rest.
+// CGN（100.64/10）响应的形状：上游填了 carrier/NAT 机构名与主机名，其余置空。
+// 地址与主机名均为占位值（原夹具是从真实设备抓的包，按仓库纪律已匿名化）。
 const CGN_RESPONSE: IpGeoLookupResponse = {
   status: "ok",
   data: {
-    ip: "100.85.244.112",
+    ip: "100.64.0.1",
     version: "ipv4",
-    hostname: "dings-macbook-pro.taile7ff02.ts.net",
+    hostname: "demo-device.tailnet.example",
     location: {
       continent: { code: "AN", name: "Unknown" },
       country: {
@@ -205,7 +205,7 @@ describe("IpDetailsDialog: partial payload rendering (CGN / bogon / tailscale)",
   test("hides null asn, null route, and 0,0 null-accuracy coordinates rows", () => {
     const { unmount } = render(
       <NextIntlClientProvider locale="en" messages={messages}>
-        <IpDetailsDialog ip="100.85.244.112" open onOpenChange={() => {}} />
+        <IpDetailsDialog ip="100.64.0.1" open onOpenChange={() => {}} />
       </NextIntlClientProvider>
     );
 
@@ -219,7 +219,7 @@ describe("IpDetailsDialog: partial payload rendering (CGN / bogon / tailscale)",
     // Things that ARE present in the CGN payload should still render so the
     // dialog is useful rather than near-empty:
     expect(text).toContain("Carrier-Grade NAT RFC6598"); // organization
-    expect(text).toContain("dings-macbook-pro.taile7ff02.ts.net"); // hostname
+    expect(text).toContain("demo-device.tailnet.example"); // hostname
     expect(text).toContain(ipDetailsMessages.sections.countryTimezone);
     expect(text).not.toContain("UTC"); // collapsed by default
 
@@ -229,7 +229,7 @@ describe("IpDetailsDialog: partial payload rendering (CGN / bogon / tailscale)",
   test("RIR row hidden when upstream returns 'UNKNOWN' sentinel", () => {
     const { unmount } = render(
       <NextIntlClientProvider locale="en" messages={messages}>
-        <IpDetailsDialog ip="100.85.244.112" open onOpenChange={() => {}} />
+        <IpDetailsDialog ip="100.64.0.1" open onOpenChange={() => {}} />
       </NextIntlClientProvider>
     );
 
@@ -243,7 +243,7 @@ describe("IpDetailsDialog: partial payload rendering (CGN / bogon / tailscale)",
   test("anycast row hidden when is_anycast is false (the common case)", () => {
     const { unmount } = render(
       <NextIntlClientProvider locale="en" messages={messages}>
-        <IpDetailsDialog ip="100.85.244.112" open onOpenChange={() => {}} />
+        <IpDetailsDialog ip="100.64.0.1" open onOpenChange={() => {}} />
       </NextIntlClientProvider>
     );
 
@@ -281,7 +281,7 @@ describe("IpDetailsDialog: partial payload rendering (CGN / bogon / tailscale)",
   test("hides abuse section when abuse payload is null", () => {
     const { unmount } = render(
       <NextIntlClientProvider locale="en" messages={messages}>
-        <IpDetailsDialog ip="100.85.244.112" open onOpenChange={() => {}} />
+        <IpDetailsDialog ip="100.64.0.1" open onOpenChange={() => {}} />
       </NextIntlClientProvider>
     );
 
@@ -295,7 +295,7 @@ describe("IpDetailsDialog: partial payload rendering (CGN / bogon / tailscale)",
   test("hides unknown-country metadata rows even though the shared meta group still exists", () => {
     const { unmount } = render(
       <NextIntlClientProvider locale="en" messages={messages}>
-        <IpDetailsDialog ip="100.85.244.112" open onOpenChange={() => {}} />
+        <IpDetailsDialog ip="100.64.0.1" open onOpenChange={() => {}} />
       </NextIntlClientProvider>
     );
 
