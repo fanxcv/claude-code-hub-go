@@ -102,11 +102,16 @@ type NotifyScheduledJob struct {
 
 // NotifyRunResult 是一轮触发的单条结果。
 type NotifyRunResult struct {
-	JobID    string
-	Type     string
-	Fired    bool
-	Skipped  bool
-	Reason   string
+	JobID   string
+	Type    string
+	Fired   bool
+	Skipped bool
+	Reason  string
+	// Payloads 是本轮要投递的数据份数（成本预警可能一次多条）。
+	Payloads int
+	// Delivered 是成功送达的份数。
+	Delivered int
+	// Attempts 是全部份数累计的投递尝试次数。
 	Attempts int
 	Error    string
 }
@@ -121,6 +126,9 @@ type NotifySchedulerOptions struct {
 	Deliverer NotifyDeliverer
 	// Payloads 现算通知数据；nil 时 NeedsPayload 的任务记 error。
 	Payloads NotifyPayloadSource
+	// Cooldown 写下「投递成功后」的去重键（Node：commitCacheHitRateAlertCooldown）；
+	// nil 时不去重，与 Node 在无 Redis 时的分支一致。
+	Cooldown NotifyCooldownWriter
 	// Clock 为 nil 时用真实时钟。
 	Clock NotifyClock
 	// LockName 覆盖默认锁名（测试用）。
@@ -144,6 +152,7 @@ type NotifyScheduler struct {
 	clock       NotifyClock
 	deliverer   NotifyDeliverer
 	payloads    NotifyPayloadSource
+	cooldown    NotifyCooldownWriter
 	maxAttempts int
 	retryBase   time.Duration
 	settingsFor func(ctx context.Context) (store.AdminNotificationSettings, string, error)
@@ -185,6 +194,7 @@ func NewNotifyScheduler(options NotifySchedulerOptions) *NotifyScheduler {
 		clock:       clock,
 		deliverer:   options.Deliverer,
 		payloads:    options.Payloads,
+		cooldown:    options.Cooldown,
 		maxAttempts: maxAttempts,
 		retryBase:   retryBase,
 		settingsFor: options.SettingsSource,
@@ -359,7 +369,7 @@ func (s *NotifyScheduler) runJob(ctx context.Context, job *notifyScheduledJob, n
 	})
 
 	// 1) 执行期复检开关：入队后开关被关掉的遗留任务不应继续发送。
-	settings, _, err := s.settingsFor(ctx)
+	settings, systemTimezone, err := s.settingsFor(ctx)
 	if err != nil {
 		return s.failJob(result, "settings_unreadable", err, 0)
 	}
@@ -375,20 +385,27 @@ func (s *NotifyScheduler) runJob(ctx context.Context, job *notifyScheduledJob, n
 	}
 
 	// 2) 数据：事件型任务带上数据；定时型任务现算，算不出就跳过（不是失败，不重试）。
-	data := schedule.Data
-	if schedule.NeedsPayload && len(data) == 0 {
+	//
+	// 生成器可以一次给出多份（成本预警有多个超限对象时就是多条告警）：多份各自独立投递、
+	// 各自独立重试，一份失败不牵连其余份。
+	payloads := []NotifyPayload{{Data: schedule.Data}}
+	if schedule.NeedsPayload && len(schedule.Data) == 0 {
 		if s.payloads == nil {
 			return s.failJob(result, "payload_source_unwired", errors.New("未装配数据生成器"), 0)
 		}
-		payload, ok, err := s.payloads.Payload(ctx, NotifyPayloadRequest{
-			Type:     schedule.Type,
-			Timezone: schedule.Timezone,
-			Now:      now,
+		computed, err := s.payloads.Payloads(ctx, NotifyPayloadRequest{
+			Type:           schedule.Type,
+			Timezone:       schedule.Timezone,
+			SystemTimezone: systemTimezone,
+			Now:            now,
+			Settings:       settings,
+			TargetID:       schedule.TargetID,
+			BindingID:      schedule.BindingID,
 		})
 		if err != nil {
 			return s.failJob(result, "payload_failed", err, 0)
 		}
-		if !ok {
+		if len(computed) == 0 {
 			result.Skipped = true
 			result.Reason = "no_data"
 			s.logger.Info("notification_job_skipped", map[string]any{
@@ -398,43 +415,107 @@ func (s *NotifyScheduler) runJob(ctx context.Context, job *notifyScheduledJob, n
 			})
 			return result
 		}
-		data = payload
+		payloads = computed
 	}
 
-	// 3) 投递 + 重试退避（Node 的 Bull attempts/backoff）。
+	// 3) 逐份投递 + 重试退避（Node 的 Bull attempts/backoff）。
 	if s.deliverer == nil {
 		return s.failJob(result, "deliverer_unwired", errors.New("未装配投递器"), 0)
 	}
+	result.Payloads = len(payloads)
+	failures := 0
+	for index, payload := range payloads {
+		outcome, lastError := s.deliverPayload(ctx, schedule, payload, index, &result)
+		switch outcome {
+		case notifyDeliveryDelivered:
+			result.Delivered++
+			// Node 只在**发送成功后**写冷却键（notification-queue.ts:592-597）。
+			s.commitCooldown(ctx, payload)
+		case notifyTargetMissing:
+			// 目标缺失或被停用：Node 同样不重试，且同一目标下其余份也不会成功。
+			result.Skipped = true
+			result.Reason = "target_missing_or_disabled"
+			return result
+		case notifyDeliveryFailed:
+			failures++
+			result.Error = lastError
+		}
+	}
+	if failures == 0 {
+		return result
+	}
+	if failures < len(payloads) {
+		s.logger.Warn("notification_job_partial_failure", map[string]any{
+			"jobId":     schedule.JobID,
+			"type":      schedule.Type,
+			"payloads":  len(payloads),
+			"delivered": result.Delivered,
+			"failed":    failures,
+			"error":     result.Error,
+		})
+		return result
+	}
+	lastError := result.Error
+	result.Error = lastError
+	s.logger.Error("notification_job_error", map[string]any{
+		"jobId":     schedule.JobID,
+		"type":      schedule.Type,
+		"payloads":  len(payloads),
+		"delivered": result.Delivered,
+		"attempts":  result.Attempts,
+		"error":     lastError,
+	})
+	return result
+}
+
+// notifyDeliveryOutcome 是一次投递的结局。
+type notifyDeliveryOutcome int
+
+const (
+	// notifyDeliveryDelivered 投递成功（该份 payload 的冷却键可以落下了）。
+	notifyDeliveryDelivered notifyDeliveryOutcome = iota
+	// notifyTargetMissing 目标缺失/停用：不重试。
+	notifyTargetMissing
+	// notifyDeliveryFailed 重试耗尽仍失败。
+	notifyDeliveryFailed
+)
+
+// deliverPayload 投递一份 payload（含重试退避），把尝试次数累加进 result。
+func (s *NotifyScheduler) deliverPayload(
+	ctx context.Context,
+	schedule NotifySchedule,
+	payload NotifyPayload,
+	index int,
+	result *NotifyRunResult,
+) (notifyDeliveryOutcome, string) {
 	var lastError string
 	for attempt := 1; attempt <= s.maxAttempts; attempt++ {
-		result.Attempts = attempt
+		result.Attempts++
 		delivery, err := s.deliverer.Deliver(ctx, NotifyDeliveryRequest{
 			Type:       schedule.Type,
 			WebhookURL: schedule.WebhookURL,
 			TargetID:   schedule.TargetID,
 			BindingID:  schedule.BindingID,
-			Data:       data,
+			Data:       payload.Data,
 			Timezone:   schedule.Timezone,
 		})
 		if err == nil && delivery.Success {
 			s.logger.Info("notification_job_complete", map[string]any{
 				"jobId":     schedule.JobID,
 				"type":      schedule.Type,
+				"index":     index,
 				"attempts":  attempt,
 				"latencyMs": delivery.LatencyMS,
 			})
-			return result
+			return notifyDeliveryDelivered, ""
 		}
 		if err == nil && delivery.Skipped {
-			// 目标缺失或被停用：Node 同样不重试。
-			result.Skipped = true
-			result.Reason = "target_missing_or_disabled"
 			s.logger.Warn("notification_target_missing_or_disabled", map[string]any{
 				"jobId":    schedule.JobID,
 				"type":     schedule.Type,
 				"targetId": schedule.TargetID,
 			})
-			return result
+			return notifyTargetMissing, ""
 		}
 		if err != nil {
 			lastError = err.Error()
@@ -446,6 +527,7 @@ func (s *NotifyScheduler) runJob(ctx context.Context, job *notifyScheduledJob, n
 			s.logger.Warn("notification_job_retry", map[string]any{
 				"jobId":      schedule.JobID,
 				"type":       schedule.Type,
+				"index":      index,
 				"attempt":    attempt,
 				"retryDelay": delay.Milliseconds(),
 				"error":      lastError,
@@ -455,15 +537,30 @@ func (s *NotifyScheduler) runJob(ctx context.Context, job *notifyScheduledJob, n
 			}
 		}
 	}
-
-	result.Error = lastError
 	s.logger.Error("notification_job_error", map[string]any{
 		"jobId":    schedule.JobID,
 		"type":     schedule.Type,
-		"attempts": result.Attempts,
+		"index":    index,
+		"attempts": s.maxAttempts,
 		"error":    lastError,
 	})
-	return result
+	return notifyDeliveryFailed, lastError
+}
+
+// commitCooldown 复刻 commitCacheHitRateAlertCooldown：投递成功后把去重键占坑。
+//
+// 写失败只记 warn，不让任务失败：键没落下最多让下一轮重发一次（漏发比重发坏）。
+func (s *NotifyScheduler) commitCooldown(ctx context.Context, payload NotifyPayload) {
+	if s.cooldown == nil || len(payload.CooldownKeys) == 0 || payload.CooldownTTL <= 0 {
+		return
+	}
+	if err := s.cooldown.Set(ctx, payload.CooldownKeys, payload.CooldownTTL); err != nil {
+		s.logger.Warn("notification_cooldown_commit_failed", map[string]any{
+			"keysCount": len(payload.CooldownKeys),
+			"cooldown":  payload.CooldownTTL.String(),
+			"error":     err.Error(),
+		})
+	}
 }
 
 // failJob 记一条不可重试的失败（装配缺失 / 读设置失败）。

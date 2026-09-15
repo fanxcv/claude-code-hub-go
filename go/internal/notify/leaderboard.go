@@ -11,23 +11,24 @@ import (
 //
 // 口径：
 //   - 榜单是「近 24 小时」的用户榜（全量按成本倒序，由 store 侧排序）；
-//   - entries 只取前 topN 条；
+//   - entries 只取前 topN 条（topN 由 LeaderboardTopN 折过缺省）；
 //   - totalRequests / totalCost 是**全量**合计——收件人看到的「今日总量」不该等于前 N 名的和。
 //
 // 返回 (nil, nil) 表示本刻无数据（榜单为空）：调用方据此跳过投递，而不是发一份空榜。
 func (g *Generators) DailyLeaderboard(
 	ctx context.Context,
 	topN int,
-	timezone string,
+	systemTimezone string,
 	now time.Time,
 ) (*DailyLeaderboardData, error) {
 	if topN <= 0 {
 		topN = DefaultLeaderboardTopN
 	}
-	location := Location(timezone)
+	location := Location(systemTimezone)
+	// last24h 是滚动窗口（SQL 里是 CURRENT_TIMESTAMP - 24h），时区不参与——仍按 Node 传入。
 	rows, err := g.Leaderboard.AdminUserLeaderboard(ctx, store.AdminLeaderboardQuery{
 		Period:   "last24h",
-		Timezone: location.String(),
+		Timezone: systemTimezone,
 	})
 	if err != nil {
 		return nil, err

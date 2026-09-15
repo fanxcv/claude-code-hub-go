@@ -116,13 +116,16 @@ type NotifyProviderRef struct {
 	ProviderType string
 }
 
-// NotifyProviderRefs 复刻 findAllProviders 的两列投影；不筛软删（Node 侧也不筛）。
+// NotifyProviderRefs 复刻 findAllProviders（src/repository/provider.ts:555）的三列投影。
+//
+// 与 Node 同判：**筛软删**（findAllProvidersFresh 的 `isNull(deletedAt)`）。不排序——调用方
+// 只是按 id 建查找表，排序没有语义。
 func (p *Pools) NotifyProviderRefs(ctx context.Context) ([]NotifyProviderRef, error) {
 	pool, err := p.Control()
 	if err != nil {
 		return nil, err
 	}
-	const query = `SELECT id, name, provider_type FROM providers ORDER BY id`
+	const query = `SELECT id, name, provider_type FROM providers WHERE deleted_at IS NULL`
 	rows, err := pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("store: 查询供应商投影失败: %w", err)

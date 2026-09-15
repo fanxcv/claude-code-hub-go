@@ -17,7 +17,9 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/config"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/jobs"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/notify"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -178,6 +180,7 @@ func startJobs(ctx context.Context, options jobsOptions) (*jobsRuntime, error) {
 func newNotifyScheduler(
 	logger *logx.Logger,
 	pools *store.Pools,
+	redisClient redis.UniversalClient,
 	lookup config.LookupEnvFunc,
 ) *jobs.NotifyScheduler {
 	if lookup == nil {
@@ -198,13 +201,28 @@ func newNotifyScheduler(
 		})
 		return nil
 	}
+	// 冷却去重：同一个实现既做「发送前读一遍」（生成器用它压制冷却期内的条目），
+	// 也做「发送成功后写下」（调度器投递回执处），故一个实例注入两处。
+	cooldown := notify.NewRedisCooldown(redisClient)
+	if cooldown == nil {
+		logger.Warn("notify_cooldown_absent", map[string]any{
+			"reason": "未配置 REDIS_URL，缓存命中率告警不做冷却去重",
+		})
+	}
 	return jobs.NewNotifyScheduler(jobs.NotifySchedulerOptions{
 		Pools:  pools,
 		Logger: logger,
 		// 投递复用管理面的 webhook 投递层（信封/签名/响应判定），
-		// 数据生成器同处装配：三个生成器未移植前一律回「无数据」并记 warn。
+		// 数据生成器同处装配（四种通知类型的数据面都在 internal/adminapi + internal/notify）。
 		Deliverer: adminapi.NewNotificationDelivery(pools, logger),
-		Payloads:  adminapi.NewNotificationAlerts(logger),
+		Payloads: adminapi.NewNotificationAlerts(&notify.Generators{
+			Leaderboard: pools,
+			Cost:        pools,
+			Cache:       pools,
+			Logger:      logger,
+			Cooldown:    cooldown,
+		}, logger),
+		Cooldown: cooldown,
 	})
 }
 

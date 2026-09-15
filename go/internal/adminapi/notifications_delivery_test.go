@@ -104,19 +104,18 @@ func TestNotificationDeliveryRejectsMissingDestination(t *testing.T) {
 	}
 }
 
-func TestNotificationAlertsReportsNoDataUntilGeneratorsPorted(t *testing.T) {
-	alerts := NewNotificationAlerts(logx.New(nil))
-	payload, ok, err := alerts.Payload(context.Background(), jobs.NotifyPayloadRequest{
+// TestNotificationAlertsWithoutGeneratorsReportsNoData 钉住「未装配生成器时不下发」：
+// 空正文的成本预警比不发更坏（收件人会以为用量归零），所以必须是「无数据」而不是空对象。
+func TestNotificationAlertsWithoutGeneratorsReportsNoData(t *testing.T) {
+	alerts := NewNotificationAlerts(nil, logx.New(nil))
+	payloads, err := alerts.Payloads(context.Background(), jobs.NotifyPayloadRequest{
 		Type:     jobs.NotifyTypeDailyLeaderboard,
 		Timezone: "UTC",
 	})
 	if err != nil {
 		t.Fatalf("无数据不该是错误: %v", err)
 	}
-	if ok || len(payload) != 0 {
-		t.Fatalf("生成器未移植前应回「无数据」: ok=%t payload=%s", ok, payload)
-	}
-	if ref := notificationPayloadSourceRef(jobs.NotifyTypeCostAlert); ref == "" {
-		t.Fatal("未移植的生成器应带上 TS 位置")
+	if len(payloads) != 0 {
+		t.Fatalf("未装配生成器时应回「无数据」: %+v", payloads)
 	}
 }

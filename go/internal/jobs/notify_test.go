@@ -69,12 +69,18 @@ type fakeNotifyPayloads struct {
 	called int
 }
 
-func (p *fakeNotifyPayloads) Payload(
+func (p *fakeNotifyPayloads) Payloads(
 	context.Context,
 	NotifyPayloadRequest,
-) (json.RawMessage, bool, error) {
+) ([]NotifyPayload, error) {
 	p.called++
-	return p.data, p.ok, p.err
+	if p.err != nil {
+		return nil, p.err
+	}
+	if !p.ok {
+		return nil, nil
+	}
+	return []NotifyPayload{{Data: p.data}}, nil
 }
 
 // fakeNotifyLeader 模拟独占权：held 为 true 表示别的实例持锁。

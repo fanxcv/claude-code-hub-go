@@ -528,23 +528,50 @@ func notifySwitchEnabled(settings store.AdminNotificationSettings, notificationT
 	}
 }
 
-// NotifyPayloadRequest 是「现算一份通知数据」的输入。
+// NotifyPayloadRequest 是「现算通知数据」的输入。
 type NotifyPayloadRequest struct {
 	// Type 是任务类型。
 	Type string
-	// Timezone 是执行期时区名（窗口切分与文案时间戳都用它）。
+	// Timezone 是任务时区名（binding.scheduleTimezone > 系统时区）：**只用于文案时间戳**。
 	Timezone string
+	// SystemTimezone 是系统设置里的时区名：窗口切分（今日/本周/本月起点、日报日期）用它，
+	// 与 Node 一致——Node 的三个生成器都调 resolveSystemTimezone()，不看 binding 的时区。
+	SystemTimezone string
 	// Now 是执行时刻。
 	Now time.Time
+	// Settings 是执行期复检通过的那份设置（生成器不必再读一次库，也不必担心两次读到不同的值）。
+	Settings store.AdminNotificationSettings
+	// TargetID / BindingID 来自任务（targets 模式下生成缓存告警的绑定级去重键要用）。
+	TargetID  int64
+	BindingID int64
 }
 
-// NotifyPayloadSource 现算一份通知数据（Node 的 generateDailyLeaderboard / generateCostAlerts /
+// NotifyPayload 是一份待投递的数据。
+type NotifyPayload struct {
+	// Data 是投递给 webhook 的正文。
+	Data json.RawMessage
+	// CooldownKeys 是**投递成功后**要写下的去重键（目前只有缓存命中率告警用）。
+	CooldownKeys []string
+	// CooldownTTL 是去重键的存活时长；<=0 表示不写。
+	CooldownTTL time.Duration
+}
+
+// NotifyPayloadSource 现算通知数据（Node 的 generateDailyLeaderboard / generateCostAlerts /
 // generateCacheHitRateAlertPayload 三个生成器）。
 //
-// 返回 (nil, false, nil) 表示「本刻无数据」，对应 Node 的 `return { success: true, skipped: true }`：
-// 不发、不重试、只记日志。
+// 返回空切片表示「本刻无数据」，对应 Node 的 `return { success: true, skipped: true }`：
+// 不发、不重试、只记日志。为什么是切片而不是单份：Node 的成本预警一次算出多条（每个超限对象一条），
+// 由队列逐条发送；Go 侧同样逐条投递，一份失败不牵连其余份。
 type NotifyPayloadSource interface {
-	Payload(ctx context.Context, request NotifyPayloadRequest) (json.RawMessage, bool, error)
+	Payloads(ctx context.Context, request NotifyPayloadRequest) ([]NotifyPayload, error)
+}
+
+// NotifyCooldownWriter 写下投递成功后的去重键（Node：commitCacheHitRateAlertCooldown）。
+//
+// 与「读去重」分开：读的那一半属于数据生成器的输入（生成器决定哪些条目被抑制），
+// 写的那一半必须在**投递成功之后**发生，故由调度器在投递回执处调用。
+type NotifyCooldownWriter interface {
+	Set(ctx context.Context, keys []string, ttl time.Duration) error
 }
 
 // NotifyDeliveryRequest 一次投递的输入。

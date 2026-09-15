@@ -1,6 +1,9 @@
 package notify
 
-// 本文件是四份通知数据的形状，逐字段对齐 `src/lib/webhook/types.ts`。
+// 本文件是三种**现算**通知数据的形状，逐字段对齐 `src/lib/webhook/types.ts`。
+//
+// 第四种（熔断告警）是事件型：正文由转发路径在开闸那一刻产生（Node 的 sendCircuitBreakerAlert），
+// 本包不参与，故不在这里声明它的形状。
 //
 // 为什么 struct 也放在本包而不是 adminapi：模板占位符（placeholders.ts）与绑定投递都按
 // 这些 JSON 键取值，生成器与形状同处一包，改一处即改契约（src/types/notifications.ts 的
@@ -36,21 +39,6 @@ type CostAlertData struct {
 	Period      string  `json:"period"`
 }
 
-// CircuitBreakerAlertData 是熔断告警正文。
-//
-// 本包只提供**形状与去重键**：熔断事件由转发路径在开闸那一刻产生（Node 的
-// sendCircuitBreakerAlert），Go 侧的对应产生点在数据面；生成器不参与事件型告警。
-type CircuitBreakerAlertData struct {
-	ProviderName   string `json:"providerName"`
-	ProviderID     int64  `json:"providerId"`
-	FailureCount   int    `json:"failureCount"`
-	RetryAt        string `json:"retryAt"`
-	LastError      string `json:"lastError,omitempty"`
-	IncidentSource string `json:"incidentSource,omitempty"`
-	EndpointID     int64  `json:"endpointId,omitempty"`
-	EndpointURL    string `json:"endpointUrl,omitempty"`
-}
-
 // CacheHitRateAlertSample 是一个统计样本：窗口内按 kind 口径算出的命中率。
 type CacheHitRateAlertSample struct {
 	Kind              string  `json:"kind"`
@@ -66,8 +54,8 @@ type CacheHitRateAlertAnomaly struct {
 	ProviderType string `json:"providerType,omitempty"`
 	Model        string `json:"model"`
 
-	// BaselineSource 取 historical / today / prev；无可用基线时该条根本不会入选。
-	BaselineSource string                   `json:"baselineSource"`
+	// BaselineSource 取 historical / today / prev；为 null 表示「没有可用基线，只凭绝对下限告警」。
+	BaselineSource *string                  `json:"baselineSource"`
 	Current        CacheHitRateAlertSample  `json:"current"`
 	Baseline       *CacheHitRateAlertSample `json:"baseline"`
 

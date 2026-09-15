@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/jobs"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/notify"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
@@ -21,7 +23,8 @@ import (
 //   - 处理作业时的目标解析与开关复检：src/lib/notification/notification-queue.ts:557-566（目标缺失/停用）、
 //     571-581（取 binding.templateOverride）、585（缺目的地）；
 //   - legacy 单 URL 的渠道推断：src/lib/webhook/notifier.ts:62 的 detectProvider、69 的 getEndpointUrl；
-//   - 任务类型的 webhook 映射：notification-queue.ts:45-51。
+//   - 任务类型的 webhook 映射：notification-queue.ts:45-51；
+//   - 三个定时类型的数据现算：internal/notify（逐条对照见该包 doc.go）。
 //
 // 登记差异：
 //  1. 正文仍是 webhook_deliver.go 的简化文案（见该文件头「登记进差异白名单的一项」）；
@@ -29,6 +32,9 @@ import (
 //     可解析性与 Node 一致。
 //  2. 一次投递只发一个 HTTP 请求（MaxAttempts=1）：Bull 的 attempts/backoff 由
 //     jobs.NotifyScheduler 在任务层实现，避免两层重试把一次失败放大成九次。
+//  3. 成本预警一次算出的多条告警**都会发出**（每份一个 HTTP），而 Node 的
+//     notification-queue.ts:465 只发 `alerts[0]` 并注明「后续可扩展为批量发送」。
+//     这是有意偏离：只发第一条会把其余超限对象静默丢掉。
 
 // NotificationDelivery 实现 jobs.NotifyDeliverer。
 type NotificationDelivery struct {
@@ -131,41 +137,138 @@ func notificationTypeFromJobType(jobType string) (string, bool) {
 	}
 }
 
-// NotificationAlerts 实现 jobs.NotifyPayloadSource。
+// NotificationAlerts 实现 jobs.NotifyPayloadSource：四种通知类型的数据生成入口。
 //
-// **未移植的数据生成器（登记，见报告「未实现清单」）**：
-//   - daily-leaderboard：src/lib/notification/tasks/daily-leaderboard.ts:11（按日成本前 N，
-//     依赖 src/repository/leaderboard.ts 的按日聚合）；
-//   - cost-alert：src/lib/notification/tasks/cost-alert.ts:14（阈值比较 + 各窗口用量）；
-//   - cache-hit-rate-alert：src/lib/notification/tasks/cache-hit-rate-alert.ts:209
-//     （窗口切分、基线对比、冷却去重）。
+// 对应 Node：
+//   - daily-leaderboard：tasks/daily-leaderboard.ts:11（近 24h 用户榜前 N + 全量合计）
+//   - cost-alert：tasks/cost-alert.ts:14（密钥 5h/周/月 + 供应商周/月的阈值比较）
+//   - cache-hit-rate-alert：tasks/cache-hit-rate-alert.ts:209（窗口切分、基线判定、冷却去重）
+//   - circuit-breaker：**事件型**，数据由转发路径在开闸那一刻随任务带上（generate* 不参与）
 //
-// 三个生成器都依赖统计/排行底座（另两个 lane 正在补齐）。在那之前本实现一律回「本刻无数据」，
-// 让任务**跳过而不是发出空告警**——空正文的成本预警比不发更坏（收件人会以为用量归零）。
+// 一次可返回多份：成本预警在多个对象超限时就是多条告警，Node 的队列逐条发送，Go 侧同样逐条投递。
 type NotificationAlerts struct {
-	logger *logx.Logger
+	generators *notify.Generators
+	logger     *logx.Logger
 }
 
-// NewNotificationAlerts 建一个数据生成器。
-func NewNotificationAlerts(logger *logx.Logger) *NotificationAlerts {
+// NewNotificationAlerts 建一个数据生成器；generators 为 nil 时一律回「本刻无数据」。
+func NewNotificationAlerts(generators *notify.Generators, logger *logx.Logger) *NotificationAlerts {
 	if logger == nil {
 		logger = logx.New(nil)
 	}
-	return &NotificationAlerts{logger: logger}
+	if generators != nil && generators.Logger == nil {
+		generators.Logger = logger
+	}
+	return &NotificationAlerts{generators: generators, logger: logger}
 }
 
-// Payload 现算一份通知数据；当前一律「无数据」（见类型注释）。
-func (a *NotificationAlerts) Payload(
-	_ context.Context,
+// Payloads 现算本轮要投递的数据。
+func (a *NotificationAlerts) Payloads(
+	ctx context.Context,
 	request jobs.NotifyPayloadRequest,
-) (json.RawMessage, bool, error) {
-	a.logger.Warn("notification_payload_generator_unported", map[string]any{
-		"type":     request.Type,
-		"action":   "skipped_no_data",
-		"source":   notificationPayloadSourceRef(request.Type),
-		"timezone": request.Timezone,
-	})
-	return nil, false, nil
+) ([]jobs.NotifyPayload, error) {
+	if a.generators == nil {
+		a.logger.Warn("notification_payload_generators_unwired", map[string]any{
+			"type": request.Type,
+		})
+		return nil, nil
+	}
+	switch request.Type {
+	case jobs.NotifyTypeDailyLeaderboard:
+		return a.leaderboardPayload(ctx, request)
+	case jobs.NotifyTypeCostAlert:
+		return a.costAlertPayloads(ctx, request)
+	case jobs.NotifyTypeCacheHitRateAlert:
+		return a.cacheHitRateAlertPayload(ctx, request)
+	default:
+		// 事件型任务自带数据（NeedsPayload=false），走到这里说明装配错了。
+		return nil, fmt.Errorf("该类型不需要现算数据: %s", request.Type)
+	}
+}
+
+func (a *NotificationAlerts) leaderboardPayload(
+	ctx context.Context,
+	request jobs.NotifyPayloadRequest,
+) ([]jobs.NotifyPayload, error) {
+	data, err := a.generators.DailyLeaderboard(
+		ctx,
+		notify.LeaderboardTopN(request.Settings),
+		request.SystemTimezone,
+		request.Now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		a.logger.Info("notification_payload_no_data", map[string]any{"type": request.Type})
+		return nil, nil
+	}
+	return marshalNotifyPayloads([]any{data})
+}
+
+func (a *NotificationAlerts) costAlertPayloads(
+	ctx context.Context,
+	request jobs.NotifyPayloadRequest,
+) ([]jobs.NotifyPayload, error) {
+	alerts, err := a.generators.CostAlerts(
+		ctx,
+		notify.CostAlertThreshold(request.Settings),
+		request.SystemTimezone,
+		request.Now,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(alerts) == 0 {
+		a.logger.Info("notification_payload_no_data", map[string]any{"type": request.Type})
+		return nil, nil
+	}
+	items := make([]any, 0, len(alerts))
+	for _, alert := range alerts {
+		items = append(items, alert)
+	}
+	return marshalNotifyPayloads(items)
+}
+
+func (a *NotificationAlerts) cacheHitRateAlertPayload(
+	ctx context.Context,
+	request jobs.NotifyPayloadRequest,
+) ([]jobs.NotifyPayload, error) {
+	result, err := a.generators.CacheHitRateAlert(
+		ctx,
+		request.Settings,
+		request.SystemTimezone,
+		request.Now,
+		request.BindingID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		a.logger.Info("notification_payload_no_data", map[string]any{"type": request.Type})
+		return nil, nil
+	}
+	payloads, err := marshalNotifyPayloads([]any{result.Payload})
+	if err != nil {
+		return nil, err
+	}
+	// 冷却键只在**投递成功后**由调度器写下（Node：commitCacheHitRateAlertCooldown）。
+	payloads[0].CooldownKeys = result.CooldownKeys
+	payloads[0].CooldownTTL = time.Duration(result.CooldownMinutes) * time.Minute
+	return payloads, nil
+}
+
+// marshalNotifyPayloads 把结构体逐份编码成正文。
+func marshalNotifyPayloads(items []any) ([]jobs.NotifyPayload, error) {
+	payloads := make([]jobs.NotifyPayload, 0, len(items))
+	for _, item := range items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return nil, fmt.Errorf("编码通知数据失败: %w", err)
+		}
+		payloads = append(payloads, jobs.NotifyPayload{Data: encoded})
+	}
+	return payloads, nil
 }
 
 // notificationPayloadSourceRef 给出该类型生成器的 TS 位置（供日志与报告引用）。

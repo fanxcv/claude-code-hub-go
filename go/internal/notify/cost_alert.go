@@ -28,7 +28,8 @@ type costWindowSpec struct {
 // CostAlerts 生成成本预警（Node：tasks/cost-alert.ts:14 的 checkUserQuotas + checkProviderQuotas）。
 //
 // 口径：
-//   - 限额为 null 或 <= 0 的档位不检查（Node 的 `if (!limit || limit <= 0) continue`）；
+//   - 限额为 null 或 <= 0 的档位不检查（Node：`if (keyData.limit5h) { const limit = parseFloat(...);
+//     if (limit > 0) {...} }`，解析不出数字的 NaN 也走不进 > 0）；
 //   - 触发条件是 `已花 >= 限额 × threshold`（UI 文案：「当消费达到配额的 {percent}% 时触发告警」）；
 //   - 5h 档是**滚动**窗口（now-5h..now），周/月档是系统时区里的自然周/月（复用 limit 包的
 //     WeekStart / MonthStart，与限流面同一套边界，避免两处口径漂移）。
@@ -37,13 +38,13 @@ type costWindowSpec struct {
 func (g *Generators) CostAlerts(
 	ctx context.Context,
 	threshold float64,
-	timezone string,
+	systemTimezone string,
 	now time.Time,
 ) ([]CostAlertData, error) {
 	if threshold <= 0 {
 		threshold = DefaultCostAlertThreshold
 	}
-	location := Location(timezone)
+	location := Location(systemTimezone)
 	fiveHourStart := now.Add(-5 * time.Hour)
 	weekStart := limit.WeekStart(now, location)
 	monthStart := limit.MonthStart(now, location)
@@ -66,8 +67,9 @@ func (g *Generators) CostAlerts(
 			}
 			cost, err := g.sumEntityCost(ctx, store.LedgerEntityKey, key.Key, window.start, now)
 			if err != nil {
-				// 单个实体读失败只跳过它：Node 的 checkUserQuotas 也把异常吞在单个实体上，
-				// 否则一行坏数据会让这一轮所有预警消失。
+				// **登记差异**：Node 的 try/catch 包在整个循环外——某一行读失败会中止该函数的
+				// 剩余检查（只保留已收集到的那些）。Go 侧只跳过失败的实体：一行坏数据不该让
+				// 其余对象的告警一起消失。
 				g.logger().Warn("notify.cost_alert_sum_failed", map[string]any{
 					"targetType": "user",
 					"targetId":   key.ID,

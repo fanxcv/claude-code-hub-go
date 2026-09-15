@@ -2,41 +2,64 @@ package notify
 
 import (
 	"context"
-	"fmt"
+	"encoding/base64"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 )
 
-// cooldownKeyPrefix 是缓存告警去重键的前缀。键里放 providerId 与 model 两维——
-// 冷却的单位就是「一个渠道上的一个模型」，与告警条目一一对应。
-const cooldownKeyPrefix = "notification:cache-hit-rate-alert"
-
-// CooldownKey 是某条告警的去重键。
+// 本文件是缓存命中率告警的冷却去重（Node：tasks/cache-hit-rate-alert.ts 的
+// buildCooldownKey / applyCacheHitRateAlertCooldownToPayload / commitCacheHitRateAlertCooldown）。
 //
-// model 里可能有 `:` 或空白（上游模型名不保证干净），故用 `|` 分隔并在键尾保留原文：
-// 去重只需要「同一条告警同键」，不需要键可解析。
-func CooldownKey(providerID int64, model string) string {
-	return fmt.Sprintf("%s|%d|%s", cooldownKeyPrefix, providerID, model)
+// 两段式语义（不要在别处简化成一次 SETNX）：
+//  1. **发送前** 用 MGET 读一遍：键已存在 => 该条被抑制（suppressedCount++），本体不发；
+//  2. **发送成功后** 才把剩下那些键 SET EX 写入（源文件 592-597 行）。
+//
+// 之所以不能提前占坑：投递失败要能重试并照常发出去；提前写死会让一次失败把冷却期吃掉。
+
+// CacheHitRateAlertCooldownKeyPrefix 是冷却键前缀（源文件 80 行）。
+const CacheHitRateAlertCooldownKeyPrefix = "cache-hit-rate-alert"
+
+// cooldownKeyParams 是冷却键的输入。
+type cooldownKeyParams struct {
+	ProviderID int64
+	Model      string
+	WindowMode string
+	// BindingID 为 0 表示 legacy 单 URL 模式：键里不带 binding 段。
+	BindingID int64
 }
 
-// Cooldown 是告警去重存储。
+// BuildCacheHitRateAlertCooldownKey 复刻 buildCooldownKey（源文件 73-87 行）。
 //
-// 契约：Claim 为 keys[i] 返回 true 表示本次占坑成功（应当发出），false 表示冷却期内已被占（丢弃）。
-// 返回的切片长度必须与 keys 等长。
+// 形状：`cache-hit-rate-alert:v1[:binding:<id>]:<providerId>:<base64url(model)>:<windowMode>`。
+// 模型名走 base64url（不带填充）是为了让任意字符集都能进 Redis 键而不产生歧义。
+func BuildCacheHitRateAlertCooldownKey(params cooldownKeyParams) string {
+	key := CacheHitRateAlertCooldownKeyPrefix + ":v1:"
+	if params.BindingID != 0 {
+		key += "binding:" + strconv.FormatInt(params.BindingID, 10) + ":"
+	}
+	key += strconv.FormatInt(params.ProviderID, 10) + ":"
+	key += base64.RawURLEncoding.EncodeToString([]byte(params.Model)) + ":"
+	key += params.WindowMode
+	return key
+}
+
+// Cooldown 是告警去重存储：读一遍（Present）+ 投递成功后写入（Set）。
+//
+// Present 返回的切片必须与 keys 等长，true 表示该键已存在（本次抑制）。
 type Cooldown interface {
-	Claim(ctx context.Context, keys []string, ttl time.Duration) ([]bool, error)
+	Present(ctx context.Context, keys []string) ([]bool, error)
+	Set(ctx context.Context, keys []string, ttl time.Duration) error
 }
 
 // redisCooldown 是 Cooldown 的 Redis 实现。
-//
-// 与 Node 的差别（登记）：Node 是「先 MGET 读一遍，再对未占用的键 SETEX」两步，竞态下两个实例
-// 可能同时通过；这里用 SETNX 一步占坑，天然互斥——多实例同时到点时只有一方发得出。
 type redisCooldown struct {
 	client redis.UniversalClient
 }
 
-// NewRedisCooldown 包一个 Redis 客户端；client 为 nil 时返回 nil（调用方据此视为「不去重」）。
+// NewRedisCooldown 包一个 Redis 客户端；client 为 nil 时返回 nil（调用方据此视为「不去重」，
+// 与 Node 的 `getRedisClient()` 回 null 的分支一致）。
 func NewRedisCooldown(client redis.UniversalClient) Cooldown {
 	if client == nil {
 		return nil
@@ -44,25 +67,32 @@ func NewRedisCooldown(client redis.UniversalClient) Cooldown {
 	return &redisCooldown{client: client}
 }
 
-func (c *redisCooldown) Claim(
-	ctx context.Context,
-	keys []string,
-	ttl time.Duration,
-) ([]bool, error) {
+func (c *redisCooldown) Present(ctx context.Context, keys []string) ([]bool, error) {
 	if len(keys) == 0 {
 		return nil, nil
 	}
-	pipe := c.client.Pipeline()
-	commands := make([]*redis.BoolCmd, len(keys))
-	for index, key := range keys {
-		commands[index] = pipe.SetNX(ctx, key, "1", ttl)
-	}
-	if _, err := pipe.Exec(ctx); err != nil {
+	values, err := c.client.MGet(ctx, keys...).Result()
+	if err != nil {
 		return nil, err
 	}
-	claimed := make([]bool, len(keys))
-	for index, command := range commands {
-		claimed[index] = command.Val()
+	present := make([]bool, len(keys))
+	for index := range keys {
+		if index >= len(values) {
+			break
+		}
+		present[index] = values[index] != nil
 	}
-	return claimed, nil
+	return present, nil
+}
+
+func (c *redisCooldown) Set(ctx context.Context, keys []string, ttl time.Duration) error {
+	if len(keys) == 0 || ttl <= 0 {
+		return nil
+	}
+	pipe := c.client.Pipeline()
+	for _, key := range keys {
+		pipe.Set(ctx, key, "1", ttl)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
 }

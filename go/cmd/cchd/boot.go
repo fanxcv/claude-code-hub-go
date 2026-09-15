@@ -203,6 +203,17 @@ func runWith(rootCtx context.Context, options startup) error {
 		storePools = opened
 	}
 
+	// 通知的冷却去重连接（缓存命中率告警的「读」与「写」共用一条命令连接）。
+	// 与订阅连接分开：Pub/Sub 会长期占用一条连接，混用会挤占命令道的延迟。
+	// 起不来只降级：没有去重最多重复发一次告警，不该让进程起不来。
+	notifyRedis, notifyRedisErr := openCommandRedis(cfg)
+	if notifyRedisErr != nil {
+		logger.Warn("notify_redis_unavailable", map[string]any{
+			"reason": "命令连接建立失败，缓存命中率告警将不去重",
+			"error":  notifyRedisErr.Error(),
+		})
+	}
+
 	// 数据面池的释放函数在装配成功后才赋值；closeAll 按引用捕获，故这里先声明。
 	var closeDataPlane func()
 	// 管理面的释放函数同理（守卫的适配器缓存与命令连接）。
@@ -230,6 +241,11 @@ func runWith(rootCtx context.Context, options startup) error {
 			}
 			if closeDataPlane != nil {
 				closeDataPlane()
+			}
+			if notifyRedis != nil {
+				if closeErr := closeRedis(notifyRedis); closeErr != nil {
+					logger.Warn("notify_redis_close_failed", map[string]any{"error": closeErr.Error()})
+				}
 			}
 			// 巡检在关池之前停：它每轮都要写库，池关了之后的写只会变成无用的报错。
 			if stopPatrol != nil {
@@ -296,7 +312,7 @@ func runWith(rootCtx context.Context, options startup) error {
 	adminPlane := frontDoor.Unimplemented()
 	// 通知调度器：settings PUT / 绑定 PUT 的重排入口（Node 的 scheduleNotifications）。
 	// 构造点必须早于管理面装配——管理面的 Deps 要拿它；而任务注册在后台任务装配处。
-	notifyScheduler := newNotifyScheduler(logger, storePools, options.LookupEnv)
+	notifyScheduler := newNotifyScheduler(logger, storePools, notifyRedis, options.LookupEnv)
 	// nil 指针不能直接塞进接口（那会得到一个非 nil 的「空实现」，让 adminapi 的未装配判断失效）。
 	var notifyRescheduler adminapi.NotifyRescheduler
 	if notifyScheduler != nil {
