@@ -31,6 +31,9 @@ const (
 // 在「Provider == nil」的返回路径上被丢掉了。本类型把事实带过适配器边界，交给日志。
 //
 // 它**不参与任何响应**，也不是落库结构：唯一消费者是日志。
+//
+// 例外是 `Filtered`：`system_settings.verbose_provider_error` 打开时，Node 会把这些条目
+// 的 id 与理由写进 503 响应体（provider-selector.ts:529-556，只带 id 与 reason，不带名称）。
 type NoProviderDiagnostic struct {
 	// RequestedModel 是客户端请求的模型名（原样，不做规范化）。
 	RequestedModel string `json:"requestedModel,omitempty"`
@@ -50,6 +53,18 @@ type NoProviderDiagnostic struct {
 	// FilteredTotal 是被剔除的条目数；ReasonCounts 是各理由的条数（理由取值与 Node 同词）。
 	FilteredTotal int            `json:"filteredTotal"`
 	ReasonCounts  map[string]int `json:"reasonCounts,omitempty"`
+	// Filtered 是被剔除条目的 id 与理由（顺序与选路留痕一致）。
+	//
+	// 只在 verbose_provider_error 打开时进响应体，且与 Node 一致地**不带供应商名称**：
+	// 名称属于内部信息，暴露给客户端会与 Node 的脱敏纪律相背。
+	Filtered []NoProviderFiltered `json:"filtered,omitempty"`
+}
+
+// NoProviderFiltered 是一条被剔除的候选（id + 理由），对应 Node 响应体里的
+// `filteredProviders[]` / `clientRestrictedProviders[]` 条目。
+type NoProviderFiltered struct {
+	ID     int64  `json:"id"`
+	Reason string `json:"reason"`
 }
 
 // Summary 给出一行中文归因，供人直接读日志（不改响应文本）。
@@ -119,6 +134,15 @@ func NewNoProviderError(context route.DecisionContext, clientFormat string) *NoP
 		AfterHealthCheck:        context.AfterHealthCheck,
 		FilteredTotal:           len(context.FilteredProviders),
 		ReasonCounts:            counts,
+	}
+	if len(context.FilteredProviders) > 0 {
+		diagnostic.Filtered = make([]NoProviderFiltered, 0, len(context.FilteredProviders))
+		for _, record := range context.FilteredProviders {
+			diagnostic.Filtered = append(diagnostic.Filtered, NoProviderFiltered{
+				ID:     record.ID,
+				Reason: string(record.Reason),
+			})
+		}
 	}
 	switch {
 	case context.RequestedModel != "" && context.TotalProviders > 0 &&

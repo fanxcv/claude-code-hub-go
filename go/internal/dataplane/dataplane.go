@@ -116,6 +116,9 @@ type RequestState struct {
 	clientHeaders map[string]string
 	// requestedEffort 是客户端请求侧的思考强度（守卫链之后采集），终态探针用它做对照。
 	requestedEffort specialsettings.EffortRequest
+	// requestedServiceTier 是客户端请求侧的 codex service_tier（同一处采集）：
+	// codex priority 计费档用它判定（见 codex_priority_billing.go）。
+	requestedServiceTier string
 	// requestSnapshotBody/Messages 是客户端正文的请求前快照（与请求工件同一份数据）。
 	requestSnapshotBody     map[string]any
 	requestSnapshotMessages any
@@ -373,9 +376,15 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			}
 			h.logger.Warn("dataplane.no_provider_available", fields)
 			h.settleFailure(requestCtx, state, http.StatusServiceUnavailable, "无可用供应商")
-			h.writeGuardResponse(writer, guard.BuildError(
+			// 详细体只在 verbose_provider_error 打开时给出；关闭时是逐字节固定的简洁体
+			// （改造前的行为，也是 Node 的默认支，见 no_provider_verbose.go）。
+			response := guard.BuildError(
 				http.StatusServiceUnavailable, "No available providers", "no_available_providers",
-			))
+			)
+			if noProvider != nil && h.verboseProviderError(requestCtx) {
+				response = verboseNoProviderResponse(noProvider.Diagnostic())
+			}
+			h.writeGuardResponse(writer, response)
 			return
 		}
 		// 步骤自身失败（不是拦截）：Node 同样翻成 500，只是文案更具体。
@@ -399,6 +408,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	// 它要进终态探针（`thinking_effort_forwarded`）与客户端侧审计做对照。
 	// 不放在请求入口是因为读体即解压：必须等鉴权通过，与上面「正文访问器按需构造」同一条纪律。
 	h.captureRequestedEffort(state, spec, body)
+	captureRequestedServiceTier(state, body)
 	lease := h.startTelemetry(requestCtx, state, spec, body, sessions)
 	state.telemetry = lease
 	// 响应正文的有界捕获：开关与上限都在装配时定，这里只判「本请求要不要捕」。
@@ -497,13 +507,16 @@ func (h *Handler) forward(
 	streamOptions := h.options.Stream
 	streamOptions.Format = spec.Format
 	streamOptions.ForceGate = spec.ForceGate
+	// 门控模式逐请求解析：设置快照优先、env 兜底，回放 owner 强制 enforce
+	// （见 gate_mode.go 的判据与出处）。
+	streamOptions.GateMode = h.gateModeForRequest(requestCtx, state)
 	streamOptions.StartedAt = state.StartedAt
 	streamOptions.Settle = streamSettler{handler: h, state: state}
 
 	result, err := h.forwardStream(requestCtx, pc, candidate, fwd, streamOptions, spec, state)
 	if result == nil {
 		h.logger.Error("dataplane.forward_failed", map[string]any{"error": errorText(err)})
-		status, message := failoverStatus(errorFailure(nil, err))
+		status, message := h.failoverStatusFor(requestCtx, errorFailure(nil, err))
 		h.settleFailure(requestCtx, state, status, message)
 		h.writeGuardResponse(writer, guard.BuildError(status, message, ""))
 		return
@@ -516,7 +529,7 @@ func (h *Handler) forward(
 	}
 	if err != nil {
 		// 全部尝试耗尽：终态已由 forward 的结算缝落库，这里只把最后归因翻成响应。
-		status, message := failoverStatus(errorFailure(&result.Result, err))
+		status, message := h.failoverStatusFor(requestCtx, errorFailure(&result.Result, err))
 		// 没走到交付路径也要记归因码：否则 response.after 的 meta 会缺 statusCode，
 		// 详情页会把「失败的请求」显示成「没有响应」。
 		h.recordFailureStatus(state, status)

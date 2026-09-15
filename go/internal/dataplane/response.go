@@ -168,6 +168,61 @@ func failoverStatus(failure *forward.Failure) (int, string) {
 	}
 }
 
+// failoverStatusFor 在基础归因之上应用 `pass_through_upstream_error_message`。
+//
+// 两态口径（Node error-handler.ts:121-158）：
+//   - 开关关闭 → 状态码对应的通用文案（genericUpstreamErrorMessage）；
+//   - 开关打开 → 从上游原文派生一条客户端安全文案，派生不出来才回退通用文案。
+//
+// 「打开」不等于「原样透传」：Node 会在派生阶段丢掉供应商名、URL、内网标签、请求 id 与
+// 密钥形状的文本，因为这些属于内部信息。改造前 Go 直接回 upstream 抽出的原文，
+// 即缺少这一步脱敏——本条是向 Node 对齐。
+func (h *Handler) failoverStatusFor(ctx context.Context, failure *forward.Failure) (int, string) {
+	status, message := failoverStatus(failure)
+	if !eligibleForClientMessageDerivation(failure) {
+		return status, message
+	}
+	generic := genericUpstreamErrorMessage(status)
+	if !h.passThroughUpstreamErrorMessage(ctx) {
+		return status, generic
+	}
+	derived := deriveClientSafeUpstreamErrorMessage(deriveClientSafeUpstreamErrorMessageInput{
+		CandidateMessage: failure.Message,
+		ProviderName:     failure.ProviderName,
+	})
+	if derived == "" {
+		return status, generic
+	}
+	return status, derived
+}
+
+// eligibleForClientMessageDerivation 判定这条失败是否走「上游错误文案」的两态口径。
+//
+// 只覆盖「上游回传了 4xx/5xx 错误响应」这一类：Go 自己造的失败（本地过载、传输超时归因、
+// 空响应、假 200 检测结果）文案由本进程产生，既不含上游内部信息，替换成通用文案反而丢信息。
+func eligibleForClientMessageDerivation(failure *forward.Failure) bool {
+	if failure == nil || failure.Internal || failure.Synthetic || failure.EmptyResponse {
+		return false
+	}
+	return upstreamErrorStatusCode(failure.StatusCode)
+}
+
+// passThroughUpstreamErrorMessage 读 `system_settings.pass_through_upstream_error_message`。
+//
+// Node 的缺省是 true（error-handler.ts:137 的 `?? true`），故读不到时按 true——
+// 与 Node 的「设置读失败仍走派生」同向。
+func (h *Handler) passThroughUpstreamErrorMessage(ctx context.Context) bool {
+	if h.options.Base.Settings == nil {
+		return true
+	}
+	settings, err := h.options.Base.Settings.FindSystemSettings(ctx)
+	if err != nil || settings == nil {
+		h.logger.Warn("dataplane.pass_through_error_message_lookup_failed", map[string]any{"error": errorText(err)})
+		return true
+	}
+	return settings.PassThroughUpstreamErrorMessage
+}
+
 // errorFailure 从转发的返回值里取最终归因。
 func errorFailure(result *forward.Result, err error) *forward.Failure {
 	var failure *forward.Failure

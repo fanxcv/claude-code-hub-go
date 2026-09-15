@@ -285,6 +285,19 @@ func (s *replaySession) completeBuffered(ctx context.Context) {
 	}
 }
 
+// holdsOwnership 报告本请求是否已持有回放 owner 租约。
+//
+// 消费者是门控模式解析（见 gate_mode.go）：Node 对 owner 路径强制跑门控，
+// 因为 spool 依赖 precommit 语义。
+func (s *replaySession) holdsOwnership() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claim != nil
+}
+
 // release 放弃本请求的 owner 角色（不建 spool 的路径一律走到这里）。
 //
 // 幂等判据是「claim 是否还在手上」而不是另一个布尔位：一个请求可能连续判定两次交付类型

@@ -73,6 +73,16 @@ type StreamOptions struct {
 	FamilyResolved bool
 	// ForceGate 为真时即使上游未声明 SSE 也走门控（对应 Node 的 codex-responses 强制流式路径）。
 	ForceGate bool
+	// GateMode 是流式内容门控模式：enforce 才门控；off/shadow 均不门控（shadow 另挂旁路观察者）。
+	//
+	// 对齐 Node 的判据（forwarder.ts:2034、5334）：
+	//
+	//	gateMode === "enforce" || replayOwner || forceCodexResponsesStream
+	//
+	// 其中两文「强制门控」（replay owner 与 codex 强制流式）不在本包里判：前者由接线层
+	// 在解析模式时直接给 enforce，后者由 ForceGate 承载（见 gateFamily）。空值等同 enforce
+	// （本字段是后加的，旧调用方不设它就得到改造前的行为）。
+	GateMode gate.Mode
 	// SkipGate 为真时跳过门控（回放 owner 之外的 shadow/off 之外的自定义策略）。
 	SkipGate bool
 	// PrebufferEventCap / PrebufferByteCap 是门控前缀上限；0 取 stage 默认（见 Node 的 caps 解析）。
@@ -276,7 +286,7 @@ func (d Deps) executeStreamAttempt(
 				StatusCode: response.StatusCode,
 				Status:     response.Status,
 				Header:     response.Header,
-				Source:     response.Body,
+				Source:     options.shadowSource(response.Body, family, outcome),
 				Gated:      false,
 				Family:     family,
 			},
@@ -423,10 +433,26 @@ func inferStatusFromFrameData(frameData string) (int, bool) {
 }
 
 // gateFamily 决定本次尝试是否以及按哪个家族跑门控。
+//
+// 模式语义（Node forwarder.ts:2034/5334）：只有 enforce 或强制门控的请求才跑门控；
+// off/shadow 不门控，但**仍返回家族**——shadow 需要它做旁路分类（见 shadowSource）。
 func (o StreamOptions) gateFamily(provider Provider) (gate.Family, bool) {
 	if o.SkipGate {
 		return "", false
 	}
+	family, ok := o.resolveGateFamily(provider)
+	if !ok {
+		return "", false
+	}
+	// ForceGate（codex 强制流式）是 Node 强制门控的两支之一，模式不得把它关掉。
+	if !o.ForceGate && (o.GateMode == gate.ModeOff || o.GateMode == gate.ModeShadow) {
+		return family, false
+	}
+	return family, true
+}
+
+// resolveGateFamily 只解家族归属，不管模式。
+func (o StreamOptions) resolveGateFamily(provider Provider) (gate.Family, bool) {
 	if o.FamilyResolved {
 		if o.Family == "" {
 			return "", false
@@ -434,6 +460,37 @@ func (o StreamOptions) gateFamily(provider Provider) (gate.Family, bool) {
 		return o.Family, true
 	}
 	return gate.MapProviderTypeToFamily(string(provider.Type))
+}
+
+// shadowSource 在 shadow 模式下把上游字节抄一份给旁路观察者。
+//
+// Node 的同一动作在 response-handler（response-handler.ts:3922、5372）：观察者由响应
+// 处理阶段逐帧喂入，日志事件为 `StreamGate[shadow]: first decisive frame observed`。
+// 本函数只包装 reader——不改字节、不缓冲、不阻断，家族未知时直接交回原文。
+func (o StreamOptions) shadowSource(source io.ReadCloser, family gate.Family, outcome *AttemptOutcome) io.ReadCloser {
+	if o.GateMode != gate.ModeShadow || family == "" || source == nil {
+		return source
+	}
+	config := gate.ShadowConfig{
+		Family:       family,
+		ProviderID:   int(outcome.ProviderID),
+		ProviderName: outcome.ProviderName,
+	}
+	if o.Logger != nil {
+		config.OnReport = func(report gate.ShadowReport) {
+			o.Logger.Info("StreamGate[shadow]: first decisive frame observed", map[string]any{
+				"providerId":        report.ProviderID,
+				"providerName":      report.ProviderName,
+				"family":            string(report.Family),
+				"decisiveVerdict":   string(report.DecisiveVerdict),
+				"divergent":         report.Divergent,
+				"firstContentLagMs": report.FirstContentLag.Milliseconds(),
+				"verdictCounts":     report.VerdictCounts,
+				"incomplete":        report.Incomplete,
+			})
+		}
+	}
+	return gate.NewShadowReader(source, config)
 }
 
 // shouldGate 判定是否真的对本次响应跑门控。

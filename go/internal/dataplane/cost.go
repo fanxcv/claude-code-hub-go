@@ -48,6 +48,14 @@ type priceSlot struct {
 	data []byte
 }
 
+// billingSettings 是一次快照里读出的计费设置项：取价基准与「非成功请求是否计费」同源。
+//
+// 合并成一次读是为了热路径：两项都来自 system_settings 单行表，分两次读会多一次查库。
+type billingSettings struct {
+	modelSource       string
+	billNonSuccessful bool
+}
+
 // priceReader 与 groupReader 是计费所需的两条只读取数缝。
 //
 // 用接口而不是直接持有 *store.Pools：计费的口径（取价基准、倍率求交、回落）全是纯判定，
@@ -66,7 +74,8 @@ type costResolver struct {
 	prices   priceReader
 	groups   groupReader
 	logger   *logx.Logger
-	source   *cfgsync.TTLMap[int, string]
+	// source 是同一次快照里读出的计费设置（取价基准 + 非成功请求计费开关）。
+	source   *cfgsync.TTLMap[int, billingSettings]
 	priceTTL *cfgsync.TTLMap[string, priceSlot]
 	groupTTL *cfgsync.TTLMap[string, float64]
 }
@@ -94,7 +103,7 @@ func newCostResolverWith(
 		prices:   prices,
 		groups:   groups,
 		logger:   logger,
-		source:   cfgsync.NewTTLMap[int, string](cfgsync.Spec(cfgsync.DomainSystemSettings).TTL, 1),
+		source:   cfgsync.NewTTLMap[int, billingSettings](cfgsync.Spec(cfgsync.DomainSystemSettings).TTL, 1),
 		priceTTL: cfgsync.NewTTLMap[string, priceSlot](priceCacheTTL, priceCacheSize),
 		groupTTL: cfgsync.NewTTLMap[string, float64](cfgsync.Spec(cfgsync.DomainProviderGroups).TTL, groupCacheSize),
 	}
@@ -106,7 +115,14 @@ type costInput struct {
 	RequestedModel string
 	// RedirectedModel 是供应商重定向后的模型名；未重定向时与 RequestedModel 相同。
 	RedirectedModel string
-	Usage           terminal.Usage
+	// StatusCode 是本次请求最终交付给客户端的状态码。非 2xx 时的计费口径由
+	// system_settings.bill_non_successful_requests 决定（见 resolve 的非 2xx 闸门）。
+	// 0 表示未知，按成功处理——与改造前的行为一致。
+	StatusCode int
+	Usage      terminal.Usage
+	// PriorityServiceTierApplied 为真时按 priority 档单价计费（codex Fast Mode，
+	// 判定见 codex_priority_billing.go）。
+	PriorityServiceTierApplied bool
 	// ProviderMultiplier 是供应商级的成本倍率；nil 表示按 1 计。
 	ProviderMultiplier *float64
 	// ProviderGroupTag 是选中供应商的 group_tag（providers.group_tag）。
@@ -119,9 +135,23 @@ type costInput struct {
 //
 // 返回 nil 成本表示**本次不计费**：用量为空（上游没报）、价格表里查不到主备两个模型、
 // 或价格数据不可用。三种情况都与 Node 一致——静默跳过，不写 cost_usd 也不报错。
+// 非 2xx 的请求另有一道闸门，见下方。
 func (r *costResolver) resolve(ctx context.Context, in costInput) *terminal.Cost {
 	if r == nil || usageEmpty(in.Usage) {
 		return nil
+	}
+	// 非 2xx 的计费闸门，逐条对齐 Node response-handler.ts:1657-1678：
+	//   默认行为是**不计费**，避免对失败/中断的请求重复扣费；
+	//   只有 system_settings.bill_non_successful_requests 打开、且上游已回报正向 token 用量时
+	//   才按用量计费（典型场景：499 客户端中断，但上游已经把 token 算完了）。
+	// 设置读不到时按 false 处理（Node 的 catch 分支同样 defaulting to skip）。
+	if !isSuccessStatus(in.StatusCode) {
+		if !r.billNonSuccessful(ctx) {
+			return nil
+		}
+		if !hasPositiveBillableTokens(in.Usage) {
+			return nil
+		}
 	}
 	model := r.billingModel(ctx, in)
 	if model == "" {
@@ -143,10 +173,11 @@ func (r *costResolver) resolve(ctx context.Context, in costInput) *terminal.Cost
 		}
 	}
 	cost, err := terminal.ComputeCost(terminal.CostInput{
-		Usage:              in.Usage,
-		PriceData:          price,
-		ProviderMultiplier: in.ProviderMultiplier,
-		GroupMultiplier:    r.groupMultiplier(ctx, in.ProviderGroupTag, in.UserGroup),
+		Usage:                      in.Usage,
+		PriorityServiceTierApplied: in.PriorityServiceTierApplied,
+		PriceData:                  price,
+		ProviderMultiplier:         in.ProviderMultiplier,
+		GroupMultiplier:            r.groupMultiplier(ctx, in.ProviderGroupTag, in.UserGroup),
 	})
 	if err != nil {
 		// 价格数据坏了按「无价格」处理：计费不能把一条正常响应变成错误。
@@ -178,18 +209,50 @@ func (r *costResolver) billingModel(ctx context.Context, in costInput) string {
 // 读失败也写缓存：否则一次数据库抖动会把热路径变成「每请求一次设置查询」。代价是最多
 // 陈旧一个 TTL 的取价基准，且失败有日志可查。
 func (r *costResolver) billingSource(ctx context.Context) string {
+	return r.billingSettings(ctx).modelSource
+}
+
+// billNonSuccessful 读 system_settings.bill_non_successful_requests（与 billingSource 同一次快照）。
+func (r *costResolver) billNonSuccessful(ctx context.Context) bool {
+	return r.billingSettings(ctx).billNonSuccessful
+}
+
+// billingSettings 一次读出计费相关的设置项：两项同源，分开读会让热路径多一次查库。
+func (r *costResolver) billingSettings(ctx context.Context) billingSettings {
 	if value, ok := r.source.Get(billingSourceKey); ok {
 		return value
 	}
-	source := ""
+	value := billingSettings{}
 	settings, err := r.settings.FindSystemSettings(ctx)
 	if err != nil {
 		r.logger.Warn("dataplane.billing_source_lookup_failed", map[string]any{"error": err.Error()})
 	} else if settings != nil {
-		source = settings.BillingModelSource
+		value.modelSource = settings.BillingModelSource
+		value.billNonSuccessful = settings.BillNonSuccessfulRequests
 	}
-	r.source.Set(billingSourceKey, source)
-	return source
+	r.source.Set(billingSourceKey, value)
+	return value
+}
+
+// hasPositiveBillableTokens 判定用量里是否有正向的可计费 token，逐项对齐 Node 的
+// hasPositiveBillableTokens（response-handler.ts:1438）：八类 token 之和大于 0 即为真。
+func hasPositiveBillableTokens(usage terminal.Usage) bool {
+	fields := [...]*int64{
+		usage.InputTokens,
+		usage.OutputTokens,
+		usage.CacheCreationInputTokens,
+		usage.CacheCreation5mInputTokens,
+		usage.CacheCreation1hInputTokens,
+		usage.CacheReadInputTokens,
+		usage.InputImageTokens,
+		usage.OutputImageTokens,
+	}
+	for _, field := range fields {
+		if field != nil && *field > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // priceFor 取某模型的价格数据（TTL 缓存）。返回 false 表示价格表里没有该模型。

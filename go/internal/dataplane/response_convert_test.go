@@ -18,6 +18,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
 // 响应侧方言回译的验收钉子（不依赖数据库）。
@@ -74,7 +75,7 @@ func newConversionHandler(
 		Base: guard.Deps{
 			Auth:           auth,
 			Users:          auth,
-			Settings:       fakeSettings{},
+			Settings:       settingsWithUpstreamPassthrough{},
 			Sensitive:      fakeEmptySource{},
 			Filters:        fakeEmptySource{},
 			Provider:       fakeProvider{selection: pctx.ProviderSelection{ProviderID: 7, Name: "假供应商", Type: string(providerType)}},
@@ -207,6 +208,18 @@ func TestSameDialectResponseStaysByteIdentical(t *testing.T) {
 	if got := recorder.Header().Get("X-Upstream-Marker"); got != "kept" {
 		t.Fatalf("同方言不得丢掉上游头部，收到 %q", got)
 	}
+}
+
+// settingsWithUpstreamPassthrough 是与**生产口径**一致的设置桩：
+// pass_through_upstream_error_message 打开（生产值，也是 Node 的 DEFAULT_SETTINGS）。
+//
+// 为何不能沿用零值 fakeSettings：零值等于「显式关闭」，会让所有上游错误消息被换成状态码
+// 通用文案（Node error-handler.ts:121-158 的两态），于是「错误体不进方言回译」这条钉子
+// 会被错误消息的形态变化掩盖。两态本身由 TestFailoverStatusForPassThroughSwitch 覆盖。
+type settingsWithUpstreamPassthrough struct{}
+
+func (settingsWithUpstreamPassthrough) FindSystemSettings(context.Context) (*store.SystemSettings, error) {
+	return &store.SystemSettings{PassThroughUpstreamErrorMessage: true}, nil
 }
 
 // TestNonSuccessResponseIsNotConverted 钉住「非 2xx 不转换」：错误体不进方言回译。

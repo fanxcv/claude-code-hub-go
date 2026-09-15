@@ -264,6 +264,8 @@ type storeSettler struct {
 	// cacheScore 是 F3b 缓存模拟列的开关与事实装配；nil 表示未接线，此时不写那五列。
 	// 它与计费相互独立：Node 的 F3b 门控只看缓存效果开关，与能否取到价格无关。
 	cacheScore *cacheScoreGate
+	// codexPriority 是 codex priority（Fast Mode）计费档的判定面；nil 表示未接线（不计 priority 档）。
+	codexPriority *codexPriorityGate
 	// now 可注入时钟；nil 时用 time.Now。
 	now func() time.Time
 }
@@ -321,10 +323,14 @@ func (s *storeSettler) NonStream(
 	settlement.Cost = s.costs.resolve(context.Background(), costInput{
 		RequestedModel:     s.state.Model,
 		RedirectedModel:    redirected,
+		StatusCode:         settlement.StatusCode,
 		Usage:              settlement.Usage,
 		ProviderMultiplier: s.state.ProviderMultiplier,
 		ProviderGroupTag:   s.state.ProviderGroupTag,
 		UserGroup:          s.state.UserGroup,
+		// codex priority 档：非流式可拿到响应侧 service_tier（见 codex_priority_billing.go）。
+		PriorityServiceTierApplied: s.codexPriority.applied(context.Background(),
+			string(result.Provider.Type), s.state.requestedServiceTier, parseServiceTierFromResponseText(result.Body)),
 	})
 	// 成本倍率列：非流式不写 F3b（Node 只在流式路径产出，见 cachescore.go）。
 	applyCostMultipliers(&settlement, s.state)
@@ -419,10 +425,15 @@ func (s *storeSettler) Stream(ctx context.Context, pc *pctx.Context, outcome for
 	settlement.Cost = s.costs.resolve(context.Background(), costInput{
 		RequestedModel:     s.state.Model,
 		RedirectedModel:    redirected,
+		StatusCode:         settlement.StatusCode,
 		Usage:              settlement.Usage,
 		ProviderMultiplier: s.state.ProviderMultiplier,
 		ProviderGroupTag:   s.state.ProviderGroupTag,
 		UserGroup:          s.state.UserGroup,
+		// 流式只给请求侧档位：actual 需扫整段 SSE（见文件头注释），缺失时与 Node
+		// 「响应未返回 service_tier」同支，回退 requested。
+		PriorityServiceTierApplied: s.codexPriority.applied(context.Background(),
+			string(outcome.Provider.Type), s.state.requestedServiceTier, ""),
 	})
 	applyCostMultipliers(&settlement, s.state)
 	// F3b 缓存模拟列（仅流式，与 Node 同一处产出）。

@@ -400,7 +400,9 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 				costs:   costs,
 				// F3b 缓存模拟列的开关（设置行优先、env 兜底）；与计费相互独立。
 				cacheScore: newCacheScoreGate(adapters.Settings, cacheEffectivenessEnvDefault()),
-				now:        options.Now,
+				// codex priority（Fast Mode）计费档：设置行给出 requested/actual 偏好。
+				codexPriority: newCodexPriorityGate(adapters.Settings, logger),
+				now:           options.Now,
 			}
 		},
 		Forward: forward.Deps{
