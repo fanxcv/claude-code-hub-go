@@ -2,9 +2,12 @@ package replay
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
 // 跨语言契约：Redis 键形制、热层 TTL、owner 租约 TTL 必须与 Node 的 replay-store.ts 逐字一致，
@@ -178,5 +181,88 @@ func TestDurablePersistenceSerialized(t *testing.T) {
 	completions.Wait()
 	if peak != 1 {
 		t.Fatalf("durable 持久化未串行，并发峰值 %d", peak)
+	}
+}
+
+// fakeSystemSettings 是 SystemSettingsSource 的桩：只提供回放 TTL 一项，并记录读取次数。
+type fakeSystemSettings struct {
+	minutes int
+	err     error
+	calls   int
+}
+
+func (f *fakeSystemSettings) FindSystemSettings(context.Context) (*store.SystemSettings, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &store.SystemSettings{ReplayCacheTTLMinutes: f.minutes}, nil
+}
+
+// TestTTLSecondsFollowsReplayCacheSetting 钉住 Node 的 resolveReplayTtlSeconds：
+// min(REPLAY_TTL_SECONDS, clamp(replay_cache_ttl_minutes, 5, 120, 默认 30) * 60)。
+//
+// 跨语言契约：改设置必须同时改两边的热层 TTL，否则切换期间同一条回放条目会在两侧
+// 不同时刻过期（Node 写、Go 读）→ 读端凭空 miss。
+func TestTTLSecondsFollowsReplayCacheSetting(t *testing.T) {
+	cases := []struct {
+		name      string
+		envTTL    time.Duration
+		minutes   int
+		settings  bool
+		want      int64
+		readFails bool
+	}{
+		{name: "设置默认 30 分钟时不越过 env 上界", envTTL: 600 * time.Second, minutes: 30, settings: true, want: 600},
+		{name: "设置 5 分钟时取小", envTTL: 600 * time.Second, minutes: 5, settings: true, want: 300},
+		{name: "设置 120 分钟仍不越过 env 上界", envTTL: 600 * time.Second, minutes: 120, settings: true, want: 600},
+		{name: "env 上界更小时取 env", envTTL: 900 * time.Second, minutes: 120, settings: true, want: 900},
+		{name: "0 分钟按 Node 夹到下限 5", envTTL: 600 * time.Second, minutes: 0, settings: true, want: 300},
+		{name: "超上限按 Node 夹到 120", envTTL: 7200 * time.Second, minutes: 500, settings: true, want: 7200},
+		{name: "未接线设置时用默认 30 分钟", envTTL: 600 * time.Second, settings: false, want: 600},
+		{name: "读设置失败时回落默认", envTTL: 600 * time.Second, settings: true, readFails: true, want: 600},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			var source SystemSettingsSource
+			if testCase.settings {
+				fake := &fakeSystemSettings{minutes: testCase.minutes}
+				if testCase.readFails {
+					fake.err = errors.New("库不可用")
+				}
+				source = fake
+			}
+			store := &Store{ttl: testCase.envTTL, settings: source, now: time.Now}
+			if got := store.ttlSeconds(context.Background()); got != testCase.want {
+				t.Fatalf("ttlSeconds 期望 %d 秒，实际 %d 秒", testCase.want, got)
+			}
+		})
+	}
+}
+
+// TestTTLSecondsCachesSettingsSnapshot 钉住设置快照的缓存窗口（Node CACHE_TTL_MS = 60 秒）：
+// 窗口内改设置沿用旧值（避免逐 chunk 读库），过期后生效（不必重启进程）。
+func TestTTLSecondsCachesSettingsSnapshot(t *testing.T) {
+	fake := &fakeSystemSettings{minutes: 5}
+	clock := time.Now()
+	store := &Store{ttl: 3600 * time.Second, settings: fake, now: func() time.Time { return clock }}
+
+	if got := store.ttlSeconds(context.Background()); got != 300 {
+		t.Fatalf("首次应取设置值 5 分钟 = 300 秒，实际 %d", got)
+	}
+	fake.minutes = 60
+	if got := store.ttlSeconds(context.Background()); got != 300 {
+		t.Fatalf("缓存窗口内不得重新读库（应仍为 300 秒），实际 %d", got)
+	}
+	if fake.calls != 1 {
+		t.Fatalf("缓存窗口内只应读库一次，实际 %d 次", fake.calls)
+	}
+
+	clock = clock.Add(settingsCacheTTL + time.Second)
+	if got := store.ttlSeconds(context.Background()); got != 3600 {
+		t.Fatalf("缓存过期后应取新设置（60 分钟与 env 上界取小 = 3600 秒），实际 %d", got)
+	}
+	if fake.calls != 2 {
+		t.Fatalf("缓存过期后应再读一次库，实际共 %d 次", fake.calls)
 	}
 }

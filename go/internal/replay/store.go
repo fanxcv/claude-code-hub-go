@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,6 +22,17 @@ const (
 	ownerLeaseTTLSeconds = 45
 	// DefaultTTLSeconds 对齐 env.schema REPLAY_TTL_SECONDS 默认 600。
 	DefaultTTLSeconds = 600
+
+	// 以下是 system_settings.replay_cache_ttl_minutes 的取值域与兜底，逐字对齐 Node
+	// src/lib/validation/replay-settings.ts（DEFAULT=30 / MIN=5 / MAX=120）。
+	replayCacheTTLMinutesDefault = 30
+	replayCacheTTLMinutesMin     = 5
+	replayCacheTTLMinutesMax     = 120
+
+	// settingsCacheTTL 是设置快照的本地缓存时长，对齐 Node system-settings-cache 的
+	// CACHE_TTL_MS（60 秒）：设置运行时可改，既不能每写一个 chunk 就读一次库，
+	// 也不能只在启动时读一次（那样改设置就必须重启，与 Node 行为分叉）。
+	settingsCacheTTL = 60 * time.Second
 )
 
 // Lua 脚本正文（与 replay-store.ts 逐字节一致）。
@@ -223,23 +235,41 @@ const (
 )
 
 // StoreOptions 是 NewStore 的入参。
+// SystemSettingsSource 提供 system_settings 快照。*store.Pools 已满足它（FindSystemSettings），
+// 故生产装配不需额外接线；测试可注入桩以避免依赖真库。
+type SystemSettingsSource interface {
+	FindSystemSettings(ctx context.Context) (*store.SystemSettings, error)
+}
+
+// StoreOptions 是热层与持久层的装配参数。
 type StoreOptions struct {
 	// Redis 是热层客户端（go-redis，可直连/哨兵/集群）。
 	Redis redis.UniversalClient
 	// Pools 是 PG 分道池，完成持久层用它。
 	Pools *store.Pools
 	// TTL 是热层条目 TTL；0 时用 DefaultTTLSeconds。
+	//
+	// 它同时是**上界**：实际使用的 TTL 取 min(本值, 设置里的 replay_cache_ttl_minutes)。
 	TTL time.Duration
+	// Settings 是 system_settings 来源；nil 时用 Pools（生产两者同源）。
+	Settings SystemSettingsSource
 	// Now 是可注入时钟；nil 用 time.Now。
 	Now func() time.Time
 }
 
 // Store 是回放双层存储。
 type Store struct {
-	rdb   redis.UniversalClient
-	pools *store.Pools
-	ttl   time.Duration
-	now   func() time.Time
+	rdb      redis.UniversalClient
+	pools    *store.Pools
+	ttl      time.Duration
+	settings SystemSettingsSource
+	now      func() time.Time
+
+	// 设置快照缓存（见 completedTTLSeconds）。
+	settingsMu      sync.Mutex
+	settingsMinutes int
+	settingsAt      time.Time
+	settingsLoaded  bool
 
 	scripts struct {
 		compareDelete  *redis.Script
@@ -268,7 +298,12 @@ func NewStore(opts StoreOptions) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
-	store := &Store{rdb: opts.Redis, pools: opts.Pools, ttl: opts.TTL, now: now}
+	settings := opts.Settings
+	if settings == nil && opts.Pools != nil {
+		// 生产装配只传 Pools；这里补上同源的设置来源，避免调用方为了一个开关多接一条缝。
+		settings = opts.Pools
+	}
+	store := &Store{rdb: opts.Redis, pools: opts.Pools, ttl: opts.TTL, settings: settings, now: now}
 	store.scripts.compareDelete = redis.NewScript(luaCompareDelete)
 	store.scripts.compareExpire = redis.NewScript(luaCompareExpire)
 	store.scripts.heartbeatOwned = redis.NewScript(luaHeartbeatOwned)
@@ -282,9 +317,61 @@ func NewStore(opts StoreOptions) (*Store, error) {
 	return store, nil
 }
 
-// TTLSeconds 返回热层 TTL（秒）。
+// TTLSeconds 返回**env 上界**（秒），即 REPLAY_TTL_SECONDS 的解析值。
+//
+// 它不是最终写进 Redis 的 TTL：实际值还要与设置里的 replay_cache_ttl_minutes 取小
+// （见 ttlSeconds），语义对齐 Node 的 resolveReplayTtlSeconds。
 func (s *Store) TTLSeconds() int64 {
 	return int64(s.ttl / time.Second)
+}
+
+// ttlSeconds 返回本次写入/续期应使用的热层 TTL（秒），对齐 Node 的 resolveReplayTtlSeconds：
+//
+//	min(REPLAY_TTL_SECONDS, clamp(replay_cache_ttl_minutes, 5, 120, 默认 30) * 60)
+//
+// 设置读不到时用默认值（30 分钟），因此库抖动只会让 TTL 回到默认，不会变成 0 或无限。
+func (s *Store) ttlSeconds(ctx context.Context) int64 {
+	envSeconds := s.TTLSeconds()
+	completedSeconds := s.completedTTLSeconds(ctx)
+	if completedSeconds <= 0 {
+		return envSeconds
+	}
+	if envSeconds <= 0 || completedSeconds < envSeconds {
+		return completedSeconds
+	}
+	return envSeconds
+}
+
+// completedTTLSeconds 把设置里的分钟数夹到 Node 的取值域后换算成秒，并缓存快照。
+func (s *Store) completedTTLSeconds(ctx context.Context) int64 {
+	now := s.now()
+	s.settingsMu.Lock()
+	if s.settingsLoaded && now.Sub(s.settingsAt) < settingsCacheTTL {
+		minutes := s.settingsMinutes
+		s.settingsMu.Unlock()
+		return int64(minutes) * 60
+	}
+	s.settingsMu.Unlock()
+
+	minutes := replayCacheTTLMinutesDefault
+	if s.settings != nil {
+		if snapshot, err := s.settings.FindSystemSettings(ctx); err == nil && snapshot != nil {
+			minutes = snapshot.ReplayCacheTTLMinutes
+		}
+	}
+	if minutes < replayCacheTTLMinutesMin {
+		minutes = replayCacheTTLMinutesMin
+	}
+	if minutes > replayCacheTTLMinutesMax {
+		minutes = replayCacheTTLMinutesMax
+	}
+
+	s.settingsMu.Lock()
+	s.settingsMinutes = minutes
+	s.settingsAt = now
+	s.settingsLoaded = true
+	s.settingsMu.Unlock()
+	return int64(minutes) * 60
 }
 
 // 键构造（与 Node 逐字节一致）。
@@ -322,7 +409,7 @@ func (s *Store) WriteOwned(
 		return 0, WriteUnavailable
 	}
 	keys := []string{ownerKey(replayID), metaKey(replayID), chunksKey(replayID)}
-	args := []any{ownerToken, s.TTLSeconds(), ownerLeaseTTLSeconds, string(metaJSON)}
+	args := []any{ownerToken, s.ttlSeconds(ctx), ownerLeaseTTLSeconds, string(metaJSON)}
 	for _, value := range values {
 		args = append(args, value)
 	}
@@ -431,7 +518,7 @@ func (s *Store) HeartbeatOwned(ctx context.Context, replayID, ownerToken string,
 	raw, err := s.scripts.heartbeatOwned.Run(
 		ctx, s.rdb,
 		[]string{ownerKey(replayID), metaKey(replayID), chunksKey(replayID)},
-		ownerToken, s.TTLSeconds(), ownerLeaseTTLSeconds, heartbeatAt,
+		ownerToken, s.ttlSeconds(ctx), ownerLeaseTTLSeconds, heartbeatAt,
 	).Result()
 	if err != nil {
 		return false
@@ -445,7 +532,7 @@ func (s *Store) PrepareOwned(ctx context.Context, replayID, ownerToken string) b
 	raw, err := s.scripts.prepareOwned.Run(
 		ctx, s.rdb,
 		[]string{ownerKey(replayID), metaKey(replayID), chunksKey(replayID)},
-		ownerToken, s.TTLSeconds(),
+		ownerToken, s.ttlSeconds(ctx),
 	).Result()
 	if err != nil {
 		return false
@@ -495,7 +582,7 @@ func (s *Store) fencedMetaWrite(
 		return false
 	}
 	keys := []string{ownerKey(replayID), metaKey(replayID), chunksKey(replayID)}
-	raw, err := script.Run(ctx, s.rdb, keys, ownerToken, s.TTLSeconds(), string(metaJSON)).Result()
+	raw, err := script.Run(ctx, s.rdb, keys, ownerToken, s.ttlSeconds(ctx), string(metaJSON)).Result()
 	if err != nil {
 		return false
 	}

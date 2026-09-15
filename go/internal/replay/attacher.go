@@ -173,7 +173,7 @@ func (a *Attacher) tryServeRedis(
 	if meta.MessageRequestID == nil || meta.ChunkCount <= 0 {
 		return nil
 	}
-	remaining := remainingTTLSeconds(meta.HeartbeatAt, a.store.TTLSeconds(), a.now)
+	remaining := remainingTTLSeconds(meta.HeartbeatAt, a.store.ttlSeconds(ctx), a.now)
 	if remaining <= 0 {
 		return nil // 热层已到原固定到期点：交由 PG 持久层。
 	}
@@ -200,7 +200,7 @@ func (a *Attacher) readAllGeneration(
 		if max > attachServeBatchChunks {
 			max = attachServeBatchChunks
 		}
-		remaining := remainingTTLSeconds(heartbeatAt, a.store.TTLSeconds(), a.now)
+		remaining := remainingTTLSeconds(heartbeatAt, a.store.ttlSeconds(ctx), a.now)
 		if remaining <= 0 {
 			return "", false
 		}
