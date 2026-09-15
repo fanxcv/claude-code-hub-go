@@ -233,9 +233,12 @@ func openRateLimiter(
 	service, err := limit.New(limit.Config{
 		Quotas: storeQuotas{pools: pools},
 		// Redis 不可用或缓存未命中时回退到账本求和（Node 的 checkCostLimitsFromDatabase）。
-		Ledger:   pools,
-		Redis:    scriptClient,
-		Location: location,
+		Ledger: pools,
+		Redis:  scriptClient,
+		// 租约设置（quota_lease_*）：非空且 Redis 可用时，周期限额改走租约判定
+		// （对齐 Node rate-limit-guard 的 checkCostLimitsWithLease）。读不到设置即退回窗口/账本路径。
+		LeaseSettings: limit.NewCachedQuotaLeaseSettings(storeQuotaLeaseSettings{pools: pools}, 30*time.Second),
+		Location:      location,
 		// SESSION_TTL 单位与 Node 一致（秒，可小数）。
 		SessionTTL: time.Duration(cfg.Env.SessionTTL * float64(time.Second)),
 		// 数据面的防爆破阈值（auth-guard.ts:58-63 的 proxyAuthPolicy）：20 次 / 5 分钟 / 封 10 分钟。
@@ -257,6 +260,107 @@ func openRateLimiter(
 //
 // 为什么单独查一次：store 的 SystemSettings 结构没有 timezone 字段（JSON 解码会把它丢掉），
 // 而改 store 超出本次改动范围。
+// storeQuotaLeaseSettings 是 limit.QuotaLeaseSettingsReader 的 store 实现：读租约族的六个配置
+// （`quota_db_refresh_interval_seconds` 与 `quota_lease_percent_*` / `quota_lease_cap_usd`）。
+//
+// 为什么单独查一次：store 已有的 `EnsureAdminSystemSettings` 会在缺行时**插入**，而这是读路径
+// （每 30 秒至多一次），不该由读取行为建行；故与 readSystemTimezone 同法直读一行。
+// 数值列一律 `::text` 后自行解析：本仓读取层不依赖 pgx 的 numeric 编解码器（NULL 与精度语义
+// 在两条路径下不能分叉）。
+type storeQuotaLeaseSettings struct {
+	pools *store.Pools
+}
+
+const quotaLeaseSettingsSQL = `SELECT
+  quota_db_refresh_interval_seconds::text,
+  quota_lease_percent_5h::text,
+  quota_lease_percent_daily::text,
+  quota_lease_percent_weekly::text,
+  quota_lease_percent_monthly::text,
+  quota_lease_cap_usd::text
+FROM system_settings
+ORDER BY id ASC
+LIMIT 1`
+
+// QuotaLeaseSettings 实现 limit.QuotaLeaseSettingsReader。读不到行（空库/骨架库）不算失败：
+// 返回零值，由 limit 侧按 Node 缺省值补齐（10 秒 / 5%），否则数据面会因为「设置表还没建行」
+// 而整条退回账本路径。
+func (s storeQuotaLeaseSettings) QuotaLeaseSettings(ctx context.Context) (limit.QuotaLeaseSettings, error) {
+	if s.pools == nil {
+		return limit.QuotaLeaseSettings{}, nil
+	}
+	pool, err := s.pools.Data()
+	if err != nil {
+		return limit.QuotaLeaseSettings{}, err
+	}
+	var (
+		refresh *string
+		p5h     *string
+		pdaily  *string
+		pweekly *string
+		pmonth  *string
+		capUSD  *string
+	)
+	if err := pool.QueryRow(ctx, quotaLeaseSettingsSQL).Scan(&refresh, &p5h, &pdaily, &pweekly, &pmonth, &capUSD); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return limit.QuotaLeaseSettings{}, nil
+		}
+		return limit.QuotaLeaseSettings{}, err
+	}
+	return limit.QuotaLeaseSettings{
+		RefreshIntervalSeconds: intOr(parseIntOrZero(refresh), limit.DefaultQuotaLeaseRefreshSeconds),
+		Percent5h:              parseFloatOr(p5h, 0),
+		PercentDaily:           parseFloatOr(pdaily, 0),
+		PercentWeekly:          parseFloatOr(pweekly, 0),
+		PercentMonthly:         parseFloatOr(pmonth, 0),
+		CapUSD:                 parseOptionalFloat(capUSD),
+	}, nil
+}
+
+// parseIntOrZero 把可能为 NULL 的整数文本转成 int（NULL/非法为 0）。
+func parseIntOrZero(raw *string) int {
+	if raw == nil {
+		return 0
+	}
+	value, err := strconv.Atoi(*raw)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+// intOr 取 value；为 0 时用 fallback。
+func intOr(value, fallback int) int {
+	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+// parseFloatOr 把可能为 NULL 的 numeric 文本转成 float64（NULL/非法为 fallback）。
+func parseFloatOr(raw *string, fallback float64) float64 {
+	if raw == nil {
+		return fallback
+	}
+	value, err := strconv.ParseFloat(*raw, 64)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+// parseOptionalFloat 把可能为 NULL 的 numeric 文本转成可空 float64（NULL 表示不设上限）。
+func parseOptionalFloat(raw *string) *float64 {
+	if raw == nil {
+		return nil
+	}
+	value, err := strconv.ParseFloat(*raw, 64)
+	if err != nil {
+		return nil
+	}
+	return &value
+}
+
 func readSystemTimezone(ctx context.Context, pools *store.Pools, logger *logx.Logger) *string {
 	if pools == nil {
 		return nil

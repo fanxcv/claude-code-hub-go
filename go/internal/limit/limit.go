@@ -83,6 +83,10 @@ type Config struct {
 	Ledger LedgerReader
 	// Redis 可空：为空时全部走账本回退。
 	Redis *ratelimit.Client
+	// LeaseSettings 可空。非空且 Redis 可用时，Key/User 的四个周期限额改走**租约**判定
+	// （对齐 Node rate-limit-guard 的 checkCostLimitsWithLease）；为空时退回窗口/账本路径。
+	// 两者不是「新旧实现」：租约是 Node 当前在用的判定口径，窗口路径是它的回退面。
+	LeaseSettings QuotaLeaseSettingsReader
 	// SessionID 取本次请求已分配的物理会话 id。
 	//
 	// 会话绑定步骤把结果写在 pctx 之外由实现自持（guard.SessionBinder 的约定），因此并发维度
@@ -109,6 +113,7 @@ type Service struct {
 	windows  *CostWindows
 	sessions *SessionTracker
 	throttle *AuthThrottle
+	leases   *LeaseService
 	loc      *time.Location
 	log      *logx.Logger
 	now      func() time.Time
@@ -136,6 +141,7 @@ func New(cfg Config) (*Service, error) {
 		windows:  NewCostWindows(cfg.Redis, logger),
 		sessions: NewSessionTracker(cfg.Redis, cfg.SessionTTL, logger),
 		throttle: NewAuthThrottle(cfg.Abuse, now),
+		leases:   NewLeaseService(cfg.Redis, cfg.LeaseSettings, cfg.Ledger, loc, now, logger),
 		loc:      loc,
 		log:      logger,
 		now:      now,
@@ -244,6 +250,14 @@ func (s *Service) check(
 	for _, dimension := range dimensions {
 		if dimension.amount == nil || *dimension.amount <= 0 {
 			continue
+		}
+		if s.leases != nil {
+			if block, decided := s.leaseCostLimit(ctx, dimension, now); decided {
+				if block != nil {
+					return block, nil
+				}
+				continue
+			}
 		}
 		current, exceeded, checkErr := s.costLimit(ctx, dimension, now)
 		if checkErr != nil {
