@@ -3,6 +3,7 @@ package cfgsync
 import (
 	"context"
 	"errors"
+	"net"
 	"strconv"
 	"sync"
 	"time"
@@ -32,8 +33,13 @@ const ResyncMessage = "cch:cache:resync"
 const (
 	subscriberConnectBackoffBase = time.Second
 	subscriberConnectBackoffMax  = time.Minute
-	subscriberReadDeadline       = 30 * time.Second
 )
+
+// subscriberReadDeadline 是订阅连接单轮读取的等待上限（生产 30s）。
+//
+// 声明为 var 而非 const，是为了让「读截止到点 = 安静、不拆连」这条判据能被毫秒级窗口的
+// 用例钉住——否则每个断言都得跑满 30s。生产代码不得改写它。
+var subscriberReadDeadline = 30 * time.Second
 
 // Logger 是日志接口，由 go/internal/logx 的 Logger 满足；传 nil 即静默。
 type Logger interface {
@@ -317,6 +323,25 @@ func (b *Bus) connectIfNeeded() (time.Duration, bool) {
 	return 0, true
 }
 
+// isSubscriberReadTimeout 判定「读截止到点、连接仍活」这类错误。
+//
+// 为什么不能只判 context.DeadlineExceeded：go-redis 把 ctx 的截止时间落到连接的读截止上，
+// 到点后返回的是裸 net.OpError（`read tcp …: i/o timeout`），那不是 ctx 错误。只判 ctx 会把
+// 空闲订阅当成断连，于是每过一个读窗口就自毁重连一次——生产实测 145/148 次
+// cfgsync_subscription_lost 的间隔恰为 31s（30s 读截止 + 1s 重连退避）。
+//
+// context.Canceled 不是 net.Error，故不落此判据：总线关闭时必须照旧结束 pump。
+func isSubscriberReadTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
 func (b *Bus) pump() {
 	for {
 		b.mu.Lock()
@@ -331,11 +356,12 @@ func (b *Bus) pump() {
 		message, err := pubsub.ReceiveMessage(ctx)
 		cancel()
 		if err != nil {
-			// 读超时说明连接没断，只是安静；继续等。
-			if errors.Is(err, context.DeadlineExceeded) {
+			// 读截止到点说明连接没断，只是安静；继续等。
+			if isSubscriberReadTimeout(err) {
 				continue
 			}
-			if b.logger != nil {
+			// 总线关闭（context.Canceled）不是订阅丢失：静默拆干净，让 pump 结束。
+			if b.logger != nil && !errors.Is(err, context.Canceled) {
 				b.logger.Warn("cfgsync_subscription_lost", map[string]any{"error": err.Error()})
 			}
 			b.mu.Lock()
