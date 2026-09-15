@@ -65,8 +65,14 @@ func (h *Handler) captureRequestedEffort(state *RequestState, spec routeSpec, bo
 // 置回了 `Conversion = nil`（后者另置 `ConversionFallback`），所以 `Conversion != nil`
 // 恰好就是 Node 的「确实应用了转换」，不包含回退与失败。
 func specialSettingsAppendEntries(state *RequestState, plan *forward.Plan) []byte {
+	// 整流器审计与计划无关：整流发生在尝试循环里，而请求整体失败时 plan 为 nil——但条目照样要落
+	// （Node 在整流那一刻就写进会话的 special settings）。故它先取出，不进下面的 plan 分支。
+	var rectifierEntries []map[string]any
+	if state != nil {
+		rectifierEntries = state.rectifierAuditsSnapshot()
+	}
 	if plan == nil {
-		return nil
+		return specialsettings.AppendEntries(rectifierEntries...)
 	}
 	converted := plan.Conversion != nil
 	var requested specialsettings.EffortRequest
@@ -86,10 +92,17 @@ func specialSettingsAppendEntries(state *RequestState, plan *forward.Plan) []byt
 	if failureEntry := specialsettings.ConversionFailureEntry(plan.ConversionFailure); failureEntry != nil {
 		conversionEntry = failureEntry
 	}
-	return specialsettings.AppendEntries(
+	entries := []map[string]any{
 		specialsettings.ProbeEntry(requested, forwarded, converted),
 		conversionEntry,
 		// Codex 会话标识补全条目（守卫链产物，见 codex_session_audit.go）。
 		codexSessionEntry(state),
-	)
+	}
+	// 整流器审计（被动型 / 主动型）与上面几条走同一个数组一次追加：它们产生在尝试循环里，
+	// 但只有到终态才落库（见 forward.Deps.RectifierAudit → RequestState.rectifierAudits）。
+	entries = append(entries, rectifierEntries...)
+	// 供应商级参数覆写的审计（provider_parameter_override / gemini_google_search_override）
+	// 也是「尝试循环里产生、终态才落库」，但它是**计划**的产物（每次尝试重算），故随 plan 追加。
+	entries = append(entries, plan.OverrideSpecialSettings...)
+	return specialsettings.AppendEntries(entries...)
 }

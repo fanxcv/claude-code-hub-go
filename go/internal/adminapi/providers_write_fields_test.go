@@ -383,3 +383,107 @@ func TestProviderGroupPrioritiesWriteValidation(t *testing.T) {
 		}
 	}
 }
+
+// TestProviderPreferenceWriteValidation 钉住偏好列的写侧取值域。
+//
+// 为什么必须有：这些列此前是「任意字符串」直通，而数据面按枚举 / 数字读——落一个读不出的值，
+// 用户只会看到「配了不生效」而没有任何提示。取值域取自 Node 的权威定义
+// （provider-patch-contract.ts 的 isValidSetValue 与 types/provider.ts 的联合类型）。
+func TestProviderPreferenceWriteValidation(t *testing.T) {
+	cases := []struct {
+		field string
+		body  string
+		// wantIssue 为真表示应拒绝并给出 400 形状的 issue。
+		wantIssue bool
+	}{
+		// cache_ttl_preference（inherit|5m|1h）
+		{field: "cache_ttl_preference", body: `{"cache_ttl_preference":"1h"}`},
+		{field: "cache_ttl_preference", body: `{"cache_ttl_preference":"inherit"}`},
+		{field: "cache_ttl_preference", body: `{"cache_ttl_preference":null}`},
+		{field: "cache_ttl_preference", body: `{"cache_ttl_preference":"1H"}`, wantIssue: true},
+		{field: "cache_ttl_preference", body: `{"cache_ttl_preference":"forever"}`, wantIssue: true},
+		// codex 字符串偏好
+		{field: "codex_reasoning_effort_preference", body: `{"codex_reasoning_effort_preference":"xhigh"}`},
+		{field: "codex_reasoning_effort_preference", body: `{"codex_reasoning_effort_preference":"turbo"}`, wantIssue: true},
+		{field: "codex_reasoning_summary_preference", body: `{"codex_reasoning_summary_preference":"detailed"}`},
+		{field: "codex_reasoning_summary_preference", body: `{"codex_reasoning_summary_preference":"verbose"}`, wantIssue: true},
+		{field: "codex_text_verbosity_preference", body: `{"codex_text_verbosity_preference":"low"}`},
+		{field: "codex_text_verbosity_preference", body: `{"codex_text_verbosity_preference":"LOUD"}`, wantIssue: true},
+		{field: "codex_service_tier_preference", body: `{"codex_service_tier_preference":"priority"}`},
+		{field: "codex_service_tier_preference", body: `{"codex_service_tier_preference":"turbo"}`, wantIssue: true},
+		// 布尔偏好用 "true"/"false" 字符串（Node 的 Select 值必须是字符串）
+		{field: "codex_parallel_tool_calls_preference", body: `{"codex_parallel_tool_calls_preference":"true"}`},
+		{field: "codex_parallel_tool_calls_preference", body: `{"codex_parallel_tool_calls_preference":"false"}`},
+		{field: "codex_parallel_tool_calls_preference", body: `{"codex_parallel_tool_calls_preference":"yes"}`, wantIssue: true},
+		{field: "codex_image_generation_preference", body: `{"codex_image_generation_preference":"true"}`},
+		{field: "codex_image_generation_preference", body: `{"codex_image_generation_preference":"maybe"}`, wantIssue: true},
+		// gemini
+		{field: "gemini_google_search_preference", body: `{"gemini_google_search_preference":"enabled"}`},
+		{field: "gemini_google_search_preference", body: `{"gemini_google_search_preference":"on"}`, wantIssue: true},
+		// anthropic 数字串偏好（inherit 或范围数字）
+		{field: "anthropic_max_tokens_preference", body: `{"anthropic_max_tokens_preference":"64000"}`},
+		{field: "anthropic_max_tokens_preference", body: `{"anthropic_max_tokens_preference":"inherit"}`},
+		{field: "anthropic_max_tokens_preference", body: `{"anthropic_max_tokens_preference":"0"}`, wantIssue: true},
+		{field: "anthropic_max_tokens_preference", body: `{"anthropic_max_tokens_preference":"64k"}`, wantIssue: true},
+		{field: "anthropic_thinking_budget_preference", body: `{"anthropic_thinking_budget_preference":"10240"}`},
+		{field: "anthropic_thinking_budget_preference", body: `{"anthropic_thinking_budget_preference":"512"}`, wantIssue: true},
+		{field: "anthropic_thinking_budget_preference", body: `{"anthropic_thinking_budget_preference":"32001"}`, wantIssue: true},
+		// context_1m_preference（同属 claude 组偏好）
+		{field: "context_1m_preference", body: `{"context_1m_preference":"force_enable"}`},
+		{field: "context_1m_preference", body: `{"context_1m_preference":"forced"}`, wantIssue: true},
+		// anthropic_adaptive_thinking（结构）
+		{
+			field: "anthropic_adaptive_thinking",
+			body:  `{"anthropic_adaptive_thinking":{"effort":"high","modelMatchMode":"all","models":[]}}`,
+		},
+		{
+			field:     "anthropic_adaptive_thinking",
+			body:      `{"anthropic_adaptive_thinking":{"effort":"ultra","modelMatchMode":"all","models":[]}}`,
+			wantIssue: true,
+		},
+		{
+			field:     "anthropic_adaptive_thinking",
+			body:      `{"anthropic_adaptive_thinking":{"effort":"high","modelMatchMode":"specific","models":[]}}`,
+			wantIssue: true,
+		},
+	}
+	specs := providerCreateWriteSpecs()
+	for _, testCase := range cases {
+		t.Run(testCase.field+"/"+testCase.body, func(t *testing.T) {
+			fields := map[string]json.RawMessage{}
+			if err := json.Unmarshal([]byte(testCase.body), &fields); err != nil {
+				t.Fatalf("构造请求体失败: %v", err)
+			}
+			object := adminNewObject(fields)
+			payload, issues := providerDecodeWriteFields(object, []string{testCase.field}, specs)
+			if testCase.wantIssue {
+				if len(issues) == 0 {
+					t.Fatalf("应拒绝，实际 payload=%v", payload)
+				}
+				return
+			}
+			if len(issues) != 0 {
+				t.Fatalf("不该有 issue：%+v", issues)
+			}
+			if _, present := payload[testCase.field]; !present {
+				t.Fatalf("该列应写入：%v", payload)
+			}
+		})
+	}
+}
+
+// TestProviderCodexImageGenerationEnumMatchesNode 钉住「REST 侧 Node 也校验的列」没被放宽。
+//
+// Node 的 schemes/providers.ts:12 对 codex_image_generation_preference 用的是
+// `z.enum(CODEX_IMAGE_GENERATION_PREFERENCE_VALUES)`（其余偏好列在 REST 侧只是 z.string()）。
+// 即：这一列的严格校验是 parity，不是 Go 的额外收紧。
+func TestProviderCodexImageGenerationEnumMatchesNode(t *testing.T) {
+	if !providerStringInList("true", providerCodexImageGenerations) ||
+		!providerStringInList("false", providerCodexImageGenerations) ||
+		!providerStringInList("inherit", providerCodexImageGenerations) {
+		t.Fatalf("取值域缺项: %v", providerCodexImageGenerations)
+	}
+	if len(providerCodexImageGenerations) != 3 {
+		t.Fatalf("取值域应恰为 inherit/true/false: %v", providerCodexImageGenerations)
+	}
+}

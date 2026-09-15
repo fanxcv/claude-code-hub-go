@@ -191,6 +191,19 @@ func (s *candidateSource) fromStore(
 			// 竞速在真实进程里永远不会开——单测手填字段是看不出来的，故这里必须有。
 			FirstByteTimeoutStreamingMS: row.FirstByteTimeoutStreamingMS,
 			ModelRedirects:              row.ModelRedirects,
+			// 供应商级参数覆写偏好（Node 的同名列）：转发层据此改写上游正文，见
+			// forward 的 ProviderOverrideApplier。列可空，故一律折叠成空串（与 inherit 同义）。
+			CacheTTLPreference:                preferenceValue(row.CacheTTLPreference),
+			CodexReasoningEffortPreference:    preferenceValue(row.CodexReasoningEffortPreference),
+			CodexReasoningSummaryPreference:   preferenceValue(row.CodexReasoningSummaryPreference),
+			CodexTextVerbosityPreference:      preferenceValue(row.CodexTextVerbosityPreference),
+			CodexParallelToolCallsPreference:  preferenceValue(row.CodexParallelToolCallsPreference),
+			CodexImageGenerationPreference:    preferenceValue(row.CodexImageGenerationPreference),
+			CodexServiceTierPreference:        preferenceValue(row.CodexServiceTierPreference),
+			AnthropicMaxTokensPreference:      preferenceValue(row.AnthropicMaxTokensPreference),
+			AnthropicThinkingBudgetPreference: preferenceValue(row.AnthropicThinkingBudgetPreference),
+			AnthropicAdaptiveThinking:         row.AnthropicAdaptiveThinking,
+			GeminiGoogleSearchPreference:      preferenceValue(row.GeminiGoogleSearchPreference),
 		},
 		ConversionEnabled: row.ProtocolConversionEnabled,
 		// 原始透传端点（count_tokens / responses/compact）不重试、不切换供应商：
@@ -244,6 +257,17 @@ func (s *candidateSource) fromStore(
 	}
 	candidate.Provider.Endpoints = candidate.Endpoints
 	return candidate, capture, nil
+}
+
+// preferenceValue 把可空的供应商偏好列折叠成空串。
+//
+// 为什么折叠而不留 nil：转发层的偏好一律用「空串 = 未配置」表达（与 DB 里的 `inherit`
+// 同义），这样覆写实现不需要在每处都判一遍指针。
+func preferenceValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // settleTimeout 是终态写入的独立时间上限。

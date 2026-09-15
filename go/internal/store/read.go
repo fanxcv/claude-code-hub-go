@@ -137,6 +137,20 @@ type Provider struct {
 	CircuitBreakerFailureThreshold         *int            `json:"circuit_breaker_failure_threshold"`
 	CircuitBreakerOpenDuration             *int            `json:"circuit_breaker_open_duration"`
 	CircuitBreakerHalfOpenSuccessThreshold *int            `json:"circuit_breaker_half_open_success_threshold"`
+	// 供应商级参数覆写偏好：数据面要拿它们改写上游正文（见 forward 的 ProviderOverrideApplier），
+	// 而本视图是选路/转发唯一的那次供应商读取（`SELECT *`，加字段不需要改 SQL）。
+	// 列可空且无默认，故一律用指针：nil 与 `inherit` 同义（均表示「遵循客户端」）。
+	CacheTTLPreference                *string         `json:"cache_ttl_preference"`
+	CodexReasoningEffortPreference    *string         `json:"codex_reasoning_effort_preference"`
+	CodexReasoningSummaryPreference   *string         `json:"codex_reasoning_summary_preference"`
+	CodexTextVerbosityPreference      *string         `json:"codex_text_verbosity_preference"`
+	CodexParallelToolCallsPreference  *string         `json:"codex_parallel_tool_calls_preference"`
+	CodexImageGenerationPreference    *string         `json:"codex_image_generation_preference"`
+	CodexServiceTierPreference        *string         `json:"codex_service_tier_preference"`
+	AnthropicMaxTokensPreference      *string         `json:"anthropic_max_tokens_preference"`
+	AnthropicThinkingBudgetPreference *string         `json:"anthropic_thinking_budget_preference"`
+	GeminiGoogleSearchPreference      *string         `json:"gemini_google_search_preference"`
+	AnthropicAdaptiveThinking         json.RawMessage `json:"anthropic_adaptive_thinking"`
 }
 
 // ProviderEndpoint 是 provider_endpoints 的读取视图（供应商厂级端点）。

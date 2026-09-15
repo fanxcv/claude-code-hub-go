@@ -594,6 +594,9 @@ func (h *Handler) planFacts(pc *pctx.Context, spec routeSpec, body *bodyAccess) 
 			HasBody: len(payload) > 0,
 		},
 		ClientUserAgent: headers.Get("User-Agent"),
+		// 供应商级参数覆写：每请求一份——gemini 的覆写要看客户端路径，而审计条目与缓存 TTL
+		// 都是本次请求的产物（见 forward.ProviderOverrideApplier）。
+		Overrides: forward.NewProviderOverrideApplier(pc.Path()),
 	}
 }
 

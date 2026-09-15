@@ -22,6 +22,24 @@ import (
 // providerModelRedirectMatchTypes 是 model_redirects 与 allowed_models 的 matchType 取值域。
 var providerModelRedirectMatchTypes = []string{"exact", "prefix", "suffix", "contains", "regex"}
 
+// 各偏好列的取值域。
+//
+// 逐条取自 Node 的权威定义——`provider-patch-contract.ts` 的 isValidSetValue 分支与
+// `types/provider.ts` 的联合类型（两者同值）；Go 的 batch patch 契约已用同一批字面量做校验，
+// 这里提成命名变量供 REST 创建/更新路径复用，避免同一套枚举出现两份写法。
+var (
+	providerCacheTTLPreferences     = []string{"inherit", "5m", "1h"}
+	providerContext1mPreferences    = []string{"inherit", "force_enable", "disabled"}
+	providerCodexReasoningEfforts   = []string{"inherit", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
+	providerCodexReasoningSummaries = []string{"inherit", "auto", "detailed"}
+	providerCodexTextVerbosities    = []string{"inherit", "low", "medium", "high"}
+	// 布尔偏好用 "true"/"false" 字符串（Node 的 Select 值必须是字符串）。
+	providerCodexBoolPreferences  = []string{"inherit", "true", "false"}
+	providerCodexImageGenerations = providerCodexBoolPreferences
+	providerCodexServiceTiers     = []string{"inherit", "auto", "default", "flex", "priority"}
+	providerGeminiGoogleSearches  = []string{"inherit", "enabled", "disabled"}
+)
+
 // providerPreimageFieldNames 是 payload 名 → Provider（camelCase）名。
 //
 // 逐条取自 Node 的 SINGLE_EDIT_PREIMAGE_FIELD_TO_PROVIDER_KEY。camelCase 名与
@@ -118,6 +136,85 @@ func providerNullableFieldSpec(maxRunes int) providerDecodeSpec {
 			return (*string)(nil), true
 		}
 		return nullable.Value, true
+	}}
+}
+
+// providerNullableEnumFieldSpec 复刻 `z.enum([...]).nullable().optional()`。
+//
+// 枚举值由调用方从本包既有的 batch 契约校验器取（同一批取值域，不再写第三份字面量）。
+// 走 object.String 的 Enum 分支：错误码与文案就是 zod 的 `invalid_enum_value` 风格。
+func providerNullableEnumFieldSpec(enum []string) providerDecodeSpec {
+	return providerDecodeSpec{Decode: func(object *adminObject, payload string) (any, bool) {
+		raw, present := object.Raw(payload)
+		if !present {
+			return nil, false
+		}
+		if adminJSONTypeName(raw) == "null" {
+			return (*string)(nil), true
+		}
+		value, ok := object.String(payload, adminStringSpec{Enum: enum})
+		if !ok {
+			return nil, true
+		}
+		return value, true
+	}}
+}
+
+// providerNullablePreferenceSpec 是「可空文本 + 取值判定」的通用形状（枚举以外的偏好：
+// 数字串与结构校验）。
+//
+// 为什么要在**写侧**拦：这些偏好列此前只是「任意字符串」直通，而数据面按枚举 / 数字读。
+// 落一个读不出来的值，用户看到的是「我配了却不生效」而没有任何提示（同
+// providerNumberRecordJSONSpec 的理由）。与 Node 的关系：Node 的 batch patch 契约
+// （`provider-patch-contract.ts`）校验同一批取值域，而其 REST 创建/更新 schema
+// （`schemas/providers.ts`）对多数偏好列只写 `z.string()`——只有
+// `codex_image_generation_preference` 在 REST 侧也是 `z.enum`。即：本改动对多数列
+// **比 Node 的 REST 路径严**，而取值域与 Node 的权威定义（`types/provider.ts` 与 batch 契约）
+// 一致，故 UI 能发出的值一个都不会被拒。
+func providerNullablePreferenceSpec(validate providerPatchSetValidator, expectation string) providerDecodeSpec {
+	return providerDecodeSpec{Decode: func(object *adminObject, payload string) (any, bool) {
+		raw, present := object.Raw(payload)
+		if !present {
+			return nil, false
+		}
+		if adminJSONTypeName(raw) == "null" {
+			return (*string)(nil), true
+		}
+		value, ok := object.String(payload, adminStringSpec{})
+		if !ok {
+			return nil, true
+		}
+		if !validate(value) {
+			object.fail([]any{payload}, "invalid_value",
+				fmt.Sprintf("Invalid value: expected %s, received '%s'", expectation, value))
+			return value, true
+		}
+		return value, true
+	}}
+}
+
+// providerAdaptiveThinkingSpec 校验 anthropic_adaptive_thinking 的 jsonb 形状。
+//
+// Node 的 REST schema 对它是 `z.unknown()`（不校验），batch 契约才校验结构；Go 此前两者都不校验
+// （jsonb 直通），而数据面本轮开始按 `{effort, modelMatchMode, models}` 读它：落一个读不出的
+// 形状就是「配了不生效」。这里复用 batch 契约的同一校validator，两个写路径口径一致。
+func providerAdaptiveThinkingSpec() providerDecodeSpec {
+	return providerDecodeSpec{Decode: func(object *adminObject, payload string) (any, bool) {
+		raw, present := object.Raw(payload)
+		if !present {
+			return nil, false
+		}
+		if adminJSONTypeName(raw) == "null" {
+			return nil, true
+		}
+		var decoded any
+		if err := json.Unmarshal(raw, &decoded); err != nil || !validateAdaptiveThinking(decoded) {
+			object.fail([]any{payload}, "invalid_value",
+				"Invalid value: adaptive thinking requires effort (low|medium|high|xhigh|max), "+
+					"modelMatchMode (specific|all) and a string array models")
+			return nil, true
+		}
+		return json.RawMessage(raw), true
 	}}
 }
 
@@ -374,25 +471,27 @@ func providerCreateWriteSpecs() map[string]providerDecodeSpec {
 		"request_timeout_non_streaming_ms":     providerTimeoutFieldSpec(&minTimeout, nil),
 		"website_url":                          providerNullableFieldSpec(0),
 		"favicon_url":                          providerNullableFieldSpec(0),
-		"cache_ttl_preference":                 providerNullableFieldSpec(0),
+		"cache_ttl_preference":                 providerNullableEnumFieldSpec(providerCacheTTLPreferences),
 		"swap_cache_ttl_billing":               providerBoolFieldSpec(),
-		"context_1m_preference":                providerNullableFieldSpec(0),
-		"codex_reasoning_effort_preference":    providerNullableFieldSpec(0),
-		"codex_reasoning_summary_preference":   providerNullableFieldSpec(0),
-		"codex_text_verbosity_preference":      providerNullableFieldSpec(0),
-		"codex_parallel_tool_calls_preference": providerNullableFieldSpec(0),
-		"codex_image_generation_preference":    providerNullableFieldSpec(0),
-		"codex_service_tier_preference":        providerNullableFieldSpec(0),
+		"context_1m_preference":                providerNullableEnumFieldSpec(providerContext1mPreferences),
+		"codex_reasoning_effort_preference":    providerNullableEnumFieldSpec(providerCodexReasoningEfforts),
+		"codex_reasoning_summary_preference":   providerNullableEnumFieldSpec(providerCodexReasoningSummaries),
+		"codex_text_verbosity_preference":      providerNullableEnumFieldSpec(providerCodexTextVerbosities),
+		"codex_parallel_tool_calls_preference": providerNullableEnumFieldSpec(providerCodexBoolPreferences),
+		"codex_image_generation_preference":    providerNullableEnumFieldSpec(providerCodexImageGenerations),
+		"codex_service_tier_preference":        providerNullableEnumFieldSpec(providerCodexServiceTiers),
 		"codex_max_tokens_preference":          providerNullableFieldSpec(0),
-		"anthropic_max_tokens_preference":      providerNullableFieldSpec(0),
-		"anthropic_thinking_budget_preference": providerNullableFieldSpec(0),
-		"anthropic_adaptive_thinking":          providerJSONFieldSpec(),
-		"openai_max_tokens_preference":         providerNullableFieldSpec(0),
-		"gemini_google_search_preference":      providerNullableFieldSpec(0),
-		"tpm":                                  providerNullableIntFieldSpec(nil, nil),
-		"rpm":                                  providerNullableIntFieldSpec(nil, nil),
-		"rpd":                                  providerNullableIntFieldSpec(nil, nil),
-		"cc":                                   providerNullableIntFieldSpec(nil, nil),
+		"anthropic_max_tokens_preference": providerNullablePreferenceSpec(
+			validateMaxTokensPreference, "inherit or a positive integer string"),
+		"anthropic_thinking_budget_preference": providerNullablePreferenceSpec(
+			validateThinkingBudgetPreference, "inherit or an integer string in 1024..32000"),
+		"anthropic_adaptive_thinking":     providerAdaptiveThinkingSpec(),
+		"openai_max_tokens_preference":    providerNullableFieldSpec(0),
+		"gemini_google_search_preference": providerNullableEnumFieldSpec(providerGeminiGoogleSearches),
+		"tpm":                             providerNullableIntFieldSpec(nil, nil),
+		"rpm":                             providerNullableIntFieldSpec(nil, nil),
+		"rpd":                             providerNullableIntFieldSpec(nil, nil),
+		"cc":                              providerNullableIntFieldSpec(nil, nil),
 	}
 }
 

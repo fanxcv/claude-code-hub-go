@@ -54,6 +54,27 @@ type Provider struct {
 	FirstByteTimeoutStreamingMS int
 	// ModelRedirects 是供应商级模型重定向规则（数组形态或旧的 map 形态）。
 	ModelRedirects json.RawMessage
+
+	// 以下列是**供应商级参数覆写偏好**（Node 的 provider.codex*/anthropic*/gemini* 族）。
+	//
+	// 为什么放在这里而不是让覆写实现自己查库：Node 施加覆写时用的就是它已经读出来的那行
+	// 供应商对象（`provider.codexReasoningEffortPreference` 等），没有第二次查询；选路已经
+	// 读过的同一行直接带过来，避免每次尝试多打一次库。
+	//
+	// 取值约定：空串与 `inherit`（DB 里两种形态都有）都表示「遵循客户端」。
+	CacheTTLPreference                string
+	CodexReasoningEffortPreference    string
+	CodexReasoningSummaryPreference   string
+	CodexTextVerbosityPreference      string
+	CodexParallelToolCallsPreference  string
+	CodexImageGenerationPreference    string
+	CodexServiceTierPreference        string
+	AnthropicMaxTokensPreference      string
+	AnthropicThinkingBudgetPreference string
+	// AnthropicAdaptiveThinking 是 jsonb 原文：写侧历史上无 schema 校验，故保留原文
+	// 由覆写实现按 Node 的字段口径逐项读（解析失败视同未配置）。
+	AnthropicAdaptiveThinking    json.RawMessage
+	GeminiGoogleSearchPreference string
 }
 
 // Endpoint 是一个上游端点候选。
@@ -117,6 +138,25 @@ type OverrideApplier interface {
 	Apply(provider Provider, protocol convert.WireProtocol, body []byte) ([]byte, error)
 }
 
+// OverrideAuditSource 由 OverrideApplier 实现**额外**提供：把本次 Apply 产生的审计条目
+// 交回计划（Node 的 `provider_parameter_override` 与 `gemini_google_search_override`）。
+//
+// 为什么是可选接口而不是改 OverrideApplier 的签名：覆写按供应商类型分派，审计只属于其中
+// 若干分支；改签名会让「不产生审计」的实现也得造一个空返回值，并打断既有测试里那些
+// 只关心正文改写的假实现。
+type OverrideAuditSource interface {
+	OverrideAuditEntries() []map[string]any
+}
+
+// CacheTTLResolver 由 OverrideApplier 实现**额外**提供：本次请求解析出的缓存 TTL。
+//
+// 为什么必须由覆写实现提供：TTL 的解析（密钥偏好 ?? 供应商偏好，forwarder.ts:774）与正文里的
+// `cache_control.ttl` 是同一个决定的两半，另一半是出站 `anthropic-beta` 头（forwarder.ts:8829）。
+// 两处各解析一次迟早分叉：正文写了 1h、头没补依赖标记，上游会按 5m 缓存。
+type CacheTTLResolver interface {
+	ResolvedCacheTTL(provider Provider) string
+}
+
 // ModelRedirect 是一次生效的模型重定向。
 type ModelRedirect struct {
 	Original string
@@ -169,6 +209,12 @@ type Plan struct {
 	ClientStream bool
 	// RequestTimeout 是本次尝试的总超时；0 表示不限。
 	RequestTimeout time.Duration
+	// OverrideSpecialSettings 是本次尝试中供应商级参数覆写产生的审计条目
+	// （Node 的 provider_parameter_override / gemini_google_search_override）。
+	//
+	// 它与整流器条目走同一条终态追加通道（见 dataplane 的 specialSettingsAppendEntries）：
+	// 产生在尝试循环里（每次尝试重算），但只有到终态才落库。
+	OverrideSpecialSettings []map[string]any
 }
 
 // Request 把计划转换为拨号层请求。
@@ -337,6 +383,18 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 			return nil, fmt.Errorf("forward: 供应商参数覆写失败: %w", err)
 		}
 		body = applied
+		// 审计与正文同源：条目在 Apply 里随改写一起决定，这里紧接着取回（下次尝试会覆盖）。
+		if source, ok := in.Overrides.(OverrideAuditSource); ok {
+			plan.OverrideSpecialSettings = source.OverrideAuditEntries()
+		}
+	}
+	// 缓存 TTL 的一头一尾：正文里的 cache_control.ttl 由上一步写，出站 anthropic-beta 头在这里补。
+	// 两者取同一个解析结果，故不依赖调用方是否单独设过 PlanFacts.CacheTTL1h。
+	cacheTTL1h := in.CacheTTL1h
+	if in.Overrides != nil {
+		if resolver, ok := in.Overrides.(CacheTTLResolver); ok && resolver.ResolvedCacheTTL(provider) == "1h" {
+			cacheTTL1h = true
+		}
 	}
 	// include_usage 补齐：Node 把它放在供应商覆写与 final-phase 过滤器之后（forwarder.ts:3743），
 	// 是出站正文的最后一步改写（见 openai_chat_usage_options.go）。
@@ -358,7 +416,7 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		ClientHeaders:     in.Client.Headers,
 		Provider:          provider,
 		BaseURL:           baseURL,
-		CacheTTL1h:        in.CacheTTL1h,
+		CacheTTL1h:        cacheTTL1h,
 		ClientUserAgent:   in.ClientUserAgent,
 		FilteredUserAgent: in.FilteredUserAgent,
 		UserAgentModified: in.UserAgentModified,
@@ -393,6 +451,18 @@ func buildGeminiPassthroughPlan(in PlanInput, baseURL string) (*Plan, error) {
 	}
 	if in.Client.HasBody {
 		plan.Body = in.Client.Body
+	}
+	// gemini 一族不走通用正文改写路径（本函数在 BuildPlan 早期就返回），所以覆写在这里单独施加：
+	// Node 的 googleSearch 注入/移除也只存在于 gemini 原生透传分支（forwarder.ts:3274）。
+	if in.Overrides != nil && len(plan.Body) > 0 {
+		applied, err := in.Overrides.Apply(in.Target.Provider, convert.ProtocolGemini, plan.Body)
+		if err != nil {
+			return nil, fmt.Errorf("forward: 供应商参数覆写失败: %w", err)
+		}
+		plan.Body = applied
+		if source, ok := in.Overrides.(OverrideAuditSource); ok {
+			plan.OverrideSpecialSettings = source.OverrideAuditEntries()
+		}
 	}
 	plan.ContentLength = int64(len(plan.Body))
 	plan.Headers = BuildUpstreamHeaders(HeaderInput{
