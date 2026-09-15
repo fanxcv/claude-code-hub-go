@@ -71,6 +71,9 @@ func (h *Handler) writeForwardResult(
 		}
 	}
 	body := result.Body
+	// 响应修复器（Node 的 response-fixer）：修的是**上游线**字节，故必须早于协议转换——
+	// 惰性 `chat.completion.chunk` 帧的判定就依赖「字节还是上游方言」这个前提。
+	body = h.fixNonStreamBody(ctx, state, result.Headers, body)
 	converted := false
 	switch {
 	case state == nil:

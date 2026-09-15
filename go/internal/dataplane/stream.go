@@ -38,6 +38,9 @@ func (h *Handler) pumpStream(
 	state *RequestState,
 ) {
 	stream := result.Stream
+	// 响应修复器（流式分支）：同样在协议转换**之前**动字节，且按「完整行」切分——
+	// 一句帧可能被上游切在两个 chunk 之间，逐块修会把半个 JSON 当完整载荷补括号。
+	fixer := h.newResponseFixStream(request.Context(), state, result.Headers)
 	// 响应侧方言回译：上游说的可能是目标线方言，客户端按自己的方言解析。转换在建 spool 之前
 	// 建好，因为喂给 spool 的必须是**客户端可见字节**（与 Node 的客户端可见文本同一口径）。
 	var converter *convert.StreamPipe
@@ -129,19 +132,37 @@ func (h *Handler) pumpStream(
 		count, err := stream.Read(buffer)
 		if count > 0 {
 			payload := buffer[:count]
+			if fixer != nil {
+				// 修复器按行边界吐出：本块未构成完整行时返回空，此时不往下走（不缓冲正文）。
+				payload = fixer.Write(payload)
+			}
 			if converter != nil {
 				// 逐帧回译：本块尚未构成完整帧时产出为空，不缓冲正文。
-				payload = converter.Push(buffer[:count])
+				payload = converter.Push(payload)
 			}
 			if !emit(payload) {
 				return
 			}
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) && converter != nil {
-				// 上游正常结束：吐净残留帧并补发客户端线的终止事件。
-				if tail := converter.Flush(); !emit(tail) {
-					return
+			if errors.Is(err, io.EOF) {
+				// 上游正常结束：先吐净修复器的残留字节（未以换行结尾的最后一行），
+				// 再让转换器吐净残留帧并补发客户端线的终止事件。
+				if fixer != nil {
+					if tail := fixer.Flush(); len(tail) > 0 {
+						if converter != nil {
+							tail = converter.Push(tail)
+						}
+						if !emit(tail) {
+							return
+						}
+					}
+					h.recordResponseFixAudit(request.Context(), state, fixer.Audit())
+				}
+				if converter != nil {
+					if tail := converter.Flush(); !emit(tail) {
+						return
+					}
 				}
 			}
 			if !errors.Is(err, io.EOF) {

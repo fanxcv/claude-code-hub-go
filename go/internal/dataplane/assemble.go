@@ -391,6 +391,10 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		// 聚合式模型列表（`/v1/models` 一族）需读全量供应商/分组/系统时区，只存在于存储层；
 		// 不装配时这五条不注册并回退 Node（见 Options.ModelCatalog 的注释）。
 		ModelCatalog: StoreModelCatalog{Pools: options.Pools},
+		// 响应修复器的审计落库：终态之后的补写，只需分道（见 store.AppendSpecialSettings）。
+		ResponseFix: ResponseFixWiring{
+			AppendSpecialSettings: options.Pools.AppendSpecialSettings,
+		},
 		Settlers: func(state *RequestState) Settler {
 			return &storeSettler{
 				settler: settler,

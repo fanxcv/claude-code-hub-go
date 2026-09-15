@@ -218,6 +218,10 @@ type Options struct {
 	// 分组与系统时区，这些只存在于存储层；没有它就只能把上游某家的模型列表原样透传，
 	// 那是错的行为，不如不接管。生产装配点见 assemble.go 的 Options 构造处。
 	ModelCatalog ModelCatalog
+	// ResponseFix 是响应修复器的接线面（`enable_response_fixer` 的实际消费方）。
+	//
+	// 零值表示审计不落库：正文仍按设置修复，只是修复事实不留痕（见 ResponseFixWiring）。
+	ResponseFix ResponseFixWiring
 }
 
 // Handler 是 `/v1` 数据面处理器。并发安全：所有可变状态都是每请求本地的。
