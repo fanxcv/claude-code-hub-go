@@ -27,9 +27,9 @@ import (
 //   - 三个定时类型的数据现算：internal/notify（逐条对照见该包 doc.go）。
 //
 // 登记差异：
-//  1. 正文仍是 webhook_deliver.go 的简化文案（见该文件头「登记进差异白名单的一项」）；
-//     binding 的 templateOverride 同样未参与拼装（Node 会覆盖模板）。渠道、字段名、
-//     可解析性与 Node 一致。
+//  1. 正文的两级拼装（构建器 + 五家渲染器）在 internal/notify 的 message.go / render.go，
+//     本文件只把 data 与绑定级 templateOverride 透给投递层（Node 在 notification-queue
+//     里现构消息，Go 侧把「构消息」下沉到渲染入口，保证测试推送与真实投递同一条路径）。
 //  2. 一次投递只发一个 HTTP 请求（MaxAttempts=1）：Bull 的 attempts/backoff 由
 //     jobs.NotifyScheduler 在任务层实现，避免两层重试把一次失败放大成九次。
 //  3. 成本预警一次算出的多条告警**都会发出**（每份一个 HTTP），而 Node 的
@@ -103,13 +103,40 @@ func (d *NotificationDelivery) Deliver(
 		return jobs.NotifyDeliveryResult{Skipped: true}, nil
 	}
 
+	// 绑定级模板覆盖（Node 的 getBindingById 后取 templateOverride）：
+	// 读不到、或绑定已被删掉都不影响投递，只少了覆盖（Node 的 `binding?.templateOverride ?? null`）。
+	templateOverride := d.bindingTemplateOverride(ctx, request.BindingID)
+
 	result := adminSendWebhook(ctx, target, webhookSendOptions{
 		NotificationType: notificationType,
 		Timezone:         timezone,
 		MaxAttempts:      1,
 		Data:             request.Data,
+		TemplateOverride: templateOverride,
 	})
 	return notifyDeliveryResultOf(result), nil
+}
+
+// bindingTemplateOverride 取绑定上的模板覆盖；任何读取问题都只记 warn 并返回空（不阻断投递）。
+func (d *NotificationDelivery) bindingTemplateOverride(
+	ctx context.Context,
+	bindingID int64,
+) json.RawMessage {
+	if bindingID == 0 || d.pools == nil {
+		return nil
+	}
+	binding, err := d.pools.AdminNotificationBindingByID(ctx, bindingID)
+	if err != nil {
+		d.logger.Warn("notification_binding_read_failed", map[string]any{
+			"bindingId": bindingID,
+			"error":     err.Error(),
+		})
+		return nil
+	}
+	if binding == nil {
+		return nil
+	}
+	return binding.TemplateOverride
 }
 
 // notifyDeliveryResultOf 把投递结果投影成调度器要的形状。

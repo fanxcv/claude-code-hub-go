@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fanxcv/claude-code-hub-go/go/internal/notify"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
@@ -23,18 +24,15 @@ import (
 //
 // 唯一真源：
 //   - 端点 URL 与签名：src/lib/webhook/notifier.ts（getEndpointUrl / withDingtalkSignature）
-//   - 请求体形状：src/lib/webhook/renderers/*（五家各一种信封）
+//   - **正文**：src/lib/webhook/templates/*.ts（四个构建器 + test-messages）与
+//     src/lib/webhook/renderers/*.ts（五家信封与排版）——已移植到 internal/notify 的
+//     message.go / render.go，本文件只负责把构建好的消息交给渲染器。
 //   - 重试：src/lib/webhook/utils/retry.ts（attempt 上限即 maxRetries，退避 baseDelay*2^(n-1)）
 //   - 响应判定：src/lib/webhook/notifier.ts:checkResponse（errcode/code/ok 三族）
 //
-// **登记进差异白名单的一项（重要）**：Node 的正文由「消息构建器 + 渲染器」两级拼装
-// （templates/test-messages.ts 调 circuit-breaker / cost-alert / daily-leaderboard /
-// cache-hit-rate-alert 四个 builder，再经五家渲染器成为 markdown / HTML / 卡片 JSON）。
-// Go 侧本 lane 只对齐**信封与端点语义**（msgtype / msg_type / chat_id / 自定义模板插值），
-// 正文文案是简化版（标题 + 与通知类型相关的几行示例字段）。因此：
-//   - 对管理 API 的调用方：无差异（该端点只回 {latencyMs}，失败时才回 Problem）。
-//   - 对 webhook 接收端：收到的正文文案与 Node 不同，但渠道、字段名、可解析性一致。
-// 若日后要逐字对齐，只需替换本文件的 buildWebhookBody，接口不变。
+// 登记差异：正文里 Node 的 emoji（标题图标、奖牌、用量指示灯）在 Go 侧省略，
+// 依据仓库指南 §8 的禁 emoji 约定；其余（标题、字段、单位、顺序、名次、截断）逐条对齐。
+// 详见 internal/notify/message.go 的文件头。
 
 // webhookSendOptions 一次投递的输入。
 type webhookSendOptions struct {
@@ -44,8 +42,21 @@ type webhookSendOptions struct {
 	Timezone string
 	// MaxAttempts 是**总尝试次数**（Node 的 withRetry 语义：attempt <= maxRetries）。
 	MaxAttempts int
-	// Data 是模板变量来源（自定义模板插值用），可为 nil。
+	// Data 是通知数据（Node 的 options.data）：四个构建器据此产出正文，
+	// 也是自定义模板 {{...}} 的取值来源；为空表示走「测试推送」的示例数据。
 	Data json.RawMessage
+	// TemplateOverride 是绑定级模板覆盖（Node 的 options.templateOverride，只在 custom 渠道消费）。
+	TemplateOverride json.RawMessage
+	// Now 是消息时刻（Node 的 new Date()）；零值表示用真实时钟。
+	Now time.Time
+}
+
+// now 取消息时刻。
+func (o webhookSendOptions) now() time.Time {
+	if o.Now.IsZero() {
+		return time.Now()
+	}
+	return o.Now
 }
 
 // webhookSendResult 一次投递的结果（形状对应 repository 的 WebhookTestResult）。
@@ -208,145 +219,44 @@ func webhookWithDingtalkSignature(rawURL, secret string) (string, error) {
 	return parsed.String(), nil
 }
 
-// buildWebhookBody 按渠道产出请求体与附加头（复刻五家渲染器的信封）。
+// buildWebhookBody 把一条通知渲染成请求体与附加头。
+//
+// 两级拼装与 Node 同形：先把数据建成结构化消息（notify.BuildDeliveryMessage——
+// data 为空时走测试消息），再交五家渲染器（notify.RenderWebhook）。
+// 渲染器不碰端点与签名，那两件在本文件的后半段。
 func buildWebhookBody(
 	target store.AdminWebhookTarget,
 	options webhookSendOptions,
 ) ([]byte, map[string]string, error) {
-	text := webhookTestText(options.NotificationType, options.Timezone)
-
-	switch target.ProviderType {
-	case "wechat":
-		return webhookBodyOf(map[string]any{
-			"msgtype":  "markdown",
-			"markdown": map[string]any{"content": text},
-		})
-	case "dingtalk":
-		return webhookBodyOf(map[string]any{
-			"msgtype": "markdown",
-			"markdown": map[string]any{
-				"title": webhookTestTitle(options.NotificationType),
-				"text":  text,
-			},
-		})
-	case "feishu":
-		return webhookBodyOf(map[string]any{
-			"msg_type": "interactive",
-			"card": map[string]any{
-				"schema": "2.0",
-				"header": map[string]any{
-					"title":    map[string]any{"tag": "plain_text", "content": webhookTestTitle(options.NotificationType)},
-					"template": webhookFeishuTemplate(options.NotificationType),
-				},
-				"body": map[string]any{
-					"elements": []any{map[string]any{"tag": "markdown", "content": text}},
-				},
-			},
-		})
-	case "telegram":
-		if strings.TrimSpace(webhookDeref(target.TelegramChatID)) == "" {
-			return nil, nil, errors.New("Telegram Chat ID 不能为空")
-		}
-		return webhookBodyOf(map[string]any{
-			"chat_id":                  strings.TrimSpace(*target.TelegramChatID),
-			"text":                     text,
-			"parse_mode":               "HTML",
-			"disable_web_page_preview": true,
-		})
-	case "custom":
-		body, err := webhookCustomBody(target.CustomTemplate, options)
-		if err != nil {
-			return nil, nil, err
-		}
-		return body, webhookCustomHeaders(target.CustomHeaders), nil
-	default:
-		return nil, nil, fmt.Errorf("不支持的推送渠道: %s", target.ProviderType)
-	}
-}
-
-// webhookBodyOf 把「对象 -> JSON 字节」与「无附加头」合成 buildWebhookBody 的三返回值。
-func webhookBodyOf(body map[string]any) ([]byte, map[string]string, error) {
-	payload, err := adminMarshalJSON(body)
+	message, err := notify.BuildDeliveryMessage(
+		options.NotificationType,
+		options.Data,
+		options.Timezone,
+		options.now(),
+	)
 	if err != nil {
 		return nil, nil, err
 	}
-	return payload, nil, nil
-}
 
-// webhookCustomBody 复刻 CustomRenderer：用模板变量替换 `{{key}}` 后再序列化。
-//
-// 变量表只实现通用五项（timestamp / timestamp_local / title / level / sections）与四个通知类型的
-// 少数直观字段；模板里出现未实现的占位符时**原样保留**（Node 侧会替换成实际值）。
-// 这条差异已登记在文件头。
-func webhookCustomBody(template json.RawMessage, options webhookSendOptions) ([]byte, error) {
-	if len(template) == 0 || string(template) == "null" {
-		return nil, errors.New("自定义 Webhook 模板不能为空")
+	rendered, err := notify.RenderWebhook(
+		target.ProviderType,
+		message,
+		notify.WebhookRenderConfig{
+			CustomTemplate: target.CustomTemplate,
+			CustomHeaders:  target.CustomHeaders,
+			TelegramChatID: webhookDeref(target.TelegramChatID),
+		},
+		notify.WebhookRenderOptions{
+			NotificationType: options.NotificationType,
+			Data:             options.Data,
+			TemplateOverride: options.TemplateOverride,
+			Timezone:         options.Timezone,
+		},
+	)
+	if err != nil {
+		return nil, nil, err
 	}
-	var decoded any
-	if err := json.Unmarshal(template, &decoded); err != nil {
-		return nil, errors.New("自定义 Webhook 模板必须是 JSON 对象")
-	}
-	object, ok := decoded.(map[string]any)
-	if !ok {
-		return nil, errors.New("自定义 Webhook 模板必须是 JSON 对象")
-	}
-	variables := webhookTemplateVariables(options)
-	interpolated := webhookInterpolate(object, variables)
-	return adminMarshalJSON(interpolated)
-}
-
-// webhookInterpolate 递归替换字符串节点里的占位符。
-func webhookInterpolate(value any, variables map[string]string) any {
-	switch typed := value.(type) {
-	case string:
-		result := typed
-		for key, replacement := range variables {
-			result = strings.ReplaceAll(result, key, replacement)
-		}
-		return result
-	case []any:
-		items := make([]any, 0, len(typed))
-		for _, item := range typed {
-			items = append(items, webhookInterpolate(item, variables))
-		}
-		return items
-	case map[string]any:
-		result := make(map[string]any, len(typed))
-		for key, item := range typed {
-			result[key] = webhookInterpolate(item, variables)
-		}
-		return result
-	default:
-		return value
-	}
-}
-
-// webhookTemplateVariables 产出通用占位符的值（见 webhookCustomBody 的差异说明）。
-func webhookTemplateVariables(options webhookSendOptions) map[string]string {
-	now := time.Now()
-	timezone := options.Timezone
-	if timezone == "" {
-		timezone = "UTC"
-	}
-	return map[string]string{
-		"{{timestamp}}":       now.UTC().Format(time.RFC3339),
-		"{{timestamp_local}}": webhookFormatInZone(now, timezone),
-		"{{title}}":           webhookTestTitle(options.NotificationType),
-		"{{level}}":           webhookTestLevel(options.NotificationType),
-		"{{sections}}":        webhookTestText(options.NotificationType, timezone),
-	}
-}
-
-// webhookCustomHeaders 取自定义头（Node 侧直接透传 customHeaders）。
-func webhookCustomHeaders(raw json.RawMessage) map[string]string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil
-	}
-	var headers map[string]string
-	if err := json.Unmarshal(raw, &headers); err != nil {
-		return nil
-	}
-	return headers
+	return rendered.Body, rendered.Headers, nil
 }
 
 // checkWebhookResponse 复刻 checkResponse 的三族判定（custom 只看 2xx）。
@@ -408,83 +318,6 @@ func checkWebhookResponse(providerType string, payload []byte) error {
 	default:
 		return nil
 	}
-}
-
-// webhookTestTitle 是测试消息标题（简化版文案，见文件头差异说明）。
-func webhookTestTitle(notificationType string) string {
-	switch notificationType {
-	case "circuit_breaker":
-		return "熔断告警测试"
-	case "daily_leaderboard":
-		return "每日排行榜测试"
-	case "cost_alert":
-		return "成本预警测试"
-	case "cache_hit_rate_alert":
-		return "缓存命中率异常告警测试"
-	default:
-		return "通知测试"
-	}
-}
-
-// webhookTestLevel 对应 StructuredMessage.header.level 的三档（测试消息用 warning/info）。
-func webhookTestLevel(notificationType string) string {
-	switch notificationType {
-	case "circuit_breaker", "cost_alert", "cache_hit_rate_alert":
-		return "warning"
-	default:
-		return "info"
-	}
-}
-
-// webhookTestText 拼一段与渠道无关的纯文本正文（markdown 与 Telegram 的 HTML 共用）。
-func webhookTestText(notificationType, timezone string) string {
-	if timezone == "" {
-		timezone = "UTC"
-	}
-	lines := []string{"## " + webhookTestTitle(notificationType), ""}
-	switch notificationType {
-	case "circuit_breaker":
-		lines = append(lines,
-			"**供应商**: 测试供应商 (ID 0)",
-			"**连续失败**: 3",
-			"**最近错误**: Connection timeout (示例错误)",
-		)
-	case "daily_leaderboard":
-		lines = append(lines,
-			"**日期**: "+time.Now().Format("2006-01-02"),
-			"- **用户A**: 150 请求 / $12.50 / 50000 tokens",
-			"- **用户B**: 120 请求 / $10.20 / 40000 tokens",
-		)
-	case "cost_alert":
-		lines = append(lines,
-			"**目标**: 测试用户",
-			"**当前消费**: $80.00 / $100.00 (阈值 80%)",
-		)
-	case "cache_hit_rate_alert":
-		lines = append(lines,
-			"**窗口**: 5m",
-			"**测试供应商 / test-model**: 命中率 12% (基线 45%)",
-		)
-	}
-	lines = append(lines, "", webhookFormatInZone(time.Now(), timezone))
-	return strings.Join(lines, "\n")
-}
-
-// webhookFeishuTemplate 是卡片头部的配色（Node 按 level 取色）。
-func webhookFeishuTemplate(notificationType string) string {
-	if webhookTestLevel(notificationType) == "warning" {
-		return "orange"
-	}
-	return "blue"
-}
-
-// webhookFormatInZone 复刻 formatDateTime（yyyy/MM/dd HH:mm:ss，指定时区）。
-func webhookFormatInZone(at time.Time, timezone string) string {
-	location, err := time.LoadLocation(timezone)
-	if err != nil {
-		location = time.UTC
-	}
-	return at.In(location).Format("2006/01/02 15:04:05")
 }
 
 // webhookDeref 读可空字符串（nil 当空串）。

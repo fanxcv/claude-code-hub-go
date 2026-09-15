@@ -110,11 +110,13 @@ func TestWebhookDeliveryEnvelopes(t *testing.T) {
 				if err := json.Unmarshal([]byte(harness.last()), &body); err != nil {
 					t.Fatalf("请求体不是 JSON: %v", err)
 				}
-				if body["text"] != webhookTestTitle("circuit_breaker") {
+				// 模板变量取的是**构建器**（templates/test-messages.ts）产出的真实字段，
+				// 不再是简化文案：熔断测试消息的标题与级别由 buildCircuitBreakerMessage 给出。
+				if body["text"] != "供应商熔断告警" {
 					t.Fatalf("模板插值未生效：%v", body["text"])
 				}
-				if body["level"] != "warning" {
-					t.Fatalf("level 变量应为 warning，实际 %v", body["level"])
+				if body["level"] != "error" {
+					t.Fatalf("level 变量应为 error，实际 %v", body["level"])
 				}
 				if auth, _ := harness.lastAuth.Load().(string); auth != "secret-token" {
 					t.Fatalf("自定义头未透传，实际 %q", auth)

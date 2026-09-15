@@ -1,0 +1,457 @@
+{
+  "circuit_breaker": {
+    "header": {
+      "title": "供应商熔断告警",
+      "icon": "",
+      "level": "error"
+    },
+    "sections": [
+      {
+        "content": [
+          {
+            "type": "quote",
+            "value": "供应商 供应商甲 (ID: 7) 已触发熔断保护"
+          }
+        ]
+      },
+      {
+        "title": "详细信息",
+        "content": [
+          {
+            "type": "fields",
+            "items": [
+              {
+                "label": "失败次数",
+                "value": "5 次"
+              },
+              {
+                "label": "预计恢复",
+                "value": "2026/01/02 15:34:05"
+              },
+              {
+                "label": "最后错误",
+                "value": "connection timeout"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "footer": [
+      {
+        "content": [
+          {
+            "type": "text",
+            "value": "熔断器将在预计时间后自动恢复"
+          }
+        ]
+      }
+    ],
+    "timestamp": "2026-01-02T15:04:05.000Z"
+  },
+  "circuit_breaker_endpoint": {
+    "header": {
+      "title": "端点熔断告警",
+      "icon": "",
+      "level": "error"
+    },
+    "sections": [
+      {
+        "content": [
+          {
+            "type": "quote",
+            "value": "供应商 供应商乙 的端点 (ID: 42) 已触发熔断保护"
+          }
+        ]
+      },
+      {
+        "title": "详细信息",
+        "content": [
+          {
+            "type": "fields",
+            "items": [
+              {
+                "label": "失败次数",
+                "value": "3 次"
+              },
+              {
+                "label": "预计恢复",
+                "value": "2026/01/02 15:34:05"
+              },
+              {
+                "label": "端点ID",
+                "value": "42"
+              },
+              {
+                "label": "端点地址",
+                "value": "https://relay.example.com/v1"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "footer": [
+      {
+        "content": [
+          {
+            "type": "text",
+            "value": "熔断器将在预计时间后自动恢复"
+          }
+        ]
+      }
+    ],
+    "timestamp": "2026-01-02T15:04:05.000Z"
+  },
+  "cost_alert": {
+    "header": {
+      "title": "成本预警提醒",
+      "icon": "",
+      "level": "warning"
+    },
+    "sections": [
+      {
+        "content": [
+          {
+            "type": "quote",
+            "value": "供应商 供应商丙 的消费已达到预警阈值"
+          }
+        ]
+      },
+      {
+        "title": "消费详情",
+        "content": [
+          {
+            "type": "fields",
+            "items": [
+              {
+                "label": "当前消费",
+                "value": "$82.5000"
+              },
+              {
+                "label": "配额限制",
+                "value": "$100.0000"
+              },
+              {
+                "label": "使用比例",
+                "value": "82.5%"
+              },
+              {
+                "label": "剩余额度",
+                "value": "$17.5000"
+              },
+              {
+                "label": "统计周期",
+                "value": "本月"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "footer": [
+      {
+        "content": [
+          {
+            "type": "text",
+            "value": "请注意控制消费"
+          }
+        ]
+      }
+    ],
+    "timestamp": "2026-01-02T15:04:05.000Z"
+  },
+  "daily_leaderboard": {
+    "header": {
+      "title": "过去24小时用户消费排行榜",
+      "icon": "",
+      "level": "info"
+    },
+    "sections": [
+      {
+        "content": [
+          {
+            "type": "quote",
+            "value": "统计时间: 2026-01-02"
+          }
+        ]
+      },
+      {
+        "title": "排名情况",
+        "content": [
+          {
+            "type": "list",
+            "style": "ordered",
+            "items": [
+              {
+                "icon": "",
+                "primary": "用户A (ID: 1)",
+                "secondary": "消费 $12.5000 · 请求 150 次 · Token 50.00K"
+              },
+              {
+                "icon": "",
+                "primary": "用户B (ID: 2)",
+                "secondary": "消费 $10.2000 · 请求 120 次 · Token 1.50M"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "content": [
+          {
+            "type": "divider"
+          }
+        ]
+      },
+      {
+        "title": "总览",
+        "content": [
+          {
+            "type": "text",
+            "value": "总请求 270 次 · 总消费 $22.7000"
+          }
+        ]
+      }
+    ],
+    "timestamp": "2026-01-02T15:04:05.000Z"
+  },
+  "cache_hit_rate_alert": {
+    "header": {
+      "title": "缓存命中率异常告警",
+      "icon": "[CACHE]",
+      "level": "warning"
+    },
+    "sections": [
+      {
+        "content": [
+          {
+            "type": "quote",
+            "value": "检测到缓存命中率异常（1 条）"
+          }
+        ]
+      },
+      {
+        "title": "检测窗口",
+        "content": [
+          {
+            "type": "fields",
+            "items": [
+              {
+                "label": "窗口",
+                "value": "5m (5 分钟)"
+              },
+              {
+                "label": "开始",
+                "value": "2026/01/02 14:59:05"
+              },
+              {
+                "label": "结束",
+                "value": "2026/01/02 15:04:05"
+              },
+              {
+                "label": "抑制数量",
+                "value": "2"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "阈值",
+        "content": [
+          {
+            "type": "fields",
+            "items": [
+              {
+                "label": "绝对下限(absMin)",
+                "value": "5.0%"
+              },
+              {
+                "label": "绝对跌幅(dropAbs)",
+                "value": "10.0%"
+              },
+              {
+                "label": "相对跌幅(dropRel)",
+                "value": "30.0%"
+              },
+              {
+                "label": "最小样本",
+                "value": "req>=20, tok>=0"
+              },
+              {
+                "label": "冷却",
+                "value": "30 分钟"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "异常列表",
+        "content": [
+          {
+            "type": "list",
+            "style": "bullet",
+            "items": [
+              {
+                "primary": "供应商甲 / test-model",
+                "secondary": "当前(eligible): 12.0% (req=100, tok=10000)\n基线(historical eligible): 45.0% (req=100, tok=10000)\n绝对跌幅: 33.0%\n相对变化: -73.3%"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "timestamp": "2026-01-02T15:04:05.000Z"
+  },
+  "render.wechat": {
+    "msgtype": "markdown",
+    "markdown": {
+      "content": "## 成本预警提醒\n\n> 供应商 供应商丙 的消费已达到预警阈值\n\n**消费详情**\n当前消费: $82.5000\n配额限制: $100.0000\n使用比例: 82.5%\n剩余额度: $17.5000\n统计周期: 本月\n\n---\n请注意控制消费\n\n2026/01/02 15:04:05"
+    }
+  },
+  "render.dingtalk": {
+    "msgtype": "markdown",
+    "markdown": {
+      "title": "成本预警提醒",
+      "text": "### 成本预警提醒\n\n> 供应商 供应商丙 的消费已达到预警阈值\n\n**消费详情**\n- 当前消费: $82.5000\n- 配额限制: $100.0000\n- 使用比例: 82.5%\n- 剩余额度: $17.5000\n- 统计周期: 本月\n\n---\n请注意控制消费\n\n2026/01/02 15:04:05"
+    }
+  },
+  "render.feishu": {
+    "msg_type": "interactive",
+    "card": {
+      "schema": "2.0",
+      "header": {
+        "title": {
+          "tag": "plain_text",
+          "content": "成本预警提醒"
+        },
+        "template": "orange"
+      },
+      "body": {
+        "elements": [
+          {
+            "tag": "markdown",
+            "content": "> 供应商 供应商丙 的消费已达到预警阈值"
+          },
+          {
+            "tag": "markdown",
+            "content": "**消费详情**"
+          },
+          {
+            "tag": "column_set",
+            "flex_mode": "bisect",
+            "columns": [
+              {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [
+                  {
+                    "tag": "markdown",
+                    "content": "**当前消费**\n$82.5000"
+                  }
+                ]
+              },
+              {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [
+                  {
+                    "tag": "markdown",
+                    "content": "**配额限制**\n$100.0000"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "column_set",
+            "flex_mode": "bisect",
+            "columns": [
+              {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [
+                  {
+                    "tag": "markdown",
+                    "content": "**使用比例**\n82.5%"
+                  }
+                ]
+              },
+              {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [
+                  {
+                    "tag": "markdown",
+                    "content": "**剩余额度**\n$17.5000"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "column_set",
+            "flex_mode": "bisect",
+            "columns": [
+              {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [
+                  {
+                    "tag": "markdown",
+                    "content": "**统计周期**\n本月"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "tag": "hr"
+          },
+          {
+            "tag": "markdown",
+            "content": "请注意控制消费"
+          },
+          {
+            "tag": "markdown",
+            "content": "2026/01/02 15:04:05",
+            "text_size": "notation"
+          }
+        ]
+      }
+    }
+  },
+  "render.telegram": {
+    "chat_id": "-100123",
+    "text": "<b>成本预警提醒</b>\n\n&gt; 供应商 供应商丙 的消费已达到预警阈值\n\n<b>消费详情</b>\n<b>当前消费</b>: $82.5000\n<b>配额限制</b>: $100.0000\n<b>使用比例</b>: 82.5%\n<b>剩余额度</b>: $17.5000\n<b>统计周期</b>: 本月\n\n---\n请注意控制消费\n\n2026/01/02 15:04:05",
+    "parse_mode": "HTML",
+    "disable_web_page_preview": true
+  },
+  "render.custom": {
+    "text": "目标模板 成本预警提醒"
+  },
+  "render.custom.override": {
+    "target_name": "张三",
+    "usage": "80.0%"
+  },
+  "vars.cost_alert": {
+    "{{timestamp}}": "2026-01-02T15:04:05.000Z",
+    "{{timestamp_local}}": "2026/01/02 15:04:05",
+    "{{title}}": "成本预警提醒",
+    "{{level}}": "warning",
+    "{{sections}}": "> 供应商 供应商丙 的消费已达到预警阈值\n\n消费详情\n当前消费: $82.5000\n配额限制: $100.0000\n使用比例: 82.5%\n剩余额度: $17.5000\n统计周期: 本月\n\n---\n请注意控制消费",
+    "{{target_type}}": "user",
+    "{{target_name}}": "张三",
+    "{{current_cost}}": "80",
+    "{{quota_limit}}": "100",
+    "{{usage_percent}}": "80.0"
+  },
+  "sections.cost_alert": "> 供应商 供应商丙 的消费已达到预警阈值\n\n消费详情\n当前消费: $82.5000\n配额限制: $100.0000\n使用比例: 82.5%\n剩余额度: $17.5000\n统计周期: 本月\n\n---\n请注意控制消费"
+}
