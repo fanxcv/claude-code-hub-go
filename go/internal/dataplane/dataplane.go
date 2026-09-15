@@ -331,6 +331,11 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		}, h.logger)
 	}
 	deps.RequestContext = func(*pctx.Context) context.Context { return requestCtx }
+	// 端点因子（Node session.getEndpointPolicy().allowRawCrossProviderFallback）：只有原始透传
+	// 端点（count_tokens / responses/compact）为真，源与转发候选取的是同一个 spec.RawPassthrough
+	// （见 routes.go 的族表），故不另建一份路径表。会话守卫拿它乘系统设置才是
+	// Node `isRawCrossProviderFallbackEnabled()` 的完整值。
+	deps.EndpointRawPassthrough = spec.RawPassthrough
 	// 会话绑定结果是每请求事实，而 pctx 刻意不带会话状态：这里用「按请求的记录视图」把它
 	// 交给请求日志开行（messageContext 步骤），不引入按上下文索引的全局表。
 	sessions := newSessionCapture(deps.Sessions)

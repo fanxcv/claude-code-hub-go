@@ -57,7 +57,7 @@ func sessionStepDeps(
 	return deps, access
 }
 
-// TestSessionStepClaudeMetadataGates 钉住注入的四个门：开关、原始端点回退、协议族、Codex 形态。
+// TestSessionStepClaudeMetadataGates 钉住注入的四个门：开关、原始端点回退（两因子）、协议族、Codex 形态。
 func TestSessionStepClaudeMetadataGates(t *testing.T) {
 	settings := func(enabled bool) settingsStub {
 		return settingsStub{claudeMetadata: enabled}
@@ -124,11 +124,28 @@ func TestSessionStepClaudeMetadataGates(t *testing.T) {
 		stub := settings(true)
 		stub.allowRawFallback = true
 		deps, access := sessionStepDeps(t, body, stub, session)
+		// 两因子：设置开关 × 端点属原始透传（Node session.ts:574-582）。
+		deps.EndpointRawPassthrough = true
 		if _, err := deps.sessionStep()(newSessionStepContext(t, "/v1/messages", egress.FamilyAnthropicMessages)); err != nil {
 			t.Fatalf("步骤失败: %v", err)
 		}
 		if _, ok := access.current["metadata"]; ok {
 			t.Fatalf("原始回退却写入了 metadata: %#v", access.current)
+		}
+	})
+
+	t.Run("设置开启但端点非原始透传（/v1/messages）：照常注入", func(t *testing.T) {
+		body := map[string]any{"messages": []any{}}
+		session := &fakeBinder{result: SessionResult{SessionID: "sess-1", Sequence: 3}}
+		stub := settings(true)
+		stub.allowRawFallback = true
+		deps, access := sessionStepDeps(t, body, stub, session)
+		if _, err := deps.sessionStep()(newSessionStepContext(t, "/v1/messages", egress.FamilyAnthropicMessages)); err != nil {
+			t.Fatalf("步骤失败: %v", err)
+		}
+		metadata, ok := access.current["metadata"].(map[string]any)
+		if !ok || metadata["user_id"] != "sess-1" {
+			t.Fatalf("普通端点应照常注入 metadata.user_id: %#v", access.current)
 		}
 	})
 

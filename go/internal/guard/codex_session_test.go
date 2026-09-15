@@ -140,7 +140,9 @@ func TestSessionStepSkipsCodexCompletionForNonCodexBody(t *testing.T) {
 	}
 }
 
-// 原始透传（allowRawSession）时不动：Node 的 `!allowRawSessionContext` 同判。
+// 原始透传端点（allowRawSession）时不动：Node 的 `!allowRawSessionContext` 同判。
+//
+// allowRawSession 是两因子：设置开关 × 本端点属原始透传。
 func TestSessionStepSkipsCodexCompletionForRawSession(t *testing.T) {
 	settings := fakeSettings{}
 	settings.settings.codexCompletion = true
@@ -148,7 +150,10 @@ func TestSessionStepSkipsCodexCompletionForRawSession(t *testing.T) {
 	completer := &fakeCodexCompleter{result: completeAll("x")}
 	body := codexRequestBody()
 	factory, _ := bodyFactory(t, body)
-	deps := Deps{Settings: settings, Sessions: &fakeBinder{}, Body: factory, CodexCompletion: completer}
+	deps := Deps{
+		Settings: settings, Sessions: &fakeBinder{}, Body: factory, CodexCompletion: completer,
+		EndpointRawPassthrough: true,
+	}
 
 	ctx := newContext(t, nil, body)
 	withAuth(ctx, 3, 7, "sk-x")
@@ -157,7 +162,70 @@ func TestSessionStepSkipsCodexCompletionForRawSession(t *testing.T) {
 		t.Fatalf("不应报错: %v", err)
 	}
 	if len(completer.requests) != 0 {
-		t.Fatalf("原始透传时不该补全")
+		t.Fatalf("原始透传端点时不该补全")
+	}
+}
+
+// 两因子的四种组合：只有「设置=true 且端点属原始透传」才跳过补全。
+//
+// 根因回归：Go 曾把 `allowRawSession` 直接赋成设置值，丢掉端点因子——生产该设置为 true，
+// 于是 /v1/responses 的闸门被永久关死，prompt_cache_key 从不注入。
+func TestSessionStepCodexCompletionGateIsTwoFactor(t *testing.T) {
+	cases := []struct {
+		name               string
+		setting            bool
+		rawPassthrough     bool
+		wantCompletionRuns bool
+	}{
+		{"设置为真 + 普通端点（/v1/responses）", true, false, true},
+		{"设置为真 + 原始透传端点（count_tokens）", true, true, false},
+		{"设置为假 + 普通端点", false, false, true},
+		// 设置关闭时回退本身就不生效（Node：rawFallbackEnabled = 设置 && 端点，缺一即假），
+		// 故闸门是开的。只有两因子同时为真才跳过补全。
+		{"设置为假 + 原始透传端点（回退未启用）", false, true, true},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			settings := fakeSettings{}
+			settings.settings.codexCompletion = true
+			settings.settings.allowRawFallback = testCase.setting
+			completer := &fakeCodexCompleter{result: completeAll("01a0a2a1-c7ff-7747-81cc-4e27411e8938")}
+			body := codexRequestBody()
+			factory, access := bodyFactory(t, body)
+			deps := Deps{
+				Settings: settings, Sessions: &fakeBinder{}, Body: factory,
+				CodexCompletion:        completer,
+				EndpointRawPassthrough: testCase.rawPassthrough,
+			}
+
+			ctx := newContext(t, nil, body)
+			withAuth(ctx, 3, 7, "sk-x")
+
+			if _, err := deps.sessionStep()(ctx); err != nil {
+				t.Fatalf("不应报错: %v", err)
+			}
+			if got := len(completer.requests) == 1; got != testCase.wantCompletionRuns {
+				t.Fatalf("补全执行 = %v，期望 %v", got, testCase.wantCompletionRuns)
+			}
+			if !testCase.wantCompletionRuns {
+				return
+			}
+			// 闸门开的这条路上要有真实效果：正文、两个请求头与审计事实都得在。
+			if access.current["prompt_cache_key"] != "01a0a2a1-c7ff-7747-81cc-4e27411e8938" {
+				t.Fatalf("正文未补 prompt_cache_key: %v", access.current)
+			}
+			if got := ctx.Headers().Get("x-session-id"); got != "01a0a2a1-c7ff-7747-81cc-4e27411e8938" {
+				t.Fatalf("x-session-id 头 = %q", got)
+			}
+			completion, ok := ctx.CodexSessionCompletion()
+			if !ok {
+				t.Fatalf("审计条目未产出：闸门开的路上必须有 codex_session_id_completion")
+			}
+			if completion.Action != "completed_missing_fields" || completion.Source != "header_session_id" {
+				t.Fatalf("审计事实不符: %+v", completion)
+			}
+		})
 	}
 }
 

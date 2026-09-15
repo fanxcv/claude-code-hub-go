@@ -549,7 +549,11 @@ func TestSessionStep(t *testing.T) {
 			binder := &fakeBinder{result: SessionResult{SessionID: "sess-1", Sequence: 3}}
 			body := map[string]any{"messages": []any{}}
 			factory, _ := bodyFactory(t, body)
-			deps := Deps{Settings: settings, Sessions: binder, Body: factory}
+			// 两因子：设置开关 × 端点属原始透传（Node session.ts:574-582）。
+			deps := Deps{
+				Settings: settings, Sessions: binder, Body: factory,
+				EndpointRawPassthrough: true,
+			}
 
 			ctx := newContext(t, map[string]string{"user-agent": "claude-cli/1.0.0"}, body)
 			withAuth(ctx, 3, 7, "sk-x")

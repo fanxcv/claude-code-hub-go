@@ -391,6 +391,14 @@ type Deps struct {
 	QueryAPIKey func(*pctx.Context) string
 	// BypassRequestFilters 报告本次请求是否跳过请求过滤器（端点策略）。nil 表示不跳过。
 	BypassRequestFilters func(*pctx.Context) bool
+	// EndpointRawPassthrough 报告本次请求是否属**原始透传端点**（count_tokens 与
+	// responses/compact；对齐 Node EndpointPolicy.allowRawCrossProviderFallback）。
+	//
+	// 它是 Node `session.isRawCrossProviderFallbackEnabled()` 的**端点因子**，调用方须自行与
+	// 系统设置 allow_non_conversation_endpoint_provider_fallback 取与，才是那个两因子判定的
+	// 完整值（session.ts:574-582）。少了它就会把「设置」当成全局开关：生产该设置为 true 时，
+	// /v1/responses 这类普通端点的闸门会被永久关死。
+	EndpointRawPassthrough bool
 	// ProviderGroupTag 取选定供应商的分组标签（providers.group_tag）。
 	// pctx.ProviderSelection 只带路由必需字段，故由接线波次从供应商快照补一个取值函数；
 	// nil 表示分组绑定的过滤规则不生效。

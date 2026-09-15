@@ -20,7 +20,8 @@ import (
 // sessionStep 复刻 ProxySessionGuard.ensure 中与请求内状态有关的部分。
 //
 // 三件事：
-//  1. 按系统设置决定本次请求是否允许「原始端点跨供应商回退」，并按高并发模式设置调试工件位。
+//  1. 按系统设置与**端点策略**两因子定本次请求是否允许「原始端点跨供应商回退」，
+//     并按高并发模式设置调试工件位。
 //  2. 把会话绑定交给 SessionBinder（客户端 session id 提取、会话 id 分配与序号）。
 //  3. 不做任何落库：请求日志上下文属 messageContext 步骤。
 //
@@ -46,7 +47,9 @@ func (d Deps) sessionStep() Step {
 				// 读不到设置就按关闭处理：这是 Node 侧「设置读取失败即用保守默认值」的等价语义。
 				d.logger().Error("guard.session.settings_failed", map[string]any{"error": err.Error()})
 			} else {
-				allowRawSession = settings.AllowNonConversationEndpointProviderFallback
+				// 两因子：设置开关 × 本端点是否属原始透传（Node session.ts:574-582）。
+				// 只取设置会把闸门变成全局开关：生产该设置为 true 时 /v1/responses 永不补全。
+				allowRawSession = settings.AllowNonConversationEndpointProviderFallback && d.EndpointRawPassthrough
 				codexCompletionEnabled = settings.EnableCodexSessionIDCompletion
 				claudeMetadataEnabled = settings.EnableClaudeMetadataUserIDInjection
 				warmupInterceptEnabled = settings.InterceptAnthropicWarmupRequests
@@ -61,6 +64,10 @@ func (d Deps) sessionStep() Step {
 		// 与 Node 的差异（接线方式，不是语义）：Node 直接改 session.headers/request.message，
 		// Go 侧改的是上下文（SetHeader + storeBody），两者最终都影响出站请求。
 		// 另：Node 的 `!allowRawSession` 与「只对 Codex 请求（正文有 input 数组）生效」两个门与这里同判。
+		//
+		// allowRawSession 是**两因子**判定（Node session.ts:574-582）：
+		// 系统设置 allowNonConversationEndpointProviderFallback × 端点策略。
+		// 端点策略只对原始透传端点为真，故本字段为「非原始透传」（/v1/responses、/v1/messages 等）。
 		body, _ := d.body(ctx)
 		if codexCompletionEnabled && d.CodexCompletion != nil && !allowRawSession && hasCodexInputArray(body) {
 			d.completeCodexSession(ctx, auth.KeyID, body)
