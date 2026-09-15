@@ -195,14 +195,34 @@ func (p *Problems) WriteActionError(writer http.ResponseWriter, request *http.Re
 	if code == "" {
 		code = actionFallbackCode(action.Resource, status)
 	}
-	if p != nil && p.Logger != nil && status >= http.StatusInternalServerError {
-		// 5xx 才记原始错误：4xx 是调用方输入问题，记原始消息只会把日志变成噪声与泄漏面。
-		p.Logger.Warn("admin_action_error_500", map[string]any{
+	// 原始错误进服务端日志（脱敏后）；客户端可见的 detail 仍是公开常量，形状不变。
+	//
+	// 为什么 4xx 也记：Node 的 action 层 catch 不区分状态码，一律 logger.error 原文
+	// （actions/providers.ts:985-997）。Go 此前只在 5xx 记，于是「400 provider.action_failed、
+	// detail 恒为 Bad request」这类响应在生产日志里**没有任何成因线索**——2026-09-15 的
+	// PATCH /api/v1/providers/149（DB 已提交、撤销快照写失败）就因此无从下手。
+	//
+	// 4xx 且无底层 error 时不记：那是码表驱动的正常拒绝（不存在、校验失败），没有成因可报。
+	if p != nil && p.Logger != nil && (status >= http.StatusInternalServerError || action.Err != nil) {
+		event := "admin_action_error"
+		if status >= http.StatusInternalServerError {
+			event = "admin_action_error_500"
+		}
+		// 错误文案是自由文本，凭据以 `sk-…` / `Bearer …` / URL 内嵌 `user:pass@` 这类**形态**
+		// 出现，键名表对它无效，故用值形态脱敏（redactErrorText，与 Node 的
+		// sanitizeErrorTextForDetail 同源）。
+		text, redacted := redactErrorText(errText(action.Err))
+		fields := map[string]any{
 			"resource": action.Resource,
 			"code":     code,
 			"status":   status,
-			"error":    errText(action.Err),
-		})
+			"error":    text,
+		}
+		// redacted 标记让排障者知道「这是改写过的文案，不是上游原话」。
+		if redacted {
+			fields["redacted"] = true
+		}
+		p.Logger.Warn(event, fields)
 	}
 
 	body := problemBody{

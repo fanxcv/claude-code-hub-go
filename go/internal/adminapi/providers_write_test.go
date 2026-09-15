@@ -3,6 +3,7 @@ package adminapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -467,3 +468,118 @@ func storeOpenForCleanup(t *testing.T) (*store.Pools, error) {
 }
 
 var _ = httptest.NewRequest
+
+// TestProviderWriteUpdateUndoFailureOnRealDeps 是 2026-09-15 事故的端到端回归（真 PG）。
+//
+// 现场：PATCH /api/v1/providers/149 连吃 400 provider.action_failed，而 DB 其实已经改完——
+// 失败点是撤销快照写 Redis。当时的 Go 版本对此**两样观测都没有**：audit_log 里没有失败行，
+// 进程日志里没有成因。本用例把三件事一起钉住：400 的响应体与纯错误映射逐字节一致、
+// 有一条失败的审计行（且 details 标明 DB 已生效）、有一条含成因的 warn 日志；
+// 并直接查库确认「改动确实生效了」。
+func TestProviderWriteUpdateUndoFailureOnRealDeps(t *testing.T) {
+	pools := testPools(t)
+	audit := &recordingAudit{}
+	logger := &recordingProblemsLogger{}
+	deps := &Deps{ProviderUndoKV: failingProviderUndoKV{}, Audit: audit, Problems: NewProblems(logger)}
+	router := providerWriteRouter(t, pools, deps)
+	prefix := fmt.Sprintf("go-pwfail-%d", time.Now().UnixNano())
+	t.Cleanup(func() {
+		cleanup, err := storeOpenForCleanup(t)
+		if err != nil {
+			return
+		}
+		defer func() { _ = cleanup.Close() }()
+		writer, err := cleanup.Writer()
+		if err != nil {
+			return
+		}
+		_, _ = writer.Exec(context.Background(), `DELETE FROM providers WHERE name LIKE $1`, prefix+"%")
+	})
+
+	createBody := fmt.Sprintf(`{"name": "%s 原名", "url": "https://%s.example.com/anthropic", "key": "sk-pwfail-%s"}`,
+		prefix, prefix, prefix)
+	recorder := providerRequest(t, router, http.MethodPost, "/api/v1/providers", createBody,
+		"application/json", false)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("创建应 201，实得 %d：%s", recorder.Code, recorder.Body.String())
+	}
+	var created map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &created); err != nil {
+		t.Fatalf("解析创建响应失败: %v", err)
+	}
+	createdID := int64(created["id"].(float64))
+	target := fmt.Sprintf("/api/v1/providers/%d", createdID)
+	audit.events = nil
+
+	recorder = providerRequest(t, router, http.MethodPatch, target,
+		fmt.Sprintf(`{"name": "%s 改过的名字"}`, prefix), "application/json", false)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("撤销快照写失败应回 400（Node：写快照失败即整动作失败），实得 %d：%s",
+			recorder.Code, recorder.Body.String())
+	}
+
+	// ① 响应体不变性：与「纯错误映射」产出的信封逐字节一致（本次改动只加观测，不动回应）。
+	_, wantType, wantBody := serveProblem(t, target, func(writer http.ResponseWriter, request *http.Request) {
+		NewProblems(nil).WriteActionError(writer, request, adminActionFailure("provider", errors.New("成因")))
+	})
+	gotBody := map[string]any{}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &gotBody); err != nil {
+		t.Fatalf("失败响应不是 JSON：%v（原文 %s）", err, recorder.Body.String())
+	}
+	gotJSON, _ := json.Marshal(gotBody)
+	wantJSON, _ := json.Marshal(wantBody)
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("失败响应体应与纯错误映射一致：\n实得 %s\n期望 %s", gotJSON, wantJSON)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != wantType {
+		t.Fatalf("Content-Type = %q，期望 %q", got, wantType)
+	}
+	// 响应体里不得出现成因（撤销快照 / Redis 这类内部事实）。
+	for _, leak := range []string{"撤销", "redis", "Redis"} {
+		if strings.Contains(recorder.Body.String(), leak) {
+			t.Fatalf("失败响应体不得夹带内部成因 %q：%s", leak, recorder.Body.String())
+		}
+	}
+
+	// ② 失败审计：一条、success=false、常量 errorMessage、details 标明 DB 已生效。
+	if len(audit.events) != 1 {
+		t.Fatalf("撤销快照写失败必须落一条失败审计，实得 %d 条", len(audit.events))
+	}
+	event := audit.events[0]
+	if event.Success || event.Action != "provider.update" || event.ErrorMessage != "UPDATE_FAILED" {
+		t.Fatalf("失败审计形状不符 Node：%+v", event)
+	}
+	if event.TargetID != fmt.Sprintf("%d", createdID) || event.TargetType != "provider" {
+		t.Fatalf("失败审计目标不符：targetType=%q targetID=%q", event.TargetType, event.TargetID)
+	}
+	if event.Details["dbUpdateApplied"] != true || event.Details["undoSnapshotWritten"] != false {
+		t.Fatalf("失败审计 details 未区分「DB 已生效」与「快照未写入」：%v", event.Details)
+	}
+
+	// ③ 服务端日志含成因（这是当时最缺的一环）。
+	if len(logger.warns) != 1 || logger.events[0] != "admin_action_error" {
+		t.Fatalf("必须记一条 warn admin_action_error，实得 %v", logger.events)
+	}
+	if text, _ := logger.warns[0]["error"].(string); !strings.Contains(text, "撤销快照写入失败") {
+		t.Fatalf("日志必须点明失败环节，实得 %q", text)
+	}
+
+	// ④ 直查库：改动确实生效了（「改了却报失败」是这次事故最误导人的地方）。
+	writer, err := pools.Writer()
+	if err != nil {
+		t.Fatalf("取写入分道失败: %v", err)
+	}
+	var name string
+	if err := writer.QueryRow(context.Background(),
+		`SELECT name FROM providers WHERE id = $1`, createdID).Scan(&name); err != nil {
+		t.Fatalf("读回供应商失败: %v", err)
+	}
+	if name != prefix+" 改过的名字" {
+		t.Fatalf("撤销快照失败时 DB 仍是已提交状态，期望 %q，实得 %q", prefix+" 改过的名字", name)
+	}
+
+	// ⑤ 失败时不得回撤销头（撤销窗口并没有真的建立）。
+	if token := recorder.Header().Get("X-CCH-Undo-Token"); token != "" {
+		t.Fatalf("失败响应不得带撤销头，实得 %q", token)
+	}
+}

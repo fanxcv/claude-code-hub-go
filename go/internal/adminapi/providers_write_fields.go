@@ -1175,11 +1175,15 @@ func providerWriteKindOf(name string) string {
 }
 
 // providerEmitWriteAudit 写一条写路径审计（Node 的 emitActionAudit，category 固定 "provider"）。
+//
+// targetID <= 0 表示「失败得早、还没有 id」（创建失败时插入未成）：target_id 落 NULL，与 Node 的
+// `targetId: undefined` 同（audit.go 的 nullIfEmpty）。targetName 同为空即落 NULL。
 func providerEmitWriteAudit(
 	deps Deps,
 	request *http.Request,
 	action string,
 	targetID int64,
+	targetName string,
 	details map[string]any,
 	success bool,
 	errorMessage string,
@@ -1187,18 +1191,54 @@ func providerEmitWriteAudit(
 	if deps.Audit == nil {
 		return
 	}
+	target := ""
+	if targetID > 0 {
+		target = providerIDKey(targetID)
+	}
 	deps.Audit.Emit(request.Context(), AuditEvent{
 		Category:     "provider",
 		Principal:    providerPrincipalFrom(request),
 		Action:       action,
 		TargetType:   "provider",
-		TargetID:     providerIDKey(targetID),
+		TargetID:     target,
+		TargetName:   targetName,
 		Details:      details,
 		IP:           auditClientIP(request.Context(), deps.Store, request),
 		UserAgent:    request.UserAgent(),
 		Success:      success,
 		ErrorMessage: errorMessage,
 	})
+}
+
+// providerWriteFailure 作答一次写路径失败：落失败审计 + 记成因日志 + 按 action 错误表回 400。
+//
+// 为什么把两件事绑一起：Node 的 action 层是「catch 里既 logger.error 又 emitActionAudit」
+// （actions/providers.ts:985-997），而 Go 侧此前两样都没有——写失败只回一个 detail 恒为
+// "Bad request" 的 400，audit_log 与进程日志里都查不到成因（2026-09-15 的 PATCH
+// /api/v1/providers/149：DB 已提交、撤销快照写失败，全程无从下手）。绑成一个函数是为了让
+// 「审计」与「回应」不再能只写一半。
+//
+// cause 只进服务端日志（WriteActionError 脱敏后记），不进响应体与审计行：前者是公开文案
+// （Node 的 publicActionErrorDetail），后者对管理面多角色可见。
+func providerWriteFailure(
+	deps Deps,
+	writer http.ResponseWriter,
+	request *http.Request,
+	action string,
+	targetID int64,
+	targetName string,
+	errorMessage string,
+	details map[string]any,
+	cause error,
+) {
+	providerEmitWriteAudit(deps, request, action, targetID, targetName, details, false, errorMessage)
+	adminProblemWriter(deps).WriteActionError(writer, request, adminActionFailure("provider", cause))
+}
+
+// providerWriteAuditName 取审计的 targetName（Node 的 `targetName: data.name` / `provider.name`）。
+func providerWriteAuditName(payload map[string]any) string {
+	name, _ := payload["name"].(string)
+	return name
 }
 
 // providerWriteAuditAfter 复刻 Node 创建审计的 after 段（id/name/url 脱敏）。

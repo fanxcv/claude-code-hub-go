@@ -5,7 +5,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 )
 
 // 本文件的金样由 Node 真实代码产出，不是手抄：
@@ -280,5 +283,123 @@ func TestActionStatusTables(t *testing.T) {
 		if got := actionStatus(testCase.resource, testCase.code); got != testCase.want {
 			t.Errorf("actionStatus(%q,%q)=%d, 期望 %d", testCase.resource, testCase.code, got, testCase.want)
 		}
+	}
+}
+
+// recordingProblemsLogger 收 Problems 的日志（Warn / Error 两条通道）。
+type recordingProblemsLogger struct {
+	events []string
+	warns  []map[string]any
+	errors []map[string]any
+}
+
+func (l *recordingProblemsLogger) Warn(event string, fields map[string]any) {
+	l.events = append(l.events, event)
+	l.warns = append(l.warns, fields)
+}
+
+func (l *recordingProblemsLogger) Error(event string, fields map[string]any) {
+	l.events = append(l.events, event)
+	l.errors = append(l.errors, fields)
+}
+
+// TestProblemActionErrorLogs4xxCause 钉住「4xx 的成因也进服务端日志」。
+//
+// 回归对象：2026-09-15 的 PATCH /api/v1/providers/149 连吃 400 provider.action_failed，
+// 响应 detail 恒为常量，而进程日志里没有任何成因（当时只在 5xx 记），只能靠 Redis 时序反推。
+// 本用例同时钉住另一半：观测增强**不得**改变客户端可见的响应体。
+func TestProblemActionErrorLogs4xxCause(t *testing.T) {
+	logger := &recordingProblemsLogger{}
+	problems := NewProblems(logger)
+	actionErr := NewActionError("provider", "provider.action_failed", http.StatusBadRequest,
+		errors.New("redis: i/o timeout sk-abcdefghijklmnopqrstuvwxyz"))
+	status, _, body := serveProblem(t, "/api/v1/providers/149",
+		func(writer http.ResponseWriter, request *http.Request) {
+			problems.WriteActionError(writer, request, actionErr)
+		})
+
+	if status != http.StatusBadRequest {
+		t.Fatalf("应 400，实得 %d", status)
+	}
+	if len(logger.events) != 1 || logger.events[0] != "admin_action_error" {
+		t.Fatalf("4xx 必须记一条 warn admin_action_error，实得 events=%v", logger.events)
+	}
+	fields := logger.warns[0]
+	if fields["resource"] != "provider" || fields["status"] != http.StatusBadRequest {
+		t.Fatalf("日志字段缺 resource/status：%v", fields)
+	}
+	text, _ := fields["error"].(string)
+	if !strings.Contains(text, "i/o timeout") {
+		t.Fatalf("日志必须含成因原文，实得 %q", text)
+	}
+	if strings.Contains(text, "sk-abcdefghijklmnopqrstuvwxyz") {
+		t.Fatalf("日志里的密钥必须被遮蔽，实得 %q", text)
+	}
+	if fields["redacted"] != true {
+		t.Fatalf("发生遮蔽时必须带 redacted 标记：%v", fields)
+	}
+	// 响应体：公开文案，且不含成因片段。
+	if detail, _ := body["detail"].(string); detail != "Bad request" {
+		t.Fatalf("detail 必须是公开常量，实得 %q", detail)
+	}
+	if strings.Contains(body["instance"].(string), "i/o timeout") {
+		t.Fatalf("响应体不得夹带成因：%v", body)
+	}
+}
+
+// TestProblemActionErrorSkipsLogWithoutCause 钉住「码表驱动的 4xx 不记日志」：
+// 那类 400/404 是正常拒绝（不存在、校验失败），没有成因可报，记了只是噪声。
+func TestProblemActionErrorSkipsLogWithoutCause(t *testing.T) {
+	logger := &recordingProblemsLogger{}
+	problems := NewProblems(logger)
+	status, _, _ := serveProblem(t, "/api/v1/providers/404",
+		func(writer http.ResponseWriter, request *http.Request) {
+			problems.WriteActionError(writer, request,
+				NewActionError("provider", "NOT_FOUND", http.StatusNotFound, nil))
+		})
+	if status != http.StatusNotFound {
+		t.Fatalf("应 404，实得 %d", status)
+	}
+	if len(logger.events) != 0 {
+		t.Fatalf("无底层 error 的 4xx 不应记日志，实得 %v", logger.events)
+	}
+}
+
+// TestProblemActionErrorKeeps5xxEventName 钉住 5xx 的事件名不因这次改动而漂移
+// （既有日志检索以 admin_action_error_500 为锚）。
+func TestProblemActionErrorKeeps5xxEventName(t *testing.T) {
+	logger := &recordingProblemsLogger{}
+	problems := NewProblems(logger)
+	status, _, _ := serveProblem(t, "/api/v1/providers/149",
+		func(writer http.ResponseWriter, request *http.Request) {
+			problems.WriteActionError(writer, request,
+				NewActionError("provider", "provider.action_failed", http.StatusInternalServerError,
+					errors.New("pg: connection refused")))
+		})
+	if status != http.StatusInternalServerError {
+		t.Fatalf("应 500，实得 %d", status)
+	}
+	if len(logger.events) != 1 || logger.events[0] != "admin_action_error_500" {
+		t.Fatalf("5xx 事件名必须保持 admin_action_error_500，实得 %v", logger.events)
+	}
+	if text, _ := logger.warns[0]["error"].(string); !strings.Contains(text, "pg: connection refused") {
+		t.Fatalf("5xx 日志必须含成因原文，实得 %q", text)
+	}
+}
+
+// TestProblemActionErrorToleratesNilConcreteLogger 钉住「Deps 没接日志器时 4xx 也不炸」。
+//
+// 现场：handler 用 Deps{} 装配时 `NewProblems(deps.Logger)` 会把 nil 的 *logx.Logger 装进
+// Problems.Logger 接口——接口非 nil、调用即 SIGSEGV。4xx 开始记日志之前这条路径不会被走到。
+func TestProblemActionErrorToleratesNilConcreteLogger(t *testing.T) {
+	var nilLogger *logx.Logger
+	problems := NewProblems(nilLogger)
+	status, _, body := serveProblem(t, "/api/v1/providers/149",
+		func(writer http.ResponseWriter, request *http.Request) {
+			problems.WriteActionError(writer, request,
+				adminActionFailure("provider", errors.New("redis: i/o timeout")))
+		})
+	if status != http.StatusBadRequest || body["errorCode"] != "provider.action_failed" {
+		t.Fatalf("应 400 provider.action_failed，实得 %d %v", status, body)
 	}
 }

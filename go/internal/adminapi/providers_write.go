@@ -192,12 +192,16 @@ func handleCreateProvider(deps Deps) http.HandlerFunc {
 		}
 		id, err := deps.Store.AdminCreateProvider(request.Context(), payload, domain)
 		if err != nil {
-			adminProblemWriter(deps).WriteActionError(writer, request, adminActionFailure("provider", err))
+			// 失败也落审计（Node 的 catch：actions/providers.ts:733-745，errorMessage 常量
+			// CREATE_FAILED）。此前 Go 只在成功路径落，故「创建报 400」在 audit_log 里是空白。
+			providerWriteFailure(deps, writer, request, "provider.create", 0,
+				providerWriteAuditName(payload), "CREATE_FAILED", nil, err)
 			return
 		}
 
 		adminPublishDomain(deps, request, cfgsync.DomainProviders)
-		providerEmitWriteAudit(deps, request, "provider.create", id, providerWriteAuditAfter(payload), true, "")
+		providerEmitWriteAudit(deps, request, "provider.create", id, providerWriteAuditName(payload),
+			providerWriteAuditAfter(payload), true, "")
 
 		created, err := providerFindVisible(request, deps, id)
 		if err != nil {
@@ -221,9 +225,18 @@ func handleUpdateProvider(deps Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		// updateFailed 作答一次更新失败：失败审计（Node 的 catch：actions/providers.ts:985-997）
+		// + 服务端日志 + 400，三件事绑在 providerWriteFailure 里。
+		//
+		// 与 Node 同：errorMessage 是常量 UPDATE_FAILED，不放原始文案——审计行在管理面里对多
+		// 角色可见，pg 约束名与调用方输入不该进它；成因只进日志。
+		updateFailed := func(details map[string]any, cause error) {
+			providerWriteFailure(deps, writer, request, "provider.update", id, "",
+				"UPDATE_FAILED", details, cause)
+		}
 		existing, err := providerFindVisible(request, deps, id)
 		if err != nil {
-			adminProblemWriter(deps).WriteActionError(writer, request, err)
+			updateFailed(nil, err)
 			return
 		}
 		fields, ok := adminReadJSONObject(writer, request, deps)
@@ -264,7 +277,7 @@ func handleUpdateProvider(deps Deps) http.HandlerFunc {
 		preimage := providerBuildPreimage(*existing, payload)
 		patched, err := deps.Store.AdminPatchProvider(request.Context(), id, payload)
 		if err != nil {
-			adminProblemWriter(deps).WriteActionError(writer, request, adminActionFailure("provider", err))
+			updateFailed(nil, err)
 			return
 		}
 		if !patched {
@@ -289,20 +302,33 @@ func handleUpdateProvider(deps Deps) http.HandlerFunc {
 		if err := putProviderPatchUndo(request.Context(), deps.ProviderUndoKV, snapshot); err != nil {
 			// 快照写不进去必须让调用方看见：改了但撤销不了是「静默的错行为」，
 			// 与 Node「写快照失败即整动作失败」同一取舍。
-			adminProblemWriter(deps).WriteActionError(writer, request, adminActionFailure("provider", err))
+			//
+			// 但此刻 DB 已经改完了。这一点必须能从审计与日志里读出来（errorMessage 仍是 Node 的
+			// UPDATE_FAILED 常量，区别落在 details 与错误文案），否则排障只能看到「400」，
+			// 会误判「没改成功」而重复提交——2026-09-15 的 PATCH /api/v1/providers/149 现场正是如此。
+			updateFailed(map[string]any{
+				"changedFields":       providerSortedKeys(preimage),
+				"dbUpdateApplied":     true,
+				"undoSnapshotWritten": false,
+			}, fmt.Errorf("provider %d 更新已提交，仅撤销快照写入失败: %w", id, err))
 			return
 		}
 
 		adminPublishDomain(deps, request, cfgsync.DomainProviders)
-		providerEmitWriteAudit(deps, request, "provider.update", id,
-			map[string]any{"changedFields": providerSortedKeys(preimage)}, true, "")
 
 		updated, err := providerFindVisible(request, deps, id)
 		if err != nil {
-			adminProblemWriter(deps).WriteActionError(writer, request, err)
+			// 成功审计就在下面几行：移到动作末尾之后，这里的失败才不会与「成功」同时出现在审计里
+			// （Node 的 catch 与末尾 emit 也是这个次序）。
+			updateFailed(map[string]any{
+				"changedFields":   providerSortedKeys(preimage),
+				"dbUpdateApplied": true,
+			}, err)
 			return
 		}
 		providerSyncCircuitConfig(deps, id, providerThresholdsFromRow(updated))
+		providerEmitWriteAudit(deps, request, "provider.update", id, "",
+			map[string]any{"changedFields": providerSortedKeys(preimage)}, true, "")
 		writer.Header().Set("X-CCH-Undo-Token", undoToken)
 		writer.Header().Set("X-CCH-Operation-Id", operationID)
 		adminWriteJSON(writer, http.StatusOK, providerSummaryPayload(*updated, nil))
@@ -323,7 +349,7 @@ func handleDeleteProvider(deps Deps) http.HandlerFunc {
 		}
 		deleted, err := deps.Store.AdminSoftDeleteProviders(request.Context(), []int64{id})
 		if err != nil {
-			providerEmitWriteAudit(deps, request, "provider.delete", id, nil, false, "DELETE_FAILED")
+			providerEmitWriteAudit(deps, request, "provider.delete", id, "", nil, false, "DELETE_FAILED")
 			adminProblemWriter(deps).WriteActionError(writer, request, adminActionFailure("provider", err))
 			return
 		}
@@ -343,12 +369,18 @@ func handleDeleteProvider(deps Deps) http.HandlerFunc {
 			ProviderIDs: []int64{id},
 		}
 		if err := putProviderDeleteUndo(request.Context(), deps.ProviderUndoKV, snapshot); err != nil {
-			adminProblemWriter(deps).WriteActionError(writer, request, adminActionFailure("provider", err))
+			// 与 update 同：DB 软删已生效（Node 的 deleteProvider 也在快照写入之前，:1013-1024），
+			// 这一事实须能从审计读出，否则排障会误判「没删成功」。
+			providerWriteFailure(deps, writer, request, "provider.delete", id, "", "DELETE_FAILED",
+				map[string]any{
+					"dbDeleteApplied":     true,
+					"undoSnapshotWritten": false,
+				}, err)
 			return
 		}
 
 		adminPublishDomain(deps, request, cfgsync.DomainProviders)
-		providerEmitWriteAudit(deps, request, "provider.delete", id,
+		providerEmitWriteAudit(deps, request, "provider.delete", id, existing.Name,
 			map[string]any{"id": id, "name": existing.Name, "url": providerRedactURLCredentials(existing.URL)},
 			true, "")
 
@@ -395,7 +427,7 @@ func handleBatchDeleteProviders(deps Deps) http.HandlerFunc {
 		}
 
 		adminPublishDomain(deps, request, cfgsync.DomainProviders)
-		providerEmitWriteAudit(deps, request, "provider.batch_delete", snapshotIDs[0],
+		providerEmitWriteAudit(deps, request, "provider.batch_delete", snapshotIDs[0], "",
 			map[string]any{"providerIds": snapshotIDs, "deletedCount": deleted}, true, "")
 
 		adminWriteJSON(writer, http.StatusOK, providerBatchDeleteResponse{
@@ -447,7 +479,7 @@ func handleUndoDeleteProvider(deps Deps) http.HandlerFunc {
 			return
 		}
 		adminPublishDomain(deps, request, cfgsync.DomainProviders)
-		providerEmitWriteAudit(deps, request, "provider.undo_delete", snapshot.ProviderIDs[0],
+		providerEmitWriteAudit(deps, request, "provider.undo_delete", snapshot.ProviderIDs[0], "",
 			map[string]any{"operationId": operationID, "restoredCount": restored}, true, "")
 
 		adminWriteJSON(writer, http.StatusOK, providerUndoDeleteResponse{
@@ -513,7 +545,7 @@ func handleUndoProviderPatch(deps Deps) http.HandlerFunc {
 			}
 		}
 		adminPublishDomain(deps, request, cfgsync.DomainProviders)
-		providerEmitWriteAudit(deps, request, "provider.undo_patch", snapshot.ProviderIDs[0],
+		providerEmitWriteAudit(deps, request, "provider.undo_patch", snapshot.ProviderIDs[0], "",
 			map[string]any{"operationId": operationID, "revertedCount": reverted}, true, "")
 
 		adminWriteJSON(writer, http.StatusOK, providerUndoPatchResponse{

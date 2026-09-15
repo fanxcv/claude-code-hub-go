@@ -391,7 +391,7 @@ func handleProviderBatchPatchApply(deps Deps) http.HandlerFunc {
 		}
 
 		providerBatchRunPostCommitEffects(deps, request, decision.Result)
-		providerEmitWriteAudit(deps, request, "provider.batch_patch_apply", effectiveIDs[0], map[string]any{
+		providerEmitWriteAudit(deps, request, "provider.batch_patch_apply", effectiveIDs[0], "", map[string]any{
 			"operationId":   operationID,
 			"updatedCount":  decision.Result.ApplyResult.UpdatedCount,
 			"changedFields": changedFields,

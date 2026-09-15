@@ -104,3 +104,17 @@ func TestWithOnUnboundLogger(t *testing.T) {
 		t.Fatalf("子日志器应携带绑定字段: %s", buffer.String())
 	}
 }
+
+// TestNilLoggerIsSilent 钉住 nil 接收者不 panic（静默即「没有日志器」的语义）。
+//
+// 为什么必须有这条：`*Logger` 是具体类型，nil 指针一装箱进接口（adminapi 的
+// `Problems.Logger`）就不再是 nil，调用方**无从判空**——4xx 日志路径第一次真正调用它时，
+// 整个测试进程以 SIGSEGV 炸掉（2026-09-15 的实际表现）。
+func TestNilLoggerIsSilent(t *testing.T) {
+	var logger *Logger
+	logger.Warn("admin_action_error", map[string]any{"resource": "provider"})
+	logger.Error("admin_action_error_500", nil)
+	if child := logger.With(map[string]any{"stage": "M1"}); child != nil {
+		t.Fatalf("nil 日志器的 With 应返回 nil，实得 %v", child)
+	}
+}

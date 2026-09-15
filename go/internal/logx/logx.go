@@ -116,6 +116,10 @@ func New(out io.Writer) *Logger {
 
 // With 返回一个携带固定字段的子日志器，父日志器不受影响。
 func (l *Logger) With(fields map[string]any) *Logger {
+	// nil 接收者返回 nil（与 log 同一语义：没有日志器就不产出子日志器）。
+	if l == nil {
+		return nil
+	}
 	child := &Logger{out: l.out, now: l.now, bound: make(map[string]any, len(l.bound)+len(fields))}
 	for key, value := range l.bound {
 		child.bound[key] = value
@@ -144,7 +148,15 @@ func (l *Logger) Warn(event string, fields map[string]any) { l.log(LevelWarn, ev
 // Error 写一条 error 日志。
 func (l *Logger) Error(event string, fields map[string]any) { l.log(LevelError, event, fields) }
 
+// log 写一条结构化日志。
+//
+// nil 接收者即静默返回：`*Logger` 是具体类型，nil 指针一旦**装箱进接口**就不再是 nil
+// （`Problems.Logger` 就是这样一个接口），调用方无从判空、只能由一个 panic 揭穿。
+// 装配处确实会传 nil（未接日志的 deps），而「没有日志器」的语义是静默，不是崩掉请求。
 func (l *Logger) log(level Level, event string, fields map[string]any) {
+	if l == nil {
+		return
+	}
 	// 级别过滤在拼装之前：被过滤掉的日志不应该付出序列化代价。
 	if !shouldWrite(level) {
 		return
