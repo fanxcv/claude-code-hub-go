@@ -144,14 +144,18 @@ func TestForwardReportsProviderErrorRetriesThenSwitches(t *testing.T) {
 
 // TestForwardRetriesClientErrorStatusesToo 断言 4xx 归供应商故障，同样重试当前供应商。
 //
-// 这条与「上游 4xx 不重试」的常见直觉相反，但它是 Node 的实际行为：4xx 属 PROVIDER_ERROR，
-// 重试耗尽后才切换；只有错误规则命中的客户端输入错误才不重试。
+// 这条与「上游 4xx 不重试」的常见直觉相反，但它是 Node 的实际行为：未命中错误规则的 4xx 属
+// PROVIDER_ERROR，重试耗尽后才切换；只有错误规则命中的客户端输入错误才不重试。
+//
+// 正文文案刻意选**不命中任何整流器触发词**的一句：整流器（Node 同）会按上游文案抢先处置，
+// 例如含 "invalid request" 会被 thinking signature 整流器接管（它本身就是 Node 的 Rule 6），
+// 从而变成不可重试并终止——那是另一条用例的事（见 rectify_test.go）。
 func TestForwardRetriesClientErrorStatusesToo(t *testing.T) {
 	var hits int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
 		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"message":"invalid request"}}`))
+		_, _ = w.Write([]byte(`{"error":{"message":"upstream rejected the request"}}`))
 	}))
 	t.Cleanup(server.Close)
 
@@ -175,7 +179,7 @@ func TestForwardRetriesClientErrorStatusesToo(t *testing.T) {
 	if failure.Category != CategoryProviderError {
 		t.Fatalf("分类 = %v", failure.Category)
 	}
-	if result.Attempts[0].Message != "invalid request" {
+	if result.Attempts[0].Message != "upstream rejected the request" {
 		t.Fatalf("错误文案未从正文提取: %q", result.Attempts[0].Message)
 	}
 }

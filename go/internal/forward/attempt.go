@@ -10,6 +10,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/rectify"
 )
 
 // 转发路径的不可恢复错误。
@@ -100,6 +101,18 @@ type Deps struct {
 	Settle func(ctx context.Context, pc *pctx.Context, result *Result, failure *Failure) error
 	// Facts 是构造计划的会话级事实。
 	Facts PlanFacts
+	// RectifySwitches 提供六个整流器开关（system_settings 的 enable_*_rectifier）。
+	//
+	// nil 表示未接线：此时按 Node 默认处理（全开）——Node 一律 `settings.x ?? true`，
+	// 读不到设置就当成关闭会让整流器在生产静默失效。
+	RectifySwitches func(ctx context.Context) rectify.Switches
+	// RectifierAudit 接收整流器审计条目（Node 的 addSpecialSetting + persistSpecialSettings）。
+	//
+	// 为什么用回调而不是把条目挂在计划上：审计必须在**建行后**的终态追加落库（见
+	// store.DetailsPatch.SpecialSettingsAppend），而整流可能发生在最终尝试失败之前——挂计划
+	// 只能覆盖成功路径，请求整体失败时条目会丢。交给接线层按请求收，成功与失败两条路都不丢。
+	// nil 表示不落审计（整流照常生效）。
+	RectifierAudit func(entry map[string]any)
 }
 
 func (d Deps) logger() *logx.Logger {
@@ -325,6 +338,9 @@ func forwardLoop(
 	result := &Result{StartedAt: startedAt, DetectorMissing: deps.Detector == nil}
 	failedProviders := make([]int64, 0, 4)
 	var lastFailure *Failure
+	// 整流器的可变副本：整流器改写的是**客户端正文快照**，而客户端正文是「每次尝试重新
+	// BuildPlan」的输入，故改写必须回到这份副本上，下一次尝试才拿得到整流后的正文。
+	rectifier := rectifierState{client: deps.Facts.Client, sink: deps.RectifierAudit}
 
 	// 终态入账只在本函数退出时发生一次：三个提前返回点（客户端中断、禁重试切换、重试等待被
 	// 取消）与两个穷尽点共用同一条路径，不会因为新增返回点而漏账或多账。
@@ -354,6 +370,14 @@ func forwardLoop(
 			maxAttempts = 1
 		}
 
+		// 整流器：幂等标记按供应商轮次重置（Node forwarder.ts:1766-1772），
+		// 并在发送前执行主动型 billing header 剥离（只对 ANTHROPIC 供应商，
+		// Node forwarder.ts:3463-3500）。幂等只约束「被动型同供应商重试一次」，
+		// 原始透传的「不重试、不切换」不受影响：它的整流器仅在失败分支里才被考虑，
+		// 而失败分支对原始透传短路（见下）。
+		rectifier.resetForProvider()
+		rectifier.applyBillingHeaderRectifier(current.Provider, deps.rectifierSwitches(ctx), deps.logger())
+
 		endpoints := current.endpoints()
 		endpointIndex := 0
 
@@ -377,7 +401,7 @@ func forwardLoop(
 
 			attemptStartedAt := deps.now()
 			plan, err := BuildPlan(PlanInput{
-				Client:            deps.Facts.Client,
+				Client:            rectifier.client,
 				Target:            Target{Provider: current.Provider, Endpoint: endpoint},
 				ConversionEnabled: current.ConversionEnabled,
 				Overrides:         deps.Facts.Overrides,
@@ -446,6 +470,35 @@ func forwardLoop(
 				"category":      failure.Category.String(),
 				"provider_type": string(current.Provider.Type),
 			})
+
+			// 2.5 被动整流：上游报错的文案命中整流器时，整流客户端正文并对**同一供应商**再试一次
+			// （Node forwarder.ts:2653-2697 的 2.5 段）。
+			//
+			// 位置有讲究：必须在下面的分类早退**之前**——上游 400 在 Go 侧的归类是不可重试的
+			// 客户端错误，而它正是整流器要抢救的那一类（Node 同样在分类判定之前调用）。
+			// 整流会改写 rectifier.client，下一次 BuildPlan 用的就是整流后的正文。
+			//
+			// 原始透传短路：它的契约是「不重试、不切换」，整流器的同供应商重试与之相冲，
+			// 故对 skipRetryAndSwitch 不做被动整流（Node 侧无此分支，属有意的 Go 侧限制）。
+			if !skipRetryAndSwitch {
+				rectified := deps.applyReactiveRectifier(ctx, current.Provider, failure, &rectifier, attempt)
+				if rectified.Matched && !rectified.Applied {
+					// already_retried / not_applicable：Node 归为不可重试的客户端错误并直接终止
+					// （不重试、不切换、不计入熔断器）。
+					failure.Category = CategoryNonRetryableClientError
+					result.EndedAt = deps.now()
+					return result, failure
+				}
+				if rectified.Applied {
+					// 整流成立：确保即使重试上限为 1 也能完成这次额外重试（Node 的
+					// `maxAttemptsPerProvider = max(..., attemptCount + 1)`），且不等待重试间隔
+					// （Node 同样是立即 continue）。
+					if attempt >= maxAttempts {
+						maxAttempts = attempt + 1
+					}
+					continue
+				}
+			}
 
 			// 客户端中断、客户端输入错误与本地过载：不重试、不切换，立即终止。
 			if !failure.Category.RetriesSameProvider() && !failure.Category.SwitchesProvider() {

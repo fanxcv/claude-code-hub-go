@@ -15,6 +15,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/guard"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/rectify"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/specialsettings"
@@ -131,6 +132,40 @@ type RequestState struct {
 	responseStatus int
 	// failureStatus 是未走到交付路径时的归因状态码（守卫抢答/失败归因）。
 	failureStatus int
+	// rectifierAudits 是整流器产生的审计条目（守卫链阶段的 responses `input` 归一 + 转发阶段的
+	// 被动/主动整流），按产生顺序落库。
+	//
+	// 为什么要攒而不是即时写：审计走 `message_request.special_settings` 的 **jsonb 追加**
+	// （存明细的建行与终态两个时刻），终态追加只有一次写入（见 store.DetailsPatch），
+	// 故整流条目与探针条目要在终态合并成同一个数组（见 specialSettingsAppendEntries）。
+	//
+	// 锁：写入发生在请求 goroutine（守卫链与尝试循环），读发生在流终态 goroutine，
+	// 故与 selections 同样加锁（此处只有追加与整取快照两个动作）。
+	rectifierMu     sync.Mutex
+	rectifierAudits []map[string]any
+}
+
+// appendRectifierAudit 记一条整流器审计条目。
+func (s *RequestState) appendRectifierAudit(entry map[string]any) {
+	if s == nil || entry == nil {
+		return
+	}
+	s.rectifierMu.Lock()
+	defer s.rectifierMu.Unlock()
+	s.rectifierAudits = append(s.rectifierAudits, entry)
+}
+
+// rectifierAuditsSnapshot 取整流器审计条目的快照，供终态追加。
+func (s *RequestState) rectifierAuditsSnapshot() []map[string]any {
+	if s == nil {
+		return nil
+	}
+	s.rectifierMu.Lock()
+	defer s.rectifierMu.Unlock()
+	if len(s.rectifierAudits) == 0 {
+		return nil
+	}
+	return append([]map[string]any(nil), s.rectifierAudits...)
 }
 
 // Options 是数据面装配参数。除 Base 外都可为空，空值语义逐个写在字段上。
@@ -277,6 +312,14 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	deps := h.options.Base
 	deps.Body = body.factory
+	// responses 路由的 `input` 归一（主动型整流器）：Node 在 guard pipeline **之前**归一
+	// （proxy-handler.ts:113），使过滤器、建行审计与转换器看到同一份形状。
+	// 只在 /v1/responses 生效（Node 的判定就是 originalFormat === "response"）。
+	if spec.Format == convert.FormatResponse {
+		deps.Body = wrapResponsesInputBodyFactory(deps.Body, state, func() rectify.Switches {
+			return rectifySwitches(requestCtx, h.options.Base.Settings, h.logger)
+		}, h.logger)
+	}
 	deps.RequestContext = func(*pctx.Context) context.Context { return requestCtx }
 	// 会话绑定结果是每请求事实，而 pctx 刻意不带会话状态：这里用「按请求的记录视图」把它
 	// 交给请求日志开行（messageContext 步骤），不引入按上下文索引的全局表。
@@ -420,6 +463,10 @@ func (h *Handler) forward(
 	}
 
 	fwd := h.options.Forward
+	// 整流器开关：六个 enable_*_rectifier，回落到 Node 默认（全开）的语义见 rectifySwitches。
+	fwd.RectifySwitches = func(ctx context.Context) rectify.Switches {
+		return rectifySwitches(ctx, h.options.Base.Settings, h.logger)
+	}
 	fwd.Settle = func(ctx context.Context, target *pctx.Context, result *forward.Result, failure *forward.Failure) error {
 		return h.options.Settlers(state).NonStream(ctx, target, result, failure)
 	}
@@ -439,6 +486,10 @@ func (h *Handler) forward(
 		return next, nil
 	}
 	fwd.Facts = h.planFacts(pc, spec, body)
+	// 整流器审计的落点：与 responses `input` 归一共用同一份条目集合，终态一次追加（见
+	// specialSettingsAppendEntries）。用回调而不是让 forward 依赖请求状态，保持转发层
+	// 只做协议与重试。
+	fwd.RectifierAudit = state.appendRectifierAudit
 	// 计费的备选基准是**客户端请求的**模型名：重定向后的名字由计划决定，两者都在结算时
 	// 才用得上，故在此一次性捕获（结算发生在响应之后，那时正文已不可读）。
 	state.Model = fwd.Facts.Client.Model
