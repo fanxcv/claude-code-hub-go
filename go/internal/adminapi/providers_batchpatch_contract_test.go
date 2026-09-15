@@ -134,12 +134,12 @@ func TestProviderBatchPatchClearValuesMatchNode(t *testing.T) {
 	if value, ok := updates["max_retry_attempts"]; !ok || value != nil {
 		t.Fatalf("max_retry_attempts 应清成 NULL，实际 %#v", value)
 	}
-	if value, ok := updates["cache_ttl_preference"]; !ok || value != "inherit" {
-		t.Fatalf("cache_ttl_preference 应清成 inherit，实际 %#v", value)
+	if value, ok := updates["cache_ttl_preference"].(*string); !ok || value == nil || *value != "inherit" {
+		t.Fatalf("cache_ttl_preference 应清成 inherit，实际 %#v", updates["cache_ttl_preference"])
 	}
-	list, ok := updates["allowed_clients"].([]string)
-	if !ok || len(list) != 0 {
-		t.Fatalf("allowed_clients 应清成空数组，实际 %#v", updates["allowed_clients"])
+	list, ok := updates["allowed_clients"].(json.RawMessage)
+	if !ok || string(list) != "[]" {
+		t.Fatalf("allowed_clients 应清成空数组（jsonb 绑定形状），实际 %#v", updates["allowed_clients"])
 	}
 	if value, ok := updates["allowed_models"]; !ok || value != nil {
 		t.Fatalf("allowed_models 空数组应写成 NULL，实际 %#v", value)
@@ -169,8 +169,9 @@ func TestProviderBatchPatchChangedFieldsFollowContractOrder(t *testing.T) {
 
 func TestProviderBatchPatchGroupTagNormalization(t *testing.T) {
 	patch := mustNormalize(t, map[string]any{"group_tag": map[string]any{"set": " b ,a，b\n a "}})
-	if got := patch["group_tag"].SetValue; got != "b,a" {
-		t.Fatalf("group_tag 应去空去重保序（Node normalizeProviderGroupTag），实际 %#v", got)
+	value, ok := patch["group_tag"].SetValue.(*string)
+	if !ok || value == nil || *value != "b,a" {
+		t.Fatalf("group_tag 应去空去重保序（Node normalizeProviderGroupTag），实际 %#v", patch["group_tag"].SetValue)
 	}
 	empty := mustNormalize(t, map[string]any{"group_tag": map[string]any{"set": "  "}})
 	if value := empty["group_tag"].SetValue; value != (*string)(nil) {

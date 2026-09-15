@@ -143,6 +143,9 @@ func providerNullableFieldSpec(maxRunes int) providerDecodeSpec {
 //
 // 枚举值由调用方从本包既有的 batch 契约校验器取（同一批取值域，不再写第三份字面量）。
 // 走 object.String 的 Enum 分支：错误码与文案就是 zod 的 `invalid_enum_value` 风格。
+//
+// 返回值：null → `(*string)(nil)`，有值 → `*string`——这些列在 store 侧是 providerNullableTextKind，
+// 只认 `*string`（裸 string 会在绑定时报「值类型不符」，2026-09-15 生产事故即此）。
 func providerNullableEnumFieldSpec(enum []string) providerDecodeSpec {
 	return providerDecodeSpec{Decode: func(object *adminObject, payload string) (any, bool) {
 		raw, present := object.Raw(payload)
@@ -156,7 +159,9 @@ func providerNullableEnumFieldSpec(enum []string) providerDecodeSpec {
 		if !ok {
 			return nil, true
 		}
-		return value, true
+		// 可空文本列的绑定形状是 *string（见 store.adminProviderBindValue）；
+		// 返回裸 string 会让整条写路径在存储层被「值类型不符」拦下。
+		return &value, true
 	}}
 }
 
@@ -171,6 +176,8 @@ func providerNullableEnumFieldSpec(enum []string) providerDecodeSpec {
 // `codex_image_generation_preference` 在 REST 侧也是 `z.enum`。即：本改动对多数列
 // **比 Node 的 REST 路径严**，而取值域与 Node 的权威定义（`types/provider.ts` 与 batch 契约）
 // 一致，故 UI 能发出的值一个都不会被拒。
+//
+// 返回值形状同 providerNullableEnumFieldSpec：可空文本列要 `*string`。
 func providerNullablePreferenceSpec(validate providerPatchSetValidator, expectation string) providerDecodeSpec {
 	return providerDecodeSpec{Decode: func(object *adminObject, payload string) (any, bool) {
 		raw, present := object.Raw(payload)
@@ -187,9 +194,10 @@ func providerNullablePreferenceSpec(validate providerPatchSetValidator, expectat
 		if !validate(value) {
 			object.fail([]any{payload}, "invalid_value",
 				fmt.Sprintf("Invalid value: expected %s, received '%s'", expectation, value))
-			return value, true
+			return nil, true
 		}
-		return value, true
+		// 同上：可空文本列要 *string。
+		return &value, true
 	}}
 }
 

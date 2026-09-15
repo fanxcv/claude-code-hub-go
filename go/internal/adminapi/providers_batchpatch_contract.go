@@ -190,7 +190,9 @@ var providerPatchFieldSpecs = []providerPatchFieldSpec{
 	{Field: "limit_weekly_usd", ProviderKey: "limitWeeklyUsd", ValueKind: patchValueNumeric, Clearable: true, Validate: validateNumber},
 	{Field: "limit_monthly_usd", ProviderKey: "limitMonthlyUsd", ValueKind: patchValueNumeric, Clearable: true, Validate: validateNumber},
 	{Field: "limit_total_usd", ProviderKey: "limitTotalUsd", ValueKind: patchValueNumeric, Clearable: true, Validate: validateNumber},
-	{Field: "limit_concurrent_sessions", ProviderKey: "limitConcurrentSessions", ValueKind: patchValueInt, Validate: validateInt},
+	// 列是可空 integer（drizzle/0000:11 `integer DEFAULT 0`，store 侧 providerNullableIntKind），
+	// 故用 nullableInt：裸 int64 会在绑定时报「值类型不符」。
+	{Field: "limit_concurrent_sessions", ProviderKey: "limitConcurrentSessions", ValueKind: patchValueNullableInt, Validate: validateInt},
 	// Circuit Breaker
 	{
 		Field: "circuit_breaker_failure_threshold", ProviderKey: "circuitBreakerFailureThreshold",
@@ -612,7 +614,12 @@ func convertPatchSetValue(spec providerPatchFieldSpec, value any) (any, error) {
 	case patchValueInt:
 		return patchIntValue(value)
 	case patchValueNullableInt:
-		return patchIntValue(value)
+		// 可空 int 列在 store 侧的绑定形状是 *int64（同 providerNullableTextKind 的道理）。
+		number, err := patchIntValue(value)
+		if err != nil {
+			return nil, err
+		}
+		return &number, nil
 	case patchValueNumeric:
 		number, err := patchFloatValue(value)
 		if err != nil {
@@ -630,10 +637,11 @@ func convertPatchSetValue(spec providerPatchFieldSpec, value any) (any, error) {
 			if normalized == "" {
 				return (*string)(nil), nil
 			}
-			return normalized, nil
+			return &normalized, nil
 		}
 		if spec.ValueKind == patchValueNullableText {
-			return text, nil
+			// 可空文本列在 store 侧的绑定形状是 *string（见 adminProviderBindValue）。
+			return &text, nil
 		}
 		return text, nil
 	case patchValueStringList:
@@ -645,7 +653,9 @@ func convertPatchSetValue(spec providerPatchFieldSpec, value any) (any, error) {
 		for _, item := range items {
 			list = append(list, item.(string))
 		}
-		return list, nil
+		// allowed_clients / blocked_clients 的列是 jsonb（store 侧 providerJSONKind），
+		// 故这里就编成 json.RawMessage——裸 []string 会在绑定时报「值类型不符」。
+		return providerStringListJSON(list)
 	case patchValueJSON:
 		payload, err := json.Marshal(value)
 		if err != nil {
@@ -681,6 +691,15 @@ func patchFloatValue(value any) (float64, error) {
 	default:
 		return 0, fmt.Errorf("value must be a number")
 	}
+}
+
+// providerStringListJSON 把字符串数组编成 jsonb 列的绑定形状。
+func providerStringListJSON(list []string) (json.RawMessage, error) {
+	encoded, err := json.Marshal(list)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(encoded), nil
 }
 
 // normalizeProviderGroupTag 复刻 normalizeProviderGroupTag（src/lib/utils/provider-group.ts:34-42）：
@@ -728,6 +747,9 @@ func changedProviderPatchFields(patch providerBatchPatch) []string {
 
 // buildProviderBatchApplyUpdates 复刻 buildProviderBatchApplyUpdates（:1021-1094）：
 // set 取转换后的值（allowed_models 空数组 → NULL），clear 取 PATCH_FIELD_CLEAR_VALUE（缺省 NULL）。
+//
+// clear 的常量在契约表里是**展示形状**（`"inherit"` / `[]string{}`，同一份还要供预览行的
+// 「改后值」直接显示），故在这里才按列类型转成 store 的绑定形状。
 func buildProviderBatchApplyUpdates(patch providerBatchPatch) providerBatchApplyUpdates {
 	updates := make(providerBatchApplyUpdates)
 	for _, spec := range providerPatchFieldSpecs {
@@ -737,7 +759,7 @@ func buildProviderBatchApplyUpdates(patch providerBatchPatch) providerBatchApply
 		}
 		if operation.Mode == providerPatchModeClear {
 			if spec.ClearValue != nil {
-				updates[spec.Field] = spec.ClearValue
+				updates[spec.Field] = providerBatchClearValueForStore(spec)
 				continue
 			}
 			updates[spec.Field] = nil
@@ -757,6 +779,28 @@ func buildProviderBatchApplyUpdates(patch providerBatchPatch) providerBatchApply
 func isEmptyJSONArray(payload json.RawMessage) bool {
 	trimmed := strings.TrimSpace(string(payload))
 	return trimmed == "[]" || trimmed == "null"
+}
+
+// providerBatchClearValueForStore 把 clear 常量转成 store 的列绑定形状。
+//
+// 已知常量只有两种：可空文本列的 `"inherit"`（→ `*string`）与字符串数组列的 `[]string{}`
+// （→ jsonb 的 json.RawMessage）。其余类型不设非 null 常量，走了也原样返回，由
+// store 的绑定报错而不是在这里静默丢值。
+func providerBatchClearValueForStore(spec providerPatchFieldSpec) any {
+	switch spec.ValueKind {
+	case patchValueNullableText:
+		if text, ok := spec.ClearValue.(string); ok {
+			return &text
+		}
+	case patchValueStringList:
+		if list, ok := spec.ClearValue.([]string); ok {
+			encoded, err := providerStringListJSON(list)
+			if err == nil {
+				return encoded
+			}
+		}
+	}
+	return spec.ClearValue
 }
 
 // computeProviderPatchPreviewAfterValue 复刻 computePreviewAfterValue（actions:1995-2016）。
