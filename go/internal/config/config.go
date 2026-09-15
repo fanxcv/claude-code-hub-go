@@ -225,6 +225,17 @@ type Config struct {
 	// 避免被对账脚本判为「Go 多配」（同 CCH_GO_MAX_STREAMS 一类）。
 	SameProtocolWeightK int
 
+	// PlaceholderThinkingSignature 是 CCH_THINKING_SIGNATURE_PLACEHOLDER：允许给「思考来自
+	// 非 Anthropic 上游、没有 Anthropic 签名」的思考块补一个占位签名，让 Anthropic 客户端
+	// 愿意显示这段思考（语义见 convert/thinking_placeholder.go）。默认开。
+	//
+	// Go 专有旋钮：不属 env.schema.ts 契约，故不进 envSpecs / go/env-parity.txt，
+	// 避免被对账脚本判为「Go 多配」。
+	//
+	// 为何需要开关：占位签名不是上游发的真签名，严格客户端或未来的上游校验都可能不认，
+	// 运维要能不重新发版就关掉它（关掉即回退成「无签名思考块丢弃」）。
+	PlaceholderThinkingSignature bool
+
 	DSN      string
 	RedisURL string
 
@@ -294,6 +305,10 @@ func LoadLookup(lookup LookupEnvFunc) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+
+	// 占位思考签名：默认开（未设置即开，设 "false"/"0" 关）。
+	placeholderThinkingSignature := boolFromNode(
+		lookupValue(lookup, "CCH_THINKING_SIGNATURE_PLACEHOLDER"), true)
 
 	// 巡检：Go 专有面，取值与边界都留在本包，装配侧只读结论。
 	patrolUnsettledAfter, err := parseIntRange(
@@ -380,6 +395,8 @@ func LoadLookup(lookup LookupEnvFunc) (Config, error) {
 		MaxStreams:       maxStreams,
 
 		SameProtocolWeightK: sameProtocolWeightK,
+
+		PlaceholderThinkingSignature: placeholderThinkingSignature,
 		Patrol: PatrolConfig{
 			// 默认开启：缺口的成因（滚动重启撞上断线）发生在每次部署，而巡检是幂等的。
 			Enabled:         boolFromNode(lookupValue(lookup, "CCH_PATROL_ENABLED"), true),

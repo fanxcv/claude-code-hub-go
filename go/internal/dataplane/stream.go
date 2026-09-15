@@ -45,7 +45,8 @@ func (h *Handler) pumpStream(
 	// 建好，因为喂给 spool 的必须是**客户端可见字节**（与 Node 的客户端可见文本同一口径）。
 	var converter *convert.StreamPipe
 	if state != nil && !hasOpaqueContentEncoding(result.Headers) {
-		conversion := newResponseConversion(result.Plan, state.Format, state.Model, true)
+		conversion := newResponseConversion(
+			result.Plan, state.Format, state.Model, true, h.options.PlaceholderThinkingSignature)
 		if pipe, ok := conversion.newStreamPipe(); ok {
 			converter = pipe
 		}

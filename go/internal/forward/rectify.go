@@ -1,6 +1,7 @@
 package forward
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -71,6 +72,39 @@ func (s *rectifierState) applyBillingHeaderRectifier(provider Provider, switches
 		"provider_id":   provider.ID,
 		"provider_name": provider.Name,
 		"removed_count": fields["removedCount"],
+	})
+}
+
+// applyPlaceholderSignatureStrip 是主动型「占位思考签名」剥离。
+//
+// 触发条件不是上游报错，而是「请求即将发往 ANTHROPIC 供应商」这一事实——与 billing header
+// 同理（Node 对主动型整流同样只按供应商类型门控）：只有 Anthropic 上游会校验签名，
+// 而占位签名是我们造给客户端看的（见 convert/thinking_placeholder.go），回传上去必被 400。
+func (s *rectifierState) applyPlaceholderSignatureStrip(provider Provider, enabled bool, logger *logx.Logger) {
+	if !enabled || rectify.KindOfProviderType(provider.Type) != rectify.KindAnthropic {
+		return
+	}
+	// 常见情形是客户端没带思考块：先做一次子串预判，避免每条请求都解一次 JSON。
+	// 占位签名是 base64，在 JSON 正文里无需转义，子串出现即可断定存在。
+	if !bytes.Contains(s.client.Body, []byte(convert.PlaceholderThinkingSignature())) {
+		return
+	}
+	body, ok := parseClientBody(s.client)
+	if !ok {
+		return
+	}
+	fields, applied := rectify.StripPlaceholderSignature(body)
+	if !applied {
+		return
+	}
+	s.client.Body = []byte(body.MarshalCompact())
+	s.record(specialsettings.ProactiveRectifierEntry(
+		specialsettings.TypeThinkingPlaceholderSignatureRectifier, fields,
+	))
+	logger.Warn("forward.rectify.thinking_placeholder_signature", map[string]any{
+		"provider_id":   provider.ID,
+		"provider_name": provider.Name,
+		"removed_count": fields["removedPlaceholderThinkingBlocks"],
 	})
 }
 

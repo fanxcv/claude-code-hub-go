@@ -113,6 +113,11 @@ type Deps struct {
 	// 只能覆盖成功路径，请求整体失败时条目会丢。交给接线层按请求收，成功与失败两条路都不丢。
 	// nil 表示不落审计（整流照常生效）。
 	RectifierAudit func(entry map[string]any)
+	// PlaceholderThinkingSignature 是 CCH_THINKING_SIGNATURE_PLACEHOLDER 的开关值。
+	//
+	// 开启时在发往 ANTHROPIC 供应商前剥掉客户端回传的自家占位签名；关闭时整条链不参与，
+	// 回退到被动整流器（上游 400 后删 thinking 块）。语义见 rectify.StripPlaceholderSignature。
+	PlaceholderThinkingSignature bool
 }
 
 func (d Deps) logger() *logx.Logger {
@@ -377,6 +382,7 @@ func forwardLoop(
 		// 而失败分支对原始透传短路（见下）。
 		rectifier.resetForProvider()
 		rectifier.applyBillingHeaderRectifier(current.Provider, deps.rectifierSwitches(ctx), deps.logger())
+		rectifier.applyPlaceholderSignatureStrip(current.Provider, deps.PlaceholderThinkingSignature, deps.logger())
 
 		endpoints := current.endpoints()
 		endpointIndex := 0

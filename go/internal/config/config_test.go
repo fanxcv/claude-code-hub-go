@@ -288,6 +288,33 @@ func TestPprofEnabledAloneYieldsUsableAddr(t *testing.T) {
 	}
 }
 
+// TestPlaceholderThinkingSignatureEnvSwitch 钉住占位思考签名的开关语义：
+//
+// 为什么默认必须是开：思考来自 chat 上游时 Anthropic 客户端本就看不到思考（无签名即丢），
+// 默认关等于这个能力永不生效（生产那个开关就曾经这样恒闭）；而它一旦不合预期（严格客户端
+// 不认占位签名）必须能立即关掉，故留一个不需发版就能改的 Go 专有 env。
+func TestPlaceholderThinkingSignatureEnvSwitch(t *testing.T) {
+	cfg, err := Load(envMap(nil))
+	if err != nil {
+		t.Fatalf("装载失败: %v", err)
+	}
+	if !cfg.PlaceholderThinkingSignature {
+		t.Fatal("CCH_THINKING_SIGNATURE_PLACEHOLDER 未设置时应默认为开")
+	}
+
+	for _, off := range []string{"false", "0"} {
+		t.Run("关="+off, func(t *testing.T) {
+			cfg, err := Load(envMap(map[string]string{"CCH_THINKING_SIGNATURE_PLACEHOLDER": off}))
+			if err != nil {
+				t.Fatalf("装载失败: %v", err)
+			}
+			if cfg.PlaceholderThinkingSignature {
+				t.Fatalf("CCH_THINKING_SIGNATURE_PLACEHOLDER=%q 应关闭该能力", off)
+			}
+		})
+	}
+}
+
 // TestRetiredNodeVarsAreIgnored 钉住旧部署文件的兼容边界：
 //
 // 已删除的 `CCH_EGRESS_MODE` / `CCH_INTERNAL_PORT` / `CCH_EGRESS_ROUTES` 不再解析；而「配置里

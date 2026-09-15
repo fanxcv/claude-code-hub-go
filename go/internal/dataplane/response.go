@@ -97,7 +97,8 @@ func (h *Handler) writeForwardResult(
 		// 非 2xx 不转换：错误体保持上游原样
 	case hasOpaqueContentEncoding(result.Headers):
 	default:
-		conversion := newResponseConversion(result.Plan, state.Format, state.Model, false)
+		conversion := newResponseConversion(
+			result.Plan, state.Format, state.Model, false, h.options.PlaceholderThinkingSignature)
 		body, converted = conversion.applyNonStream(body)
 	}
 	copyUpstreamHeaders(writer.Header(), result.Headers)

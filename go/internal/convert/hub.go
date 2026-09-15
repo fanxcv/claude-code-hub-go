@@ -191,6 +191,21 @@ type ConvertCtx struct {
 	ToWireToolName func(string) string
 	// FromWireToolName 把上游回显的规范化名还原为客户端原名（解码器读名时用）。
 	FromWireToolName func(string) string
+
+	// PlaceholderThinkingSignature 是响应侧开关（CCH_THINKING_SIGNATURE_PLACEHOLDER）：
+	// 允许给「来自非 Anthropic 上游、没有签名」的思考块补一个占位签名，让 Anthropic 客户端
+	// 愿意显示它。只影响响应编码，见 thinking_placeholder.go。
+	PlaceholderThinkingSignature bool
+}
+
+// shouldPlaceholderThinkingSignature 报告本次渲染是否该补占位签名。
+//
+// 三个条件缺一不可：开关开、客户端说 Anthropic 协议（否则它不认 thinking 块）、上游不是
+// Anthropic 线（原生上游的签名是真的，补占位是失真；且原生配对根本不走编码器）。
+func (ctx ConvertCtx) shouldPlaceholderThinkingSignature() bool {
+	return ctx.PlaceholderThinkingSignature &&
+		ctx.ClientFormat == FormatClaude &&
+		ctx.TargetProto != ProtocolAnthropicMessages
 }
 
 func (ctx ConvertCtx) toWireName(name string) string {

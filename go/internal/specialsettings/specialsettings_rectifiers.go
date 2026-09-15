@@ -24,6 +24,11 @@ const (
 	TypeBillingHeaderRectifier = "billing_header_rectifier"
 	// TypeResponseInputRectifier 是 responses input 主动归一条目。
 	TypeResponseInputRectifier = "response_input_rectifier"
+	// TypeThinkingPlaceholderSignatureRectifier 是占位思考签名的主动剥离条目。
+	//
+	// 与被动型的 thinking_signature_rectifier 分开命名：那个是上游报错后删 thinking 块，
+	// 这个是发送前剥掉我方自己造给客户端的占位签名，两条事实不能混为一条。
+	TypeThinkingPlaceholderSignatureRectifier = "thinking_placeholder_signature_rectifier"
 )
 
 // ReactiveRectifierEntry 组一条被动整流器的审计条目。

@@ -28,11 +28,16 @@ type responseConversion struct {
 }
 
 // newResponseConversion 按本次尝试的计划建响应侧转换器；不该转换时返回 nil。
+//
+// placeholderThinkingSignature 是占位思考签名开关（CCH_THINKING_SIGNATURE_PLACEHOLDER，
+// 默认开）：思考来自 chat/responses 线上游时，Anthropic 客户端拿到的块本就无签名，
+// 开了它客户端才能显示思考（见 convert/thinking_placeholder.go）。
 func newResponseConversion(
 	plan *forward.Plan,
 	format convert.ClientFormat,
 	model string,
 	stream bool,
+	placeholderThinkingSignature bool,
 ) *responseConversion {
 	if plan == nil || plan.Conversion == nil {
 		return nil
@@ -41,11 +46,12 @@ func newResponseConversion(
 		upstream: plan.Conversion.TargetProtocol,
 		client:   plan.Conversion.ClientProtocol,
 		ctx: convert.ConvertCtx{
-			ClientFormat:     format,
-			TargetProto:      plan.Conversion.TargetProtocol,
-			Model:            model,
-			Stream:           stream,
-			FromWireToolName: toolNameRestoreHook(plan.ToolNameRestore),
+			ClientFormat:                 format,
+			TargetProto:                  plan.Conversion.TargetProtocol,
+			Model:                        model,
+			Stream:                       stream,
+			FromWireToolName:             toolNameRestoreHook(plan.ToolNameRestore),
+			PlaceholderThinkingSignature: placeholderThinkingSignature,
 		},
 	}
 }

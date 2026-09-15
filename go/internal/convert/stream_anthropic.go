@@ -233,6 +233,9 @@ type anthropicStreamEncoder struct {
 type anthropicOpenBlock struct {
 	hub  int
 	wire int
+	// placeholderSignature 非空时，关闭本块前补发一条 signature_delta（见
+	// PlaceholderThinkingSignature）：官方流式的签名走增量事件，块起始里不带。
+	placeholderSignature string
 }
 
 func newAnthropicStreamEncoder(ctx ConvertCtx) StreamEncoder {
@@ -277,6 +280,17 @@ func (e *anthropicStreamEncoder) closeOpenBlock(implicit bool) [][]byte {
 	if e.openBlock == nil {
 		return nil
 	}
+	var out [][]byte
+	if signature := e.openBlock.placeholderSignature; signature != "" {
+		// 签名必须在块内、stop 之前到达；顺序为 thinking_delta… → signature_delta → stop。
+		payload := NewObject().
+			Set("type", NewString("content_block_delta")).
+			Set("index", NewNumberInt(int64(e.openBlock.wire))).
+			Set("delta", NewObject().
+				Set("type", NewString("signature_delta")).
+				Set("signature", NewString(signature)))
+		out = append(out, e.emit("content_block_delta", payload))
+	}
 	payload := NewObject().
 		Set("type", NewString("content_block_stop")).
 		Set("index", NewNumberInt(int64(e.openBlock.wire)))
@@ -284,7 +298,8 @@ func (e *anthropicStreamEncoder) closeOpenBlock(implicit bool) [][]byte {
 	if implicit {
 		e.autoClosedBlocks++
 	}
-	return [][]byte{e.emit("content_block_stop", payload)}
+	out = append(out, e.emit("content_block_stop", payload))
+	return out
 }
 
 func (e *anthropicStreamEncoder) ensureDelta() [][]byte {
@@ -370,7 +385,14 @@ func (e *anthropicStreamEncoder) Push(chunk Chunk) [][]byte {
 		}
 		wire := e.wireCounter
 		e.wireCounter++
-		e.openBlock = &anthropicOpenBlock{hub: hub, wire: wire}
+		// 无签名的思考块（来自 chat/responses 线上游）：补占位签名，但签名走 signature_delta，
+		// 不塞进块起始——与官方流式形态一致。有真实签名时不动（保持既有透传形状）。
+		placeholderSignature := ""
+		if block := chunk.Block; block != nil && block.Kind == BlockThinking &&
+			!block.Redacted && block.Signature == "" && e.ctx.shouldPlaceholderThinkingSignature() {
+			placeholderSignature = PlaceholderThinkingSignature()
+		}
+		e.openBlock = &anthropicOpenBlock{hub: hub, wire: wire, placeholderSignature: placeholderSignature}
 		payload := NewObject().
 			Set("type", NewString("content_block_start")).
 			Set("index", NewNumberInt(int64(wire))).

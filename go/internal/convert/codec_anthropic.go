@@ -410,6 +410,9 @@ type anthropicRenderOptions struct {
 	idMap     map[string]string
 	loss      *LossCollector
 	toWire    func(string) string
+	// placeholderThinkingSignature 允许给无签名的思考块补占位签名（取值见
+	// ConvertCtx.shouldPlaceholderThinkingSignature）。
+	placeholderThinkingSignature bool
 }
 
 func anthropicResolveEmitID(original string, seed string, options *anthropicRenderOptions) string {
@@ -474,14 +477,21 @@ func encodeAnthropicBlock(block Block, seed string, options *anthropicRenderOpti
 			options.loss.Dropped(LossThinkingBlock, options.direction, "redacted")
 			return nil, false
 		}
-		if block.Signature == "" {
-			options.loss.Dropped(LossThinkingSignature, options.direction, "missing_signature")
-			return nil, false
+		signature := block.Signature
+		if signature == "" {
+			if !options.placeholderThinkingSignature {
+				options.loss.Dropped(LossThinkingSignature, options.direction, "missing_signature")
+				return nil, false
+			}
+			// 上游（chat/responses 线）没给签名：补占位让客户端显示思考。记 Rewritten 而非
+			// Dropped——块留下了，但签名是造的，报表里必须能看出来。
+			signature = PlaceholderThinkingSignature()
+			options.loss.Rewritten(LossThinkingSignature, options.direction, "placeholder_signature_injected")
 		}
 		return NewObject().
 			Set("type", NewString("thinking")).
 			Set("thinking", NewString(block.Text)).
-			Set("signature", NewString(block.Signature)), true
+			Set("signature", NewString(signature)), true
 	case BlockOpaque:
 		if block.Wire != anthropicWire {
 			// 外线 opaque（如 responses 的 mcp_call / web_search_call 项）：按专用类别归因，
@@ -593,6 +603,8 @@ func encodeAnthropicMessages(items []Item, idMap map[string]string, loss *LossCo
 			idMap:     idMap,
 			loss:      loss,
 			toWire:    ctx.ToWireToolName,
+
+			placeholderThinkingSignature: ctx.shouldPlaceholderThinkingSignature(),
 		}
 		switch item.Kind {
 		case ItemMessage, ItemReasoning:
@@ -692,6 +704,7 @@ func encodeAnthropicRequest(request *Request, ctx ConvertCtx) EncodeResult {
 		system := []*Value{}
 		systemOptions := &anthropicRenderOptions{
 			direction: direction, seed: "system", idMap: idMap, loss: loss, toWire: ctx.ToWireToolName,
+			placeholderThinkingSignature: ctx.shouldPlaceholderThinkingSignature(),
 		}
 		for index, block := range request.System {
 			if encoded, ok := encodeAnthropicBlock(block, "system:"+itoa(index), systemOptions); ok {
@@ -826,6 +839,7 @@ func encodeAnthropicResponse(response *Response, ctx ConvertCtx) EncodeResult {
 	content := []*Value{}
 	options := &anthropicRenderOptions{
 		direction: "response", seed: "0", idMap: idMap, loss: loss,
+		placeholderThinkingSignature: ctx.shouldPlaceholderThinkingSignature(),
 	}
 	for index, block := range response.Blocks {
 		if encoded, ok := encodeAnthropicBlock(block, "0:"+itoa(index), options); ok {

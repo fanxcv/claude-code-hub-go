@@ -225,6 +225,12 @@ type Options struct {
 	//
 	// 零值表示审计不落库：正文仍按设置修复，只是修复事实不留痕（见 ResponseFixWiring）。
 	ResponseFix ResponseFixWiring
+	// PlaceholderThinkingSignature 是响应侧占位思考签名的开关
+	// （CCH_THINKING_SIGNATURE_PLACEHOLDER）：给来自非 Anthropic 上游、没有签名的思考块
+	// 补一个占位签名，让 Anthropic 客户端愿意显示它。语义见 convert/thinking_placeholder.go。
+	//
+	// 零值即关（与 env「未设置即开」不同）：默认值由 config 层给出，装配侧只搬运。
+	PlaceholderThinkingSignature bool
 }
 
 // Handler 是 `/v1` 数据面处理器。并发安全：所有可变状态都是每请求本地的。

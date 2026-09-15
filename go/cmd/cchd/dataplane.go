@@ -113,6 +113,9 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 		},
 		// 端点级与厂级熔断复用这个开关（Node 也在同一开关上短路，见 health 包注释）。
 		EndpointCircuitBreakerEnabled: options.Cfg.Env.EnableEndpointCircuitBreaker,
+		// 占位思考签名（CCH_THINKING_SIGNATURE_PLACEHOLDER，Go 专有，默认开）：思考来自
+		// chat/responses 线上游时，给无签名的思考块补占位签名，Anthropic 客户端才会显示。
+		PlaceholderThinkingSignature: options.Cfg.PlaceholderThinkingSignature,
 		// 回放：开关、TTL 与两道资源上限都取自与 Node 同一组环境变量（REPLAY_*），
 		// 切换期间两侧才会对「什么都缓存、缓存多久」持同一套口径。
 		ReplayEnabled:             options.Cfg.Env.EnableRequestReplay,

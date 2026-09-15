@@ -101,6 +101,9 @@ type StoreOptions struct {
 	// EndpointCircuitBreakerEnabled 取自 ENABLE_ENDPOINT_CIRCUIT_BREAKER：关闭时端点级与
 	// 厂级熔断一律不写（Node 在同一开关上短路，见 endpoint-circuit-breaker.ts:334）。
 	EndpointCircuitBreakerEnabled bool
+	// PlaceholderThinkingSignature 取自 CCH_THINKING_SIGNATURE_PLACEHOLDER（Go 专有，默认开）：
+	// 给来自非 Anthropic 上游、没有签名的思考块补占位签名，见 convert/thinking_placeholder.go。
+	PlaceholderThinkingSignature bool
 	// SessionArtifacts 是会话工件的开关与体积上限（STORE_SESSION_MESSAGES /
 	// SESSION_REQUEST_ARTIFACT_MAX_BYTES / STORE_SESSION_RESPONSE_BODY）。
 	SessionArtifacts session.SessionArtifactOptions
@@ -443,6 +446,8 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			Limits: options.Limits,
 			Logger: logger,
 			Now:    options.Now,
+			// 占位思考签名的主动剥离开关：发往 ANTHROPIC 供应商前剥掉客户端回传的自家占位签名。
+			PlaceholderThinkingSignature: options.PlaceholderThinkingSignature,
 			// 错误规则与假 200 检测共用守卫侧的快照（同一个 cfgsync 通道，避免两套真相）。
 			Rules:    adapters.Rules,
 			Detector: adapters.Detector,
@@ -463,8 +468,10 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		EffectiveGroup: func(pc *pctx.Context) string {
 			return adapters.Auth.ProviderGroup(context.Background(), pc)
 		},
-		Replay:    replayWiring,
-		Telemetry: telemetry,
+		// 响应侧占位思考签名开关（CCH_THINKING_SIGNATURE_PLACEHOLDER）。
+		PlaceholderThinkingSignature: options.PlaceholderThinkingSignature,
+		Replay:                       replayWiring,
+		Telemetry:                    telemetry,
 		// 工件选项同时进 Handler.Options：响应侧捕获要在这里判「本请求捕不捕正文」，
 		// 而 Stream 的选项是每请求从 Handler.Options.Stream 拷贝的（见 forward 的
 		// streamOptions 组装），在那里读会拿到未填的零值。
