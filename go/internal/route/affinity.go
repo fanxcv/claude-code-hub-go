@@ -91,8 +91,9 @@ func ScopeTag(keyID int64, format convert.ClientFormat, model string) string {
 
 // Fingerprint 计算一条指纹链；不支持的格式返回 (nil, false)。
 //
-// 已实现的线：claude（anthropic messages）、openai（chat completions）、response（OpenAI Responses）。
-// 未实现：gemini / gemini-cli。Node 有四条线，这是本波有意保留的差异——未实现即不产生亲和提名，
+// 已实现的线：claude（anthropic messages）、openai（chat completions）、response（OpenAI Responses）、
+// gemini（generateContent）与 gemini-cli（正文嵌在 request 里时取内层）——五条分支逐条对照
+// Node 的 fingerprint.ts:extractConversation。未知格式返回 false：此时不产生亲和提名，
 // 退化为加权随机，不会产生错误命中。
 func Fingerprint(body map[string]any, format convert.ClientFormat, window int) (*FingerprintChain, bool) {
 	if body == nil {
@@ -106,6 +107,10 @@ func Fingerprint(body map[string]any, format convert.ClientFormat, window int) (
 		extracted = extractOpenAIChat(body)
 	case convert.FormatResponse:
 		extracted = extractResponses(body)
+	case convert.FormatGemini:
+		extracted = extractGemini(body)
+	case convert.FormatGeminiCLI:
+		extracted = extractGeminiCLI(body)
 	default:
 		return nil, false
 	}
@@ -174,7 +179,7 @@ func extractClaude(body map[string]any) *extractedConversation {
 			segments = append(segments, normalizeContentBlock(block))
 		}
 	}
-	appendTools(segments, body["tools"], func(tool map[string]any) normalizedToolSpec {
+	segments = appendTools(segments, body["tools"], func(tool map[string]any) normalizedToolSpec {
 		return normalizedToolSpec{
 			name:        readString(tool, "name"),
 			description: readString(tool, "description"),
@@ -260,7 +265,7 @@ func extractOpenAIChat(body map[string]any) *extractedConversation {
 		return nil
 	}
 	segments := []string{sep}
-	appendTools(segments, body["tools"], func(tool map[string]any) normalizedToolSpec {
+	segments = appendTools(segments, body["tools"], func(tool map[string]any) normalizedToolSpec {
 		fn := readRecord(tool, "function")
 		if fn != nil {
 			return normalizedToolSpec{
@@ -320,7 +325,7 @@ func extractResponses(body map[string]any) *extractedConversation {
 	if instructions, ok := body["instructions"].(string); ok {
 		segments = append(segments, instructions)
 	}
-	appendTools(segments, body["tools"], func(tool map[string]any) normalizedToolSpec {
+	segments = appendTools(segments, body["tools"], func(tool map[string]any) normalizedToolSpec {
 		return normalizedToolSpec{
 			name:        readString(tool, "name"),
 			description: readString(tool, "description"),
@@ -367,6 +372,154 @@ func extractResponses(body map[string]any) *extractedConversation {
 	return &extractedConversation{sysSegments: segments, messages: out}
 }
 
+// ===== gemini / gemini-cli =====
+
+// extractGemini 复刻 fingerprint.ts:extractGemini。
+//
+// 与其它线的两点差别：
+//   - gemini 把系统段放在 systemInstruction.parts（REST 也有 system_instruction 变体）；
+//   - 工具声明嵌在 tools[].functionDeclarations 里，先摊平再并入 F_sys。
+//
+// contents 不是数组时不可指纹化（与 Node 的 `!Array.isArray(contents) → null` 同结论）。
+func extractGemini(body map[string]any) *extractedConversation {
+	contents, ok := body["contents"].([]any)
+	if !ok {
+		return nil
+	}
+
+	segments := []string{sep}
+	systemInstruction := readRecord(body, "systemInstruction")
+	if systemInstruction == nil {
+		systemInstruction = readRecord(body, "system_instruction")
+	}
+	if systemInstruction != nil {
+		if parts, ok := systemInstruction["parts"].([]any); ok {
+			for _, part := range parts {
+				segments = append(segments, normalizeGeminiPart(part))
+			}
+		}
+	}
+	segments = appendTools(segments, flattenGeminiTools(body["tools"]), func(declaration map[string]any) normalizedToolSpec {
+		return normalizedToolSpec{
+			name:        readString(declaration, "name"),
+			description: readString(declaration, "description"),
+			parameters:  readRecord(declaration, "parameters"),
+		}
+	})
+
+	out := make([]normalizedMessage, 0, len(contents))
+	for _, raw := range contents {
+		content, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		parts := []string{sep, readString(content, "role")}
+		if contentParts, ok := content["parts"].([]any); ok {
+			for _, part := range contentParts {
+				parts = append(parts, normalizeGeminiPart(part))
+			}
+		}
+		out = append(out, finishMessage(parts, false))
+	}
+	return &extractedConversation{sysSegments: segments, messages: out}
+}
+
+// extractGeminiCLI 复刻 fingerprint.ts 的 gemini-cli 分支：正文嵌在 request 里时取内层。
+//
+// JS 的判据是 `request && typeof request === "object"`：null/缺失/标量都回落外层正文，
+// 而数组同样满足 typeof === "object"，进内层后取不到 contents 即归 null。为保持
+// 「同输入同结论」，这里显式跟随该分支。
+func extractGeminiCLI(body map[string]any) *extractedConversation {
+	if raw, present := body["request"]; present {
+		switch request := raw.(type) {
+		case map[string]any:
+			return extractGemini(request)
+		case []any:
+			return nil
+		}
+	}
+	return extractGemini(body)
+}
+
+// flattenGeminiTools 复刻 fingerprint.ts:flattenGeminiTools：把 tools[].functionDeclarations 摊平，
+// 没有该键的条目按声明本身对待（Node 的 else 分支）。
+func flattenGeminiTools(raw any) []any {
+	tools, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	declarations := make([]any, 0, len(tools))
+	for _, tool := range tools {
+		record, ok := tool.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nested, ok := record["functionDeclarations"].([]any); ok {
+			declarations = append(declarations, nested...)
+			continue
+		}
+		declarations = append(declarations, tool)
+	}
+	return declarations
+}
+
+// normalizeGeminiPart 复刻 fingerprint.ts:normalizeGeminiPart。
+//
+// 易变 id 一律不入指纹：functionCall 只取 name + args、functionResponse 只取 name + response；
+// 内联二进制取内容 sha256 摘要（同长异图不碰撞），文件引用取 uri。无法归类的 part 走兜底，
+// 其内部顶层易变键由 stripVolatileKeys 剥离。
+func normalizeGeminiPart(part any) string {
+	record, ok := part.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if text, ok := record["text"].(string); ok {
+		return sep + "text:" + text
+	}
+	if functionCall := readRecord(record, "functionCall"); functionCall != nil {
+		return sep + "tool_use:" + readString(functionCall, "name") + ":" +
+			stableStringify(valueOrNil(functionCall["args"]))
+	}
+	if functionResponse := readRecord(record, "functionResponse"); functionResponse != nil {
+		return sep + "tool_result:" + readString(functionResponse, "name") + ":" +
+			stableStringify(valueOrNil(functionResponse["response"]))
+	}
+	inlineData := firstRecord(record, "inlineData", "inline_data")
+	if inlineData != nil {
+		digest := ""
+		if data := readString(inlineData, "data"); data != "" {
+			digest = hash32(data)
+		}
+		return sep + "image:" + firstString(inlineData, "mimeType", "mime_type") + ":" + digest
+	}
+	fileData := firstRecord(record, "fileData", "file_data")
+	if fileData != nil {
+		return sep + "file:" + firstString(fileData, "mimeType", "mime_type") + ":" +
+			firstString(fileData, "fileUri", "file_uri")
+	}
+	return sep + "part:" + stableStringify(stripVolatileKeys(record))
+}
+
+// firstRecord 按给定顺序取第一个存在的对象值（Node 的 `a ?? b` / `a || b` 形态）。
+func firstRecord(record map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		if value := readRecord(record, key); value != nil {
+			return value
+		}
+	}
+	return nil
+}
+
+// firstString 按给定顺序取第一个非空字符串值。
+func firstString(record map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := readString(record, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 type normalizedToolSpec struct {
 	name        string
 	description string
@@ -374,10 +527,14 @@ type normalizedToolSpec struct {
 }
 
 // appendTools 复刻 appendTools：工具按 name 排序后并入 F_sys，工具顺序差异不产生不同 F_sys。
-func appendTools(segments []string, raw any, project func(map[string]any) normalizedToolSpec) {
+//
+// 返回追加后的切片而**不是**就地 append：Go 的切片按值传递，而 `segments := []string{sep}`
+// 容量只有 1，首个工具就触发扩容，调用方拿不到新底层数组——工具段会静默丢失（Node 的
+// `segments.push(...)` 是就地变更，两者语义不同）。
+func appendTools(segments []string, raw any, project func(map[string]any) normalizedToolSpec) []string {
 	tools, ok := raw.([]any)
 	if !ok || len(tools) == 0 {
-		return
+		return segments
 	}
 	specs := make([]normalizedToolSpec, 0, len(tools))
 	for _, tool := range tools {
@@ -399,6 +556,7 @@ func appendTools(segments []string, raw any, project func(map[string]any) normal
 		}
 		segments = append(segments, sep, spec.name, ":", spec.description, ":", parameters)
 	}
+	return segments
 }
 
 // finishMessage 复刻 finishMessage：只有分隔符 + role 而无任何内容段的消息视为空。

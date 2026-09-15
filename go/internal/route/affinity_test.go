@@ -243,15 +243,22 @@ func TestFingerprintSupportsOpenAIAndResponses(t *testing.T) {
 }
 
 func TestFingerprintUnsupportedFormatsAndBodies(t *testing.T) {
-	body := map[string]any{"contents": []any{}}
-	if _, ok := Fingerprint(body, convert.FormatGemini, 8); ok {
-		t.Errorf("gemini 指纹本波未实现，应返回 false 而不是产生错误命中")
+	// gemini 的 contents 为空数组时**可**指纹化（只有 F_sys，无会话边界），与 Node 同结论。
+	chain, ok := Fingerprint(map[string]any{"contents": []any{}}, convert.FormatGemini, 8)
+	if !ok || len(chain.Tail) != 0 {
+		t.Errorf("空 contents 应产出只有 F_sys 的链，实际 ok=%v 边界=%d", ok, len(chain.Tail))
+	}
+	if _, ok := Fingerprint(map[string]any{"contents": "nope"}, convert.FormatGemini, 8); ok {
+		t.Errorf("contents 非数组应不可指纹化")
 	}
 	if _, ok := Fingerprint(map[string]any{}, convert.FormatClaude, 8); ok {
 		t.Errorf("缺少 messages 的请求体应不可指纹化")
 	}
 	if _, ok := Fingerprint(nil, convert.FormatClaude, 8); ok {
 		t.Errorf("空请求体应不可指纹化")
+	}
+	if _, ok := Fingerprint(map[string]any{"contents": []any{}}, convert.ClientFormat("bogus"), 8); ok {
+		t.Errorf("未知客户端格式应不可指纹化")
 	}
 }
 
