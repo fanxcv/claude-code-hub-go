@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/forward"
 )
 
@@ -50,7 +51,13 @@ func FetchUpstreamModels(
 }
 
 func fetchOpenAIModels(ctx context.Context, client *http.Client, baseURL, apiKey string) ([]string, error) {
-	response, body, err := doJSONRequest(ctx, client, http.MethodGet, baseURL+"/v1/models", map[string]string{
+	// URL 经 dial 拼接（与数据面同一条语义）：基址停在版本根（如 `…/api/plan/v3`）时
+	// 裸拼 `base + "/v1/models"` 会多一个版本段而 404。
+	requestURL, err := dial.BuildUpstreamURL(baseURL, "/v1/models")
+	if err != nil {
+		return nil, err
+	}
+	response, body, err := doJSONRequest(ctx, client, http.MethodGet, requestURL, map[string]string{
 		"Authorization": "Bearer " + apiKey,
 	})
 	if err != nil {
@@ -77,7 +84,11 @@ func fetchOpenAIModels(ctx context.Context, client *http.Client, baseURL, apiKey
 
 func fetchAnthropicModels(ctx context.Context, client *http.Client, providerType ProviderType, baseURL, apiKey string) ([]string, error) {
 	headers := forward.ResolveAnthropicAuthHeaders(apiKey, baseURL, providerType == TypeClaudeAuth)
-	response, body, err := doJSONRequest(ctx, client, http.MethodGet, baseURL+"/v1/models", headers)
+	requestURL, err := dial.BuildUpstreamURL(baseURL, "/v1/models")
+	if err != nil {
+		return nil, err
+	}
+	response, body, err := doJSONRequest(ctx, client, http.MethodGet, requestURL, headers)
 	if err != nil {
 		return nil, err
 	}

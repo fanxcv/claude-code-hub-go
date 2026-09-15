@@ -53,6 +53,181 @@ func TestBuildUpstreamURLRejectsRelativeBase(t *testing.T) {
 	}
 }
 
+// TestBuildUpstreamURLJoinsEndpointRoot 钉住 Node buildProxyUrl 的「端点根 / 版本根」语义
+// （用例逐条对齐 src/lib/v1-url.ts 的既有断言，见 tests/unit/app/v1/url.test.ts）。
+//
+// 生产事故（2026-09-15，ARK Codex 渠道）：供应商 url 填 `…/api/plan/v3`，本函数曾拼成
+// `…/api/plan/v3/v1/chat/completions`（版本段重复，上游 404，整家渠道被摘出竞争），
+// 而 Node 同一配置拼的是 `…/api/plan/v3/chat/completions`（上游 200）。
+func TestBuildUpstreamURLJoinsEndpointRoot(t *testing.T) {
+	cases := []struct {
+		name string
+		base string
+		path string
+		want string
+	}{
+		{
+			"base 停在版本根：只补端点不重复版本段",
+			"https://relay.example.com/openai/v1", "/v1/chat/completions",
+			"https://relay.example.com/openai/v1/chat/completions",
+		},
+		{
+			"事故配置：base 停在 /api/plan/v3",
+			"https://ark.example.com/api/plan/v3", "/v1/chat/completions",
+			"https://ark.example.com/api/plan/v3/chat/completions",
+		},
+		{
+			"任意前缀的版本根 v4",
+			"https://open.bigmodel.cn/api/coding/paas/v4", "/v1/chat/completions",
+			"https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
+		},
+		{
+			"带数字后缀的版本根 v1beta1",
+			"https://relay.example.com/openai/v1beta1", "/v1/chat/completions",
+			"https://relay.example.com/openai/v1beta1/chat/completions",
+		},
+		{
+			"带 rc 后缀的版本根 v1rc1",
+			"https://relay.example.com/openai/v1rc1", "/v1/chat/completions",
+			"https://relay.example.com/openai/v1rc1/chat/completions",
+		},
+		{
+			"版本根 + 资源后缀要留住",
+			"https://relay.example.com/openai/v1", "/v1/chat/completions/cmpl_123/messages",
+			"https://relay.example.com/openai/v1/chat/completions/cmpl_123/messages",
+		},
+		{
+			"版本根 + models 资源",
+			"https://relay.example.com/openai/v1", "/v1/models/gpt-4o",
+			"https://relay.example.com/openai/v1/models/gpt-4o",
+		},
+		{
+			"版本根 + images 端点",
+			"https://relay.example.com/openai/v1", "/v1/images/generations",
+			"https://relay.example.com/openai/v1/images/generations",
+		},
+		{
+			"版本根 + audio 端点",
+			"https://relay.example.com/openai/v1", "/v1/audio/transcriptions",
+			"https://relay.example.com/openai/v1/audio/transcriptions",
+		},
+		{
+			"base 是端点根（无版本段）：不补版本段",
+			"https://relay.example.com/openai/responses", "/v1/responses",
+			"https://relay.example.com/openai/responses",
+		},
+		{
+			"base 是 embeddings 端点根",
+			"https://relay.example.com/openai/embeddings", "/v1/embeddings",
+			"https://relay.example.com/openai/embeddings",
+		},
+		{
+			"端点根 + 资源后缀",
+			"https://relay.example.com/openai/messages", "/v1/messages/count_tokens",
+			"https://relay.example.com/openai/messages/count_tokens",
+		},
+		{
+			"端点根（带版本段）+ 资源后缀",
+			"https://relay.example.com/openai/v1/images", "/v1/images/edits",
+			"https://relay.example.com/openai/v1/images/edits",
+		},
+		{
+			"端点根 responses + 资源后缀",
+			"https://relay.example.com/openai/responses", "/v1/responses/abc",
+			"https://relay.example.com/openai/responses/abc",
+		},
+		{
+			"gemini 端点根 + 模型动作后缀",
+			"https://api.example.com/gemini/models", "/v1beta/models/gemini-1.5-pro:streamGenerateContent",
+			"https://api.example.com/gemini/models/gemini-1.5-pro:streamGenerateContent",
+		},
+		{
+			"v1internal 版本段同样可剥",
+			"https://example.com/gemini/models", "/v1internal/models/gemini-2.5-flash:generateContent",
+			"https://example.com/gemini/models/gemini-2.5-flash:generateContent",
+		},
+		{
+			"v1api 不是版本根：照常标准拼接",
+			"https://relay.example.com/proxy/v1api", "/v1/chat/completions",
+			"https://relay.example.com/proxy/v1api/v1/chat/completions",
+		},
+		{
+			"responses-archive 不得被折叠成 responses",
+			"https://relay.example.com/openai/responses-archive", "/v1/responses",
+			"https://relay.example.com/openai/responses-archive/v1/responses",
+		},
+		{
+			"非端点路径的版本根不剥版本段",
+			"https://relay.example.com/openai/v1", "/v1/responses-archive",
+			"https://relay.example.com/openai/v1/v1/responses-archive",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := BuildUpstreamURL(testCase.base, testCase.path)
+			if err != nil {
+				t.Fatalf("BuildUpstreamURL 返回错误: %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("期望 %q，实际 %q", testCase.want, got)
+			}
+		})
+	}
+}
+
+// TestBuildUpstreamURLKeepsQueryInEveryBranch 钉住「每条分支都带查询串」。
+//
+// 回归：原先 Case 1（base 已是请求路径前缀）直接返回，未写回查询，故 Gemini 官方端点形态
+// 下 `?alt=sse` 会被静默吞掉（上游改回 JSON 数组，客户端拿到非流式响应）。
+func TestBuildUpstreamURLKeepsQueryInEveryBranch(t *testing.T) {
+	cases := []struct {
+		name  string
+		base  string
+		path  string
+		query string
+		want  string
+	}{
+		{
+			"Case 1（base 已是完整端点）带查询",
+			"https://generativelanguage.example.com/v1beta/models/gemini-2.0-flash:streamGenerateContent",
+			"/v1beta/models/gemini-2.0-flash:streamGenerateContent", "alt=sse",
+			"https://generativelanguage.example.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse",
+		},
+		{
+			"Case 2（版本根）带查询",
+			"https://ark.example.com/api/plan/v3", "/v1/chat/completions", "trace=1",
+			"https://ark.example.com/api/plan/v3/chat/completions?trace=1",
+		},
+		{
+			"Case 3（标准拼接）带查询",
+			"https://api.example.com", "/v1/messages", "x=1",
+			"https://api.example.com/v1/messages?x=1",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := BuildUpstreamURLWithQuery(testCase.base, testCase.path, testCase.query)
+			if err != nil {
+				t.Fatalf("BuildUpstreamURLWithQuery 返回错误: %v", err)
+			}
+			if got != testCase.want {
+				t.Fatalf("期望 %q，实际 %q", testCase.want, got)
+			}
+		})
+	}
+
+	// 空查询串时保留 base 自带查询（探针与回放路径依赖此语义）。
+	got, err := BuildUpstreamURLWithQuery("https://api.example.com/v1/messages?from=base", "/v1/messages", "")
+	if err != nil {
+		t.Fatalf("BuildUpstreamURLWithQuery 返回错误: %v", err)
+	}
+	if want := "https://api.example.com/v1/messages?from=base"; got != want {
+		t.Fatalf("空查询串应保留 base 查询：期望 %q，实际 %q", want, got)
+	}
+}
+
 func TestResolveClientIP(t *testing.T) {
 	cases := []struct {
 		name    string

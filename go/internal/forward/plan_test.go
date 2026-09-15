@@ -34,7 +34,12 @@ func claudeProvider(baseURL string) Provider {
 	}
 }
 
-// TestBuildPlanKeepsBaseURLPathPrefix 断言基址自带的路径前缀不被丢弃。
+// TestBuildPlanKeepsBaseURLPathPrefix 断言基址自带的路径前缀不被丢弃，且基址停在版本根时
+// 不再重复追加请求路径里的版本段。
+//
+// 历史：本用例曾断言 `…/anthropic/v2/v1/messages`（版本段重复）。那是与 Node 不一致的拼接：
+// buildProxyUrl 认「base 停在版本根」（/v1、/v2、/v3、/v1beta …），此时版本段以 base 为准。
+// 生产事故同源（2026-09-15，ARK Codex）：base `…/api/plan/v3` 被拼成 `…/api/plan/v3/v1/…` → 上游 404。
 func TestBuildPlanKeepsBaseURLPathPrefix(t *testing.T) {
 	plan, err := BuildPlan(PlanInput{
 		Client: newClaudeRequest(claudeRequestBody),
@@ -43,7 +48,7 @@ func TestBuildPlanKeepsBaseURLPathPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPlan 失败: %v", err)
 	}
-	if plan.URL != "https://relay.example.com/anthropic/v2/v1/messages" {
+	if plan.URL != "https://relay.example.com/anthropic/v2/messages" {
 		t.Fatalf("URL = %q", plan.URL)
 	}
 	if plan.Protocol != convert.ProtocolAnthropicMessages {

@@ -298,7 +298,10 @@ func (h *Handler) fetchProviderModels(ctx context.Context, provider ModelProvide
 	if baseURL == "" {
 		return nil, errors.New("dataplane: 供应商基址为空")
 	}
-	url, headers, parse := upstreamModelsConfig(provider.Type, baseURL, provider.Key)
+	url, headers, parse, err := upstreamModelsConfig(provider.Type, baseURL, provider.Key)
+	if err != nil {
+		return nil, err
+	}
 	if url == "" {
 		return nil, fmt.Errorf("dataplane: 未知的供应商类型 %q", provider.Type)
 	}
@@ -331,25 +334,31 @@ func (h *Handler) fetchProviderModels(ctx context.Context, provider ModelProvide
 }
 
 // upstreamModelsConfig 按供应商类型给出上游 URL、请求头与响应解析器。
-func upstreamModelsConfig(providerType, baseURL, key string) (string, http.Header, func([]byte) ([]fetchedModel, error)) {
+//
+// 标准 `/v1/models` 一律经 dial.BuildUpstreamURL 拼接（与数据面同一条语义）：供应商基址自带
+// 路径前缀或停在版本根（如 `…/api/plan/v3`）时，裸拼 `base + "/v1/models"` 会多出一个版本段。
+// gemini 的分支保留自己的形态（`/v1beta` 前缀 + 查询参数），不适用标准端点根语义。
+func upstreamModelsConfig(providerType, baseURL, key string) (string, http.Header, func([]byte) ([]fetchedModel, error), error) {
 	headers := http.Header{}
 	switch providerType {
 	case "claude", "claude-auth":
 		headers.Set("x-api-key", key)
 		headers.Set("anthropic-version", "2023-06-01")
-		return baseURL + "/v1/models", headers, parseClaudeModels
+		target, err := dial.BuildUpstreamURL(baseURL, "/v1/models")
+		return target, headers, parseClaudeModels, err
 	case "codex", "openai-compatible":
 		headers.Set("Authorization", "Bearer "+key)
-		return baseURL + "/v1/models", headers, parseOpenAIModels
+		target, err := dial.BuildUpstreamURL(baseURL, "/v1/models")
+		return target, headers, parseOpenAIModels, err
 	case "gemini", "gemini-cli":
 		headers.Set("x-goog-api-key", key)
 		prefix := baseURL
 		if !strings.HasSuffix(baseURL, "/v1beta") {
 			prefix = baseURL + "/v1beta"
 		}
-		return prefix + "/models", headers, parseGeminiModels
+		return prefix + "/models", headers, parseGeminiModels, nil
 	default:
-		return "", headers, nil
+		return "", headers, nil, nil
 	}
 }
 

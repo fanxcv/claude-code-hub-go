@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/forward"
 )
 
@@ -200,7 +201,11 @@ func TestHeaders(
 }
 
 // TestURL 复刻 getTestUrl：把 path 拼到 baseURL 上，**复用数据面的 URL 语义**
-// （`internal/forward` 的 buildProxyUrl 对应实现），避免探测面另起一套拼接规则。
+// （dial.BuildUpstreamURL，即数据面的 buildProxyUrl 对应实现），避开探测面另起一套拼接规则。
+//
+// 为何必须走 dial：探测面的 URL 就是数据面即将发出的 URL，两边不一致会出现「探活通过、真实
+// 请求 404」（或反之）。供应商基址停在版本根（如 `…/api/plan/v3`）时，裸拼
+// `base + "/v1/chat/completions"` 会多出一个版本段，上游 404（2026-09-15 ARK 生产实证）。
 func TestURL(baseURL string, providerType ProviderType, model string, pathOverride string) (string, error) {
 	targetModel := model
 	if targetModel == "" {
@@ -214,12 +219,12 @@ func TestURL(baseURL string, providerType ProviderType, model string, pathOverri
 		return "", &UnsupportedProviderTypeError{ProviderType: providerType}
 	}
 	path = strings.ReplaceAll(path, "{model}", targetModel)
-	trimmed := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
-	parsed, err := url.Parse(trimmed + path)
-	if err != nil {
-		return "", err
+	// pathOverride 可能自带查询串（预设模板的 `?beta=true` 之类），拆开交给 dial 原样带上。
+	rawPath, rawQuery := path, ""
+	if index := strings.Index(path, "?"); index >= 0 {
+		rawPath, rawQuery = path[:index], path[index+1:]
 	}
-	return parsed.String(), nil
+	return dial.BuildUpstreamURLWithQuery(strings.TrimSpace(baseURL), rawPath, rawQuery)
 }
 
 // versionedFallbackPaths 复刻 OPENAI_VERSIONED_FALLBACK_PATHS（test-prompts.ts:180-184）。
