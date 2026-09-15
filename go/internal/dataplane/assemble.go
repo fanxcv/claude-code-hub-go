@@ -326,6 +326,15 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	if options.MaxUpstreamConnections > 0 {
 		dialOptions.MaxUpstreamConnections = options.MaxUpstreamConnections
 	}
+	if dialOptions.HTTP2Enabled == nil {
+		// system_settings.enable_http2（建表默认 false）决定是否对该上游尝试 HTTP/2，
+		// 语义对齐 Node 的 forwarder.ts:3954：**每请求**读一遍设置快照。这里取的是
+		// adapters.Settings（cfgsync 的 60s 快照 + 失效广播），不是每请求一次真库查询。
+		dialOptions.HTTP2Enabled = func(ctx context.Context) bool {
+			settings, settingsErr := adapters.Settings.FindSystemSettings(ctx)
+			return settingsErr == nil && settings != nil && settings.EnableHTTP2
+		}
+	}
 	dialClient, err := dial.New(dialOptions)
 	if err != nil {
 		return nil, fmt.Errorf("dataplane: 拨号器构造失败: %w", err)

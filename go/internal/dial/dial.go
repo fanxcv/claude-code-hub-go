@@ -47,6 +47,13 @@ type Options struct {
 	DisableKeepAlives bool
 	// Transport 允许测试注入自定义 RoundTripper。非空时忽略其余传输层配置。
 	Transport http.RoundTripper
+	// HTTP2Enabled 每请求询问一次「这条上游是否允许尝试 HTTP/2」，nil 表示不允许
+	// （默认只走 HTTP/1.1，与 Go 端口历史行为一致）。
+	//
+	// 语义对齐 Node 的 system_settings.enable_http2：它是全局开关，但**按请求**读取——Node 在
+	// 每次转发前读一遍设置缓存快照（forwarder.ts:3954）。若改成构造期读一次，改开关就必须重启，
+	// 与 Node 行为分叉。
+	HTTP2Enabled func(ctx context.Context) bool
 }
 
 // Request 是一次上游调用的输入。Body 为 nil 表示无请求体。
@@ -79,10 +86,17 @@ type IPHeaders struct {
 // Client 是可复用的拨号器。并发安全。
 type Client struct {
 	options Options
-	http    *http.Client
-	admit   chan struct{}
-	mu      sync.Mutex
-	closed  bool
+	// http 是 HTTP/1.1 传输；h2 是按需构造的 HTTP/2 传输（见 http2.go）。
+	http *http.Client
+	h2   *http.Client
+	// quarantine 记录近期出现过 HTTP/2 协议错误的路由（对齐 Node 的隔离表）。
+	quarantine *http2Quarantine
+	// now 可注入时钟（测试用隔离期过期）。
+	now    func() time.Time
+	h2Once sync.Once
+	admit  chan struct{}
+	mu     sync.Mutex
+	closed bool
 }
 
 // New 构造拨号器。Options.ProxyURL 非空时直接失败，避免调用方以为代理已生效。
@@ -104,7 +118,12 @@ func New(options Options) (*Client, error) {
 			ExpectContinueTimeout: time.Second,
 		}
 	}
-	client := &Client{options: options, http: &http.Client{Transport: transport}}
+	client := &Client{
+		options:    options,
+		http:       &http.Client{Transport: transport},
+		quarantine: newHTTP2Quarantine(),
+		now:        time.Now,
+	}
 	if options.MaxUpstreamConnections > 0 {
 		client.admit = make(chan struct{}, options.MaxUpstreamConnections)
 	}
@@ -128,28 +147,23 @@ func (c *Client) RoundTrip(ctx context.Context, request Request) (*Response, err
 		return nil, err
 	}
 
-	method := request.Method
-	if method == "" {
-		method = http.MethodPost
-	}
-
-	httpRequest, err := http.NewRequestWithContext(ctx, method, request.URL, request.Body)
-	if err != nil {
+	useHTTP2 := c.http2Eligible(ctx, request.URL)
+	httpResponse, attemptErr := c.attempt(ctx, request, c.transportFor(useHTTP2))
+	if errors.Is(attemptErr, ErrRequestBuild) {
 		release()
-		return nil, fmt.Errorf("%w: %v", ErrRequestBuild, err)
+		return nil, attemptErr
 	}
-	if httpRequest.Host == "" {
-		// 让 Host 头与请求目标一致（不要在 URL 之外另行覆写）。
-		httpRequest.Host = ""
+	if attemptErr != nil && useHTTP2 && isHTTP2ProtocolError(attemptErr) {
+		// 对齐 Node forwarder.ts:4297-4340：HTTP/2 协议错误按**传输层**问题处理——隔离这条
+		// 路由 5 分钟，并透明回退 HTTP/1.1 重试一次；不改供应商选路，也不进熔断归因。
+		c.quarantine.quarantine(request.URL, c.now())
+		if rewindBody(request.Body) {
+			httpResponse, attemptErr = c.attempt(ctx, request, c.transportFor(false))
+		}
 	}
-	httpRequest.ContentLength = request.ContentLength
-	applyHeaders(httpRequest.Header, request.Headers)
-	ForceIdentityEncoding(httpRequest.Header)
-
-	httpResponse, err := c.http.Do(httpRequest)
-	if err != nil {
+	if attemptErr != nil {
 		release()
-		return nil, classifyTransportError(err, c.options)
+		return nil, classifyTransportError(attemptErr, c.options)
 	}
 
 	idle := resolve(c.options.BodyIdleTimeout, DefaultBodyIdleTimeout)
@@ -162,12 +176,54 @@ func (c *Client) RoundTrip(ctx context.Context, request Request) (*Response, err
 	}, nil
 }
 
+// transportFor 给出本次使用的客户端：允许且未被隔离时用 h2，否则 h1。
+func (c *Client) transportFor(useHTTP2 bool) *http.Client {
+	if !useHTTP2 {
+		return c.http
+	}
+	if client := c.http2Client(); client != nil {
+		return client
+	}
+	return c.http
+}
+
+// attempt 用给定传输发一次请求；错误原样返回，由调用方决定是否回退与如何分类。
+func (c *Client) attempt(ctx context.Context, request Request, client *http.Client) (*http.Response, error) {
+	method := request.Method
+	if method == "" {
+		method = http.MethodPost
+	}
+
+	httpRequest, err := http.NewRequestWithContext(ctx, method, request.URL, request.Body)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrRequestBuild, err)
+	}
+	if httpRequest.Host == "" {
+		// 让 Host 头与请求目标一致（不要在 URL 之外另行覆写）。
+		httpRequest.Host = ""
+	}
+	httpRequest.ContentLength = request.ContentLength
+	applyHeaders(httpRequest.Header, request.Headers)
+	ForceIdentityEncoding(httpRequest.Header)
+
+	return client.Do(httpRequest)
+}
+
 // Close 关闭空闲连接。在途响应不受影响。
 func (c *Client) Close() {
 	c.mu.Lock()
 	c.closed = true
 	c.mu.Unlock()
-	if transport, ok := c.http.Transport.(*http.Transport); ok {
+	closeIdle(c.http)
+	closeIdle(c.h2)
+}
+
+// closeIdle 关闭某个客户端底层传输的空闲连接（注入的 RoundTripper 不是 *http.Transport 时无操作）。
+func closeIdle(client *http.Client) {
+	if client == nil {
+		return
+	}
+	if transport, ok := client.Transport.(*http.Transport); ok {
 		transport.CloseIdleConnections()
 	}
 }
