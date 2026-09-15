@@ -215,6 +215,8 @@ type SessionArtifactReader interface {
 	SessionResponseHeaders(ctx context.Context, sessionID string, sequence int) map[string]string
 	// ReadSessionPhaseSnapshot 读一份相位快照（kind × phase）。
 	ReadSessionPhaseSnapshot(ctx context.Context, sessionID string, sequence int, kind, phase string) *session.SessionDetailSnapshotRead
+	// ReadSessionClientRequestMeta 读客户端请求元信息（详情页 requestMeta.clientUrl 的来源）。
+	ReadSessionClientRequestMeta(ctx context.Context, sessionID string, sequence int) *session.SessionUpstreamRequestMetaRead
 	// ReadSessionUpstreamRequestMeta 读上游请求元信息。
 	ReadSessionUpstreamRequestMeta(ctx context.Context, sessionID string, sequence int) *session.SessionUpstreamRequestMetaRead
 	// ReadSessionUpstreamResponseMeta 读上游响应元信息。

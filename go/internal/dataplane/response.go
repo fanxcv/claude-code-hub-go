@@ -32,20 +32,29 @@ var hopByHopHeaders = []string{
 	"Upgrade",
 }
 
-// writeGuardResponse 写回守卫链的抢答响应。
-func (h *Handler) writeGuardResponse(writer http.ResponseWriter, response *guard.Response) {
+// writeGuardResponse 写回守卫链的抢答响应（自身失败与无可用供应商也走这条）。
+//
+// 4xx/5xx 的 JSON 正文会在写回前挂上会话 id（见 error_session_id.go）；这与 Node 在
+// proxy-handler 末尾统一附着同效——凡本进程自答的错误，客户端都能拿到 cch_session_id。
+func (h *Handler) writeGuardResponse(writer http.ResponseWriter, state *RequestState, response *guard.Response) {
 	if response == nil {
 		return
+	}
+	body := response.Body
+	if state != nil {
+		body = attachSessionIDToErrorBody(
+			state.sessionID, response.Status, response.Headers.Get("content-type"), body,
+		)
 	}
 	for key, values := range response.Headers {
 		for _, value := range values {
 			writer.Header().Add(key, value)
 		}
 	}
-	writer.Header().Set("Content-Length", strconv.Itoa(len(response.Body)))
+	writer.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	writer.WriteHeader(response.Status)
-	if len(response.Body) > 0 {
-		if _, err := writer.Write(response.Body); err != nil {
+	if len(body) > 0 {
+		if _, err := writer.Write(body); err != nil {
 			h.logger.Debug("dataplane.guard_write_failed", map[string]any{"error": err.Error()})
 		}
 	}
@@ -74,6 +83,13 @@ func (h *Handler) writeForwardResult(
 	// 响应修复器（Node 的 response-fixer）：修的是**上游线**字节，故必须早于协议转换——
 	// 惰性 `chat.completion.chunk` 帧的判定就依赖「字节还是上游方言」这个前提。
 	body = h.fixNonStreamBody(ctx, state, result.Headers, body)
+	// 错误体挂会话 id（Node 在 handler 末尾统一附着）：只动 4xx/5xx 的 JSON 正文。
+	// 取上游的 content-type 而非 writer 上的——非 2xx 不做协议转换，交付的正是上游那份正文。
+	if state != nil {
+		body = attachSessionIDToErrorBody(
+			state.sessionID, result.StatusCode, result.Headers.Get("Content-Type"), body,
+		)
+	}
 	converted := false
 	switch {
 	case state == nil:

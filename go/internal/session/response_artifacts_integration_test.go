@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/fanxcv/claude-code-hub-go/go/internal/guard"
 )
 
 // 本文件钉住**响应侧工件**的写读闭环：数据面按下述顺序写入 → 详情面读出来。
@@ -230,5 +232,95 @@ func TestIntegrationResponseBodySwitchSkipsWrite(t *testing.T) {
 	}
 	if _, found := binder.SessionResponseBody(ctx, sessionID, 1); found {
 		t.Fatal("STORE_SESSION_RESPONSE_BODY=false 时不应落下任何正文")
+	}
+}
+
+// TestIntegrationClientRequestMetaRoundTrip 钉住客户端请求元信息的写读闭环。
+//
+// 这条工件此前两侧都在却都不通：键名落地但写侧未接、详情面读侧恒返回 nil，故详情页的
+// requestMeta.clientUrl 恒为 null 而没有任何请求会失败。故按「生产入口写 → 生产入口读」串起来。
+func TestIntegrationClientRequestMetaRoundTrip(t *testing.T) {
+	rdb := testRedis(t)
+	binder := newTestBinder(t, rdb)
+	sessionID := uniqueSessionID(t)
+	cleanupSessionKeys(t, rdb, sessionID, testKeyID)
+	ctx := context.Background()
+
+	raw := "https://hub.example.com/v1/messages?api_key=sk-secret&trace=t1"
+	if err := binder.StoreSessionClientRequestMeta(ctx, sessionID, raw, "POST", 2); err != nil {
+		t.Fatalf("写客户端请求元信息失败: %v", err)
+	}
+	meta := binder.ReadSessionClientRequestMeta(ctx, sessionID, 2)
+	if meta == nil {
+		t.Fatal("写后读不到——写读键名已分叉")
+	}
+	if meta.Method != "POST" {
+		t.Fatalf("method = %q", meta.Method)
+	}
+	if meta.URL != "https://hub.example.com/v1/messages?api_key=[REDACTED]&trace=t1" {
+		t.Fatalf("url 未按 sanitizeUrl 脱敏: %q", meta.URL)
+	}
+
+	// 序号归一：非正数按 1（与其它工件同规则），故写 0 与读 1 是同一键。
+	if err := binder.StoreSessionClientRequestMeta(ctx, sessionID, "https://hub.example.com/x", "GET", 0); err != nil {
+		t.Fatalf("写序号 0 失败: %v", err)
+	}
+	first := binder.ReadSessionClientRequestMeta(ctx, sessionID, 1)
+	if first == nil || first.Method != "GET" {
+		t.Fatalf("序号未归一为 1: %+v", first)
+	}
+}
+
+// TestIntegrationWarmupArtifactsRoundTrip 钉住 warmup 抢答四条工件的写读闭环。
+//
+// 抢答是本进程自造的响应，上游没有这次请求；这四条键是详情页里它唯一的痕迹。
+func TestIntegrationWarmupArtifactsRoundTrip(t *testing.T) {
+	rdb := testRedis(t)
+	binder := newTestBinder(t, rdb)
+	sessionID := uniqueSessionID(t)
+	cleanupSessionKeys(t, rdb, sessionID, testKeyID)
+	ctx := context.Background()
+	sequence := 1
+
+	options := SessionArtifactOptions{StoreMessages: false, StoreResponseBody: true}
+	adapter := NewWarmupArtifactAdapter(binder, options)
+	if adapter == nil {
+		t.Fatal("适配器未构造")
+	}
+	body := `{"id":"msg_cch_x","type":"message"}`
+	if err := adapter.StoreWarmupResponse(ctx, guard.WarmupArtifactRequest{
+		SessionID:  sessionID,
+		Sequence:   sequence,
+		KeyID:      testKeyID,
+		Method:     "POST",
+		Body:       body,
+		Headers:    map[string]string{"content-type": "application/json; charset=utf-8"},
+		StatusCode: 200,
+	}); err != nil {
+		t.Fatalf("写 warmup 工件失败: %v", err)
+	}
+
+	storedBody, found := binder.SessionResponseBody(ctx, sessionID, sequence)
+	if !found {
+		t.Fatal("响应正文写后读不到")
+	}
+	if !strings.Contains(storedBody, "msg_cch_x") {
+		t.Fatalf("响应正文内容不符: %s", storedBody)
+	}
+	headers := binder.SessionResponseHeaders(ctx, sessionID, sequence)
+	if headers["content-type"] != "application/json; charset=utf-8" {
+		t.Fatalf("响应头不符: %#v", headers)
+	}
+	reqMeta := binder.ReadSessionUpstreamRequestMeta(ctx, sessionID, sequence)
+	if reqMeta == nil || reqMeta.URL != guard.WarmupUpstreamMetaURL || reqMeta.Method != "POST" {
+		t.Fatalf("上游请求元信息不符: %+v", reqMeta)
+	}
+	resMeta := binder.ReadSessionUpstreamResponseMeta(ctx, sessionID, sequence)
+	if resMeta == nil || resMeta.StatusCode != 200 {
+		t.Fatalf("上游响应元信息不符: %+v", resMeta)
+	}
+	// 所有者围栏必须建立（响应侧几条写入都会 refresh）：否则详情面读响应正文会被拒。
+	if !binder.IsSessionRequestOwnedByKey(ctx, sessionID, sequence, testKeyID) {
+		t.Fatal("所有者键未建立，详情面会因无权而读不到")
 	}
 }

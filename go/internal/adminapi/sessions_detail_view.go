@@ -447,16 +447,11 @@ func (api *sessionAPI) readHeaders(
 	return api.artifacts.SessionResponseHeaders(ctx, in.sourceSessionID, in.sequence)
 }
 
-// readClientRequestMeta 读客户端请求元信息。
-//
-// **刻意恒为 nil**：Go 数据面不写 clientReqMeta（sanitizeUrl 的逐字语义此前未对齐，见
-// session/artifacts.go 的 ClientRequestMetaKey 注释）。本波已把 sanitizeUrl 逐字复刻出来
-// （session.SanitizeURL），但**写入侧的接线**未在本波范围内，故这里如实读空——
-// 详情页的 requestMeta.clientUrl 为 null（Node 有值），登记差异见报告。
+// readClientRequestMeta 读客户端请求元信息（数据面已写：见 session.StoreSessionClientRequestMeta）。
 func (api *sessionAPI) readClientRequestMeta(
 	ctx context.Context, in sessionDetailInputs,
 ) *session.SessionUpstreamRequestMetaRead {
-	return nil
+	return api.artifacts.ReadSessionClientRequestMeta(ctx, in.sourceSessionID, in.sequence)
 }
 
 // readUpstreamRequestMeta 读上游请求元信息（不拥有时 nil）。

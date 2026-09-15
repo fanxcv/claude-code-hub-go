@@ -724,7 +724,8 @@ func (h *Handler) serveModelListRequest(writer http.ResponseWriter, request *htt
 		return
 	}
 	if response != nil {
-		h.writeGuardResponse(writer, response)
+		// 这里的 response 只会来自鉴权步骤：会话步骤在它之后，故必然没有会话 id 可挂。
+		h.writeGuardResponse(writer, nil, response)
 		return
 	}
 	auth, _ := pc.Auth()

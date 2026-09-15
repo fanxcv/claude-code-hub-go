@@ -99,6 +99,7 @@ type settingsStub struct {
 	highConcurrency          bool
 	allowRawFallback         bool
 	codexCompletion          bool
+	claudeMetadata           bool
 }
 
 func (s fakeSettings) FindSystemSettings(_ context.Context) (*store.SystemSettings, error) {
@@ -111,6 +112,7 @@ func (s fakeSettings) FindSystemSettings(_ context.Context) (*store.SystemSettin
 	settings.EnableHighConcurrencyMode = s.settings.highConcurrency
 	settings.AllowNonConversationEndpointProviderFallback = s.settings.allowRawFallback
 	settings.EnableCodexSessionIDCompletion = s.settings.codexCompletion
+	settings.EnableClaudeMetadataUserIDInjection = s.settings.claudeMetadata
 	return settings, nil
 }
 
@@ -339,3 +341,11 @@ func pctxSelection(providerID int64) pctx.ProviderSelection {
 
 // containsSubstring 报告子串是否出现（测试断言用）。
 func containsSubstring(haystack, needle string) bool { return strings.Contains(haystack, needle) }
+
+// lookupResult 让假绑定器满足 SessionLookup 钩子的形状（会话身份是每请求事实）。
+func (b *fakeBinder) lookupResult(*pctx.Context) (SessionResult, bool) {
+	if b.result.SessionID == "" {
+		return SessionResult{}, false
+	}
+	return b.result, true
+}

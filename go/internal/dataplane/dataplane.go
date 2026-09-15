@@ -107,6 +107,9 @@ type RequestState struct {
 	replay *replaySession
 	// telemetry 是本请求的会话观测租约（守卫链通过后开启）；未接线时为零值。
 	telemetry TelemetryLease
+	// sessionID 是本次请求绑定的物理会话 id（守卫链的会话步骤赋值），供错误体挂
+	// cch_session_id 与后续读取共用一份；空串表示本请求没有会话身份。
+	sessionID string
 	// responseCapture 是响应正文的**有界头尾捕获**；nil 表示本请求不落正文
 	// （高并发模式、STORE_SESSION_RESPONSE_BODY 关闭或未接线）。
 	//
@@ -298,7 +301,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		Now:          h.options.Now,
 	})
 	if err != nil {
-		h.writeGuardResponse(writer, guard.BuildError(http.StatusBadRequest, "请求上下文构造失败", ""))
+		h.writeGuardResponse(writer, nil, guard.BuildError(http.StatusBadRequest, "请求上下文构造失败", ""))
 		return
 	}
 	if err := pc.SetOwner(egress.OwnerGo); err != nil {
@@ -353,11 +356,15 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	chain, err := guard.Assemble(deps, spec.Policy)
 	if err != nil {
 		h.logger.Error("dataplane.chain_build_failed", map[string]any{"path": request.URL.Path, "error": err.Error()})
-		h.writeGuardResponse(writer, guard.BuildError(http.StatusInternalServerError, "守卫链装配失败", ""))
+		h.writeGuardResponse(writer, state, guard.BuildError(http.StatusInternalServerError, "守卫链装配失败", ""))
 		return
 	}
 
 	response, err := chain.Run(pc)
+	// 会话身份在链上已定（会话步骤早于限流与选路），此刻取一次留给错误体与会话观测共用。
+	if bound, ok := sessions.lookup(pc); ok {
+		state.sessionID = bound.SessionID
+	}
 	if err != nil {
 		// 无可用供应商**不是步骤失败**：Node 的 resolver 返回 null 后继续走到转发层，
 		// 由转发层给出 503 `no_available_providers`（生产实测与 Node 逐字段对照得来）。
@@ -388,7 +395,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			if noProvider != nil && h.verboseProviderError(requestCtx) {
 				response = verboseNoProviderResponse(noProvider.Diagnostic())
 			}
-			h.writeGuardResponse(writer, response)
+			h.writeGuardResponse(writer, state, response)
 			return
 		}
 		// 步骤自身失败（不是拦截）：Node 同样翻成 500，只是文案更具体。
@@ -396,11 +403,11 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 			"path":  request.URL.Path,
 			"error": err.Error(),
 		})
-		h.writeGuardResponse(writer, guard.BuildError(http.StatusInternalServerError, "请求处理失败", ""))
+		h.writeGuardResponse(writer, state, guard.BuildError(http.StatusInternalServerError, "请求处理失败", ""))
 		return
 	}
 	if response != nil {
-		h.writeGuardResponse(writer, response)
+		h.writeGuardResponse(writer, state, response)
 		return
 	}
 
@@ -413,7 +420,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	// 不放在请求入口是因为读体即解压：必须等鉴权通过，与上面「正文访问器按需构造」同一条纪律。
 	h.captureRequestedEffort(state, spec, body)
 	captureRequestedServiceTier(state, body)
-	lease := h.startTelemetry(requestCtx, state, spec, body, sessions)
+	lease := h.startTelemetry(requestCtx, state, spec, body, sessions, clientRequestURL(request))
 	state.telemetry = lease
 	// 响应正文的有界捕获：开关与上限都在装配时定，这里只判「本请求要不要捕」。
 	//
@@ -444,7 +451,7 @@ func (h *Handler) forward(
 	if !ok || selection.ProviderID == 0 {
 		// Node 在无可用供应商时返回 503（provider === null 分支）。
 		h.settleFailure(requestCtx, state, http.StatusServiceUnavailable, "无可用供应商")
-		h.writeGuardResponse(writer, guard.BuildError(
+		h.writeGuardResponse(writer, state, guard.BuildError(
 			http.StatusServiceUnavailable, "无可用供应商", "",
 		))
 		return
@@ -461,7 +468,7 @@ func (h *Handler) forward(
 			"error":      errorText(err),
 		})
 		h.settleFailure(requestCtx, state, http.StatusServiceUnavailable, "供应商候选不可用")
-		h.writeGuardResponse(writer, guard.BuildError(
+		h.writeGuardResponse(writer, state, guard.BuildError(
 			http.StatusServiceUnavailable, "供应商候选不可用", "",
 		))
 		return
@@ -522,7 +529,7 @@ func (h *Handler) forward(
 		h.logger.Error("dataplane.forward_failed", map[string]any{"error": errorText(err)})
 		status, message := h.failoverStatusFor(requestCtx, errorFailure(nil, err))
 		h.settleFailure(requestCtx, state, status, message)
-		h.writeGuardResponse(writer, guard.BuildError(status, message, ""))
+		h.writeGuardResponse(writer, state, guard.BuildError(status, message, ""))
 		return
 	}
 	if result.Stream != nil {
@@ -538,7 +545,7 @@ func (h *Handler) forward(
 		// 详情页会把「失败的请求」显示成「没有响应」。
 		h.recordFailureStatus(state, status)
 		h.recordUpstream(state, planViewOf(&result.Result), result.Headers)
-		h.writeGuardResponse(writer, guard.BuildError(status, message, ""))
+		h.writeGuardResponse(writer, state, guard.BuildError(status, message, ""))
 		return
 	}
 	h.recordUpstream(state, planViewOf(&result.Result), result.Headers)
@@ -639,7 +646,8 @@ func (s streamSettler) SettleStream(ctx context.Context, outcome forward.StreamO
 // fallback 把未实现的路由交回 Node；没有回退目标时如实 404。
 func (h *Handler) fallback(writer http.ResponseWriter, request *http.Request) {
 	if h.options.Fallback == nil {
-		h.writeGuardResponse(writer, guard.BuildErrorWithDetails(
+		// 未承载的路由没有会话步骤，故没有会话 id 可挂。
+		h.writeGuardResponse(writer, nil, guard.BuildErrorWithDetails(
 			http.StatusNotFound, "本进程未承载该路由", "",
 			map[string]any{"path": request.URL.Path}, "",
 		))

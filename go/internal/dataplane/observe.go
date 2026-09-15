@@ -36,6 +36,12 @@ type TelemetryFacts struct {
 	Sequence int
 	// Artifacts 非 nil 时落请求侧调试工件；nil 表示本次不落（高并发模式或体积超限）。
 	Artifacts *RequestArtifactInput
+	// ClientURL/ClientMethod 是客户端请求的地址与方法（clientReqMeta 工件的内容）。
+	//
+	// 只判「本进程收到的是什么」（scheme 按连接是否 TLS 取，host 取 Host 头），与 Node 的
+	// `new URL(c.req.url)` 同义——两者都是「服务进程视角的绝对地址」，不推断反代的原始地址。
+	ClientURL    string
+	ClientMethod string
 }
 
 // RequestArtifactInput 是请求侧工件的输入。
@@ -106,13 +112,15 @@ const telemetryTimeout = 3 * time.Second
 // startTelemetry 在守卫链通过之后开启会话观测。
 func (h *Handler) startTelemetry(
 	requestCtx context.Context, state *RequestState, spec routeSpec, body *bodyAccess,
-	capture *sessionCapture,
+	capture *sessionCapture, clientURL string,
 ) TelemetryLease {
 	observer := h.options.Telemetry
 	if observer == nil {
 		return TelemetryLease{}
 	}
 	facts := h.telemetryFacts(state, spec, body, capture)
+	facts.ClientURL = clientURL
+	facts.ClientMethod = state.PC.Method()
 	if facts.SessionID == "" {
 		return TelemetryLease{}
 	}
@@ -350,6 +358,20 @@ func (t *sessionTelemetry) persistRequestArtifacts(ctx context.Context, facts Te
 	if facts.Artifacts == nil {
 		return
 	}
+	// 工件写入自带上限：热路径不接受一次无界的 Redis 等待。
+	writeCtx, cancel := context.WithTimeout(ctx, session.ArtifactWriteTimeout)
+	defer cancel()
+
+	// 客户端请求元信息（Node 的 storeSessionClientRequestMeta）只受高并发闸，**不受体积闸**：
+	// 它只有 url 与 method 两个短字段，Node 把它放在 shouldPersistSessionRequestArtifacts
+	// 判定之外。写在体积判定之前，超大正文的请求也保得住这条。
+	if facts.ClientURL != "" {
+		if err := t.binder.StoreSessionClientRequestMeta(
+			writeCtx, facts.SessionID, facts.ClientURL, facts.ClientMethod, facts.Sequence,
+		); err != nil {
+			t.logger.Warn("dataplane.session_client_req_meta_failed", map[string]any{"error": err.Error()})
+		}
+	}
 	if !requestArtifactWithinLimit(facts.Artifacts.Body, t.artifacts.ArtifactMaxBytes()) {
 		t.logger.Warn("dataplane.session_artifact_oversized", map[string]any{
 			"sessionId": facts.SessionID,
@@ -357,9 +379,6 @@ func (t *sessionTelemetry) persistRequestArtifacts(ctx context.Context, facts Te
 		})
 		return
 	}
-	// 工件写入自带上限：热路径不接受一次无界的 Redis 等待。
-	writeCtx, cancel := context.WithTimeout(ctx, session.ArtifactWriteTimeout)
-	defer cancel()
 
 	// 工件所有者键：详情面的四条读端点靠它判「这份工件是不是这个 keyId 写的」。
 	//

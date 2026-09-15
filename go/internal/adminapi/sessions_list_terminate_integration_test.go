@@ -846,6 +846,10 @@ func (stubArtifacts) ReadSessionPhaseSnapshot(context.Context, string, int, stri
 	return nil
 }
 
+func (stubArtifacts) ReadSessionClientRequestMeta(context.Context, string, int) *session.SessionUpstreamRequestMetaRead {
+	return nil
+}
+
 func (stubArtifacts) ReadSessionUpstreamRequestMeta(context.Context, string, int) *session.SessionUpstreamRequestMetaRead {
 	return nil
 }

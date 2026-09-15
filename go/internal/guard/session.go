@@ -38,6 +38,8 @@ func (d Deps) sessionStep() Step {
 		// codexCompletionEnabled 的默认值取「关闭」：只有读到设置且该列为真才补全。
 		// Node 的同处是 `?? true`（列默认 true），本仓读不到设置时一律按保守默认处理（见上方注释）。
 		codexCompletionEnabled := false
+		claudeMetadataEnabled := false
+		warmupInterceptEnabled := false
 		if d.Settings != nil {
 			settings, err := d.Settings.FindSystemSettings(d.runContext(ctx))
 			if err != nil {
@@ -46,6 +48,8 @@ func (d Deps) sessionStep() Step {
 			} else {
 				allowRawSession = settings.AllowNonConversationEndpointProviderFallback
 				codexCompletionEnabled = settings.EnableCodexSessionIDCompletion
+				claudeMetadataEnabled = settings.EnableClaudeMetadataUserIDInjection
+				warmupInterceptEnabled = settings.InterceptAnthropicWarmupRequests
 				// 高并发模式与调试工件位互为取反：调试工件是每流内存的主要放大器。
 				ctx.SetPersistDebugArtifacts(!settings.EnableHighConcurrencyMode)
 			}
@@ -84,6 +88,13 @@ func (d Deps) sessionStep() Step {
 			"sessionId": result.SessionID,
 			"sequence":  result.Sequence,
 		})
+		// Claude metadata.user_id 注入：Node 在拿到会话 id **之后**注入（session-guard.ts:214-232），
+		// 写进去的就是本次请求绑定的那个会话 id；它同时早于请求过滤器，故过滤器看到的是注入后的正文。
+		warmupMaybeIntercepted := warmupInterceptEnabled && isWarmupRequest(ctx.Path(), body) &&
+			auth.KeyID != 0 && auth.UserID != 0 && auth.APIKey != ""
+		if claudeMetadataEnabled && !allowRawSession && !warmupMaybeIntercepted {
+			d.injectClaudeMetadata(ctx, auth.KeyID, result.SessionID, body)
+		}
 		// 会话身份也交给本次请求的选路器：前缀亲和要按**本会话**判定是否闲置过久
 		// （见 ProviderRouter.applyConversationIdle）。取的就是这里已解析出的身份，
 		// 与落库列 session_id、交给 MessageWriter 的 SessionLookup 钩子同一值。
@@ -183,6 +194,8 @@ func (d Deps) warmupStep() Step {
 			"userId":   auth.UserID,
 			"endpoint": ctx.Path(),
 		})
+
+		d.storeWarmupArtifacts(ctx, auth.KeyID, string(responseText))
 
 		return NewResponse(200, headers, responseText), nil
 	}

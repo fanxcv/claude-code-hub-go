@@ -281,13 +281,55 @@ func MessagesSequenceKey(sessionID string, sequence int) string {
 
 // ClientRequestMetaKey 是客户端请求元信息键：session:{id}:req:{seq}:clientReqMeta。
 //
-// **本波不写**（键名先落地，供详情面波次接手）：Node 的 storeSessionClientRequestMeta 先过
-// sanitizeUrl（对 key/api_key/token 等查询参数换成 [REDACTED]），而 Go 侧还没有等价的
-// sanitizeUrl——JS 的 encodeURIComponent 与 Go 的 url.QueryEscape 对空格、`+`、`!'()*`
-// 的编码不同，矇一个近似实现只会把「泄露查询串里的密钥」变成一段静默的差异。
+// 写侧是 StoreSessionClientRequestMeta，读侧是 ReadSessionClientRequestMeta；两端都经
+// SanitizeURL，故查询串里的凭据不会落进键值（Node 的 storeSessionClientRequestMeta 同法）。
 func ClientRequestMetaKey(sessionID string, sequence int) string {
 	return "session:" + sessionID + ":req:" + strconv.Itoa(normalizeArtifactSequence(sequence)) +
 		":clientRequestMeta"
+}
+
+// StoreSessionClientRequestMeta 复刻 storeSessionClientRequestMeta（session-manager.ts:2677）。
+//
+// 与另外两条工件的差异：它**不受工件开关与体积上限**约束——Node 只判「会话调试工件开不开」，
+// 而值本身只有 url 与 method 两个短字段（url 还已过 sanitizeUrl）。
+func (b *Binder) StoreSessionClientRequestMeta(
+	ctx context.Context, sessionID string, url, method string, sequence int,
+) error {
+	if !b.Ready() || sessionID == "" {
+		return nil
+	}
+	payload := struct {
+		URL    string `json:"url"`
+		Method string `json:"method"`
+	}{URL: SanitizeURL(url), Method: method}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return b.client.rc.Raw().Set(
+		ctx, ClientRequestMetaKey(sessionID, sequence), encoded, b.sessionTTL(),
+	).Err()
+}
+
+// ReadSessionClientRequestMeta 读客户端请求元信息：形状不合法（非对象）返回 nil。
+func (b *Binder) ReadSessionClientRequestMeta(
+	ctx context.Context, sessionID string, sequence int,
+) *SessionUpstreamRequestMetaRead {
+	if !b.Ready() || sessionID == "" || sequence <= 0 {
+		return nil
+	}
+	raw, err := b.client.rc.Raw().Get(ctx, ClientRequestMetaKey(sessionID, sequence)).Result()
+	if err != nil || raw == "" {
+		return nil
+	}
+	var payload struct {
+		URL    string `json:"url"`
+		Method string `json:"method"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil
+	}
+	return &SessionUpstreamRequestMetaRead{URL: payload.URL, Method: payload.Method}
 }
 
 // normalizeArtifactSequence 复刻 normalizeRequestSequence：非正数一律按 1。

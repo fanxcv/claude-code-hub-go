@@ -307,6 +307,25 @@ type WarmupLogWriter interface {
 	RecordWarmup(ctx context.Context, record WarmupRecord) error
 }
 
+// WarmupSessionArtifactWriter 把本地抢答的 warmup 响应写进会话详情（Redis）。
+//
+// 为什么单列一条缝隙而不是复用 WarmupLogWriter：前者写账本行（数据库），后者写会话调试
+// 工件（Redis 的四条键）——两者的失败处理与开关都不同（工件受高并发模式节制）。
+type WarmupSessionArtifactWriter interface {
+	StoreWarmupResponse(ctx context.Context, request WarmupArtifactRequest) error
+}
+
+// WarmupArtifactRequest 是一次 warmup 抢答要落的四份工件所需的输入。
+type WarmupArtifactRequest struct {
+	SessionID  string
+	Sequence   int
+	KeyID      int64
+	Method     string
+	Body       string
+	Headers    map[string]string
+	StatusCode int
+}
+
 // WarmupRecord 是一条 warmup 抢答的日志载荷。
 type WarmupRecord struct {
 	KeyID         int64
@@ -365,6 +384,8 @@ type Deps struct {
 	MessageContext  MessageContextWriter
 	Replay          ReplayAttacher
 	WarmupLog       WarmupLogWriter
+	// WarmupArtifacts 落 warmup 抢答的会话工件；nil 表示未接线（不落，请求照常抢答）。
+	WarmupArtifacts WarmupSessionArtifactWriter
 	// QueryAPIKey 取 Gemini CLI 的 key 查询参数。pctx.Path 不含查询串，该凭据必须由入口注入。
 	// nil 表示入口未提供，按无此凭据处理。
 	QueryAPIKey func(*pctx.Context) string
@@ -382,6 +403,11 @@ type Deps struct {
 	// RequestContext 把 pctx 上的请求映射回标准库 context，供缝隙里的数据库、Redis 与
 	// 出站调用使用。nil 时退化为 context.Background()：守卫链不断言取消，但实现方应当提供。
 	RequestContext func(*pctx.Context) context.Context
+	// ClaudeMetadata 注入 Claude 线的 metadata.user_id（Node claude-code/metadata-user-id.ts 的
+	// 构建侧，落在 session 包）。返回是否写入。nil 表示未接线：注入整体跳过，请求照常放行。
+	//
+	// 参数依次是正文、密钥 id、本次会话 id、客户端 UA；正文就地改写，调用方负责写回。
+	ClaudeMetadata func(body map[string]any, keyID int64, sessionID, userAgent string) bool
 	// Logger 是守卫链自身的日志器；nil 时写 stderr。
 	Logger *logx.Logger
 	// Locale 覆盖默认语种（默认 zh-CN，与 i18n/config.ts 的 defaultLocale 一致），仅供测试与管理员配置使用。

@@ -215,6 +215,8 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	// telemetry 与绑定**共用同一个 Binder**：同一套键名与 TTL 口径，分开两个实例只会在
 	// 未来某次改键名时让写侧与读侧静默分叉。
 	var telemetry SessionTelemetry
+	// binderForTelemetry 是会话工件的写侧实例（warmup 抢答的响应工件也走它）。
+	var binderForTelemetry *session.Binder
 	if options.Redis != nil {
 		registry, registryErr := ratelimit.Embedded()
 		if registryErr != nil {
@@ -230,6 +232,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			Logger: logger,
 		})
 		telemetry = newSessionTelemetry(binder, options.SessionArtifacts, logger)
+		binderForTelemetry = binder
 		// Codex 会话标识补全与绑定共用同一个 Redis：它的指纹缓存是普通 GET / SET NX（无脚本），
 		// 故直接取脚本层底下的连接，不再包一层。
 		codexCompleter = session.NewCodexSessionCompleterAdapter(session.CodexCompleterOptions{
@@ -370,6 +373,14 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	}
 	if codexCompleter != nil {
 		deps.CodexCompletion = codexCompleter
+	}
+	// Claude metadata.user_id 注入：纯函数（无 Redis、无库），故无条件接上——开关在守卫步骤里判。
+	deps.ClaudeMetadata = func(body map[string]any, keyID int64, sessionID, userAgent string) bool {
+		return session.InjectClaudeMetadataUserID(body, keyID, sessionID, userAgent).Applied
+	}
+	// warmup 抢答的会话工件：与绑定共用同一个 Binder（同一套键名与 TTL）。
+	if binderForTelemetry != nil {
+		deps.WarmupArtifacts = session.NewWarmupArtifactAdapter(binderForTelemetry, options.SessionArtifacts)
 	}
 	// 版本检查：UA 解析 + 用户版本记录 + GA 版本比对。fail-open，缺 Redis 时自动退化为放行。
 	deps.Versions = clientver.NewChecker(clientver.Options{
