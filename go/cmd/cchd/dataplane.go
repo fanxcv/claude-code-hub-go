@@ -132,6 +132,8 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 			// 「把上游正文留在服务端」的写入，故与请求侧三条工件分开授开关。
 			StoreResponseBody: options.Cfg.Env.StoreSessionResponseBody,
 		},
+		// 熔断初次开闸的告警：交给通知栈投递（三重闸门与去重都在产生点里）。
+		CircuitAlerts: newCircuitBreakerAlerts(options.Logger, pools, redisClient),
 	})
 	if err != nil {
 		affinity.close()

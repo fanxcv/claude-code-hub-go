@@ -79,6 +79,9 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 
 	problems := adminapi.NewProblems(logger)
 
+	// 熔断开闸告警：与数据面共用同一份装配（同一套去重与投递语义）。
+	alerts := newCircuitBreakerAlerts(logger, options.Pools, redisClient)
+
 	// 使用记录的新行信号（推送模式的 SSE）：发布面与订阅面共用同一个 Hub。
 	// 投递只经 Redis，故管理面与数据面各建一个也正确；这里共用只为一个好处——少一条
 	// pub/sub 连接。未装配时 RegisterUsageLogsStream 不注册该路由（显式回退 Node，不静默错数）。
@@ -191,6 +194,10 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 			Redis:                         redisClient,
 			EndpointCircuitBreakerEnabled: options.Cfg.Env.EnableEndpointCircuitBreaker,
 			Logger:                        logger,
+			// 手动拨测也可把熔断打开：与数据面走同一套开闸告警装配，避免两条路径
+			// 对「开闸要不要告警」持不同口径。
+			OnProviderOpened: alerts.OnProviderOpened,
+			OnEndpointOpened: alerts.OnEndpointOpened,
 		}),
 		Logger: logger,
 	})

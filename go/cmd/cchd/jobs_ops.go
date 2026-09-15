@@ -59,16 +59,22 @@ func startOpsRuntime(
 		return nil, err
 	}
 
+	// 熔断开闸告警：与数据面共用同一份装配（同一套去重与投递语义）。
+	alerts := newCircuitBreakerAlerts(logger, pools, redisClient)
+
 	deps := jobs.OpsDeps{
 		Pools:  pools,
 		Redis:  redisClient,
 		Logger: logger,
 		// 熔断记账：探活成功归闭、失败计数。Settings 留空——端点级状态 TTL 不随设置收缩
 		// （收缩只作用于厂级 TTL，探活不写厂级状态）。
+		// 开闸告警与数据面同源：运维任务也能把熔断打开，对「开闸要不要告警」得同一口径。
 		Health: health.NewWriter(health.Options{
 			Redis:                         redisClient,
 			EndpointCircuitBreakerEnabled: cfg.Env.EnableEndpointCircuitBreaker,
 			Logger:                        logger,
+			OnProviderOpened:              alerts.OnProviderOpened,
+			OnEndpointOpened:              alerts.OnEndpointOpened,
 		}),
 	}
 

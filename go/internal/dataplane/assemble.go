@@ -104,8 +104,22 @@ type StoreOptions struct {
 	// SessionArtifacts 是会话工件的开关与体积上限（STORE_SESSION_MESSAGES /
 	// SESSION_REQUEST_ARTIFACT_MAX_BYTES / STORE_SESSION_RESPONSE_BODY）。
 	SessionArtifacts session.SessionArtifactOptions
+	// CircuitAlerts 是熔断初次开闸的告警回调（health.Options 的同名回调）。
+	// 零值表示不告警：熔断照常开闸与恢复，只是不发 webhook。
+	CircuitAlerts CircuitAlerts
 	// Now 可注入时钟；nil 时用 time.Now。
 	Now func() time.Time
+}
+
+// CircuitAlerts 是熔断开闸告警的两个回调。
+//
+// 用函数值而不是直接收 jobs 的产生点：dataplane 不认识通知栈（设置、绑定、投递），
+// 只负责在 health 开闸时把事件交出去；「发不发、发给谁」由装配层注入的实现决定。
+type CircuitAlerts struct {
+	// OnProviderOpened 在供应商级熔断初次开闸时回调。
+	OnProviderOpened func(providerID int64, failureCount int64, openUntilMS int64, cause error)
+	// OnEndpointOpened 在端点级熔断初次开闸时回调。
+	OnEndpointOpened func(endpointID int64, failureCount int64, openUntilMS int64, cause error)
 }
 
 // Assembly 是装配结果：处理器 + 释放函数。
@@ -265,6 +279,10 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		Settings:                      adapters.Settings,
 		Now:                           options.Now,
 		Logger:                        logger,
+		// 开闸告警：nil 时静默（熔断照常开闸与恢复）。产生点自带三重闸门
+		// （通知总开关、circuitBreakerEnabled、5 分钟去重），故这里不做二次判断。
+		OnProviderOpened: options.CircuitAlerts.OnProviderOpened,
+		OnEndpointOpened: options.CircuitAlerts.OnEndpointOpened,
 	})
 	recordFailure := func(ctx context.Context, failure *forward.Failure) {
 		if failure == nil {
