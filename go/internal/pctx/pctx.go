@@ -132,6 +132,9 @@ type Context struct {
 	// 请求日志的 session_identity_kind 靠它判定「前缀亲和」还是「客户端会话」。
 	affinityIdentity    AffinityIdentity
 	affinityIdentitySet bool
+	// codexSessionCompletion 是本次请求的 Codex 会话标识补全事实（守卫链写、终态读，见 codex_session.go）。
+	codexSessionCompletion    CodexSessionCompletion
+	codexSessionCompletionSet bool
 
 	// selectionChainEntry 是选择期 provider_chain 条目（链首）的原样快照，见 selection_chain.go。
 	selectionChainEntry []byte

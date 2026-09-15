@@ -259,6 +259,34 @@ type SessionBinder interface {
 	Ensure(ctx context.Context, request SessionRequest) (SessionResult, error)
 }
 
+type CodexSessionCompleter interface {
+	// Complete 判定需要补齐哪一侧（正文 prompt_cache_key / 请求头 session_id、x-session-id），
+	// 并给出要写进审计条目的 action/source/sessionId。它**不**改写请求——改写是守卫链的职责。
+	Complete(ctx context.Context, request CodexSessionCompletionRequest) (CodexSessionCompletionResult, error)
+}
+
+// CodexSessionCompletionRequest 是补全需要的入口事实。
+type CodexSessionCompletionRequest struct {
+	KeyID     int64
+	Body      map[string]any
+	Headers   map[string][]string
+	UserAgent string
+}
+
+// CodexSessionCompletionResult 是一次补全的结果。
+type CodexSessionCompletionResult struct {
+	// Applied 表示确实补写了某个字段。
+	Applied bool
+	// Action / Source / SessionID 是落审计条目的三个事实（取值域见 session 包）。
+	Action    string
+	Source    string
+	SessionID string
+	// SetBodyPromptCacheKey / SetHeaderSessionID / SetHeaderXSessionID 是要补写的侧。
+	SetBodyPromptCacheKey bool
+	SetHeaderSessionID    bool
+	SetHeaderXSessionID   bool
+}
+
 // SessionRequest 是会话绑定需要的入口事实。
 type SessionRequest struct {
 	KeyID           int64
@@ -317,23 +345,26 @@ type ReplayAttacher interface {
 // 每个字段的可为 nil 语义都在对应接口上写明；链在构造时不做完整性校验，因为过渡期
 // 必然存在「部分接线」的中间态，硬校验会让 Go 无法按路由灰度。
 type Deps struct {
-	Auth           AuthResolver
-	AuthThrottle   RateLimiter
-	Users          UserDirectory
-	ExpiryMarker   UserExpiryMarker
-	Settings       SettingsSource
-	IP             IPExtractor
-	Versions       VersionChecker
-	Sessions       SessionBinder
-	Sensitive      SensitiveWordSource
-	BlockedLog     BlockedRequestLogger
-	Filters        FilterSource
-	Body           BodyFactory
-	RateLimit      RateLimiter
-	Provider       ProviderSelector
-	MessageContext MessageContextWriter
-	Replay         ReplayAttacher
-	WarmupLog      WarmupLogWriter
+	Auth         AuthResolver
+	AuthThrottle RateLimiter
+	Users        UserDirectory
+	ExpiryMarker UserExpiryMarker
+	Settings     SettingsSource
+	IP           IPExtractor
+	Versions     VersionChecker
+	Sessions     SessionBinder
+	// CodexCompletion 是 Codex 会话标识补全（Node codex/session-completer.ts）；
+	// nil 表示未接线（补全整体跳过，请求照常放行）。
+	CodexCompletion CodexSessionCompleter
+	Sensitive       SensitiveWordSource
+	BlockedLog      BlockedRequestLogger
+	Filters         FilterSource
+	Body            BodyFactory
+	RateLimit       RateLimiter
+	Provider        ProviderSelector
+	MessageContext  MessageContextWriter
+	Replay          ReplayAttacher
+	WarmupLog       WarmupLogWriter
 	// QueryAPIKey 取 Gemini CLI 的 key 查询参数。pctx.Path 不含查询串，该凭据必须由入口注入。
 	// nil 表示入口未提供，按无此凭据处理。
 	QueryAPIKey func(*pctx.Context) string

@@ -98,6 +98,7 @@ type settingsStub struct {
 	interceptWarmup          bool
 	highConcurrency          bool
 	allowRawFallback         bool
+	codexCompletion          bool
 }
 
 func (s fakeSettings) FindSystemSettings(_ context.Context) (*store.SystemSettings, error) {
@@ -109,6 +110,7 @@ func (s fakeSettings) FindSystemSettings(_ context.Context) (*store.SystemSettin
 	settings.InterceptAnthropicWarmupRequests = s.settings.interceptWarmup
 	settings.EnableHighConcurrencyMode = s.settings.highConcurrency
 	settings.AllowNonConversationEndpointProviderFallback = s.settings.allowRawFallback
+	settings.EnableCodexSessionIDCompletion = s.settings.codexCompletion
 	return settings, nil
 }
 

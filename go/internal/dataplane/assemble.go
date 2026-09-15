@@ -210,6 +210,8 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	// 会话绑定：与 Node 共用同一套 Redis 键与 Lua 脚本（切换期间两侧互相看得见），
 	// 脚本注册表取自 ratelimit 的内嵌清单——会话包只经 EvalConst 按常量名调用，不另存一份脚本。
 	var sessionBinder guard.SessionBinder
+	// codexCompleter 是 Codex 会话标识补全（Node codex/session-completer.ts）：nil 表示未接线。
+	var codexCompleter guard.CodexSessionCompleter
 	// telemetry 与绑定**共用同一个 Binder**：同一套键名与 TTL 口径，分开两个实例只会在
 	// 未来某次改键名时让写侧与读侧静默分叉。
 	var telemetry SessionTelemetry
@@ -228,6 +230,12 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			Logger: logger,
 		})
 		telemetry = newSessionTelemetry(binder, options.SessionArtifacts, logger)
+		// Codex 会话标识补全与绑定共用同一个 Redis：它的指纹缓存是普通 GET / SET NX（无脚本），
+		// 故直接取脚本层底下的连接，不再包一层。
+		codexCompleter = session.NewCodexSessionCompleterAdapter(session.CodexCompleterOptions{
+			Store:  session.NewRedisCodexSessionStore(scriptClient.Raw()),
+			Logger: logger,
+		})
 	}
 
 	// 会话观测写侧：写活跃 ZSET、session:{id}:info、并发计数与请求工件。
@@ -359,6 +367,9 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	// 会话绑定在 Apply 之后注入：Apply 不覆盖调用方显式接上的缝隙，顺序写反会得到静默的空会话。
 	if sessionBinder != nil {
 		deps.Sessions = sessionBinder
+	}
+	if codexCompleter != nil {
+		deps.CodexCompletion = codexCompleter
 	}
 	// 版本检查：UA 解析 + 用户版本记录 + GA 版本比对。fail-open，缺 Redis 时自动退化为放行。
 	deps.Versions = clientver.NewChecker(clientver.Options{

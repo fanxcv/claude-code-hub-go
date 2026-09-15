@@ -399,3 +399,57 @@ func TestSanitizeReasonRedactsAndBounds(t *testing.T) {
 		}
 	})
 }
+
+// TestCodexSessionCompletionEntryMatchesNodeShape 钉住补全审计的字段集与取值。
+//
+// 形状真源：Node `session-guard.ts:128` 的对象字面量与 `src/types/special-settings.ts` 的
+// `CodexSessionIdCompletionSpecialSetting`——字段名与取值域都不得改写（前端按名取值）。
+func TestCodexSessionCompletionEntryMatchesNodeShape(t *testing.T) {
+	entry := CodexSessionCompletionEntry(
+		"generated_uuid_v7",
+		"fingerprint_cache",
+		"01a0a2a1-c7ff-7747-81cc-4e27411e8938",
+	)
+	if entry == nil {
+		t.Fatal("应产出条目，实际为 nil")
+	}
+	want := map[string]any{
+		"type":      "codex_session_id_completion",
+		"scope":     "request",
+		"hit":       true,
+		"action":    "generated_uuid_v7",
+		"source":    "fingerprint_cache",
+		"sessionId": "01a0a2a1-c7ff-7747-81cc-4e27411e8938",
+	}
+	for key, expected := range want {
+		if got, ok := entry[key]; !ok || got != expected {
+			t.Errorf("字段 %s 应为 %v，实际 %v（全条目：%v）", key, expected, got, entry)
+		}
+	}
+	if len(entry) != len(want) {
+		t.Errorf("条目字段数应为 %d（与 Node 同集），实际 %d：%v", len(want), len(entry), entry)
+	}
+}
+
+// TestCodexSessionCompletionEntrySkipsNoneAndEmpty 钉住「不补就不记」。
+//
+// Node 只在 `completion.applied && completion.action !== "none"` 时记条目。
+func TestCodexSessionCompletionEntrySkipsNoneAndEmpty(t *testing.T) {
+	cases := []struct {
+		name      string
+		action    string
+		source    string
+		sessionID string
+	}{
+		{name: "action=none", action: "none", source: "header_session_id", sessionID: "01a0a2a1-c7ff-7747-81cc-4e27411e8938"},
+		{name: "action 为空", action: "", source: "header_session_id", sessionID: "01a0a2a1-c7ff-7747-81cc-4e27411e8938"},
+		{name: "sessionId 为空", action: "completed_missing_fields", source: "header_session_id", sessionID: ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := CodexSessionCompletionEntry(testCase.action, testCase.source, testCase.sessionID); got != nil {
+				t.Errorf("应返回 nil，实际 %v", got)
+			}
+		})
+	}
+}

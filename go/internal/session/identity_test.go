@@ -121,6 +121,29 @@ func TestHeaderValueTakesFirst(t *testing.T) {
 	}
 }
 
+// TestHeaderValueIsCaseInsensitive 钉住真实流量的键形制。
+//
+// 回归：入口 headers 来自 `http.Header`，键是 Go 的规范形（`session_id` → `Session_id`）。
+// 字面小写比对在真实流量下从不命中，于是客户端的 `session_id` 头被当成没传——
+// 而这个头正是 Codex 客户端的对话身份来源。
+func TestHeaderValueIsCaseInsensitive(t *testing.T) {
+	canonical := map[string][]string{"Session_id": {validHeaderSessionID}, "X-Session-Id": {validHeaderSessionID}}
+	if got := headerValue(canonical, "session_id"); got != validHeaderSessionID {
+		t.Fatalf("规范形键应按大小写不敏感命中: got=%q", got)
+	}
+	if got := headerValue(canonical, "x-session-id"); got != validHeaderSessionID {
+		t.Fatalf("规范形兼容头应按大小写不敏感命中: got=%q", got)
+	}
+	// 整条提取路径同样要认得出：这是会话身份与出站缓存键的共同来源。
+	body := map[string]any{"input": []any{}}
+	if got := ExtractCodexSessionID(canonical, body); got != validHeaderSessionID {
+		t.Fatalf("规范形键下提取应命中: got=%q", got)
+	}
+}
+
+// validHeaderSessionID 是归一规则接受的会话标识形态（UUID）。
+const validHeaderSessionID = "01a0a2a1-c7ff-7747-81cc-4e27411e8938"
+
 // TestExtractClientSessionID 覆盖 Claude 与 Codex 两条入口路径。
 func TestExtractClientSessionID(t *testing.T) {
 	codexSession := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"

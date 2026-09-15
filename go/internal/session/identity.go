@@ -94,12 +94,22 @@ func NormalizeCodexSessionID(value any) string {
 }
 
 // headerValue 取单值请求头（Node 的 headers.get 语义：取第一个值）。
+//
+// 大小写不敏感是这条语义的一部分，不是优化：入口 headers 的键是 Go 的规范形
+// （`session_id` → `Session_id`、`x-session-id` → `X-Session-Id`），字面小写比对照真实流量
+// 从不命中——而 Node 的 Headers.get 本来就大小写不敏感。少了这一层，客户端的 `session_id`
+// 头会被当成「没传」，会话身份只能落到生成的 `sess_*` 上（与 Node 行为相悖）。
 func headerValue(headers map[string][]string, name string) string {
-	values := headers[name]
-	if len(values) == 0 {
-		return ""
+	if values, ok := headers[name]; ok && len(values) > 0 {
+		return values[0]
 	}
-	return values[0]
+	for key, values := range headers {
+		if len(values) == 0 || !strings.EqualFold(key, name) {
+			continue
+		}
+		return values[0]
+	}
+	return ""
 }
 
 // parseMetadataBody 取正文顶层 metadata 字典。

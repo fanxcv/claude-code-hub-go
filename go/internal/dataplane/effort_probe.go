@@ -89,5 +89,7 @@ func specialSettingsAppendEntries(state *RequestState, plan *forward.Plan) []byt
 	return specialsettings.AppendEntries(
 		specialsettings.ProbeEntry(requested, forwarded, converted),
 		conversionEntry,
+		// Codex 会话标识补全条目（守卫链产物，见 codex_session_audit.go）。
+		codexSessionEntry(state),
 	)
 }

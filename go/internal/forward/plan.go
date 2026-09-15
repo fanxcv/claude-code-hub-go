@@ -338,6 +338,15 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		}
 		body = applied
 	}
+	// include_usage 补齐：Node 把它放在供应商覆写与 final-phase 过滤器之后（forwarder.ts:3743），
+	// 是出站正文的最后一步改写（见 openai_chat_usage_options.go）。
+	if body != nil {
+		completed, _, err := applyOpenAIChatStreamUsageOption(body, provider.Type, in.Client.Path)
+		if err != nil {
+			return nil, fmt.Errorf("forward: include_usage 补齐失败: %w", err)
+		}
+		body = completed
+	}
 	plan.Body = body
 	plan.ContentLength = int64(len(body))
 	if body == nil {

@@ -35,6 +35,9 @@ func (d Deps) sessionStep() Step {
 		}
 
 		allowRawSession := false
+		// codexCompletionEnabled 的默认值取「关闭」：只有读到设置且该列为真才补全。
+		// Node 的同处是 `?? true`（列默认 true），本仓读不到设置时一律按保守默认处理（见上方注释）。
+		codexCompletionEnabled := false
 		if d.Settings != nil {
 			settings, err := d.Settings.FindSystemSettings(d.runContext(ctx))
 			if err != nil {
@@ -42,9 +45,21 @@ func (d Deps) sessionStep() Step {
 				d.logger().Error("guard.session.settings_failed", map[string]any{"error": err.Error()})
 			} else {
 				allowRawSession = settings.AllowNonConversationEndpointProviderFallback
+				codexCompletionEnabled = settings.EnableCodexSessionIDCompletion
 				// 高并发模式与调试工件位互为取反：调试工件是每流内存的主要放大器。
 				ctx.SetPersistDebugArtifacts(!settings.EnableHighConcurrencyMode)
 			}
+		}
+
+		// Codex 会话标识补全：Node 把它放在「提取 clientSessionId 之前」，好让随后的会话身份、
+		// 亲和与限流都绑到补全后的稳定 id 上（session-guard.ts 的注释原话）。
+		//
+		// 与 Node 的差异（接线方式，不是语义）：Node 直接改 session.headers/request.message，
+		// Go 侧改的是上下文（SetHeader + storeBody），两者最终都影响出站请求。
+		// 另：Node 的 `!allowRawSession` 与「只对 Codex 请求（正文有 input 数组）生效」两个门与这里同判。
+		body, _ := d.body(ctx)
+		if codexCompletionEnabled && d.CodexCompletion != nil && !allowRawSession && hasCodexInputArray(body) {
+			d.completeCodexSession(ctx, auth.KeyID, body)
 		}
 
 		if d.Sessions == nil {
@@ -54,7 +69,6 @@ func (d Deps) sessionStep() Step {
 			return nil, nil
 		}
 
-		body, _ := d.body(ctx)
 		result, err := d.Sessions.Ensure(d.runContext(ctx), SessionRequest{
 			KeyID:           auth.KeyID,
 			Body:            body,
