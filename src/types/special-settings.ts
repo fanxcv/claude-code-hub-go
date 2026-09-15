@@ -26,6 +26,7 @@ export type SpecialSetting =
   | PricingResolutionSpecialSetting
   | CodexServiceTierResultSpecialSetting
   | ResponseInputRectifierSpecialSetting
+  | ThinkingPlaceholderSignatureRectifierSpecialSetting
   | ThinkingSignatureModelDetectionSpecialSetting
   | ProtocolConversionSpecialSetting
   | ProtocolConversionFailedSpecialSetting
@@ -262,6 +263,25 @@ export type ThinkingSignatureRectifierSpecialSetting = {
   removedThinkingBlocks: number;
   removedRedactedThinkingBlocks: number;
   removedSignatureFields: number;
+};
+
+/**
+ * 占位思考签名剥离审计（**Go 侧新增，超出 Node parity**）
+ *
+ * 与 `thinking_signature_rectifier`（被动：上游报错后删 thinking 块）**不是一条事实**：
+ * 本条记的是主动型剥离——客户端回传的 thinking 块带的是本代理造给客户端看的占位签名
+ * （上游是 chat 兼容、本无 Anthropic 签名，见 `go/internal/convert/thinking_placeholder.go`），
+ * 发往 Anthropic 系上游前整块剥掉，避免拿一次注定 400 的上游调用与熔断失败计数去换。
+ *
+ * 触发条件不是上游报错，而是「即将发往 Anthropic 供应商」+「正文里确有我方占位签名」，
+ * 故没有 trigger/attemptNumber 这类被动整流字段。
+ */
+export type ThinkingPlaceholderSignatureRectifierSpecialSetting = {
+  type: "thinking_placeholder_signature_rectifier";
+  scope: "request";
+  hit: boolean;
+  /** 被整块剥离的占位签名 thinking / redacted_thinking 块数。 */
+  removedPlaceholderThinkingBlocks: number;
 };
 
 /**

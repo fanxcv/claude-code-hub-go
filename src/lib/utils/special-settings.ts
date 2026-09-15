@@ -191,6 +191,9 @@ function buildSettingKey(setting: SpecialSetting): string {
       ]);
     case "response_input_rectifier":
       return JSON.stringify([setting.type, setting.hit, setting.action, setting.originalType]);
+    case "thinking_placeholder_signature_rectifier":
+      // 主动型剥离：同一处剥离的块数就唯一确定一条记录（无 trigger/attempt 维度）。
+      return JSON.stringify([setting.type, setting.hit, setting.removedPlaceholderThinkingBlocks]);
     case "thinking_signature_model_detection":
       return JSON.stringify([
         setting.type,

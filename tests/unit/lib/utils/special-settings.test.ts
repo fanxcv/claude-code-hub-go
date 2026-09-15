@@ -138,6 +138,24 @@ describe("buildUnifiedSpecialSettings", () => {
     expect(settings?.filter((s) => s.type === "guard_intercept").length).toBe(1);
   });
 
+  test("thinking_placeholder_signature_rectifier 应原样保留，且同块数条目折叠为一条", () => {
+    // Go 侧新增的主动型剥离条目：前端无专属展示，走通用渲染 + 统一化流程，
+    // 故此用例只钉住「不被丢弃」与去重口径（块数相同折叠、不同则各自保留）。
+    const entry = (removedPlaceholderThinkingBlocks: number): SpecialSetting => ({
+      type: "thinking_placeholder_signature_rectifier",
+      scope: "request",
+      hit: true,
+      removedPlaceholderThinkingBlocks,
+    });
+
+    const settings = buildUnifiedSpecialSettings({
+      existing: [entry(1), entry(1), entry(2)],
+    });
+
+    expect(settings).not.toBeNull();
+    expect(settings).toEqual([entry(1), entry(2)]);
+  });
+
   test("guard_intercept 去重时不应受 reason 差异影响", () => {
     const existing: SpecialSetting[] = [
       {
