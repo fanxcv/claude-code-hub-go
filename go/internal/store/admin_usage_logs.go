@@ -44,6 +44,15 @@ const ExcludeWarmupCondition = `(blocked_by IS NULL OR blocked_by <> 'warmup')`
 // RetryCountExpr 复刻 usage-log-filters.ts:115 的 RETRY_COUNT_EXPR：只统计「实际请求」的
 // 次数再减一；链里出现 hedge 标记时按 0 处理（并发不算顺序重试）。列名用 providerChainColumn
 // 替换后即可用于不同表（Node 侧由 drizzle 注入列引用）。
+//
+// 同一语义有**三处镜像**，三个集合必须逐项一致，否则「列表按最小重试数过滤」与「界面/导出的
+// 重试次数」会互相矛盾（同一条链在列表里查得到、在弹窗里却显示 0 次重试）：
+//   - 本表达式（minRetryCount 过滤）；
+//   - `adminapi/usage_logs_export_render.go` 的 exportIsActualRequest / exportIsHedgeRace（CSV 导出）；
+//   - 前端 `src/lib/utils/provider-chain-formatter.ts` 的 isActualRequest / isHedgeRace。
+//
+// 两处容易漏的等价点：`unsupported`（上游声明不支持输入形态，仍是一次真实尝试）必须计入；
+// 成功条目的判据是**真值**（statusCode 为 0 不算，镜像侧用 `!= nil && != 0`）。
 const RetryCountExpr = `(
   SELECT
     CASE
@@ -53,7 +62,8 @@ const RetryCountExpr = `(
             'hedge_triggered',
             'hedge_launched',
             'hedge_winner',
-            'hedge_loser_cancelled'
+            'hedge_loser_cancelled',
+            'hedge_loser_billed'
           )
         ),
         false
@@ -71,6 +81,7 @@ const RetryCountExpr = `(
                   'system_error',
                   'resource_not_found',
                   'client_error_non_retryable',
+                  'unsupported',
                   'endpoint_pool_exhausted',
                   'vendor_type_all_timeout',
                   'client_abort',
@@ -80,6 +91,7 @@ const RetryCountExpr = `(
                 OR (
                   (elem->>'reason') IN ('request_success', 'retry_success')
                   AND (elem->>'statusCode') IS NOT NULL
+                  AND (elem->>'statusCode') <> '0'
                 )
               )
               THEN 1
