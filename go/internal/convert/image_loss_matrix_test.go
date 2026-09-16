@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -31,8 +32,11 @@ type mediaForm struct {
 	sourceJSON string
 	// dataURLClient 报告客户端是否用 data URL 表达这幅图。
 	dataURLClient bool
-	// needle 是目标正文里「这张图还在」的判据（两种承载形态里都出现的那段）。
-	needle string
+	// mediaType / data 是这幅图在客户端语义上的**内联**取值（远程形态时为空）；
+	// url 是**远程**取值。目标线上应有的承载值由这两组值算出（见 expectedTargetImageValue）。
+	mediaType string
+	data      string
+	url       string
 }
 
 var imageMediaForms = []mediaForm{
@@ -41,20 +45,22 @@ var imageMediaForms = []mediaForm{
 		wire:          "data:image/png;base64," + testImagePNGBase64,
 		sourceJSON:    `{"type":"base64","media_type":"image/png","data":"` + testImagePNGBase64 + `"}`,
 		dataURLClient: true,
-		needle:        testImagePNGBase64,
+		mediaType:     "image/png",
+		data:          testImagePNGBase64,
 	},
 	{
 		name:          "GIF data URL",
 		wire:          "data:image/gif;base64," + testImageGIFBase64,
 		sourceJSON:    `{"type":"base64","media_type":"image/gif","data":"` + testImageGIFBase64 + `"}`,
 		dataURLClient: true,
-		needle:        testImageGIFBase64,
+		mediaType:     "image/gif",
+		data:          testImageGIFBase64,
 	},
 	{
 		name:       "远程 URL",
 		wire:       testImageRemoteURL,
 		sourceJSON: `{"type":"url","url":"` + testImageRemoteURL + `"}`,
-		needle:     testImageRemoteURL,
+		url:        testImageRemoteURL,
 	},
 }
 
@@ -213,14 +219,101 @@ func TestImageLossOncePerChainAcrossDirections(t *testing.T) {
 					}
 
 					// 记账必须与「图到底送出去没有」一致，否则「只记一条」可以靠丢图换来。
+					//
+					// 判据是**按目标协议路径取到的 image 节点**，不是子串：子串只问字节在不在，不问挂在哪，
+					// 图落进无效字段或被塞进别的块里都能绿。
+					nodes := targetImages(direction.target, encoded.Body)
 					marshaled := string(encoded.Body.MarshalCompact())
-					if got := strings.Contains(marshaled, form.needle); got != want.delivered {
-						t.Fatalf("目标正文里这张图的存在性 = %v，期望 %v（正文 %s）", got, want.delivered, marshaled)
+					if !want.delivered {
+						if len(nodes) != 0 {
+							t.Fatalf("目标 %s 不该收下这张图，却在 %s 取到 %d 个节点（正文 %s）",
+								direction.target, nodes[0].path, len(nodes), marshaled)
+						}
+						return
+					}
+					if len(nodes) != 1 {
+						t.Fatalf("目标 %s 应恰好有 1 个 image 节点，实际 %d 个（正文 %s）",
+							direction.target, len(nodes), marshaled)
+					}
+					if wantValue := expectedTargetImageValue(direction.target, form); nodes[0].value != wantValue {
+						t.Fatalf("%s 的承载值应为 %q，实际 %q（正文 %s）",
+							nodes[0].path, wantValue, nodes[0].value, marshaled)
+					}
+					// anthropic 的承载位分 data / url 两态，媒体类型只在内联态存在：漏带类型即无法还原。
+					if direction.target == ProtocolAnthropicMessages && nodes[0].mediaType != form.mediaType {
+						t.Fatalf("%s 的 media_type 应为 %q，实际 %q（正文 %s）",
+							nodes[0].path, form.mediaType, nodes[0].mediaType, marshaled)
 					}
 				})
 			}
 		}
 	}
+}
+
+// targetImageNode 是按目标协议路径取到的一个 image 节点。
+type targetImageNode struct {
+	// path 是从正文根到承载值的路径（失败信息里用它指出图到底挂在哪儿）。
+	path string
+	// value 是承载值：chat / responses 线上的 URL 字符串，anthropic 的 source.data 或 source.url。
+	value string
+	// mediaType 是 anthropic 的 source.media_type（其余两线没有这一层，固定为空）。
+	mediaType string
+}
+
+// targetImages 按**目标协议定义的 JSON 路径**取出正文里的 image 节点。
+//
+// 为何不能只查子串：子串只问字节在不在，不问挂在哪——图落进无效字段、或被塞到别的块里，
+// 它都照样绿。这里逐层走到协议规定的位置，并把承载值与媒体类型一并取出。
+func targetImages(proto WireProtocol, body *Value) []targetImageNode {
+	container, nodeType := "messages", "image"
+	switch proto {
+	case ProtocolOpenAIChat:
+		container, nodeType = "messages", "image_url"
+	case ProtocolOpenAIResponses:
+		container, nodeType = "input", "input_image"
+	}
+	nodes := []targetImageNode{}
+	for messageIndex, message := range body.ArrayField(container) {
+		for blockIndex, block := range message.ArrayField("content") {
+			if kind, _ := block.StringField("type"); kind != nodeType {
+				continue
+			}
+			base := fmt.Sprintf("%s[%d].content[%d]", container, messageIndex, blockIndex)
+			switch proto {
+			case ProtocolOpenAIChat:
+				url, _ := block.ObjectField("image_url").StringField("url")
+				nodes = append(nodes, targetImageNode{path: base + ".image_url.url", value: url})
+			case ProtocolOpenAIResponses:
+				url, _ := block.StringField("image_url")
+				nodes = append(nodes, targetImageNode{path: base + ".image_url", value: url})
+			default:
+				source := block.ObjectField("source")
+				mediaType, _ := source.StringField("media_type")
+				if data, ok := source.StringField("data"); ok {
+					nodes = append(nodes, targetImageNode{
+						path: base + ".source.data", value: data, mediaType: mediaType})
+					continue
+				}
+				url, _ := source.StringField("url")
+				nodes = append(nodes, targetImageNode{
+					path: base + ".source.url", value: url, mediaType: mediaType})
+			}
+		}
+	}
+	return nodes
+}
+
+// expectedTargetImageValue 由客户端语义（内联 / 远程）算出这幅图在目标线上应有的承载值。
+func expectedTargetImageValue(proto WireProtocol, form mediaForm) string {
+	if form.data == "" {
+		// 远程 URL：三种目标线都原样承载这个 URL（chat 的 image_url 不需要媒体类型）。
+		return form.url
+	}
+	if proto == ProtocolAnthropicMessages {
+		// anthropic 的 source.type=base64 承载裸 base64，不合成 data URL。
+		return form.data
+	}
+	return "data:" + form.mediaType + ";base64," + form.data
 }
 
 // clientFormatFor 把源协议映射成客户端形态（与 dataplane 的入站格式一致）。

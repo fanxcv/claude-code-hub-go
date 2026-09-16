@@ -10,11 +10,13 @@ import (
 
 // 本文件钉住「网关注入」判定与转换层损失台账之间的那条事实链。
 //
-// 判据只能是**客户端原文里有没有这个键**，不能是「值能不能归一成会话标识」——两者在
+// 契约（与 guard/codex_session.go 的注释互相印证）：**客户端原文里存在一个非 null 的值**
+// 才算「客户端提供了这个字段」。判据不能是「值能不能归一成会话标识」——两者在
 // 「客户端给了值但值非法」时相反：归一规则把 `"short"` / `42` 这类值作废、正文被网关改写，
 // 但那个字段确实是客户端声明的约束，跨线丢弃时该记一条损失（信息档）。
 // 修前：它被登记成网关注入而整条略过，于是**少报**一条——与「每个转换请求凭空多一条」
 // 正好相反方向的错，两者同源（判据取错了对象）。
+// `null` 落在契约的边界上：它不承载约束，故视同未给（若算提供，每个请求会凭空多一条损失）。
 
 // codexBodyWithCacheKey 造一条带指定 `prompt_cache_key` 原值的 Codex 正文。
 func codexBodyWithCacheKey(value any) map[string]any {
@@ -46,8 +48,8 @@ func runSessionStepWithBody(t *testing.T, body map[string]any) (*pctx.Context, m
 
 const codexTestSessionID = "01a0a2a1-c7ff-7747-81cc-4e27411e8938"
 
-// TestSessionStepClientProvidedCacheKeyIsNotGatewayInjected 钉住判据是「原文里有没有这个键」。
-func TestSessionStepClientProvidedCacheKeyIsNotGatewayInjected(t *testing.T) {
+// TestSessionStepCacheKeyPresenceContractIsNonNull 钉住契约：原文里存在一个非 null 的值才算提供。
+func TestSessionStepCacheKeyPresenceContractIsNonNull(t *testing.T) {
 	cases := []struct {
 		name         string
 		body         map[string]any
@@ -59,7 +61,7 @@ func TestSessionStepClientProvidedCacheKeyIsNotGatewayInjected(t *testing.T) {
 		{"客户端给了空串", codexBodyWithCacheKey(""), false},
 		{"客户端给了合法值", codexBodyWithCacheKey("01a0a2a1-c7ff-7747-81cc-4e27411e8938"), false},
 		// null 视同未给：它本来就没声明任何约束，登记为注入才不会给每个请求凭空加一条损失。
-		{"客户端给了空值", codexBodyWithCacheKey(nil), true},
+		{"客户端给了 null（视同未给）", codexBodyWithCacheKey(nil), true},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -91,6 +93,8 @@ func TestClientProvidedCacheKeySurvivesAsDeclaredConstraintInConversion(t *testi
 	}{
 		{"非法但非空的原值仍是客户端声明的约束", codexBodyWithCacheKey("short"), 1},
 		{"客户端没给过这个键：不得凭空记一条", codexRequestBody(), 0},
+		// 契约的边界：`null` 不承载约束、视同未给，同样不得凭空记一条（否则每个请求 +1）。
+		{"客户端给了 null：不得凭空记一条", codexBodyWithCacheKey(nil), 0},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

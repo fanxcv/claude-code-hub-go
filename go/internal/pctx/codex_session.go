@@ -43,8 +43,11 @@ func (c *Context) CodexSessionCompletion() (CodexSessionCompletion, bool) {
 //
 // 为何要单独记：跨线转换会把正文里客户端没有的字段也当成「客户端声明的约束」记进损失台账，
 // 而 Codex 会话补全恰好会往正文写 `prompt_cache_key`——于是每个转换请求都凭空多一条损失，
-// 客户端却从未提过这个字段（生产实测：每一行 +1）。判据只能是「客户端原文里是否出现」，
-// 故由写正文的那一步（守卫链）把事实留在上下文里，供转换与审计读取。
+// 客户端却从未提过这个字段（生产实测：每一行 +1）。
+//
+// 契约：判据只能是「客户端原文里**是否存在一个非 null 的值**」。非法值（`"short"` / `42` / `""`）
+// 仍算客户端提供（那是它声明的约束，只是被归一规则作废了）；`null` 视同未给（不承载约束）。
+// 判定本身在写正文的那一步（guard.completeCodexSession）完成，本处只负责承载事实。
 func (c *Context) AddGatewayInjectedBodyField(name string) {
 	if c == nil || name == "" {
 		return

@@ -41,11 +41,14 @@ func (d Deps) completeCodexSession(ctx *pctx.Context, keyID int64, body map[stri
 		return
 	}
 	if completion.SetBodyPromptCacheKey {
-		// 快照必须在写入之前：注入事实的判据是「客户端原文里到底有没有这个键」，
-		// 而不是「值能不能归一成会话标识」。两者在「给了值但值非法」时相反：
-		// 客户端的 `prompt_cache_key:"short"` 会被归一规则作废、值被网关改写，但那个字段
-		// 确实是客户端声明的约束——跨线丢弃时该记一条损失（信息档），不该被当成网关注入而略过。
-		// 值为 null 视同未给：它本来就没声明任何约束（见 pctx.AddGatewayInjectedBodyField）。
+		// 快照必须在写入之前。注入事实的契约是**「客户端原文里存在一个非 null 的值」**，
+		// 不是「值能不能归一成会话标识」——两者在下面两种情形上分开：
+		//   - 给了非法值（`"short"` / `42` / `""`）：归一规则把它作废、正文被网关改写，但那个
+		//     字段确实是客户端声明的约束，跨线丢弃时该记一条损失（信息档），故**算客户端提供**；
+		//   - 给了 `null`：它不承载任何约束（补全语义里 `null` 与缺值同路：只有归一后非空才算已有
+		//     标识，见 session.normalizeBodySessionID），故**视同未给**——登记为网关注入，免得
+		//     每个请求凭空多一条损失（生产实测：每一行 +1）。
+		// 契约与两侧同判的用例见 codex_session_cache_key_test.go。
 		provided, hasKey := body["prompt_cache_key"]
 		clientProvided := hasKey && provided != nil
 		body["prompt_cache_key"] = completion.SessionID
