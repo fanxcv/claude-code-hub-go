@@ -112,7 +112,10 @@ func TestAnthropicToolCacheControlDecode(t *testing.T) {
 	}
 }
 
-func TestChatToolCacheControlRecordedAsLoss(t *testing.T) {
+// TestChatToolBlockCacheControlRecordedAsLoss 与 parity_test.go 的同名钉子（工具定义上的提示）
+// 各测一侧：本用例的提示挂在消息内的 tool_use / tool_result 块上，故断言的是 tool_call /
+// tool_result 两类明细。两条钉子内容不同，仅函数名在整合时撞车，故此处改名为块级。
+func TestChatToolBlockCacheControlRecordedAsLoss(t *testing.T) {
 	request := decodeAnthropicToolCacheControl(t, toolCacheControlPayload)
 	encoded, ok := EncodeRequest(ProtocolOpenAIChat, request, ConvertCtx{
 		ClientFormat: FormatClaude,
