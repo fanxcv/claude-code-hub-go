@@ -30,9 +30,18 @@ type responsesDecodedBlock struct {
 	seed string
 	// pending 是悬置待裁的增量：首个增量与 seed 逐字相同时，「上游重发首片」与「合法续写恰好同字」
 	// 在本地是同一串字节，只有声明式全文能消歧，故先攒在这里，等声明到达由 reconcile 交付。
+	// 只准攒到 responsesPendingMaxBytes，越界即按兜底口径放行（见 releaseSuspended）。
 	pending string
 	closed  bool
 }
+
+// responsesPendingMaxBytes 是「首片歧义」悬置的硬上限。
+//
+// 悬置的唯一目的是等声明式全文来消歧，而声明通常紧随该片增量到达，故一个小窗口就够覆盖常见
+// 形态。若不给上限，等不到声明的长响应会把整段正文扣在本地：客户端在 done 之前一个字节都收不到
+// （可触发 idle timeout），pending 又是字符串累加、随响应长度二次复制放大。越界即按既有兜底口径
+// （「宁可重复、不静默丢字」，与 closeBlock 同一取舍）放行，把代价换成有界的延迟与驻留。
+const responsesPendingMaxBytes = 1024
 
 // responsesDoneKinds 把 done 事件映射到块类型（按 output_index 兜底匹配用）。
 var responsesDoneKinds = map[string]responsesDecodedKind{
@@ -353,17 +362,35 @@ func (d *responsesStreamDecoder) handleDelta(out *[]Chunk, eventType string, pay
 	// 首个增量与 part.text 逐字相同：本地无从判定上游是在重发首片，还是续写恰好同字（两种解释
 	// 产生同一串字节），而交付顺序不可回退，故把这段悬置到声明式全文到达再交付——声明是权威，
 	// 既不会重复交付（重发型），也不会吞掉合法续写的首字（合法续写型）。见 reconcile。
+	//
+	// 悬置只到 responsesPendingMaxBytes 为止：等不到声明就无限攒，等于把整段正文扣在本地。
 	if decoded.emitted == "" && decoded.seed != "" {
-		if decoded.pending == "" && delta == decoded.seed {
+		switch {
+		case decoded.pending == "" && delta == decoded.seed && len(delta) <= responsesPendingMaxBytes:
 			decoded.pending = delta
 			return
-		}
-		if decoded.pending != "" {
+		case decoded.pending != "" && len(decoded.pending)+len(delta) <= responsesPendingMaxBytes:
 			decoded.pending += delta
+			return
+		case decoded.pending != "":
+			d.releaseSuspended(out, decoded, delta)
 			return
 		}
 	}
 	d.flushSeed(out, decoded)
+	d.emitDeltaChunk(out, decoded, delta)
+}
+
+// releaseSuspended 在悬置到达上限（或首片本身超过上限）时放弃等声明，按既有兜底口径交付，并把
+// 这一块交回普通流式路径：此后 emitted 非空，不会再进入悬置分支。
+//
+// 取舍与 closeBlock 的兜底完全一致——两种来源各交付一次（重发型的首片在这里多出一份），也不肯
+// 继续攒着等一个可能永远不来的声明。声明若随后到达，reconcile 仍会尝试对账，只是此时 emitted 已
+// 长于声明全文、不构成前缀，算不出差额故不再改动（绝不重复地回退已交付内容）。
+func (d *responsesStreamDecoder) releaseSuspended(out *[]Chunk, decoded *responsesDecodedBlock, delta string) {
+	d.flushSeed(out, decoded)
+	d.emitDeltaChunk(out, decoded, decoded.pending)
+	decoded.pending = ""
 	d.emitDeltaChunk(out, decoded, delta)
 }
 

@@ -401,6 +401,11 @@ func mergeUsage(base *Usage, delta *Usage) *Usage {
 // 硬约束是「绝不重复」：仅当已发内容恰好是声明全文的前缀时才补差额，否则返回空串——不构成
 // 前缀关系说明上游顺序反常（重排或回退），补任何东西都会让客户端看到重复或乱序，宁可不补。
 //
+// 例外只有一种，且只在上游**完全不给声明**时生效：块内首片歧义（content_part.added 的 part.text
+// 与首个增量逐字相同）在流结束仍无 done / item / 终态文本时无从消歧，此时按「宁可重复、不静默
+// 丢字」把两个来源各交付一次——见 responsesStreamDecoder 的 closeBlock 与 releaseSuspended
+// （后者是同一取舍在「悬置越界」上的体现）。声明可得时一律按声明精确交付，不走这条。
+//
 // 只许用于**声明式**载荷（done / 终态 / item / content_part.added 的初始文本），禁止用于
 // 增量帧：增量之间没有前缀保证，合法的重复文本（如两个同字增量）会被误判成重复而吞掉。
 func declaredTextTail(emitted string, declared string) string {

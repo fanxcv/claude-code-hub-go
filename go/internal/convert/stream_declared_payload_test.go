@@ -1,6 +1,9 @@
 package convert
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // 声明式载荷的对账验收：上游只在 done / 终态 / item 载荷里给全文、或只在块起始帧里给正文，
 // 而一个增量都不发时，跨线客户端仍须拿到完整正文——且**只拿到一次**。
@@ -378,6 +381,137 @@ func TestResponsesSuspendedSeedWithTextlessDoneKeepsTrailingContent(t *testing.T
 			assertClientTerminator(t, client, out)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 悬置的硬上限：等不到声明不得把正文无限扣在本地
+// ---------------------------------------------------------------------------
+
+// responsesSeedAmbiguityFrames 造出「part.text 与首个增量逐字相同」的上游帧序列（歧义入口）。
+func responsesSeedAmbiguityFrames(seed string, deltas []string) []string {
+	frames := []string{
+		"event: response.created\n" +
+			`data: {"type":"response.created","response":{"id":"resp_1","model":"m","status":"in_progress","output":[]}}` + "\n\n",
+		"event: response.output_item.added\n" +
+			`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"i1","type":"message","role":"assistant","status":"in_progress","content":[]}}` + "\n\n",
+		"event: response.content_part.added\n" +
+			`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"i1","part":{"type":"output_text","text":"` + seed + `"}}` + "\n\n",
+	}
+	for _, delta := range deltas {
+		frames = append(frames,
+			"event: response.output_text.delta\n"+
+				`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"i1","delta":"`+delta+`"}`+"\n\n")
+	}
+	return frames
+}
+
+// responsesTextDoneFrames 造出带声明式全文的收尾帧（done + item + 终态）。
+func responsesTextDoneFrames(declared string) []string {
+	return []string{
+		"event: response.output_text.done\n" +
+			`data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"i1","text":"` + declared + `"}` + "\n\n",
+		"event: response.output_item.done\n" +
+			`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"i1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"` + declared + `"}]}}` + "\n\n",
+		"event: response.completed\n" +
+			`data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[{"id":"i1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"` + declared + `"}]}],"usage":{"input_tokens":5,"output_tokens":3}}}` + "\n\n",
+	}
+}
+
+// TestResponsesSuspendedSeedStreamsBeforeDeclaration 钉住悬置的硬上限：等不到声明时，正文不得被
+// 无限扣在本地。
+//
+// 形态：part.text 与首片增量逐字相同（歧义入口），随后上游持续发增量却迟迟不给 done。旧实现把
+// 这些增量全部攒进 pending 直到声明到达，长响应下客户端在 done 之前零正文（可触发 idle timeout），
+// 且 pending 是字符串累加、随响应长度二次复制放大。现改为越界即按兜底口径放行。
+//
+// 断言：① 在**任何声明到达之前**客户端已拿到全部正文（不是攒到 done 才一次性交付）；
+// ② 后续声明到达后不回头改动已交付内容，重复次数恰为兜底口径的那一份。
+func TestResponsesSuspendedSeedStreamsBeforeDeclaration(t *testing.T) {
+	const seed = "起始段"
+	const delta = "续写片段"
+	const repeats = 120 // 超过上限所需的增量数（上限 1024 字节，seed 9 字节 + 每片 12 字节）
+	deltas := append([]string{seed}, repeatString(delta, repeats)...)
+
+	// 兜底口径：两个来源各交付一次，首片多出来一份（重发型上游正是这个形态）。
+	wantText := seed + seed + strings.Repeat(delta, repeats)
+	// 声明说的是「首片是重发」：真正文只有一份 seed。
+	declared := seed + strings.Repeat(delta, repeats)
+
+	for _, client := range []WireProtocol{ProtocolOpenAIChat, ProtocolAnthropicMessages} {
+		client := client
+		t.Run(string(client), func(t *testing.T) {
+			pipe, ok := NewStreamPipe(ProtocolOpenAIResponses, client, ConvertCtx{
+				ClientFormat: clientFormatOfProtocol(client),
+				TargetProto:  ProtocolOpenAIResponses,
+				Stream:       true,
+			})
+			if !ok {
+				t.Fatalf("建管道失败：responses -> %s", client)
+			}
+			var out []byte
+			for _, frame := range responsesSeedAmbiguityFrames(seed, deltas) {
+				out = append(out, pipe.Push([]byte(frame))...)
+			}
+			// ① 还没有任何声明：流式正文必须已经交付出去。
+			if got := clientDialectText(t, client, string(out)); got != wantText {
+				t.Fatalf("声明到达前客户端正文 %q != %q（越界未放行 ⇒ 正文被悬置到 done）", got, wantText)
+			}
+			// ② 声明到达后不回头改已交付内容；重复恰为兜底口径的一份。
+			for _, frame := range responsesTextDoneFrames(declared) {
+				out = append(out, pipe.Push([]byte(frame))...)
+			}
+			final := string(out) + string(pipe.Flush())
+			if got := clientDialectText(t, client, final); got != wantText {
+				t.Fatalf("声明到达后正文被改动：got %q want %q\n原文：%q", got, wantText, final)
+			}
+			if occurrences := countOccurrences(final, seed); occurrences != 2 {
+				t.Fatalf("重发型兜底的交付次数 %d != 2（0=丢字，1=声称能消歧）\n原文：%q", occurrences, final)
+			}
+			assertClientTerminator(t, client, final)
+		})
+	}
+}
+
+// TestResponsesSuspendedSeedPendingHasHardCap 直接读同包解码器状态，钉住悬置缓冲的驻留有硬上限：
+// 「客户端收得到正文」是行为近似，驻留上界必须有确定性断言，否则字符串累加的放大随时可以回归。
+func TestResponsesSuspendedSeedPendingHasHardCap(t *testing.T) {
+	decoder := newResponsesStreamDecoder(ConvertCtx{
+		ClientFormat: clientFormatOfProtocol(ProtocolOpenAIChat),
+		TargetProto:  ProtocolOpenAIResponses,
+		Stream:       true,
+	})
+	decoded, ok := decoder.(*responsesStreamDecoder)
+	if !ok {
+		t.Fatalf("解码器类型不符：%T", decoder)
+	}
+
+	const seed = "起始段"
+	deltas := append([]string{seed}, repeatString("续写片段", 200)...)
+	maxPending := 0
+	for index, frame := range responsesSeedAmbiguityFrames(seed, deltas) {
+		decoded.Push([]byte(frame))
+		for _, block := range decoded.byKey {
+			if len(block.pending) > responsesPendingMaxBytes {
+				t.Fatalf("第 %d 帧后悬置缓冲 %d 字节，超过上限 %d",
+					index, len(block.pending), responsesPendingMaxBytes)
+			}
+			if len(block.pending) > maxPending {
+				maxPending = len(block.pending)
+			}
+		}
+	}
+	// 非零最大值证明本用例真的走到了悬置（否则上限断言是空的）。
+	if maxPending == 0 {
+		t.Fatal("从未进入悬置：用例失去了针对上限的意义")
+	}
+}
+
+func repeatString(value string, count int) []string {
+	out := make([]string, count)
+	for i := range out {
+		out[i] = value
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
