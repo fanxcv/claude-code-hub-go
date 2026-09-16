@@ -135,6 +135,9 @@ type Context struct {
 	// codexSessionCompletion 是本次请求的 Codex 会话标识补全事实（守卫链写、终态读，见 codex_session.go）。
 	codexSessionCompletion    CodexSessionCompletion
 	codexSessionCompletionSet bool
+	// gatewayInjectedBodyFields 是**网关注入**（客户端原文里没有）的正文顶层字段名，
+	// 守卫链写、转换与终态读（见 codex_session.go 的说明）。
+	gatewayInjectedBodyFields []string
 
 	// selectionChainEntry 是选择期 provider_chain 条目（链首）的原样快照，见 selection_chain.go。
 	selectionChainEntry []byte

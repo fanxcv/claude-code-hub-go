@@ -395,9 +395,15 @@ func ConversionFailureEntry(failure *convert.ConversionFailure) map[string]any {
 // 请求的 jsonb 撑到不可读，以及把审计面变成第二份请求体（连带把上游/客户端的数据搬进审计列）。
 // 故 detail 一律不进条目——定位靠 capability + action + fix 代码，逐条细节由单测与复现取。
 //
-// 体积上界（可核）：capability 取自 convert 的 21 个 `Loss*` 常量（hub.go 的两段 capability
-// const 块），action 只有 dropped/downgraded/rewritten 三种，故 groups **至多 21×3=63 组**、
-// 每组约 60 字节，加上协议对与 total 共约 4KB 的硬上界（远小于同层既有条目如 provider_parameter_override）。
+// 档位（severity）：每组带一个 `rewrite | degrade | info`，并在顶层给三档合计，供界面决定
+// 「哪些损失值得一眼看到」（建议列表只显示 rewrite 档，降级与信息档折叠进详情）。
+// 为何不只在界面侧映射：档位与 capability 的对应是语义判断，必须在损失定义处（convert
+// 的 Loss* 常量旁）维护一份，界面自建一张表就是第二份真源。
+//
+// 体积上界（可核）：capability 取自 convert 的 `Loss*` 常量（hub.go 的两段 capability
+// const 块，含 catch-all 细分后的 28 个），action 只有 dropped/downgraded/rewritten 三种，
+// 故 groups **至多 28×3=84 组**、每组约 80 字节，加上协议对、total 与三档合计共约 7KB 的
+// 硬上界（仍远小于同层既有条目如 provider_parameter_override 的上界）。
 //
 // 分组顺序按 (capability, action) 字典序固定：同一份损失集必须序列化成同一份字节，
 // 否则测试无法断言、前端按内容去重（buildUnifiedSpecialSettings）也会把同一条事实当成两条。
@@ -423,15 +429,19 @@ func ConversionLossEntry(plan *convert.ConversionPlan, loss *convert.LossReport)
 		}
 		return groups[i].action < groups[j].action
 	})
+	severityTotals := map[convert.LossSeverity]int{}
 	aggregated := make([]map[string]any, 0, len(groups))
 	for _, group := range groups {
+		severity := convert.LossSeverityOf(group.capability, convert.LossAction(group.action))
+		severityTotals[severity] += counts[group]
 		aggregated = append(aggregated, map[string]any{
 			"capability": group.capability,
 			"action":     group.action,
 			"count":      counts[group],
+			"severity":   string(severity),
 		})
 	}
-	return map[string]any{
+	entry := map[string]any{
 		"type":           TypeProtocolConversionLoss,
 		"scope":          "request",
 		"hit":            true,
@@ -442,6 +452,12 @@ func ConversionLossEntry(plan *convert.ConversionPlan, loss *convert.LossReport)
 		"total":  len(loss.Entries),
 		"groups": aggregated,
 	}
+	// 三档合计恒在（零也写）：读侧不必区分「没有这一档」与「这一档是 0」，
+	// 也避免老条目（无该字段）与新条目在界面上走两条分支。
+	for _, severity := range []convert.LossSeverity{convert.SeverityRewrite, convert.SeverityDegrade, convert.SeverityInfo} {
+		entry[string(severity)+"Total"] = severityTotals[severity]
+	}
+	return entry
 }
 
 // SanitizeReason 把失败原因处理成可落库的文本：单行化 + 脱敏 + 定长。

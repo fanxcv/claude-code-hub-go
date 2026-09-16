@@ -720,7 +720,7 @@ func encodeResponsesRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	out.Delete("tools")
 	// 外线留存的非 function 工具（如 claude 线没有的 MCP 工具声明）本线无法承载时记损。
 	reportForeignPreservedTools(request, responsesWire, loss, direction)
-	reportForeignDroppableFields(request, responsesWire, loss, direction)
+	reportForeignDroppableFields(request, responsesWire, loss, direction, ctx)
 	out.Set("model", NewString(firstString(request.Model, ctx.Model)))
 	if request.Stream || ctx.Stream {
 		out.Set("stream", NewBool(true))

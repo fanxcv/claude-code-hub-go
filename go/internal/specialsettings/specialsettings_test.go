@@ -475,6 +475,8 @@ func TestConversionLossEntryAggregatesByCapabilityAndAction(t *testing.T) {
 		// 同一 capability、不同 action 必须分成两组（动作不同 = 事实不同：丢了 vs 改了）。
 		{Capability: convert.LossUnknownField, Direction: "request", Action: convert.LossRewritten, Detail: "message.role"},
 		{Capability: convert.LossThinkingDerived, Direction: "request", Action: convert.LossDowngraded, Detail: "budget_tokens=8192→effort=high"},
+		// 信息档也要出现一次：三档合计恒在且相加等于 total，是该条目的不变量。
+		{Capability: convert.LossPromptCacheKey, Direction: "request", Action: convert.LossDropped, Detail: "prompt_cache_key"},
 	}}
 	entry := ConversionLossEntry(plan, loss)
 	if entry == nil {
@@ -486,7 +488,12 @@ func TestConversionLossEntryAggregatesByCapabilityAndAction(t *testing.T) {
 		"hit":            true,
 		"clientProtocol": "openai-responses",
 		"targetProtocol": "openai-chat",
-		"total":          5,
+		"total":          6,
+		// 档位合计：cache_control(2) + thinking.derived(1) 为降级档，两个 unknown_field 为改写档，
+		// prompt_cache_key 为信息档。三者相加必须等于 total（下面显式断言）。
+		"rewriteTotal": 2,
+		"degradeTotal": 3,
+		"infoTotal":    1,
 	}
 	for key, expected := range want {
 		if got, ok := entry[key]; !ok || got != expected {
@@ -494,10 +501,11 @@ func TestConversionLossEntryAggregatesByCapabilityAndAction(t *testing.T) {
 		}
 	}
 	wantGroups := []map[string]any{
-		{"capability": "cache_control", "action": "dropped", "count": 2},
-		{"capability": "thinking.derived", "action": "downgraded", "count": 1},
-		{"capability": "unknown_field", "action": "dropped", "count": 1},
-		{"capability": "unknown_field", "action": "rewritten", "count": 1},
+		{"capability": "cache_control", "action": "dropped", "count": 2, "severity": "degrade"},
+		{"capability": "prompt_cache_key", "action": "dropped", "count": 1, "severity": "info"},
+		{"capability": "thinking.derived", "action": "downgraded", "count": 1, "severity": "degrade"},
+		{"capability": "unknown_field", "action": "dropped", "count": 1, "severity": "rewrite"},
+		{"capability": "unknown_field", "action": "rewritten", "count": 1, "severity": "rewrite"},
 	}
 	groups, ok := entry["groups"].([]map[string]any)
 	if !ok {
@@ -506,11 +514,27 @@ func TestConversionLossEntryAggregatesByCapabilityAndAction(t *testing.T) {
 	if len(groups) != len(wantGroups) {
 		t.Fatalf("应聚合成 %d 组，实际 %d：%v", len(wantGroups), len(groups), groups)
 	}
+	groupSum := 0
 	for index, expected := range wantGroups {
 		got := groups[index]
-		if got["capability"] != expected["capability"] || got["action"] != expected["action"] || got["count"] != expected["count"] {
+		if got["capability"] != expected["capability"] || got["action"] != expected["action"] ||
+			got["count"] != expected["count"] || got["severity"] != expected["severity"] {
 			t.Errorf("第 %d 组应为 %v，实际 %v", index, expected, got)
 		}
+		count, _ := got["count"].(int)
+		groupSum += count
+	}
+	// 不变量：分组计数之和、三档之和都必须等于 total（任一处口径漂移都会被这一行抳住）。
+	if groupSum != want["total"] {
+		t.Errorf("分组计数之和应等于 total %v，实际 %d", want["total"], groupSum)
+	}
+	severitySum, _ := entry["rewriteTotal"].(int)
+	for _, key := range []string{"degradeTotal", "infoTotal"} {
+		value, _ := entry[key].(int)
+		severitySum += value
+	}
+	if severitySum != want["total"] {
+		t.Errorf("三档之和应等于 total %v，实际 %d（%v）", want["total"], severitySum, entry)
 	}
 	// detail 不落进条目：序列化结果里不得出现任何 detail 原文（同时证明没有整条展开）。
 	raw, err := json.Marshal(entry)

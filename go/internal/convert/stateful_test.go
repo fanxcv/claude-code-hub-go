@@ -59,7 +59,7 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 		wantLoss []string
 	}{
 		{
-			name:   "responses→chat：缓存键、结构化输出、落库开关",
+			name:   "responses→chat：缓存键、结构化输出",
 			source: ProtocolOpenAIResponses,
 			target: ProtocolOpenAIChat,
 			body: `{"model":"gpt-5","input":"hi","prompt_cache_key":"k1",` +
@@ -68,8 +68,26 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 			wantLoss: []string{
 				LossPromptCacheKey + "/dropped/prompt_cache_key",
 				LossTextControls + "/dropped/text",
-				LossStoreFlag + "/dropped/store",
 			},
+		},
+		{
+			// store:false 是多数 Responses 客户端的默认值，与「目标线不落库」等价 ⇒ 不记损。
+			// 它曾是每个转换请求恒定多出的一条（生产实测每行 +1），故这一格必须为**空**：
+			// wantLoss 为空时下面会跑「不多不少」断言，凭空补条目会直接转红。
+			name:     "responses→chat：store:false 不算损失",
+			source:   ProtocolOpenAIResponses,
+			target:   ProtocolOpenAIChat,
+			body:     `{"model":"gpt-5","input":"hi","store":false}`,
+			wantLoss: []string{},
+		},
+		{
+			// store:true 是真实要求落库：responses 源线由 fail-closed 拦（不会走到记损），
+			// 其它源线仍必须记（目标线不落库，而状态型冲突只对 responses 源线判定）。
+			name:     "chat→anthropic：store:true 仍记损",
+			source:   ProtocolOpenAIChat,
+			target:   ProtocolAnthropicMessages,
+			body:     `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"store":true}`,
+			wantLoss: []string{LossStoreFlag + "/dropped/store"},
 		},
 		{
 			name:     "chat→responses：response_format",
@@ -150,6 +168,51 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 // foreignDroppableClasses 是本文件钉住的四类损失；「不多不少」断言按它过滤，避免误伤其它来源的损失。
 var foreignDroppableClasses = []string{
 	LossPromptCacheKey, LossResponseFormat, LossTextControls, LossStoreFlag,
+}
+
+// TestGatewayInjectedPromptCacheKeyNotRecorded 钉住「客户端原文里没有的字段不算客户端约束」。
+//
+// 为何必须钉：Codex 客户端用 `session_id` 头表达会话身份时，守卫链会把 `prompt_cache_key`
+// 补进正文（见 guard.completeCodexSession），而它随后会被当成「客户端声明的缓存路由键」记进
+// 损失台账——于是**每一个转换请求都凭空多一条**（生产实测：每一行 +1，卡在 total 上）。
+// 判据只能是「客户端原文里是否出现」，故守卫链把注入事实传进 ConvertCtx。
+//
+// 两个方向都要钉：注入了不记 → 这条用例；未注入仍记 → 同一份 body 不带该事实时必须有一条，
+// 否则修法会把真·客户端声明的缓存键一起辟掉。
+func TestGatewayInjectedPromptCacheKeyNotRecorded(t *testing.T) {
+	const body = `{"model":"gpt-5","input":"hi","prompt_cache_key":"sess_1"}`
+	run := func(t *testing.T, injected []string) []string {
+		t.Helper()
+		ctx := ConvertCtx{
+			ClientFormat:              FormatResponse,
+			TargetProto:               ProtocolOpenAIChat,
+			Model:                     "m",
+			ToWireToolName:            NormalizeToolName,
+			GatewayInjectedBodyFields: injected,
+		}
+		decoded, ok := DecodeRequest(ProtocolOpenAIResponses, mustParsePayload(t, body), ctx)
+		if !ok {
+			t.Fatal("responses 线必须能解码")
+		}
+		encoded, ok := EncodeRequest(ProtocolOpenAIChat, decoded.Value, ctx)
+		if !ok {
+			t.Fatal("chat 线必须能编码")
+		}
+		got := []string{}
+		for _, entry := range encoded.Loss.Entries {
+			if entry.Capability == LossPromptCacheKey {
+				got = append(got, entry.Detail)
+			}
+		}
+		return got
+	}
+
+	if got := run(t, []string{"prompt_cache_key"}); len(got) != 0 {
+		t.Fatalf("网关注入的 prompt_cache_key 不得记损，实际 %v", got)
+	}
+	if got := run(t, nil); len(got) != 1 {
+		t.Fatalf("客户端原文里确实出现的 prompt_cache_key 必须记损（恰好一条），实际 %v", got)
+	}
 }
 
 func containsString(haystack []string, needle string) bool {

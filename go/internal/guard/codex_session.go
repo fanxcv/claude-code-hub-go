@@ -49,6 +49,9 @@ func (d Deps) completeCodexSession(ctx *pctx.Context, keyID int64, body map[stri
 			})
 			return
 		}
+		// 登记「这个键是网关注入的」：跨线转换时它会被当作客户端声明的约束记进损失台账，
+		// 而客户端原文里从未出现这个字段（判据见 pctx.AddGatewayInjectedBodyField）。
+		ctx.AddGatewayInjectedBodyField("prompt_cache_key")
 	}
 	if completion.SetHeaderSessionID {
 		ctx.SetHeader("session_id", completion.SessionID)

@@ -198,6 +198,25 @@ type ConvertCtx struct {
 	// 允许给「来自非 Anthropic 上游、没有签名」的思考块补一个占位签名，让 Anthropic 客户端
 	// 愿意显示它。只影响响应编码，见 thinking_placeholder.go。
 	PlaceholderThinkingSignature bool
+
+	// GatewayInjectedBodyFields 是**网关注入**（客户端原文里没有）的正文顶层字段名。
+	//
+	// 为何需要：Codex 客户端用 `session_id` 头表达会话身份时，守卫链会把 `prompt_cache_key`
+	// 补进正文（见 guard.completeCodexSession），而跨线转换时它会被当成「客户端声明的
+	// 缓存路由键」记入损失——客户端根本没提过这个字段，于是**每一个转换请求都凭空多一条**
+	// （生产实测：每一行 +1）。判据只能是「客户端原文里是否出现」，而字段是否被注入
+	// 只有守卫链知道，故由它把事实传到这里。
+	GatewayInjectedBodyFields []string
+}
+
+// isGatewayInjectedField 报告某个正文顶层字段名是否由网关注入（而非客户端给出）。
+func (ctx ConvertCtx) isGatewayInjectedField(name string) bool {
+	for _, injected := range ctx.GatewayInjectedBodyFields {
+		if injected == name {
+			return true
+		}
+	}
+	return false
 }
 
 // shouldPlaceholderThinkingSignature 报告本次渲染是否该补占位签名。
@@ -268,6 +287,12 @@ type LossCollector struct {
 }
 
 func (c *LossCollector) add(capability, direction string, action LossAction, detail string) {
+	// catch-all 细分在这里收口：`unknown_field` 的记损站点有八十余处，逐个改名既改不动也
+	// 容易漏，而 detail 的首词就是来源（各站点传的是字段路径），故在唯一的累积入口按前缀
+	// 归类（见 unknownFieldCapability）。
+	if capability == LossUnknownField {
+		capability = unknownFieldCapability(detail)
+	}
 	c.entries = append(c.entries, LossEntry{
 		Capability: capability,
 		Direction:  direction,
@@ -353,6 +378,109 @@ const (
 	LossTextControls   = "text.controls"
 	LossStoreFlag      = "store"
 )
+
+// 以下七个是 catch-all `unknown_field` 的细分类别（按 detail 的来源归类）。
+//
+// 为何要细分：`unknown_field` 是生产报告里第二大类（仅次于 thinking.block 降级，约占 9.7%），
+// 但它把「工具声明丢了」「消息成员丢了」「采样参数丢了」混成一格——界面上看不出是什么，
+// 也无法按来源过滤，跟「任意未知字段丢了」完全不可区分。前缀统一为 `unknown_field.`，
+// 故“是否属于 catch-all 家族”可由前缀判定（服务端与界面两侧同一判据）。
+const (
+	LossUnknownFieldTool      = "unknown_field.tool"
+	LossUnknownFieldRefusal   = "unknown_field.refusal"
+	LossUnknownFieldContent   = "unknown_field.content"
+	LossUnknownFieldMessage   = "unknown_field.message"
+	LossUnknownFieldParam     = "unknown_field.param"
+	LossUnknownFieldStructure = "unknown_field.structure"
+	// LossUnknownFieldOther 是未能归类的兜底子类：新增记损站点若引入新前缀，落这里而不是消失。
+	LossUnknownFieldOther = "unknown_field.other"
+)
+
+// unknownFieldRule 是一条「detail 前缀 → 子类别」规则。
+//
+// 顺序即优先级：更长的前缀必须排在更短的前面（`input_image…` 必须先于 `input…`），
+// 否则后者会把前者的来源吞掉。
+var unknownFieldRules = []unknownFieldRule{
+	{prefix: "tool", capability: LossUnknownFieldTool},
+	{prefix: "refusal", capability: LossUnknownFieldRefusal},
+	{prefix: "content", capability: LossUnknownFieldContent},
+	{prefix: "image_url", capability: LossUnknownFieldContent},
+	{prefix: "input_image", capability: LossUnknownFieldContent},
+	{prefix: "block", capability: LossUnknownFieldContent},
+	{prefix: "choices", capability: LossUnknownFieldContent},
+	{prefix: "message", capability: LossUnknownFieldMessage},
+	{prefix: "reasoning", capability: LossUnknownFieldParam},
+	{prefix: "thinking", capability: LossUnknownFieldParam},
+	{prefix: "output_config", capability: LossUnknownFieldParam},
+	{prefix: "seed", capability: LossUnknownFieldParam},
+	{prefix: "max_tokens", capability: LossUnknownFieldParam},
+	{prefix: "stop", capability: LossUnknownFieldParam},
+	{prefix: "parallel_tool_calls", capability: LossUnknownFieldParam},
+	{prefix: "instructions", capability: LossUnknownFieldStructure},
+	{prefix: "output", capability: LossUnknownFieldStructure},
+	{prefix: "input", capability: LossUnknownFieldStructure},
+	{prefix: "opaque", capability: LossUnknownFieldStructure},
+}
+
+type unknownFieldRule struct {
+	prefix     string
+	capability string
+}
+
+// unknownFieldCapability 把 catch-all 的 `unknown_field` 按 detail 首词归到子类别。
+//
+// 判据只用 detail 的前缀：各站点传进来的 detail 就是字段路径（`tools[].name`、
+// `content_part.image_url`、`messages[3]`…），故这一层无需站点配合；新增站点只要前缀已在
+// 规则表内就自动归类，否则落 `unknown_field.other`（可见地暴露“忘了归类”）。
+func unknownFieldCapability(detail string) string {
+	for _, rule := range unknownFieldRules {
+		if strings.HasPrefix(detail, rule.prefix) {
+			return rule.capability
+		}
+	}
+	return LossUnknownFieldOther
+}
+
+// LossSeverity 是损失条目的档位：为「界面上哪些损失值得一眼看到」提供权威口径。
+//
+// 分档判据是**对本次作答的影响**，而不是“丢了多少条”（计数大不等于影响大：一轮思考降级
+// 只弱化保真度，而一个被丢的 top_k 会直接改模型行为）：
+//   - rewrite：内容/工具被改写或删除，或客户端**显式给定**的参数被丢弃——上游看到的东西变了；
+//   - degrade：能力仍在但保真度弱化（思考强度、思考签名、缓存提示）；
+//   - info：字段不承载约束（默认语义、缓存路由键），丢失后本次作答完全不变。
+//
+// 为什么档位定在服务端而不是界面侧：add 的同一份判据还要给日志、回放与后续消费者用，
+// 界面自建一张表就是第二份真源，迟早分叉。
+type LossSeverity string
+
+const (
+	SeverityRewrite LossSeverity = "rewrite"
+	SeverityDegrade LossSeverity = "degrade"
+	SeverityInfo    LossSeverity = "info"
+)
+
+// LossSeverityOf 报告一条损失（capability + action）的档位。
+//
+// 为何要连 action 一起看：thinking.block 是同一能力的两种事实——块被**丢**（客户端的思考
+// 内容消失）与被**降级**（强度载体换算），前者改变内容、后者只弱化保真度。
+//
+// 未知 capability 一律按 rewrite 处理：宁可让它显眼，也不要让新能力默默躺在折叠区里。
+func LossSeverityOf(capability string, action LossAction) LossSeverity {
+	switch capability {
+	case LossStoreFlag, LossPromptCacheKey:
+		return SeverityInfo
+	case LossThinkingBlock:
+		if action == LossDowngraded {
+			return SeverityDegrade
+		}
+		return SeverityRewrite
+	case LossThinkingSignature, LossThinkingDerived, LossReasoningReplay, LossCacheControl:
+		return SeverityDegrade
+	default:
+		// catch-all 家族（含未细分的裸 `unknown_field`）都在此落地。
+		return SeverityRewrite
+	}
+}
 
 // nonFunctionToolLossClass 把「目标线无法承载的非 function 工具/工具项」归到专用损失类别。
 // reportForeignPreservedTools 把「留在外线 passthrough 里、目标线无法承载的工具定义」记入损失。

@@ -38,3 +38,35 @@ func (c *Context) CodexSessionCompletion() (CodexSessionCompletion, bool) {
 	}
 	return c.codexSessionCompletion, true
 }
+
+// AddGatewayInjectedBodyField 登记一个**网关注入**（客户端原文里没有）的正文顶层字段名。
+//
+// 为何要单独记：跨线转换会把正文里客户端没有的字段也当成「客户端声明的约束」记进损失台账，
+// 而 Codex 会话补全恰好会往正文写 `prompt_cache_key`——于是每个转换请求都凭空多一条损失，
+// 客户端却从未提过这个字段（生产实测：每一行 +1）。判据只能是「客户端原文里是否出现」，
+// 故由写正文的那一步（守卫链）把事实留在上下文里，供转换与审计读取。
+func (c *Context) AddGatewayInjectedBodyField(name string) {
+	if c == nil || name == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, existing := range c.gatewayInjectedBodyFields {
+		if existing == name {
+			return
+		}
+	}
+	c.gatewayInjectedBodyFields = append(c.gatewayInjectedBodyFields, name)
+}
+
+// GatewayInjectedBodyFields 取网关注入的正文顶层字段名（副本，调用方可自由持有）。
+func (c *Context) GatewayInjectedBodyFields() []string {
+	if c == nil || len(c.gatewayInjectedBodyFields) == 0 {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, len(c.gatewayInjectedBodyFields))
+	copy(out, c.gatewayInjectedBodyFields)
+	return out
+}

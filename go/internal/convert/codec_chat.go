@@ -712,7 +712,10 @@ func chatImageBlockToPart(block Block, loss *LossCollector, direction string) *V
 		return nil
 	}
 	if block.Data != "" {
-		loss.Rewritten(LossImage, direction, "base64_to_data_url")
+		// 编码侧**不记损**：同一张图在解码侧（客户端形态 → 枢纽）已经记过一次
+		// （见 decodeChatImagePart / decodeResponsesImagePart 的 `data_url_to_base64`），
+		// 两侧都记就是同一张图记两遍——生产实测把 image 计数抬高到实际值的两倍。
+		// 且这里的变换是无损表示归一（base64 ↔ data URL），图片完整送给上游。
 		return NewObject().
 			Set("type", NewString("image_url")).
 			Set("image_url", NewObject().Set("url", NewString(chatToDataURL(block.MediaType, block.Data))))
@@ -941,7 +944,7 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	out := cloneOrNewObject(passthroughFor(request, chatWire))
 	// 外线留存的非 function 工具（如 responses 线的 MCP / web_search 工具声明）本线无法承载时记损。
 	reportForeignPreservedTools(request, chatWire, loss, direction)
-	reportForeignDroppableFields(request, chatWire, loss, direction)
+	reportForeignDroppableFields(request, chatWire, loss, direction, ctx)
 	out.Set("model", NewString(firstString(ctx.Model, request.Model)))
 	out.Set("stream", NewBool(request.Stream || ctx.Stream))
 

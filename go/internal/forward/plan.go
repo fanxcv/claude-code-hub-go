@@ -128,6 +128,11 @@ type ClientRequest struct {
 	HasBody bool
 	// MultipartBody 为真表示正文是 multipart 图片请求，不参与协议转换。
 	MultipartBody bool
+	// GatewayInjectedBodyFields 是网关注入（客户端原文里没有）的正文顶层字段名。
+	//
+	// 跨线转换会把它们当成客户端声明的约束逐条记进损失台账，而客户端压根没给过这些字段
+	// （见 pctx.AddGatewayInjectedBodyField 与 convert.ConvertCtx.GatewayInjectedBodyFields）。
+	GatewayInjectedBodyFields []string
 }
 
 // PlanInput 是编译一次上游请求的全部输入。
@@ -542,12 +547,13 @@ func convertBody(
 		return nil, nil, nil, fmt.Errorf("%w: %v", ErrInvalidBody, err)
 	}
 	ctx := convert.ConvertCtx{
-		ClientFormat:   clientFormatOfProtocol(plan.ClientProtocol),
-		TargetProto:    plan.TargetProtocol,
-		Model:          client.Model,
-		Stream:         ClientStreamRequestedFromValue(client.Path, client.Query, value),
-		ProviderID:     -1,
-		ToWireToolName: convert.NormalizeToolName,
+		ClientFormat:              clientFormatOfProtocol(plan.ClientProtocol),
+		TargetProto:               plan.TargetProtocol,
+		Model:                     client.Model,
+		Stream:                    ClientStreamRequestedFromValue(client.Path, client.Query, value),
+		ProviderID:                -1,
+		ToWireToolName:            convert.NormalizeToolName,
+		GatewayInjectedBodyFields: client.GatewayInjectedBodyFields,
 	}
 	decoded, ok := convert.DecodeRequest(plan.ClientProtocol, value, ctx)
 	if !ok {

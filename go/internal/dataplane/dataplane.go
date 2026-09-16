@@ -646,6 +646,8 @@ func (h *Handler) planFacts(pc *pctx.Context, spec routeSpec, body *bodyAccess) 
 			Model:   model,
 			Body:    payload,
 			HasBody: len(payload) > 0,
+			// 网关注入的正文键要在转换层排除：它们是网关为同线上游缓存补的，不是客户端约束。
+			GatewayInjectedBodyFields: pc.GatewayInjectedBodyFields(),
 		},
 		ClientUserAgent: headers.Get("User-Agent"),
 		// 供应商级参数覆写：每请求一份——gemini 的覆写要看客户端路径，而审计条目与缓存 TTL

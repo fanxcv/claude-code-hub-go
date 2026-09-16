@@ -49,6 +49,14 @@ func isTrue(value *Value) bool {
 type foreignDroppableField struct {
 	key   string
 	class string
+	// requireTruthy 为真时只有值为真才记损。
+	//
+	// 为何 `store` 需要它：`store:false` 是多数 Responses 客户端的默认值，语义等价于「不额外
+	// 落库」，而目标线本来就不落库——记它等于给每个转换请求加一条恒定噪声（生产实测：
+	// 每一行 +1）。真正要求落库（`store:true`）的 responses 请求由 StatefulConversionConflict
+	// 拦在前面的 fail-closed，不会走到这里；但 chat 线的 `store:true` 仍会记损（其目标线
+	// 不落库，而本函数只对 responses 源线判冲突）。
+	requireTruthy bool
 }
 
 // foreignDroppableFields 是有承载体但与目标线不兼容的顶层字段清单。
@@ -60,7 +68,7 @@ var foreignDroppableFields = []foreignDroppableField{
 	{key: "prompt_cache_key", class: LossPromptCacheKey},
 	{key: "response_format", class: LossResponseFormat},
 	{key: "text", class: LossTextControls},
-	{key: "store", class: LossStoreFlag},
+	{key: "store", class: LossStoreFlag, requireTruthy: true},
 }
 
 // reportForeignDroppableFields 把「留在外线 passthrough 里、目标线无法承载的高层字段」记入损失。
@@ -68,7 +76,7 @@ var foreignDroppableFields = []foreignDroppableField{
 // 与 reportForeignPreservedTools 同源同因（同一处调用、同一类事实），只是字段清单不同。
 // 为什么记损而不是 fail-closed：这些字段丢失后本次作答仍然正确，只是约束降级——静默丢弃才是
 // 缺陷（客户端按 schema 解析拿到自由文本、客户端以为命中了前缀缓存而实际没有）。
-func reportForeignDroppableFields(request *Request, target WireProtocol, loss *LossCollector, direction string) {
+func reportForeignDroppableFields(request *Request, target WireProtocol, loss *LossCollector, direction string, ctx ConvertCtx) {
 	if request == nil || loss == nil {
 		return
 	}
@@ -77,7 +85,15 @@ func reportForeignDroppableFields(request *Request, target WireProtocol, loss *L
 			continue
 		}
 		for _, item := range foreignDroppableFields {
-			if !isMeaningful(fieldOrNil(fields, item.key)) {
+			value := fieldOrNil(fields, item.key)
+			if !isMeaningful(value) {
+				continue
+			}
+			if item.requireTruthy && !isTrue(value) {
+				continue
+			}
+			// 网关注入的字段不算客户端声明的约束（见 ConvertCtx.GatewayInjectedBodyFields）。
+			if ctx.isGatewayInjectedField(item.key) {
 				continue
 			}
 			loss.Dropped(item.class, direction, item.key)
