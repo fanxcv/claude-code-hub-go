@@ -214,7 +214,7 @@
       "reasonUnknown": "No reason recorded",
       "fallbackNotice": "Fell back to native passthrough per Node semantics; the request completed normally.",
       "lossBadge": "{count} lost",
-      "lossTooltip": "The protocol conversion dropped, downgraded or rewrote these capabilities: the request still completed, but the upstream received less",
+      "lossTooltip": "The protocol conversion left these capabilities differing from the client request (dropped, downgraded or rewritten); the request still completed.",
       "lossTotalLabel": "Loss entries",
       "lossAction": {
         "dropped": "dropped",
