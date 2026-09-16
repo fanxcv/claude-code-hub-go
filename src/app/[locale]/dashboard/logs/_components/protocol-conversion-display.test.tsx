@@ -137,3 +137,108 @@ describe("ProtocolConversionDisplay 失败态", () => {
     expect(html).toBe("");
   });
 });
+
+describe("ProtocolConversionDisplay 损失态", () => {
+  const lossEntry: SpecialSetting = {
+    type: "protocol_conversion_loss",
+    scope: "request",
+    hit: true,
+    clientProtocol: "openai-responses",
+    targetProtocol: "openai-chat",
+    total: 3,
+    groups: [
+      { capability: "cache_control", action: "dropped", count: 2 },
+      { capability: "thinking.signature", action: "rewritten", count: 1 },
+    ],
+  };
+
+  test("有损失时与「已转换」徽章并存（两者都是事实，不得互相替代）", () => {
+    const html = renderToStaticMarkup(
+      <ProtocolConversionDisplay
+        specialSettings={[
+          {
+            type: "protocol_conversion",
+            scope: "request",
+            hit: true,
+            clientProtocol: "openai-responses",
+            targetProtocol: "openai-chat",
+          },
+          lossEntry,
+        ]}
+      />
+    );
+
+    expect(html).toContain('data-slot="protocol-conversion"');
+    expect(html).toContain('data-slot="protocol-conversion-loss"');
+    expect(html).toContain(">lossBadge<");
+    // 总数与逐组明细都要出现：只给总数定位不到丢的是哪类能力。
+    expect(html).toContain("lossTotalLabel");
+    expect(html).toContain("cache_control");
+    expect(html).toContain("lossAction.dropped");
+    expect(html).toContain("thinking.signature");
+    expect(html).toContain("lossAction.rewritten");
+    expect(html).toContain("openai-responses");
+    expect(html).toContain("openai-chat");
+  });
+
+  test("只有损失条目时也能单独渲染（不依赖成功徽章在场）", () => {
+    const html = renderToStaticMarkup(<ProtocolConversionDisplay specialSettings={[lossEntry]} />);
+
+    expect(html).toContain('data-slot="protocol-conversion-loss"');
+    expect(html).not.toContain('data-slot="protocol-conversion"');
+  });
+
+  test("未知损失动作原样展示，不把整组丢出明细（少报比难看严重）", () => {
+    const dirty = {
+      type: "protocol_conversion_loss",
+      scope: "request",
+      hit: true,
+      clientProtocol: "anthropic-messages",
+      targetProtocol: "openai-chat",
+      total: 1,
+      groups: [{ capability: "cache_control", action: "something_new", count: 1 }],
+    } as unknown as SpecialSetting;
+    const html = renderToStaticMarkup(<ProtocolConversionDisplay specialSettings={[dirty]} />);
+
+    expect(html).toContain('data-slot="protocol-conversion-loss"');
+    expect(html).toContain("something_new");
+  });
+
+  test("总数与明细皆无的脏记录不画「丢失 0 项」噪声徽章", () => {
+    const dirty = {
+      type: "protocol_conversion_loss",
+      scope: "request",
+      hit: true,
+      clientProtocol: "openai-responses",
+      targetProtocol: "openai-chat",
+      total: 0,
+      groups: [],
+    } as unknown as SpecialSetting;
+    const html = renderToStaticMarkup(<ProtocolConversionDisplay specialSettings={[dirty]} />);
+
+    expect(html).toBe("");
+  });
+
+  test("损失与失败同存时以失败为准（与后端互斥约定一致）", () => {
+    const html = renderToStaticMarkup(
+      <ProtocolConversionDisplay
+        specialSettings={[
+          {
+            type: "protocol_conversion_failed",
+            scope: "request",
+            hit: true,
+            clientProtocol: "anthropic-messages",
+            targetProtocol: "openai-chat",
+            phase: "body_conversion",
+            reason: "unexpected end of JSON input",
+            fallback: true,
+          },
+          lossEntry,
+        ]}
+      />
+    );
+
+    expect(html).toContain('data-slot="protocol-conversion-failed"');
+    expect(html).not.toContain('data-slot="protocol-conversion-loss"');
+  });
+});

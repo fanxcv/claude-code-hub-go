@@ -212,7 +212,15 @@
       },
       "reasonLabel": "原因",
       "reasonUnknown": "未记录原因",
-      "fallbackNotice": "已按 Node 语义回退为原生直通，请求照常完成。"
+      "fallbackNotice": "已按 Node 语义回退为原生直通，请求照常完成。",
+      "lossBadge": "丢失 {count} 项",
+      "lossTooltip": "本次协议转换丢弃/降级/改写了以下能力：请求照常完成，但上游收到的东西变少了",
+      "lossTotalLabel": "损失条目",
+      "lossAction": {
+        "dropped": "丢弃",
+        "downgraded": "降级",
+        "rewritten": "改写"
+      }
     },
     "details": {
       "title": "请求详情",

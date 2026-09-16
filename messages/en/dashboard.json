@@ -212,7 +212,15 @@
       },
       "reasonLabel": "Reason",
       "reasonUnknown": "No reason recorded",
-      "fallbackNotice": "Fell back to native passthrough per Node semantics; the request completed normally."
+      "fallbackNotice": "Fell back to native passthrough per Node semantics; the request completed normally.",
+      "lossBadge": "{count} lost",
+      "lossTooltip": "The protocol conversion dropped, downgraded or rewrote these capabilities: the request still completed, but the upstream received less",
+      "lossTotalLabel": "Loss entries",
+      "lossAction": {
+        "dropped": "dropped",
+        "downgraded": "downgraded",
+        "rewritten": "rewritten"
+      }
     },
     "details": {
       "title": "Request Details",

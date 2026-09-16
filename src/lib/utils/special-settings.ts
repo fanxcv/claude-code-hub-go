@@ -69,6 +69,19 @@ function buildSettingKey(setting: SpecialSetting): string {
         setting.targetProtocol ?? null,
         setting.reason ?? null,
       ]);
+    case "protocol_conversion_loss":
+      // 损失条目：协议对 + 未聚合总数 + 分组（按能力/动作字典序，与后端固定顺序一致）。
+      // 注：Go 读侧对该类型走兜底编码（整对象字典序，见 usage_logs_rows.go 的 default 分支），
+      // 两侧键形不同，但对同一行的重复条目去重结果一致，故不强行对齐字符串。
+      return JSON.stringify([
+        setting.type,
+        setting.clientProtocol,
+        setting.targetProtocol,
+        setting.total,
+        [...setting.groups]
+          .map((group) => [group.capability, group.action, group.count] as const)
+          .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1])),
+      ]);
     case "thinking_effort_forwarded":
       // Go 侧新增的转换探针：同一条链路上「请求值 + 转发值 + 是否丢弃」就唯一确定一条记录。
       // 注：Go 读侧对该类型走兵底编码（整对象字典序，见 usage_logs_rows.go 的 default 分支），

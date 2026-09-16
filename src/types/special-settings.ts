@@ -30,6 +30,7 @@ export type SpecialSetting =
   | ThinkingSignatureModelDetectionSpecialSetting
   | ProtocolConversionSpecialSetting
   | ProtocolConversionFailedSpecialSetting
+  | ProtocolConversionLossSpecialSetting
   | ThinkingEffortForwardedSpecialSetting;
 
 /**
@@ -80,6 +81,46 @@ export type ProtocolConversionFailedSpecialSetting = {
 
 /** 协议转换失败的阶段取值。 */
 export type ConversionFailurePhase = "path_resolution" | "body_conversion";
+
+/** 协议转换的损失动作（与 Go 的 `convert.LossAction` 同取值域）。 */
+export type ConversionLossAction = "dropped" | "downgraded" | "rewritten";
+
+/**
+ * 协议转换**损失**审计（**Go 侧新增，超出 Node parity**）。
+ *
+ * 为何需要它：转换器（decode/encode）逐项记下「某个能力被丢弃/降级/改写」，但这份 LossReport
+ * 曾长期**只写不读**——不写日志、不落库，于是使用记录页上「转换干净」与「转换把 cache_control /
+ * 思考签名 / MCP 工具声明丢了」长得完全一样（实现见 `go/internal/specialsettings/specialsettings.go`
+ * 的 `ConversionLossEntry`）。
+ *
+ * 与 `protocol_conversion` 的关系（**可共存，不是互斥**）：那条只说「转换发生了」，本条说
+ * 「转换丢了什么」。零损失时不写零噪声条目；转换自身失败时走 `protocol_conversion_failed`
+ * （转换没做，无从丢），故本条不会与失败条目并存。
+ *
+ * 聚合口径：按 (capability, action) 分组计数，**不含逐条 detail**——detail 可能带上工具名与
+ * 字段路径，逐条落库会把审计面变成第二份请求体。
+ */
+export type ProtocolConversionLossSpecialSetting = {
+  type: "protocol_conversion_loss";
+  scope: "request";
+  hit: true;
+  /** 客户端入站协议线，如 openai-responses。 */
+  clientProtocol: string;
+  /** 本次实际请求的上游协议线，如 openai-chat。 */
+  targetProtocol: string;
+  /**
+   * **未聚合**的损失条目数。与 groups 的组数一起读，才看得出「同类丢了 1 次」
+   * 还是「同类丢了 50 次」。
+   */
+  total: number;
+  /** 按 (capability, action) 聚合的分组；顺序由后端按字典序固定，两侧据此得到稳定的去重键。 */
+  groups: Array<{
+    /** 能力标识，取自 Go 的 `convert.Loss*` 常量（如 cache_control、thinking.signature）。 */
+    capability: string;
+    action: ConversionLossAction;
+    count: number;
+  }>;
+};
 
 /**
  * 协议转换后的思考强度探针（**Go 侧新增，超出 Node parity**）。
