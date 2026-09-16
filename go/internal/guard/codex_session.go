@@ -41,6 +41,13 @@ func (d Deps) completeCodexSession(ctx *pctx.Context, keyID int64, body map[stri
 		return
 	}
 	if completion.SetBodyPromptCacheKey {
+		// 快照必须在写入之前：注入事实的判据是「客户端原文里到底有没有这个键」，
+		// 而不是「值能不能归一成会话标识」。两者在「给了值但值非法」时相反：
+		// 客户端的 `prompt_cache_key:"short"` 会被归一规则作废、值被网关改写，但那个字段
+		// 确实是客户端声明的约束——跨线丢弃时该记一条损失（信息档），不该被当成网关注入而略过。
+		// 值为 null 视同未给：它本来就没声明任何约束（见 pctx.AddGatewayInjectedBodyField）。
+		provided, hasKey := body["prompt_cache_key"]
+		clientProvided := hasKey && provided != nil
 		body["prompt_cache_key"] = completion.SessionID
 		if err := d.storeBody(ctx, body); err != nil {
 			d.logger().Warn("guard.session.codex_completion_body_store_failed", map[string]any{
@@ -51,7 +58,9 @@ func (d Deps) completeCodexSession(ctx *pctx.Context, keyID int64, body map[stri
 		}
 		// 登记「这个键是网关注入的」：跨线转换时它会被当作客户端声明的约束记进损失台账，
 		// 而客户端原文里从未出现这个字段（判据见 pctx.AddGatewayInjectedBodyField）。
-		ctx.AddGatewayInjectedBodyField("prompt_cache_key")
+		if !clientProvided {
+			ctx.AddGatewayInjectedBodyField("prompt_cache_key")
+		}
 	}
 	if completion.SetHeaderSessionID {
 		ctx.SetHeader("session_id", completion.SessionID)
