@@ -27,8 +27,11 @@ type responsesDecodedBlock struct {
 	// emitted 是已作为 delta 发出的载荷（用于判断 done 帧是否需要补发全文）。
 	emitted string
 	// seed 是读到的、未发出的 part 初始文本（content_part.added 兜底）。
-	seed   string
-	closed bool
+	seed string
+	// pending 是悬置待裁的增量：首个增量与 seed 逐字相同时，「上游重发首片」与「合法续写恰好同字」
+	// 在本地是同一串字节，只有声明式全文能消歧，故先攒在这里，等声明到达由 reconcile 交付。
+	pending string
+	closed  bool
 }
 
 // responsesDoneKinds 把 done 事件映射到块类型（按 output_index 兜底匹配用）。
@@ -105,6 +108,12 @@ func (d *responsesStreamDecoder) closeBlock(out *[]Chunk, decoded *responsesDeco
 		d.emitDeltaChunk(out, decoded, decoded.seed)
 		decoded.seed = ""
 	}
+	// 悬置的增量还没等到任何声明就要关块（上游连 done / item / 终态都没给）：此时无从消歧，
+	// 按「宁可重复、不静默丢字」交付。声明可用时 reconcile 早已清空它，走不到这里。
+	if decoded.pending != "" {
+		d.emitDeltaChunk(out, decoded, decoded.pending)
+		decoded.pending = ""
+	}
 	decoded.closed = true
 	for i, open := range d.openBlocks {
 		if open == decoded {
@@ -167,8 +176,8 @@ func (d *responsesStreamDecoder) findBlock(payload *Value, kind responsesDecoded
 // 为什么不能只靠 closeBlock 的兜底：部分上游先给 part.text、再给续写增量（part.text 是最终正文的
 // 前缀）。那时 emitted 已非空，兜底不再触发，初始文本就随块消失；而 done / item 的对账也补不回来
 // ——emitted 不含这段前缀，不构成声明全文的前缀，按「宁可不补」的策略算不出差额。
-// 单点在这里发出去后，「seed 非空 ⇒ emitted 为空」在本块上始终成立，所有对账路径看到的 emitted
-// 都已经是声明全文的前缀。
+// 单点在这里发出去后，「seed 非空 ⇒ emitted 为空」在本块上始终成立（悬置的增量同样尚未交付），
+// 所有对账路径看到的 emitted 都已经是声明全文的前缀。
 func (d *responsesStreamDecoder) flushSeed(out *[]Chunk, decoded *responsesDecodedBlock) {
 	if decoded.seed == "" {
 		return
@@ -341,8 +350,36 @@ func (d *responsesStreamDecoder) handleDelta(out *[]Chunk, eventType string, pay
 		}
 		decoded = d.startBlock(out, key, kind, block, outputIndex)
 	}
+	// 首个增量与 part.text 逐字相同：本地无从判定上游是在重发首片，还是续写恰好同字（两种解释
+	// 产生同一串字节），而交付顺序不可回退，故把这段悬置到声明式全文到达再交付——声明是权威，
+	// 既不会重复交付（重发型），也不会吞掉合法续写的首字（合法续写型）。见 reconcile。
+	if decoded.emitted == "" && decoded.seed != "" {
+		if decoded.pending == "" && delta == decoded.seed {
+			decoded.pending = delta
+			return
+		}
+		if decoded.pending != "" {
+			decoded.pending += delta
+			return
+		}
+	}
 	d.flushSeed(out, decoded)
 	d.emitDeltaChunk(out, decoded, delta)
+}
+
+// reconcile 用声明式全文对账一个块尚未交付的内容。
+//
+// 悬置期内块内一个字节都没交付过（进入悬置的前置条件就是 emitted 为空），所以声明到达时该块的全部
+// 内容就是声明全文本身：重发的首片自然被吸收，合法续写的两段则一并交付。没有声明就什么都不做——
+// 悬置内容留给 closeBlock 的兜底，绝不凭猜测交付。
+func (d *responsesStreamDecoder) reconcile(out *[]Chunk, decoded *responsesDecodedBlock, declared string) {
+	if len(declared) == 0 {
+		return
+	}
+	decoded.pending = ""
+	if tail := declaredTextTail(decoded.emitted, declared); len(tail) > 0 {
+		d.emitDeltaChunk(out, decoded, tail)
+	}
 }
 
 func (d *responsesStreamDecoder) handleDone(out *[]Chunk, eventType string, payload *Value) {
@@ -389,13 +426,19 @@ func (d *responsesStreamDecoder) handleDone(out *[]Chunk, eventType string, payl
 		d.closeBlock(out, created)
 		return
 	}
-	if full == "" {
+	declaredMissing := full == ""
+	if declaredMissing {
 		full = decoded.seed
 	}
-	// done 载荷是声明式全文：只补已发内容之后的差额，绝不重发已发部分。
-	if tail := declaredTextTail(decoded.emitted, full); len(tail) > 0 {
-		d.emitDeltaChunk(out, decoded, tail)
+	// 这里的 full 如果是拿 seed 顶替出来的，就不是上游的声明，不能凭它裁决悬置的增量：
+	// 多片悬置时（如累计型上游）seed 只是首段，据此交付会把后面的内容静默吃掉。交给 closeBlock
+	// 的「宁可重复、不静默丢字」兜底。
+	if declaredMissing && decoded.pending != "" {
+		d.closeBlock(out, decoded)
+		return
 	}
+	// done 载荷是声明式全文：先裁决悬置的增量，再只补已发内容之后的差额，绝不重发已发部分。
+	d.reconcile(out, decoded, full)
 	d.closeBlock(out, decoded)
 }
 
@@ -438,9 +481,7 @@ func (d *responsesStreamDecoder) recoverItemContent(out *[]Chunk, payload *Value
 		decoded := d.startBlock(out, "item:"+itemID, responsesKindToolCall,
 			&Block{Kind: BlockToolCall, ID: callID, Name: d.ctx.fromWireName(name)}, outputIndex)
 		if args, ok := stringField(item, "arguments"); ok && len(args) > 0 {
-			if tail := declaredTextTail(decoded.emitted, args); len(tail) > 0 {
-				d.emitDeltaChunk(out, decoded, tail)
-			}
+			d.reconcile(out, decoded, args)
 		}
 	case "reasoning":
 		text := responsesReasoningTextOf(item)
@@ -450,9 +491,7 @@ func (d *responsesStreamDecoder) recoverItemContent(out *[]Chunk, payload *Value
 		d.ensureStart(out)
 		decoded := d.startBlock(out, "item:"+itemID, responsesKindThinking,
 			&Block{Kind: BlockThinking}, outputIndex)
-		if tail := declaredTextTail(decoded.emitted, text); len(tail) > 0 {
-			d.emitDeltaChunk(out, decoded, tail)
-		}
+		d.reconcile(out, decoded, text)
 	case "message":
 		for index, part := range item.ArrayField("content") {
 			text, ok := stringField(part, "text")
@@ -463,9 +502,7 @@ func (d *responsesStreamDecoder) recoverItemContent(out *[]Chunk, payload *Value
 			decoded := d.startBlock(out,
 				"part:"+strconv.Itoa(outputIndex)+":"+strconv.Itoa(index),
 				responsesKindText, &Block{Kind: BlockText}, outputIndex)
-			if tail := declaredTextTail(decoded.emitted, text); len(tail) > 0 {
-				d.emitDeltaChunk(out, decoded, tail)
-			}
+			d.reconcile(out, decoded, text)
 		}
 	}
 }
@@ -526,6 +563,12 @@ func (d *responsesStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 		// 关键：识别它而**不计入 ignoredEvents**——那是「无法映射」的健康信号，
 		// 把可识别的冗余事件算进去会让每个正常响应都背上一个假损失。
 		if part := d.findBlock(payload, responsesKindText); part != nil {
+			// 分片收尾帧同样携带该分片的声明式全文：首片悬置未决时用它消歧，免得紧接着的 closeBlock
+			// 兜底把重发的首片一并交付出去。
+			if part.pending != "" {
+				text, _ := stringField(payload.ObjectField("part"), "text")
+				d.reconcile(&out, part, text)
+			}
 			d.closeBlock(&out, part)
 		}
 	case "response.completed", "response.incomplete", "response.done", "response.failed":

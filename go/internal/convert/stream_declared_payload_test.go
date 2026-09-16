@@ -251,6 +251,135 @@ func TestResponsesContentPartSeedAndFollowingDeltaReachesClient(t *testing.T) {
 	}
 }
 
+// TestResponsesSeedRepeatedAsFirstDeltaReachesClientOnce 钉住「content_part.added 的 part.text 与
+// 首个增量逐字相同」这一歧义形态。
+//
+// 它有两种互斥解释：上游把整段正文又作为首片增量重发了一遍（重发型），或初始文本恰好与首段续写
+// 同字（合法续写型，如 seed「好」+ delta「好」=「好好」）。两种解释在增量到达时是同一串字节，本地
+// 无从区分，只有 done / item / 终态给出的声明式全文能消歧——故这段必须悬置到声明到达再按声明交付。
+// 按「相同即去重」的启发式就地猜，会直接把合法续写型的首字吞掉。
+func TestResponsesSeedRepeatedAsFirstDeltaReachesClientOnce(t *testing.T) {
+	build := func(seed string, deltas []string, declared string) string {
+		input := "event: response.created\n" +
+			`data: {"type":"response.created","response":{"id":"resp_1","model":"m","status":"in_progress","output":[]}}` + "\n\n" +
+			"event: response.output_item.added\n" +
+			`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"i1","type":"message","role":"assistant","status":"in_progress","content":[]}}` + "\n\n" +
+			"event: response.content_part.added\n" +
+			`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"i1","part":{"type":"output_text","text":"` + seed + `"}}` + "\n\n"
+		for _, delta := range deltas {
+			input += "event: response.output_text.delta\n" +
+				`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"i1","delta":"` + delta + `"}` + "\n\n"
+		}
+		return input +
+			"event: response.output_text.done\n" +
+			`data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"i1","text":"` + declared + `"}` + "\n\n" +
+			"event: response.output_item.done\n" +
+			`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"i1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"` + declared + `"}]}}` + "\n\n" +
+			"event: response.completed\n" +
+			`data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[{"id":"i1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"` + declared + `"}]}],"usage":{"input_tokens":5,"output_tokens":3}}}` + "\n\n"
+	}
+
+	cases := []struct {
+		name     string
+		seed     string
+		deltas   []string
+		declared string
+		want     string
+	}{
+		{"重发型（声明全文与首片同内容）", "正文", []string{"正文"}, "正文", "正文"},
+		{"重发首片后继续续写", "正文", []string{"正文", "更多"}, "正文更多", "正文更多"},
+		{"累计型上游（后续增量再带一遍全文）", "正文", []string{"正文", "正文更多"}, "正文更多", "正文更多"},
+		{"合法续写型（声明全文是两段之和）", "好", []string{"好"}, "好好", "好好"},
+	}
+	for _, testCase := range cases {
+		testCase := testCase
+		for _, client := range []WireProtocol{ProtocolOpenAIChat, ProtocolAnthropicMessages} {
+			client := client
+			t.Run(testCase.name+"/"+string(client), func(t *testing.T) {
+				for _, chunkSize := range []int{0, 1} {
+					out := runDeclaredPayloadPipe(t, ProtocolOpenAIResponses, client,
+						build(testCase.seed, testCase.deltas, testCase.declared), chunkSize)
+					if got := clientDialectText(t, client, out); got != testCase.want {
+						t.Fatalf("chunkSize=%d：got %q want %q（重发首片被重复交付，或合法续写的首字被吞）\n原文：%q",
+							chunkSize, got, testCase.want, out)
+					}
+					assertClientTerminator(t, client, out)
+					assertClientUsageConsistent(t, client, out)
+				}
+			})
+		}
+	}
+}
+
+// TestResponsesSuspendedSeedWithoutDeclarationStillDeliversContent 钉住悬置内容在「上游连一个
+// 声明都不给」（无 done 文本、无 item、终态 output 为空）时的兜底。
+//
+// 此形态下已无从消歧，只能二选一：赌一种解释（赌错就静默丢字）或不赌（两种都交付，可能重复）。
+// 本实现选后者——内容丢失是公认的硬失败，重复不是；故正文在此形态下会出现两次，这是可接受的
+// 代价，而不是把内容丢掉的借口。正常上游一定给声明，故这条兜底只在协议残缺时走到。
+func TestResponsesSuspendedSeedWithoutDeclarationStillDeliversContent(t *testing.T) {
+	const input = "event: response.created\n" +
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"m","status":"in_progress","output":[]}}` + "\n\n" +
+		"event: response.output_item.added\n" +
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"i1","type":"message","role":"assistant","status":"in_progress","content":[]}}` + "\n\n" +
+		"event: response.content_part.added\n" +
+		`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"i1","part":{"type":"output_text","text":"正文"}}` + "\n\n" +
+		"event: response.output_text.delta\n" +
+		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"i1","delta":"正文"}` + "\n\n" +
+		"event: response.completed\n" +
+		`data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[],"usage":{"input_tokens":5,"output_tokens":3}}}` + "\n\n"
+
+	for _, client := range []WireProtocol{ProtocolOpenAIChat, ProtocolAnthropicMessages} {
+		client := client
+		t.Run(string(client), func(t *testing.T) {
+			out := runDeclaredPayloadPipe(t, ProtocolOpenAIResponses, client, input, 0)
+			got := clientDialectText(t, client, out)
+			// 刻意钉住「两个来源各交付一次」：若日后改成「无声明时一律不重复」，改的就是这一条断言，
+			// 而不是默默把内容丢掉。上面两种形态（重发型 / 合法续写型）都必须给出 2。
+			if occurrences := countOccurrences(got, "正文"); occurrences != 2 {
+				t.Fatalf("无声明时悬置内容的交付次数 %d != 2（0=静默丢字，1=赌了一种解释并丢了另一来源）"+
+					"：got %q\n原文：%q", occurrences, got, out)
+			}
+			assertClientTerminator(t, client, out)
+		})
+	}
+}
+
+// TestResponsesSuspendedSeedWithTextlessDoneKeepsTrailingContent 钉住另一处易漏的角落：done 帧存在
+// 但不带 text 时，旧路径会拿 seed 顶替声明去裁决悬置增量——多片悬置下 seed 只是首段，据此交付会把
+// 后面的内容静默吃掉。此时必须退回「两种来源都交付」的兜底，因为根本没有真声明可依。
+func TestResponsesSuspendedSeedWithTextlessDoneKeepsTrailingContent(t *testing.T) {
+	const input = "event: response.created\n" +
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"m","status":"in_progress","output":[]}}` + "\n\n" +
+		"event: response.output_item.added\n" +
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"i1","type":"message","role":"assistant","status":"in_progress","content":[]}}` + "\n\n" +
+		"event: response.content_part.added\n" +
+		`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"i1","part":{"type":"output_text","text":"正文"}}` + "\n\n" +
+		"event: response.output_text.delta\n" +
+		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"i1","delta":"正文"}` + "\n\n" +
+		"event: response.output_text.delta\n" +
+		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"i1","delta":"正文更多"}` + "\n\n" +
+		"event: response.output_text.done\n" +
+		`data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"i1"}` + "\n\n" +
+		"event: response.completed\n" +
+		`data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[],"usage":{"input_tokens":5,"output_tokens":3}}}` + "\n\n"
+
+	for _, client := range []WireProtocol{ProtocolOpenAIChat, ProtocolAnthropicMessages} {
+		client := client
+		t.Run(string(client), func(t *testing.T) {
+			out := runDeclaredPayloadPipe(t, ProtocolOpenAIResponses, client, input, 0)
+			got := clientDialectText(t, client, out)
+			if countOccurrences(got, "更多") == 0 {
+				t.Fatalf("done 帧不带 text 时，悬置增量里的末段内容被静默吃掉：got %q\n原文：%q", got, out)
+			}
+			if countOccurrences(got, "正文") == 0 {
+				t.Fatalf("done 帧不带 text 时，初始文本被吞：got %q\n原文：%q", got, out)
+			}
+			assertClientTerminator(t, client, out)
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // anthropic 块起始帧携带的正文（含 thinking）不得跨线消失
 // ---------------------------------------------------------------------------
