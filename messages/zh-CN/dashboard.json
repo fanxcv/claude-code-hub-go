@@ -213,9 +213,14 @@
       "reasonLabel": "原因",
       "reasonUnknown": "未记录原因",
       "fallbackNotice": "已按 Node 语义回退为原生直通，请求照常完成。",
-      "lossBadge": "丢失 {count} 项",
-      "lossTooltip": "本次协议转换后，下列能力与客户端请求存在差异（丢弃、降级或改写）：请求照常完成",
+      "lossBadge": "内容改写 {count} 项",
+      "lossTooltip": "本次协议转换后，下列能力与客户端请求存在差异（丢弃、降级或改写）：请求照常完成。列表徽章只计改写档，三档明细见下方",
       "lossTotalLabel": "损失条目",
+      "lossTier": {
+        "rewrite": "改写",
+        "degrade": "降级",
+        "info": "信息"
+      },
       "lossAction": {
         "dropped": "丢弃",
         "downgraded": "降级",

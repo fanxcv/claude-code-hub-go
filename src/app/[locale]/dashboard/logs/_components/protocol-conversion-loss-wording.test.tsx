@@ -8,6 +8,8 @@
  * 故这里引真词表渲染，把「该说明不得声称内容变少、必须表述为与客户端请求存在差异」钉成断言，
  * 中英各一条。动作语义（丢弃/降级/改写）由逐组明细承担，故一并断言明细仍在场——否则把 tooltip
  * 改中性就等于把信息改没了。
+ *
+ * 能力取改写档（image）：降级/信息档的条目在列表上不画徽章，tooltip 根本不渲染，也就无从断言其措辞。
  */
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -75,7 +77,7 @@ const rewrittenOnly: SpecialSetting = {
   clientProtocol: "openai-responses",
   targetProtocol: "openai-chat",
   total: 1,
-  groups: [{ capability: "thinking.signature", action: "rewritten", count: 1 }],
+  groups: [{ capability: "image", action: "rewritten", count: 1 }],
 };
 
 describe("转换损失说明对 rewritten 的概括", () => {
@@ -98,7 +100,7 @@ describe("转换损失说明对 rewritten 的概括", () => {
       expect(tooltip).toMatch(neutral);
       // 中性化 tooltip 不等于抹掉信息：动作语义仍须在逐组明细里出现。
       expect(html).toContain(table.logs.protocolConversion.lossAction.rewritten);
-      expect(html).toContain("thinking.signature");
+      expect(html).toContain("image");
     });
   }
 });

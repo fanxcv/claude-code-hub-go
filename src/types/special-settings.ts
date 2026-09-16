@@ -86,6 +86,21 @@ export type ConversionFailurePhase = "path_resolution" | "body_conversion";
 export type ConversionLossAction = "dropped" | "downgraded" | "rewritten";
 
 /**
+ * 损失档位（与 Go 的 `convert.LossSeverity` 同取值域）。
+ *
+ * 三档的分界是「值不值得让用户在列表里看一眼」：
+ *  - rewrite：内容元素被改写或删除（image、document、tool 定义类、unknown_field 细分），
+ *    以及客户端显式给出的采样参数被丢（top_k、stop_sequences…）——行为或输出形态会变，
+ *    故列表徽章**只数这一档**；
+ *  - degrade：能力仍在但保真度弱化（thinking 降级、签名丢失、reasoning 重放、cache_control 提示丢失）；
+ *  - info：对行为无影响的账目（store 默认值、prompt_cache_key）。
+ *
+ * 降级与信息档不进列表数字，只在 tooltip 与详情里列示：它们在一行长会话里能累到上百条
+ * （thinking 每回合一条），画成徽章会让几乎每一行都挂个两位数，真损失反而被淹没。
+ */
+export type ConversionLossSeverity = "rewrite" | "degrade" | "info";
+
+/**
  * 协议转换**损失**审计（**Go 侧新增，超出 Node parity**）。
  *
  * 为何需要它：转换器（decode/encode）逐项记下「某个能力被丢弃/降级/改写」，但这份 LossReport
@@ -113,12 +128,21 @@ export type ProtocolConversionLossSpecialSetting = {
    * 还是「同类丢了 50 次」。
    */
   total: number;
+  /**
+   * 三档各自合计。**历史条目没有这三个字段**（severity 与合计是后加的），读取侧必须能
+   * 按分组现算，见 `getProtocolConversionLoss`。
+   */
+  rewriteTotal?: number;
+  degradeTotal?: number;
+  infoTotal?: number;
   /** 按 (capability, action) 聚合的分组；顺序由后端按字典序固定，两侧据此得到稳定的去重键。 */
   groups: Array<{
     /** 能力标识，取自 Go 的 `convert.Loss*` 常量（如 cache_control、thinking.signature）。 */
     capability: string;
     action: ConversionLossAction;
     count: number;
+    /** 档位；历史条目缺失，读取侧按能力名推导。 */
+    severity?: ConversionLossSeverity;
   }>;
 };
 

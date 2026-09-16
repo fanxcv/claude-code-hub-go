@@ -139,6 +139,7 @@ describe("ProtocolConversionDisplay 失败态", () => {
 });
 
 describe("ProtocolConversionDisplay 损失态", () => {
+  // 分组里必须至少有一条**改写档**（image）：只有降级/信息档时列表不画徽章，tooltip 也就不存在。
   const lossEntry: SpecialSetting = {
     type: "protocol_conversion_loss",
     scope: "request",
@@ -147,8 +148,8 @@ describe("ProtocolConversionDisplay 损失态", () => {
     targetProtocol: "openai-chat",
     total: 3,
     groups: [
+      { capability: "image", action: "rewritten", count: 1 },
       { capability: "cache_control", action: "dropped", count: 2 },
-      { capability: "thinking.signature", action: "rewritten", count: 1 },
     ],
   };
 
@@ -175,7 +176,7 @@ describe("ProtocolConversionDisplay 损失态", () => {
     expect(html).toContain("lossTotalLabel");
     expect(html).toContain("cache_control");
     expect(html).toContain("lossAction.dropped");
-    expect(html).toContain("thinking.signature");
+    expect(html).toContain("image");
     expect(html).toContain("lossAction.rewritten");
     expect(html).toContain("openai-responses");
     expect(html).toContain("openai-chat");
@@ -189,6 +190,7 @@ describe("ProtocolConversionDisplay 损失态", () => {
   });
 
   test("未知损失动作原样展示，不把整组丢出明细（少报比难看严重）", () => {
+    // 能力取改写档（image）：整条只有未知动作的组时，列表上也看得见，才验得到「没被剔除」。
     const dirty = {
       type: "protocol_conversion_loss",
       scope: "request",
@@ -196,7 +198,7 @@ describe("ProtocolConversionDisplay 损失态", () => {
       clientProtocol: "anthropic-messages",
       targetProtocol: "openai-chat",
       total: 1,
-      groups: [{ capability: "cache_control", action: "something_new", count: 1 }],
+      groups: [{ capability: "image", action: "something_new", count: 1 }],
     } as unknown as SpecialSetting;
     const html = renderToStaticMarkup(<ProtocolConversionDisplay specialSettings={[dirty]} />);
 
@@ -204,7 +206,7 @@ describe("ProtocolConversionDisplay 损失态", () => {
     expect(html).toContain("something_new");
   });
 
-  test("总数与明细皆无的脏记录不画「丢失 0 项」噪声徽章", () => {
+  test("总数与明细皆无的脏记录不画「内容改写 0 项」噪声徽章", () => {
     const dirty = {
       type: "protocol_conversion_loss",
       scope: "request",

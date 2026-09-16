@@ -213,9 +213,14 @@
       "reasonLabel": "Reason",
       "reasonUnknown": "No reason recorded",
       "fallbackNotice": "Fell back to native passthrough per Node semantics; the request completed normally.",
-      "lossBadge": "{count} lost",
-      "lossTooltip": "The protocol conversion left these capabilities differing from the client request (dropped, downgraded or rewritten); the request still completed.",
+      "lossBadge": "{count} content rewritten",
+      "lossTooltip": "The protocol conversion left these capabilities differing from the client request (dropped, downgraded or rewritten); the request still completed. The list badge counts rewrites only; all three tiers are listed below",
       "lossTotalLabel": "Loss entries",
+      "lossTier": {
+        "rewrite": "Rewrite",
+        "degrade": "Downgrade",
+        "info": "Informational"
+      },
       "lossAction": {
         "dropped": "dropped",
         "downgraded": "downgraded",

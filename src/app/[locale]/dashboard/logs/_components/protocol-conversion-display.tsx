@@ -9,10 +9,11 @@ import {
   getProtocolConversionFailure,
   getProtocolConversionLoss,
   LOSS_ACTIONS,
+  LOSS_SEVERITIES,
   type ProtocolConversionFailureInfo,
   type ProtocolConversionLossInfo,
 } from "@/lib/utils/protocol-conversion";
-import type { SpecialSetting } from "@/types/special-settings";
+import type { ConversionLossSeverity, SpecialSetting } from "@/types/special-settings";
 
 /** 协议转换展示属性。 */
 interface ProtocolConversionDisplayProps {
@@ -28,6 +29,8 @@ interface ProtocolConversionDisplayProps {
  *  - **转换损失**：`protocol_conversion_loss` 存在 —— 转换确实发生了，但丢/降/改了若干能力。
  *    这一态若是留空，界面上就和「转换干净」完全一样，用户再也查不到跨线转换在丢东西
  *    （这正是本条审计存在的理由）；
+ *    但**只画改写档**：降级/信息档（每回合一次的 thinking 降级、恒 +1 的 store）不是「内容被改」，
+ *    把它们也画上会让几乎每一行都挂个两位数，真损失反而被淹没（它们仍列在 tooltip 与详情里）。
  *  - **转换失败**：`protocol_conversion_failed` 存在 —— 画一个**显式失败徽章**并在 tooltip 里
  *    给出阶段与原因。这一态若是留空，界面上就和「没转换」完全一样；
  *  - 未转换（原生同协议）：三者都不存在 → 留空。
@@ -39,7 +42,8 @@ export function ProtocolConversionDisplay({ specialSettings }: ProtocolConversio
   }
 
   const loss = getProtocolConversionLoss(specialSettings);
-  if (!loss) {
+  // 改写档为 0 就不画损失徽章（降级/信息档的账仍留在 tooltip 与详情里）。
+  if (!loss || loss.rewriteTotal === 0) {
     return <ProtocolConversionSuccessBadge specialSettings={specialSettings} />;
   }
 
@@ -97,10 +101,11 @@ function ProtocolConversionSuccessBadge({
 /**
  * 转换损失徽章。
  *
- * 与成功徽章**并存**（不是替代）：转换确实发生了，只是过程中丢了东西，两者都是事实。
+ * 与成功徽章**并存**（不是替代）：转换确实发生了，只是过程中改了东西，两者都是事实。
  * 颜色用橙色（而非失败态的了琥珀色）：琥珀说的是「转换没生效、已回退」，本条说的是「转换生效但有损」，
  * 两件事的排查方向不同，用同一色会让运维把它们混为一谈。
- * 徽章只给未聚合总数，逐组明细放 tooltip（组数上界 63 组，不会把提示栏刷满）。
+ * 数字只数**改写档**（内容被改写/删除、客户端显式给的参数被丢），降级与信息档按三档分列在 tooltip 里；
+ * 逐组明细放 tooltip（组数上界 63 组，不会把提示栏刷满）。
  */
 function ProtocolConversionLossBadge({ loss }: { loss: ProtocolConversionLossInfo }) {
   const t = useTranslations("dashboard.logs.protocolConversion");
@@ -108,6 +113,12 @@ function ProtocolConversionLossBadge({ loss }: { loss: ProtocolConversionLossInf
   // 未知动作原样展示（机器标识符）：剔除整组会让损失被少报，而少报比难看严重。
   const actionLabel = (action: string): string =>
     LOSS_ACTIONS.some((known) => known === action) ? t(`lossAction.${action}`) : action;
+
+  const tierTotals: Record<ConversionLossSeverity, number> = {
+    rewrite: loss.rewriteTotal,
+    degrade: loss.degradeTotal,
+    info: loss.infoTotal,
+  };
 
   return (
     <TooltipProvider>
@@ -122,7 +133,7 @@ function ProtocolConversionLossBadge({ loss }: { loss: ProtocolConversionLossInf
               className="w-fit gap-1 border-orange-200 bg-orange-50 px-1 text-[10px] leading-tight text-orange-700 dark:border-orange-800 dark:bg-orange-950/30 dark:text-orange-300"
             >
               <TrendingDown className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />
-              {t("lossBadge", { count: loss.total })}
+              {t("lossBadge", { count: loss.rewriteTotal })}
             </Badge>
           </span>
         </TooltipTrigger>
@@ -140,15 +151,30 @@ function ProtocolConversionLossBadge({ loss }: { loss: ProtocolConversionLossInf
             {loss.total}
           </p>
           {loss.groups.length > 0 ? (
-            <div className="space-y-0.5">
-              {loss.groups.map((group) => (
-                <p
-                  key={`${group.capability}:${group.action}`}
-                  className="font-mono text-xs text-muted-foreground"
-                >
-                  {group.capability} × {actionLabel(group.action)} × {group.count}
-                </p>
-              ))}
+            <div className="space-y-1">
+              {LOSS_SEVERITIES.map((severity) => {
+                const tierGroups = loss.groups.filter((group) => group.severity === severity);
+                if (tierGroups.length === 0) {
+                  return null;
+                }
+
+                return (
+                  <div key={severity} className="space-y-0.5">
+                    <p className="text-xs">
+                      <span className="text-muted-foreground">{t(`lossTier.${severity}`)}：</span>
+                      {tierTotals[severity]}
+                    </p>
+                    {tierGroups.map((group) => (
+                      <p
+                        key={`${group.capability}:${group.action}`}
+                        className="font-mono text-xs text-muted-foreground"
+                      >
+                        {group.capability} × {actionLabel(group.action)} × {group.count}
+                      </p>
+                    ))}
+                  </div>
+                );
+              })}
             </div>
           ) : null}
         </TooltipContent>

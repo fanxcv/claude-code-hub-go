@@ -12,6 +12,12 @@ import zhCNDashboard from "../../../messages/zh-CN/dashboard.json";
  */
 const LOSS_ACTIONS = ["dropped", "downgraded", "rewritten"] as const;
 
+/**
+ * 损失档位取值域镜像 Go 的 `convert.LossSeverity`，理由同 LOSS_ACTIONS：
+ * 界面用 `t(`lossTier.${severity}`)` 拼键，Go 侧新增档位而词表没跟上时，界面上会掉出键名。
+ */
+const LOSS_SEVERITIES = ["rewrite", "degrade", "info"] as const;
+
 const dashboards = {
   en: enDashboard,
   "zh-CN": zhCNDashboard,
@@ -30,8 +36,17 @@ describe("dashboard protocol conversion loss translations", () => {
       }
     });
 
+    it(`${locale} covers every loss severity`, () => {
+      expect(Object.keys(conversion.lossTier).sort(), `${locale} loss tier keys`).toEqual(
+        [...LOSS_SEVERITIES].sort()
+      );
+      for (const severity of LOSS_SEVERITIES) {
+        expect(conversion.lossTier[severity].trim(), `${locale} ${severity}`).not.toBe("");
+      }
+    });
+
     it(`${locale} keeps the loss badge count placeholder`, () => {
-      // 徽章文案必须保留 {count}：丢了占位符就只剩一句「丢失 项」，看不出丢了多少。
+      // 徽章文案必须保留 {count}：丢了占位符就只剩一句「内容改写 项」，看不出改了多少。
       expect(conversion.lossBadge).toContain("{count}");
       expect(conversion.lossTooltip.trim()).not.toBe("");
       expect(conversion.lossTotalLabel.trim()).not.toBe("");
