@@ -37,6 +37,14 @@ type Block struct {
 	MediaType string
 	Data      string
 	URL       string
+	// FromDataURL 报告「客户端的这幅图是用 data URL 表达的、解码时归一成了 base64」。
+	//
+	// 为何只留事实、不在解码处记损：同一张逻辑图的最终去向只有编码侧知道——目标线可能
+	// 整块丢掉它（chat 不收 GIF、responses 不收 assistant 图）。两处都记就是一张图两条台账，
+	// 生产实测把 image 计数抬成实际值的两倍。故解码侧只置此位，编码侧按最终结果记一条：
+	// 送达则 rewritten，被丢则只记 dropped（见 chatImageBlockToPart / responsesImagePart /
+	// encodeAnthropicBlock）。
+	FromDataURL bool
 	// tool_call
 	ID   string
 	Name string

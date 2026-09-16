@@ -204,8 +204,9 @@ func chatImagePartToBlock(part *Value, loss *LossCollector, direction string) Bl
 			loss.Rewritten(LossUnknownField, direction, "image_url.data_url")
 			return opaqueBlock(chatWire, part)
 		}
-		loss.Rewritten(LossImage, direction, "data_url_to_base64")
-		return Block{Kind: BlockImage, MediaType: parsed.MediaType, Data: parsed.Data}
+		// 不在此记损：同一张图的最终去向只有编码侧知道（可能被目标线整块丢掉），
+		// 两处都记就是一张图两条台账（见 Block.FromDataURL）。
+		return Block{Kind: BlockImage, MediaType: parsed.MediaType, Data: parsed.Data, FromDataURL: true}
 	}
 	return Block{Kind: BlockImage, MediaType: chatGuessMediaType(url), URL: url}
 }
@@ -712,10 +713,13 @@ func chatImageBlockToPart(block Block, loss *LossCollector, direction string) *V
 		return nil
 	}
 	if block.Data != "" {
-		// 编码侧**不记损**：同一张图在解码侧（客户端形态 → 枢纽）已经记过一次
-		// （见 decodeChatImagePart / decodeResponsesImagePart 的 `data_url_to_base64`），
-		// 两侧都记就是同一张图记两遍——生产实测把 image 计数抬高到实际值的两倍。
-		// 且这里的变换是无损表示归一（base64 ↔ data URL），图片完整送给上游。
+		// 损失记在编码侧（解码侧只置 FromDataURL）：解码侧再记一次就是一张图两条台账
+		// （生产实测把 image 计数抬成实际值的两倍）。记在此处的另一个好处是
+		// 「最终结果为准」自动成立：上面的 GIF / 非图片媒体分支已经 return，被丢掉的那张图
+		// 只留一条 dropped，不会被这里补成「既改写又丢弃」。
+		if block.FromDataURL {
+			loss.Rewritten(LossImage, direction, "data_url_to_base64")
+		}
 		return NewObject().
 			Set("type", NewString("image_url")).
 			Set("image_url", NewObject().Set("url", NewString(chatToDataURL(block.MediaType, block.Data))))

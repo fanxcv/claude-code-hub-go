@@ -94,8 +94,9 @@ func decodeResponsesImagePart(part *Value, loss *LossCollector, direction string
 			loss.Rewritten(LossImage, direction, "data_url")
 			return []Block{opaqueBlock(responsesWire, part)}
 		}
-		loss.Rewritten(LossImage, direction, "data_url_to_base64")
-		return []Block{{Kind: BlockImage, MediaType: parsed.MediaType, Data: parsed.Data}}
+		// 不在此记损：同一张图的最终去向只有编码侧知道（可能被目标线整块丢掉），
+		// 两处都记就是一张图两条台账（见 Block.FromDataURL）。
+		return []Block{{Kind: BlockImage, MediaType: parsed.MediaType, Data: parsed.Data, FromDataURL: true}}
 	}
 	return []Block{{Kind: BlockImage, URL: url}}
 }
@@ -523,6 +524,11 @@ func responsesImagePart(block Block, options *responsesRenderOptions) *Value {
 			mediaType = "image/png"
 		}
 		url = chatToDataURL(mediaType, block.Data)
+		// 记损在编码侧（解码侧只置 FromDataURL）：送达了这一张图才记一条表示归一；
+		// 本函数被丢弃的分支上游拦截（assistant 图、output 图），故「最终结果为准」成立。
+		if block.FromDataURL {
+			options.loss.Rewritten(LossImage, options.direction, "data_url_to_base64")
+		}
 	}
 	if url == "" {
 		options.loss.Dropped(LossImage, options.direction, "no_data_or_url")

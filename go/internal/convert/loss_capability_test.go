@@ -131,11 +131,14 @@ func TestLossSeverityOf(t *testing.T) {
 	}
 }
 
-// TestImageLossCountedOncePerLogicalImage 钉住「一张图只记一次」。
+// TestImageLossCountedOncePerLogicalImage 钉住「一张图只记一次」的最小一格。
 //
 // 缺陷原状：responses→chat 一条转换里，解码侧（data URL → base64）与编码侧（base64 → data URL）
-// 各记一次，于是同一张图进两次台账。修法是记录点统一在解码侧——每次转换必经解码,
-// 而编码侧那条记的是无损表示归一（图片完整送给上游），不该算损失。
+// 各记一次，于是同一张图进两次台账。修法是**解码侧只留事实、编码侧按最终结果记一条**
+// （见 Block.FromDataURL）：送达则记 rewritten，被目标线整幅丢掉则只记 dropped。
+//
+// 本用例只守「一张图一条」这一格（PNG / user / responses→chat）；足量的覆盖在
+// image_loss_matrix_test.go 的六向 × role × 媒体形态矩阵里（那里同时断言目标正文里图还在）。
 //
 // 断言同时覆盖「编码侧真的把图写出去了」：若哪天编码器把图丢了，计数会变成 0 或出现 drop，
 // 这条用例会连同下面的 message 形状一起失败，而不是默默通过。

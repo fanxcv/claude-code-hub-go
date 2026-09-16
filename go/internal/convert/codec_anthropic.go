@@ -448,6 +448,11 @@ func encodeAnthropicBlock(block Block, seed string, options *anthropicRenderOpti
 		return out, true
 	case BlockImage:
 		if mediaOut, ok := encodeAnthropicMedia(block, "image"); ok {
+			// 记损在编码侧（解码侧只置 FromDataURL）：送达了这一张图才记一条表示归一；
+			// 本分支下的失败支（无 data 也无 url）在前面就记 dropped 并返回，不会被这里补记。
+			if block.FromDataURL {
+				options.loss.Rewritten(LossImage, options.direction, "data_url_to_base64")
+			}
 			return mediaOut, true
 		}
 		options.loss.Dropped(LossImage, options.direction, "no_data_or_url")
