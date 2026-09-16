@@ -184,6 +184,63 @@ describe("损失徽章降噪口径", () => {
     expect(html).toContain("lossBadge(count=2)");
   });
 
+  test("历史条目：未列出的 thinking 续写名归改写档（前缀放宽会把徽章藏掉）", () => {
+    const legacyThinkingNew: SpecialSetting = {
+      type: "protocol_conversion_loss",
+      scope: "request",
+      hit: true,
+      clientProtocol: "anthropic-messages",
+      targetProtocol: "openai-chat",
+      total: 2,
+      // Go 的 `LossSeverityOf` 只认精确常量，`thinking.new` 落到 default 分支（改写档）。
+      // 此处若按 `thinking` 前缀匹配，这 2 项会被算成降级档 ⇒ 改写档为 0 ⇒ 徽章不画。
+      groups: [{ capability: "thinking.new", action: "dropped", count: 2 }],
+    };
+    const html = render(converted, legacyThinkingNew);
+
+    expect(html).toContain('data-slot="protocol-conversion-loss"');
+    expect(html).toContain("lossBadge(count=2)");
+    expect(html).toContain("lossTier.rewrite：</span>2");
+    // 它不该被归进降级档：归错档正是本用例要防的分歧。
+    expect(html).not.toContain("lossTier.degrade");
+  });
+
+  test("历史条目：未列出的 store 续写名归改写档（前缀放宽会归成信息档）", () => {
+    const legacyStoreNew: SpecialSetting = {
+      type: "protocol_conversion_loss",
+      scope: "request",
+      hit: true,
+      clientProtocol: "anthropic-messages",
+      targetProtocol: "openai-chat",
+      total: 1,
+      groups: [{ capability: "store.new", action: "dropped", count: 1 }],
+    };
+    const html = render(converted, legacyStoreNew);
+
+    expect(html).toContain('data-slot="protocol-conversion-loss"');
+    expect(html).toContain("lossBadge(count=1)");
+    expect(html).toContain("lossTier.rewrite：</span>1");
+    expect(html).not.toContain("lossTier.info");
+  });
+
+  test("历史条目：未列出的 cache_control 续写名归改写档", () => {
+    const legacyCacheControlV2: SpecialSetting = {
+      type: "protocol_conversion_loss",
+      scope: "request",
+      hit: true,
+      clientProtocol: "anthropic-messages",
+      targetProtocol: "openai-chat",
+      total: 3,
+      groups: [{ capability: "cache_control.v2", action: "dropped", count: 3 }],
+    };
+    const html = render(converted, legacyCacheControlV2);
+
+    expect(html).toContain('data-slot="protocol-conversion-loss"');
+    expect(html).toContain("lossBadge(count=3)");
+    expect(html).toContain("lossTier.rewrite：</span>3");
+    expect(html).not.toContain("lossTier.degrade");
+  });
+
   test("历史条目：参数被丢（top_k）仍进列表数字，不被降噪吞掉", () => {
     const legacyTopK: SpecialSetting = {
       type: "protocol_conversion_loss",

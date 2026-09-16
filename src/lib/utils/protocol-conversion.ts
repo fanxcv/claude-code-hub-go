@@ -80,55 +80,37 @@ function normalizeNonNegativeCount(value: unknown): number | null {
 }
 
 /**
- * 历史条目的档位推导表（**前缀 → 档位**）。
+ * 历史条目的档位推导表（**精确名 → 档位**），须与 Go 的 `convert.LossSeverityOf` 逐条同步
+ * （`go/internal/convert/hub.go`：`store`/`prompt_cache_key` → info，`thinking.signature`/
+ * `thinking.derived`/`reasoning.replay`/`cache_control` → degrade，其余 → rewrite）。
  *
  * 为何需要：`severity` 是后加的字段，库里已落库的历史条目没有它。若无此表，读取侧只能
- * 要么整条不显示、要么把几十条降级当作改写报出来——两者都比多写几行前缀表差。
+ * 要么整条不显示、要么把几十条降级当作改写报出来——两者都比多写几行表差。
  *
- * 匹配规则：等于该名或以「该名 + .」开头（`unknown_field` 会被后端细分成
- * `unknown_field.<reason>`，前缀不变）。**未知能力归 rewrite**：宁可多画一个徽章，
- * 也不让真损失被降噪吞掉；漏报一旦发生，用户在没有徽章的行上永远不会去查。
+ * 为何必须是**精确名**而非族前缀：Go 只认精确常量，未列出者一律 rewrite。若此处按族放宽
+ * （`thinking` / `store` / `cache_control` / `reasoning.replay` / `prompt_cache_key`），库里
+ * 出现未列出的新名（`thinking.new`、`store.new`、`cache_control.v2`）时两侧就会分歧：Go 判
+ * rewrite、此处判 degrade/info ⇒ 改写档合计算成 0 ⇒ 徽章不画，真损失被降噪吞掉。
  *
- * **本表只按能力名判档**，故 `thinking.block` 不在其列：同一能力不同动作分属两档，
- * 由下面的动作相关例外表先行判定（`thinking` 前缀仍覆盖 `thinking.signature` 与
- * `thinking.derived`，两者与动作无关）。
+ * 改写档不在此列表：它与 Go 的 `default` 分支同义（`unknown_field.<reason>`、`image`、`top_k`
+ * 等细分名一并落地），故「未列出 ⇒ rewrite」即是完整规则——多列一份只会再分叉。
  */
-const REWRITE_CAPABILITY_PREFIXES = [
-  "unknown_field",
-  "image",
-  "document",
-  "tool_result.is_error",
-  "tool_call",
-  "tool.non_function",
-  "mcp.tool",
-  "web_search.tool",
-  "assistant.content.empty",
-  "top_k",
-  "stop_sequences",
-  "max_tokens.defaulted",
-  "response_format",
-  "text.controls",
+const DEGRADE_CAPABILITIES = [
+  "thinking.signature",
+  "thinking.derived",
+  "reasoning.replay",
+  "cache_control",
 ] as const;
 
-const DEGRADE_CAPABILITY_PREFIXES = ["thinking", "reasoning.replay", "cache_control"] as const;
+const INFO_CAPABILITIES = ["store", "prompt_cache_key"] as const;
 
-const INFO_CAPABILITY_PREFIXES = ["store", "prompt_cache_key"] as const;
-
-/** 前缀表命中判定：整名相等，或用 `.` 续写的细分名（避免 `store` 误吞 `storage.x` 这类无关前缀）。 */
-function matchesPrefix(capability: string, prefix: string): boolean {
-  return capability === prefix || capability.startsWith(`${prefix}.`);
-}
-
-/** 按能力名推导档位；未知能力归 rewrite（见上表注释）。 */
+/** 按能力名推导档位；未列出者归 rewrite（与 Go 的 `default` 分支同口径，宁可多画也不漏报）。 */
 function lossSeverityForCapability(capability: string): ConversionLossSeverity {
-  if (REWRITE_CAPABILITY_PREFIXES.some((prefix) => matchesPrefix(capability, prefix))) {
-    return "rewrite";
-  }
-  if (DEGRADE_CAPABILITY_PREFIXES.some((prefix) => matchesPrefix(capability, prefix))) {
-    return "degrade";
-  }
-  if (INFO_CAPABILITY_PREFIXES.some((prefix) => matchesPrefix(capability, prefix))) {
+  if ((INFO_CAPABILITIES as readonly string[]).includes(capability)) {
     return "info";
+  }
+  if ((DEGRADE_CAPABILITIES as readonly string[]).includes(capability)) {
+    return "degrade";
   }
   return "rewrite";
 }
@@ -148,7 +130,7 @@ const ACTION_DEPENDENT_SEVERITY: Record<string, (action: string) => ConversionLo
   "thinking.block": (action) => (action === "downgraded" ? "degrade" : "rewrite"),
 };
 
-/** 按 (能力, 动作) 推导档位：先查动作相关例外，再退回能力名前缀表。 */
+/** 按 (能力, 动作) 推导档位：先查动作相关例外，再退回能力名精确表。 */
 function lossSeverityForGroup(capability: string, action: string): ConversionLossSeverity {
   const byAction = ACTION_DEPENDENT_SEVERITY[capability];
   return byAction ? byAction(action) : lossSeverityForCapability(capability);
