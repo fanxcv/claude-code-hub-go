@@ -369,8 +369,20 @@ func forwardLoop(
 		}
 	}()
 
-	for totalProvidersAttempted := 0; totalProvidersAttempted < limits.MaxProviderSwitches; totalProvidersAttempted++ {
-		result.TotalProvidersAttempted = append(result.TotalProvidersAttempted, current.Provider.ID)
+	// 候选扫描有两本独立账：attempted 只记**真正进入尝试**的候选（计划构造成功），跳过只
+	// 记计划阶段因状态型字段被拒的候选。两者必须分开——把跳过也计进尝试额度，同线候选排在
+	// 第 21 位时就永远轮不到它，可用性被白扔。
+	// 跳过的上界不靠额度兜底：每次跳过都把该供应商记进排除集，候选集单调收缩；seen 再兜一层
+	// 「选路不守排除列表」的异常实现，避免退化成死循环。
+	seen := make(map[int64]struct{}, 4)
+	for attempted := 0; attempted < limits.MaxProviderSwitches; {
+		if _, repeat := seen[current.Provider.ID]; repeat {
+			deps.logger().Warn("forward: 选路返回了已排除的候选，按候选耗尽处理", map[string]any{
+				"provider_id": current.Provider.ID,
+			})
+			break
+		}
+		seen[current.Provider.ID] = struct{}{}
 
 		skipRetryAndSwitch := current.RawPassthrough && !current.RawCrossProviderFallback
 		maxAttempts := ResolveMaxAttempts(current.Provider, limits)
@@ -442,6 +454,11 @@ func forwardLoop(
 				// 计划构造失败属本地配置/请求问题：重试同一供应商或换供应商都不会变好。
 				return nil, err
 			}
+
+			// 计划构造成功＝这个候选真的进入尝试：此刻才计尝试额度与留痕。被跳过的候选两者都不占
+			// （它从未拨号，把它记成「尝试过的供应商」是假账）。
+			attempted++
+			result.TotalProvidersAttempted = append(result.TotalProvidersAttempted, current.Provider.ID)
 
 			outcome := AttemptOutcome{
 				ProviderID:            current.Provider.ID,
@@ -590,12 +607,20 @@ func forwardLoop(
 
 	result.EndedAt = deps.now()
 	if lastFailure == nil {
-		// 全池候选都因状态型字段不可服务：客户端拿到 400 + 字段名，而不是「供应商耗尽」。
-		// 两者必须分开——「池里没有能承载的候选」要客户端改道，「供应商都失败了」只需重试。
+		// 没有任何一次尝试真正开始（候选都在计划阶段就被拒），故按 Forward 的返回值契约给
+		// **nil Result**——「尝试开始前即失败」这一档必须让调用方自己结算。
+		//
+		// 两处代价说明为什么不能返回非 nil：（1）调用方只在 result == nil 分支把状态型字段
+		// 拒绝翻成 400，非 nil 会走「尝试耗尽」分支被译成 502（客户端据 502 会去重试，而正解
+		// 是改道）；（2）forward 的结算 defer 以 len(Attempts) > 0 为前提，而这条路径 Attempts
+		// 恒为空，于是非 nil 返回会同时构成「502 + 请求不留终态」——账目上一个请求凭空消失。
+		//
+		// 全池候选都因状态型字段不可服务与「供应商都失败」必须分开：前者要客户端改道，
+		// 后者只需重试。
 		if statefulRejection != nil {
-			return result, statefulRejection
+			return nil, statefulRejection
 		}
-		return result, fmt.Errorf("%w: provider#%d", ErrProvidersExhausted, initial.Provider.ID)
+		return nil, fmt.Errorf("%w: provider#%d", ErrProvidersExhausted, initial.Provider.ID)
 	}
 	return result, fmt.Errorf("%w: %w", ErrProvidersExhausted, lastFailure)
 }

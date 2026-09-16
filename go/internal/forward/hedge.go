@@ -173,8 +173,12 @@ type hedgeRace struct {
 	// 它不落成 lastFailure：跳过候选不是上游故障，只有池子耗尽时它才变成客户端的 400。
 	statefulRejection *StatefulConversionError
 	launching         bool
-	outcomes          []AttemptOutcome
-	resultCh          chan hedgeResult
+	// launchPending 记「启动窗口被占用期间收到过一次启动申请」。窗口持有者退出时必须补跑它，
+	// 否则那次申请就凭空消失：active 可能已归零、noMoreProviders 又是假，整局再没人推进
+	// （见 launchAlternative）。
+	launchPending bool
+	outcomes      []AttemptOutcome
+	resultCh      chan hedgeResult
 }
 
 // hedgeResult 是竞速的终局。
@@ -669,11 +673,37 @@ func (r *hedgeRace) excludedLocked() []int64 {
 
 // launchAlternative 从候选里选下一个供应商启动（同一时刻只有一个启动协程）。
 // excluded 为 nil 时现场从 launched+failed 组装排除列表。
+//
+// 循环而非单趟：launchAlternativeOnce 返回真表示「它占着窗口时有人申请过启动，而那次申请
+// 被挂起」，此时必须由本循环补跑。为什么不能把那次申请直接丢掉：申请来自「某个 attempt
+// 的 BuildPlan 因状态型字段被拒 —— skipUnservableStateful」或「首字节阈值到期」，两者都是
+// 推进竞速的唯一动力；丢掉它后 active 可能已经归零、noMoreProviders 却仍是假，于是既没有
+// 在途 attempt 也没有启动者，请求只能等 context 取消（竞速悬挂）。
+//
+// 补跑的次数有界：每次补跑必须先有人重新申请，而申请者（跳过/阈值）的数量受候选集与
+// 在途 attempt 数约束；且窗口内的申请只记一个标志位（多次并发申请合并成一次补跑）。
 func (r *hedgeRace) launchAlternative(excluded []int64) {
+	for {
+		if !r.launchAlternativeOnce(excluded) {
+			return
+		}
+		// 补跑时排除列表重新取：这一趟可能已经启动/失败了候选。
+		excluded = nil
+	}
+}
+
+// launchAlternativeOnce 开一次启动窗口；返回真表示窗口内有被挂起的启动申请，调用方须补跑。
+func (r *hedgeRace) launchAlternativeOnce(excluded []int64) (relaunch bool) {
 	r.mu.Lock()
-	if r.winnerCommitted || r.settled || r.noMoreProviders || r.launching {
+	if r.winnerCommitted || r.settled || r.noMoreProviders {
 		r.mu.Unlock()
-		return
+		return false
+	}
+	if r.launching {
+		// 另一个启动者正占着窗口：把申请挂到它身上（见 launchAlternative），不静默丢弃。
+		r.launchPending = true
+		r.mu.Unlock()
+		return false
 	}
 	r.launching = true
 	if excluded == nil {
@@ -684,6 +714,8 @@ func (r *hedgeRace) launchAlternative(excluded []int64) {
 	defer func() {
 		r.mu.Lock()
 		r.launching = false
+		relaunch = r.launchPending
+		r.launchPending = false
 		r.mu.Unlock()
 	}()
 
@@ -731,8 +763,14 @@ func (r *hedgeRace) launchAlternative(excluded []int64) {
 	}
 }
 
-// skipUnservableStateful 处理「该候选无法承载状态型字段」：不留失败留痕、不计供应商健康度，
+// skipUnservableStateful 处理「该候选无法承载状态型字段」：不留**失败**留痕、不计供应商健康度，
 // 只把该供应商记入排除集并把竞速推进到下一个候选；池子耗尽时由终局把这条拒绝交给客户端。
+//
+// 「不留痕」的确切范围（勿读成「零痕迹」）：本候选既没有失败结局（provider_chain 里不会出现
+// retry_failed 之类），也不计供应商健康度，更没有拨号；但它**计入**两处审计——启动时的
+// hedge_launched 占位（它确实作为备选被启动过）与 TotalProvidersAttempted，另有一条
+// effect=candidate_skipped 的 warn 日志。这两处是有意保留的：它们说明「考虑过它、跳过了」，
+// 而不是「它失败了」。
 //
 // 归零口径与 finishAttemptFailed 的失败路径一致，且必须置 outcomeRecorded：否则胜者裁决时
 // markLoserOutcomeLocked 会把这个**从未拨号**的候选记成竞速输家。

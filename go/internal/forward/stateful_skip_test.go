@@ -136,8 +136,13 @@ func TestForwardReportsStatefulRejectionWhenNoCandidateCanCarry(t *testing.T) {
 	if hits := atomic.LoadInt32(&hits); hits != 0 {
 		t.Fatalf("不可服务的候选被拨号 %d 次", hits)
 	}
-	if len(result.Attempts) != 0 {
-		t.Fatalf("跳过不产生尝试留痕，实际 %d 条", len(result.Attempts))
+	// 穷尽时必须给 **nil Result**：这条路径上一次尝试都没开始，而调用方只在 result == nil
+	// 分支把状态型字段拒绝翻成 400；返回非 nil 会走「尝试耗尽」分支译成 502。而且
+	// forward 的结算 defer 以 len(Attempts) > 0 为前提，这里 Attempts 恒为空，故非 nil 返回
+	// 会同时构成「502 + 请求不留终态」。本断言替换了先前钉「非 nil 且 Attempts 为空」的旧口径
+	// ——那条口径正是上述两个缺陷的来源（见 dataplane 的 HTTP 层回归）。
+	if result != nil {
+		t.Fatalf("穷尽时不该有结果（调用方据此判 400 与结算）：%+v", result)
 	}
 }
 
