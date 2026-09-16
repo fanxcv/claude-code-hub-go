@@ -80,60 +80,33 @@ function normalizeNonNegativeCount(value: unknown): number | null {
 }
 
 /**
- * 历史条目的档位推导表（**精确名 → 档位**），须与 Go 的 `convert.LossSeverityOf` 逐条同步
- * （`go/internal/convert/hub.go`：`store`/`prompt_cache_key` → info，`thinking.signature`/
- * `thinking.derived`/`reasoning.replay`/`cache_control` → degrade，其余 → rewrite）。
+ * 历史条目的档位推导：**直接消费 Go 生成的档位表**，本文件不再手抄一份。
  *
- * 为何需要：`severity` 是后加的字段，库里已落库的历史条目没有它。若无此表，读取侧只能
- * 要么整条不显示、要么把几十条降级当作改写报出来——两者都比多写几行表差。
+ * 为何需要推导：`severity` 是后加的字段，库里已落库的历史损失条目没有它；推导表是这些行的
+ * 唯一档位来源。若把历史条目整条不显示、或把几十条降级当作改写报出来，两者都比多一次查表差。
  *
- * 为何必须是**精确名**而非族前缀：Go 只认精确常量，未列出者一律 rewrite。若此处按族放宽
- * （`thinking` / `store` / `cache_control` / `reasoning.replay` / `prompt_cache_key`），库里
- * 出现未列出的新名（`thinking.new`、`store.new`、`cache_control.v2`）时两侧就会分歧：Go 判
- * rewrite、此处判 degrade/info ⇒ 改写档合计算成 0 ⇒ 徽章不画，真损失被降噪吞掉。
+ * 为何用生成物而非手写表：这份表以前是手抄的，与 Go 的 `convert.LossSeverityOf` 只靠注释互相
+ * 指认，于是分叉了——一侧按族前缀匹配、一侧按精确名，库里出现未列出的新名（`thinking.new`、
+ * `store.new`）时两侧判档不同：Go 判 rewrite、此处判 degrade/info ⇒ 改写档合计算成 0 ⇒ 徽章
+ * 不画，真损失被降噪吞掉。现在真源只有 Go 一处，本文件读取 `loss-severity.gen.ts`（由
+ * `go run ./cmd/lossseverity` 生成），是否同步由 `go test ./internal/convert/` 逐字节钉住。
  *
- * 改写档不在此列表：它与 Go 的 `default` 分支同义（`unknown_field.<reason>`、`image`、`top_k`
- * 等细分名一并落地），故「未列出 ⇒ rewrite」即是完整规则——多列一份只会再分叉。
+ * 判档顺序与 Go 的 `LossSeverityOf` 同构：先查 (能力, 动作) 例外表，再查能力名表，未命中一律
+ * rewrite（宁可多画也不漏报）。两张表都是 `Partial`，故「未列出」在本文件里是真实的缺键，
+ * 靠 `??` 落到下一层，而不是靠约定。
  */
-const DEGRADE_CAPABILITIES = [
-  "thinking.signature",
-  "thinking.derived",
-  "reasoning.replay",
-  "cache_control",
-] as const;
+import {
+  LOSS_SEVERITY_BY_CAPABILITY,
+  LOSS_SEVERITY_BY_CAPABILITY_ACTION,
+} from "@/lib/utils/loss-severity.gen";
 
-const INFO_CAPABILITIES = ["store", "prompt_cache_key"] as const;
-
-/** 按能力名推导档位；未列出者归 rewrite（与 Go 的 `default` 分支同口径，宁可多画也不漏报）。 */
-function lossSeverityForCapability(capability: string): ConversionLossSeverity {
-  if ((INFO_CAPABILITIES as readonly string[]).includes(capability)) {
-    return "info";
-  }
-  if ((DEGRADE_CAPABILITIES as readonly string[]).includes(capability)) {
-    return "degrade";
-  }
-  return "rewrite";
-}
-
-/**
- * 同一能力**按动作**分档的例外表：`thinking.block` 的两种事实档位不同。
- *
- * 为何要连动作一起看：「块被丢」是客户端的思考内容消失（改写档），「块被降级」只是强度载体的
- * 换算（降级档）。表里只有这一项——Go 的 `convert.LossSeverityOf` 同样只对 `thinking.block`
- * 连 action 一起看，其余能力一律按名判档（已逐条比对）。
- *
- * 影响面：库里历史条目没有 `severity` 字段，只能在这里判。若把 `thinking.block` 整族判成降级，
- * 含「思考整块被丢」的历史行会算不出改写档 ⇒ 徽章不画 ⇒ 真损失被降噪吞掉。
- */
-const ACTION_DEPENDENT_SEVERITY: Record<string, (action: string) => ConversionLossSeverity> = {
-  // 与 Go 同口径：除 downgraded 外一律改写档（未知动作也不许被降噪藏起来）。
-  "thinking.block": (action) => (action === "downgraded" ? "degrade" : "rewrite"),
-};
-
-/** 按 (能力, 动作) 推导档位：先查动作相关例外，再退回能力名精确表。 */
+/** 按 (能力, 动作) 推导档位。 */
 function lossSeverityForGroup(capability: string, action: string): ConversionLossSeverity {
-  const byAction = ACTION_DEPENDENT_SEVERITY[capability];
-  return byAction ? byAction(action) : lossSeverityForCapability(capability);
+  return (
+    LOSS_SEVERITY_BY_CAPABILITY_ACTION[capability]?.[action] ??
+    LOSS_SEVERITY_BY_CAPABILITY[capability] ??
+    "rewrite"
+  );
 }
 
 /** 后端给的档位优先（宽进严出：未知取值当作未给，退回按 (能力, 动作) 推导）。 */
@@ -225,8 +198,8 @@ export function getProtocolConversionFailure(
  * 宽进严出：只剔除「不可能成立」的项（能力名为空、计数非正数），未知动作**原样保留**——
  * 丢掉整组会让损失被少报，而动作名与协议名同属机器标识符，直接展示不损失可读性。
  *
- * 档位：优先读后端给的 `severity`，缺失时按 (能力, 动作) 推导（历史条目没有该字段，见前缀表与
- * 动作相关例外表的注释）。
+ * 档位：优先读后端给的 `severity`，缺失时按 (能力, 动作) 推导（历史条目没有该字段，见
+ * `loss-severity.gen.ts`）。
  * 三档合计同样先读后端声明，缺失时按分组现算；**没有明细只有总数**时把总数归入改写档，
  * 宁可多画一个徽章，也不让整条损失从列表里消失。
  */

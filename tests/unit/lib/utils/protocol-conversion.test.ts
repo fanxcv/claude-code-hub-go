@@ -1,11 +1,14 @@
 /**
- * 专测**历史损失条目（无 `severity` 字段）的档位推导表**与 Go 的等价性。
+ * 专测**历史损失条目（无 `severity` 字段）的档位推导**与 Go 真源的等价性。
  *
  * 为何要逐条钉：`severity` 与三档合计都是后加的字段，库里已有 236 行历史条目没有它，
- * 推导表是这些行的唯一档位来源。一旦此处与 Go 的 `convert.LossSeverityOf`
- * （`go/internal/convert/hub.go`）判档不同——例如按族前缀放宽成 `thinking` / `store`——
- * 未列出的新名（`thinking.new`、`store.new`）就会被算成降级/信息档，改写档合计为 0，
- * **徽章不再画出来**：真损失被降噪吞掉，而在没有徽章的行上用户永远不会去查。
+ * 推导表是这些行的唯一档位来源。判档一旦与 Go 的 `convert.LossSeverityOf`
+ * （`go/internal/convert/hub.go`）不同——例如按族前缀放宽成 `thinking` / `store`——未列出的
+ * 新名（`thinking.new`、`store.new`）就会被算成降级/信息档，改写档合计为 0，**徽章不再画出来**：
+ * 真损失被降噪吞掉，而在没有徽章的行上用户永远不会去查。
+ *
+ * 两张表不再手抄：本用例的期望值来自生成物 `loss-severity.gen.ts`（由 Go 真源渲染），
+ * 「生成物 vs 真源」由 `go test ./internal/convert/` 逐字节钉住，此处只钉「消费侧 vs 生成物」。
  */
 import { describe, expect, test } from "vitest";
 import type {
@@ -13,7 +16,11 @@ import type {
   ConversionLossSeverity,
   SpecialSetting,
 } from "@/types/special-settings";
-import { getProtocolConversionLoss } from "@/lib/utils/protocol-conversion";
+import {
+  LOSS_SEVERITY_BY_CAPABILITY,
+  LOSS_SEVERITY_BY_CAPABILITY_ACTION,
+} from "@/lib/utils/loss-severity.gen";
+import { LOSS_ACTIONS, getProtocolConversionLoss } from "@/lib/utils/protocol-conversion";
 
 /** 读一组历史损失（只给 capability + action，不给 severity）的档位。 */
 function legacySeverity(capability: string, action: ConversionLossAction): ConversionLossSeverity {
@@ -34,30 +41,49 @@ function legacySeverity(capability: string, action: ConversionLossAction): Conve
 }
 
 describe("历史损失条目的档位推导", () => {
-  test("精确名集合与 Go 的 LossSeverityOf 同口径", () => {
-    const table: ReadonlyArray<readonly [string, ConversionLossAction, ConversionLossSeverity]> = [
-      // Go：LossStoreFlag / LossPromptCacheKey → info
-      ["store", "dropped", "info"],
-      ["prompt_cache_key", "dropped", "info"],
-      // Go：LossThinkingSignature / LossThinkingDerived / LossReasoningReplay / LossCacheControl → degrade
-      ["thinking.signature", "dropped", "degrade"],
-      ["thinking.derived", "dropped", "degrade"],
-      ["reasoning.replay", "dropped", "degrade"],
-      ["cache_control", "dropped", "degrade"],
-      // Go：LossThinkingBlock 连 action 一起看
-      ["thinking.block", "dropped", "rewrite"],
-      ["thinking.block", "rewritten", "rewrite"],
-      ["thinking.block", "downgraded", "degrade"],
-      // Go：default → rewrite（含细分名与未收录的新能力）
-      ["unknown_field", "dropped", "rewrite"],
-      ["unknown_field.tool", "dropped", "rewrite"],
-      ["image", "rewritten", "rewrite"],
-      ["top_k", "dropped", "rewrite"],
-      ["brand.new.capability", "dropped", "rewrite"],
-    ];
+  test("生成表里每一项都在本侧同档推导（含 thinking.block 的动作例外）", () => {
+    const capabilities = Object.entries(LOSS_SEVERITY_BY_CAPABILITY);
+    // 空表会让下面的循环空转通过，而「生成物坏掉」正是最该红的一刻。
+    expect(
+      capabilities.length,
+      "生成表为空：先查 Go 的档位表与 go/cmd/lossseverity"
+    ).toBeGreaterThan(0);
 
-    for (const [capability, action, expected] of table) {
-      expect(legacySeverity(capability, action), `${capability} × ${action}`).toBe(expected);
+    for (const [capability, severity] of capabilities) {
+      expect(legacySeverity(capability, "dropped"), capability).toBe(severity);
+    }
+
+    const actionDependent = Object.entries(LOSS_SEVERITY_BY_CAPABILITY_ACTION);
+    expect(
+      actionDependent.length,
+      "动作例外表为空：thinking.block 的丢/降两态必须在此"
+    ).toBeGreaterThan(0);
+
+    for (const [capability, byAction] of actionDependent) {
+      for (const [action, severity] of Object.entries(byAction)) {
+        expect(
+          legacySeverity(capability, action as ConversionLossAction),
+          `${capability} × ${action}`
+        ).toBe(severity);
+      }
+    }
+  });
+
+  test("动作例外表未覆盖的动作退回能力名表，仍无命中即改写档（与 Go 的回落顺序同构）", () => {
+    for (const [capability, byAction] of Object.entries(LOSS_SEVERITY_BY_CAPABILITY_ACTION)) {
+      const unmappedActions = LOSS_ACTIONS.filter((action) => !(action in byAction));
+      expect(
+        unmappedActions.length,
+        `${capability} 的动作例外表覆盖了全部已知动作，本用例失去意义`
+      ).toBeGreaterThan(0);
+
+      const fallback = LOSS_SEVERITY_BY_CAPABILITY[capability] ?? "rewrite";
+      for (const action of unmappedActions) {
+        expect(
+          legacySeverity(capability, action),
+          `${capability} × ${action} 应退回 ${fallback}`
+        ).toBe(fallback);
+      }
     }
   });
 

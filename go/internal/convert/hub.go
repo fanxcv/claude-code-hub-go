@@ -467,27 +467,46 @@ const (
 	SeverityInfo    LossSeverity = "info"
 )
 
-// LossSeverityOf 报告一条损失（capability + action）的档位。
+// lossSeverityByCapability 是「能力 → 档位」的权威表；**未列出的能力一律 rewrite**。
+//
+// 为何写成表而不是 switch：界面侧要为库里**历史**条目（没有 severity 字段）推导档位，而档位
+// 真源在这里；表可以由 `go/cmd/lossseverity` 原样渲染成 TS（见 loss_severity_gen.go），
+// switch 不行——手工抄一份表迟早分叉（2026-09-16 实证：一侧按族前缀、一侧按精确名，未列出的
+// 新名两侧判档不同，徽章整枚不画，真损失被降噪吞掉）。
+//
+// 新增非 rewrite 档能力只改这张表，随后按 TestLossSeverityGeneratedTableIsUpToDate 的提示
+// 重新生成界面侧的表即可。
+var lossSeverityByCapability = map[string]LossSeverity{
+	LossStoreFlag:         SeverityInfo,
+	LossPromptCacheKey:    SeverityInfo,
+	LossThinkingSignature: SeverityDegrade,
+	LossThinkingDerived:   SeverityDegrade,
+	LossReasoningReplay:   SeverityDegrade,
+	LossCacheControl:      SeverityDegrade,
+}
+
+// lossSeverityByCapabilityAction 是「同一能力按动作分档」的例外表。
 //
 // 为何要连 action 一起看：thinking.block 是同一能力的两种事实——块被**丢**（客户端的思考
 // 内容消失）与被**降级**（强度载体换算），前者改变内容、后者只弱化保真度。
+// 表中未列出的动作退回 lossSeverityByCapability，仍无命中则 rewrite。
+var lossSeverityByCapabilityAction = map[string]map[LossAction]LossSeverity{
+	LossThinkingBlock: {LossDowngraded: SeverityDegrade},
+}
+
+// LossSeverityOf 报告一条损失（capability + action）的档位。
 //
 // 未知 capability 一律按 rewrite 处理：宁可让它显眼，也不要让新能力默默躺在折叠区里。
 func LossSeverityOf(capability string, action LossAction) LossSeverity {
-	switch capability {
-	case LossStoreFlag, LossPromptCacheKey:
-		return SeverityInfo
-	case LossThinkingBlock:
-		if action == LossDowngraded {
-			return SeverityDegrade
+	if byAction, ok := lossSeverityByCapabilityAction[capability]; ok {
+		if severity, ok := byAction[action]; ok {
+			return severity
 		}
-		return SeverityRewrite
-	case LossThinkingSignature, LossThinkingDerived, LossReasoningReplay, LossCacheControl:
-		return SeverityDegrade
-	default:
-		// catch-all 家族（含未细分的裸 `unknown_field`）都在此落地。
-		return SeverityRewrite
 	}
+	if severity, ok := lossSeverityByCapability[capability]; ok {
+		return severity
+	}
+	return SeverityRewrite
 }
 
 // nonFunctionToolLossClass 把「目标线无法承载的非 function 工具/工具项」归到专用损失类别。
