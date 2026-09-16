@@ -343,6 +343,9 @@ func forwardLoop(
 	result := &Result{StartedAt: startedAt, DetectorMissing: deps.Detector == nil}
 	failedProviders := make([]int64, 0, 4)
 	var lastFailure *Failure
+	// statefulRejection 记住首次「候选无法承载状态型字段」的拒绝。候选级跳过不留失败留痕，
+	// 故池子耗尽时由它（而不是 lastFailure）决定客户端看到什么。
+	var statefulRejection *StatefulConversionError
 	// 整流器的可变副本：整流器改写的是**客户端正文快照**，而客户端正文是「每次尝试重新
 	// BuildPlan」的输入，故改写必须回到这份副本上，下一次尝试才拿得到整流后的正文。
 	rectifier := rectifierState{client: deps.Facts.Client, sink: deps.RectifierAudit}
@@ -417,6 +420,25 @@ func forwardLoop(
 				UserAgentModified: deps.Facts.UserAgentModified,
 			})
 			if err != nil {
+				// 候选级不可服务：该候选会转正文，而客户端正文里的状态型字段在目标线没有承载位。
+				// 这不是上游故障（根本没接触上游）、也不靠重试同一供应商改善，故把它记入排除集、
+				// 换下一个候选——池中有能承载的原生同线供应商时请求照常成功；池子耗尽才由下面的
+				// statefulRejection 分支给出 400 与字段名。
+				var rejected *StatefulConversionError
+				if errors.As(err, &rejected) {
+					if statefulRejection == nil {
+						statefulRejection = rejected
+					}
+					failedProviders = append(failedProviders, current.Provider.ID)
+					deps.logger().Warn("forward: 候选无法承载状态型字段，跳过", map[string]any{
+						"provider_id":   current.Provider.ID,
+						"provider_type": string(current.Provider.Type),
+						"field":         rejected.Field,
+						"effect":        "candidate_skipped",
+					})
+					// 跳出重试循环换候选：同一供应商的正文相同，重试拿到的还是同一条拒绝。
+					break
+				}
 				// 计划构造失败属本地配置/请求问题：重试同一供应商或换供应商都不会变好。
 				return nil, err
 			}
@@ -568,6 +590,11 @@ func forwardLoop(
 
 	result.EndedAt = deps.now()
 	if lastFailure == nil {
+		// 全池候选都因状态型字段不可服务：客户端拿到 400 + 字段名，而不是「供应商耗尽」。
+		// 两者必须分开——「池里没有能承载的候选」要客户端改道，「供应商都失败了」只需重试。
+		if statefulRejection != nil {
+			return result, statefulRejection
+		}
 		return result, fmt.Errorf("%w: provider#%d", ErrProvidersExhausted, initial.Provider.ID)
 	}
 	return result, fmt.Errorf("%w: %w", ErrProvidersExhausted, lastFailure)

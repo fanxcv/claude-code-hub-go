@@ -508,8 +508,9 @@ func buildGeminiPassthroughPlan(in PlanInput, baseURL string) (*Plan, error) {
 // 杂项键；同时客户端收到的错误体是 OpenAI 形状（`guard.BuildError`），只有这两族读得懂——
 // 不能因为一个杂项键给 claude 客户端发一个形状不对的 400。
 //
-// 已知边界：判定发生在**该次尝试**的计划上（attempt.go 对计划错误不重试、不换供应商），
-// 故候选池里同时存在同协议供应商时不会自动改投——宁可真话（400）也不要静默降级。
+// 本错误是**候选级**的，不是请求级：forward 的两条路径（串行 attempt.go、竞速 hedge.go）都把
+// 它当成「该候选不可服务」，把供应商记入排除集后换下一个候选；只有当所有候选都无法承载时，
+// 它才作为本次请求的结论交给客户端（400 + 字段名）。
 func rejectUnservableStateful(client ClientRequest, plan *convert.ConversionPlan) error {
 	if client.Format != convert.FormatResponse && client.Format != convert.FormatOpenAI {
 		return nil

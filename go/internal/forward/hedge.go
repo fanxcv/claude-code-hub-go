@@ -169,9 +169,12 @@ type hedgeRace struct {
 	settled         bool
 	noMoreProviders bool
 	lastFailure     *Failure
-	launching       bool
-	outcomes        []AttemptOutcome
-	resultCh        chan hedgeResult
+	// statefulRejection 是本次竞速遇到的「候选无法承载状态型字段」拒绝（取首次）。
+	// 它不落成 lastFailure：跳过候选不是上游故障，只有池子耗尽时它才变成客户端的 400。
+	statefulRejection *StatefulConversionError
+	launching         bool
+	outcomes          []AttemptOutcome
+	resultCh          chan hedgeResult
 }
 
 // hedgeResult 是竞速的终局。
@@ -350,6 +353,14 @@ func (r *hedgeRace) runAttempt(c *Candidate, seq int, maxInFlight int) {
 		UserAgentModified: r.deps.Facts.UserAgentModified,
 	})
 	if err != nil {
+		// 候选级不可服务（状态型字段在目标线没有承载位）：不是上游故障，也没拨过号，故不走
+		// finishAttemptFailed（那会替它落一条 system_error 留痕，在
+		// CountNetworkFailureTowardCircuit 为真时还会记一次供应商健康度失败）。
+		var rejected *StatefulConversionError
+		if errors.As(err, &rejected) {
+			r.skipUnservableStateful(attempt, rejected)
+			return
+		}
 		failure := &Failure{
 			Category:   CategorySystemError,
 			Message:    err.Error(),
@@ -720,6 +731,39 @@ func (r *hedgeRace) launchAlternative(excluded []int64) {
 	}
 }
 
+// skipUnservableStateful 处理「该候选无法承载状态型字段」：不留失败留痕、不计供应商健康度，
+// 只把该供应商记入排除集并把竞速推进到下一个候选；池子耗尽时由终局把这条拒绝交给客户端。
+//
+// 归零口径与 finishAttemptFailed 的失败路径一致，且必须置 outcomeRecorded：否则胜者裁决时
+// markLoserOutcomeLocked 会把这个**从未拨号**的候选记成竞速输家。
+func (r *hedgeRace) skipUnservableStateful(attempt *hedgeAttempt, rejection *StatefulConversionError) {
+	r.mu.Lock()
+	if r.winnerCommitted {
+		// 胜者已定：本 attempt 已无意义，静默归零（其 ctx 由 runAttempt 的 defer 释放）。
+		attempt.outcomeRecorded = true
+		r.active--
+		r.mu.Unlock()
+		return
+	}
+	if r.statefulRejection == nil {
+		r.statefulRejection = rejection
+	}
+	r.failed = append(r.failed, attempt.provider.ID)
+	attempt.outcomeRecorded = true
+	r.active--
+	r.mu.Unlock()
+
+	r.deps.logger().Warn("forward: 候选无法承载状态型字段，跳过", map[string]any{
+		"provider_id":   attempt.provider.ID,
+		"provider_type": string(attempt.provider.Type),
+		"field":         rejection.Field,
+		"effect":        "candidate_skipped",
+		"race":          true,
+	})
+
+	r.launchAlternative(nil)
+}
+
 // failSelection 记录选路失败并把整局判定为耗尽。
 func (r *hedgeRace) failSelection(err error) {
 	r.mu.Lock()
@@ -1056,7 +1100,15 @@ func (r *hedgeRace) maybeFinishLocked() {
 		return
 	}
 	r.settled = true
-	err := r.lastFailure
+	var err error
+	switch {
+	case r.lastFailure != nil:
+		err = r.lastFailure
+	case r.statefulRejection != nil:
+		// 池中所有候选都无法承载状态型字段：给客户端 400 + 字段名（与串行路径同口径），
+		// 而不是一个「供应商耗尽」的 5xx。
+		err = r.statefulRejection
+	}
 	r.resultCh <- hedgeResult{err: err}
 }
 
