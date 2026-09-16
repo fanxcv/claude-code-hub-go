@@ -462,11 +462,14 @@ type AdminDefaultErrorRule struct {
 	Priority           int
 }
 
-// adminDefaultErrorRules 与 Node 的 DEFAULT_ERROR_RULES（src/repository/error-rules.ts:291-895）逐条一致。
+// adminNodeDefaultErrorRules 是 Node 的 DEFAULT_ERROR_RULES（src/repository/error-rules.ts:291-895）
+// 的原样副本。
 //
 // 顺序不重要（同步按 pattern 匹配），但**内容必须逐字一致**：pattern 参与唯一索引与用户自定义
 // 判定，override_response 是用户可见的覆写体。改动这里等于改动线上默认规则。
-var adminDefaultErrorRules = []AdminDefaultErrorRule{
+//
+// Go 侧增补的规则另立 adminUnsupportedInputErrorRules，由 adminDefaultErrorRules 拼在其后。
+var adminNodeDefaultErrorRules = []AdminDefaultErrorRule{
 	{
 		Pattern:          "Missing or invalid 'alt' query parameter. Expected 'alt=sse'",
 		Category:         "parameter_error",
@@ -784,3 +787,55 @@ var adminDefaultErrorRules = []AdminDefaultErrorRule{
 		OverrideResponse: json.RawMessage("{\"error\":{\"message\":\"Responses API 的 input 参数必须为数组格式。请检查请求体中 input 字段是否为列表\",\"type\":\"invalid_request_error\",\"param\":\"input\",\"code\":null}}"),
 	},
 }
+
+// adminUnsupportedInputErrorRules 是 Go 侧增补的一族默认规则（Node 的默认表里没有）：
+// 上游**明确声明该客户端输入形态不受支持**时，命中即归 CategoryNonRetryableClientError
+// （不重试当前供应商、不切换，见 forward/errors.go 的 Classify 第 7 步）。
+//
+// 动机（2026-09-16 生产实测）：上游对「图片以 URL 形态送达」回 `image URLs are not currently
+// supported, please use base64 encoded data instead`，此前无规则命中 ⇒ 归 CategoryProviderError
+// （可重试且可切换）⇒ 同一份必然再被拒的输入被逐家重试，实测耗掉 20 次尝试、14.7s 才放弃。
+//
+// 判据刻意**窄**：必须同时出现「模态」（image/audio/video/file/pdf/document）与「载体形态」
+// （url/link），即争的是这**一种送达形态**而非模态本身。因此下列情形**有意不命中**，仍走
+// 重试与切换（换一家供应商可能成功，属供应商能力差异而非客户端输入错误）：
+//   - 模态陈述：「This model does not support image inputs」「本模型不支持图片识别」「不支持图片」
+//   - 模型/参数能力：「unsupported value for reasoning_effort」「model does not support tool calling」
+//
+// 有意不给 override_response：本仓的覆写响应尚未落到响应路径（见 guard/adapters_rules.go 的
+// 说明与 Assembly.Missing），写了也是空承诺；上游原文如实回给客户端。
+var adminUnsupportedInputErrorRules = []AdminDefaultErrorRule{
+	{
+		Pattern:     `(image|audio|video|file|pdf|document|media)s?\s+(urls?|links?)\s+(is|are)\s+not\s+(currently\s+)?supported`,
+		Category:    "invalid_request",
+		MatchType:   "regex",
+		Description: adminRuleText("媒体以 URL/链接形态送达不被上游支持（非重试）"),
+		Priority:    78,
+		IsEnabled:   true,
+	},
+	{
+		Pattern:     `unsupported\s+(image|audio|video|file|pdf|document)\s+(url|urls|link|links)`,
+		Category:    "invalid_request",
+		MatchType:   "regex",
+		Description: adminRuleText("上游声明该媒体 URL 形态不受支持（非重试）"),
+		Priority:    77,
+		IsEnabled:   true,
+	},
+	{
+		Pattern:     `(图片|音频|视频|文件)(URL|url|链接)(形式|格式|类型|方式)?(暂|当前|目前)?不支持|不支持(图片|音频|视频|文件)(URL|url|链接)`,
+		Category:    "invalid_request",
+		MatchType:   "regex",
+		Description: adminRuleText("中文上游声明该媒体 URL 形态不受支持（非重试）"),
+		Priority:    76,
+		IsEnabled:   true,
+	},
+}
+
+// adminDefaultErrorRules 是同步进库的完整默认表：Node 原表在前，Go 侧增补在后。
+//
+// 顺序只影响装载顺序——判定是「任一命中即命中」（guard/adapters_rules.go 的 matches），
+// 故增补放尾部不改变既有规则的命中结果。
+var adminDefaultErrorRules = append(
+	append([]AdminDefaultErrorRule{}, adminNodeDefaultErrorRules...),
+	adminUnsupportedInputErrorRules...,
+)
