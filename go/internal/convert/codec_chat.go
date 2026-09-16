@@ -704,15 +704,19 @@ func chatImageBlockToPart(block Block, loss *LossCollector, direction string) *V
 	if block.CacheHint != nil {
 		loss.Dropped(LossCacheControl, direction, "image")
 	}
-	if !strings.HasPrefix(block.MediaType, "image/") {
-		loss.Dropped(LossImage, direction, "media_type:"+block.MediaType)
-		return nil
-	}
-	if strings.HasSuffix(block.MediaType, "/gif") {
-		loss.Dropped(LossImage, direction, "image/gif")
-		return nil
-	}
+	// 媒体类型闸门只对内联数据成立：要合成 data URL 就必须知道类型。
+	// 远程 URL 图不做重编码（chat 的 image_url 原样承载 URL），故不因「类型未知」丢图——
+	// responses 的 input_image 与 anthropic 的 source.type=url 都不带媒体类型，此前它们
+	// 被这里的闸门判成「不是图片」而整幅丢弃（矩阵四格钉住的缺陷）。
 	if block.Data != "" {
+		if !strings.HasPrefix(block.MediaType, "image/") {
+			loss.Dropped(LossImage, direction, "media_type:"+imageMediaTypeDetail(block.MediaType))
+			return nil
+		}
+		if strings.HasSuffix(block.MediaType, "/gif") {
+			loss.Dropped(LossImage, direction, "image/gif")
+			return nil
+		}
 		// 损失记在编码侧（解码侧只置 FromDataURL）：解码侧再记一次就是一张图两条台账
 		// （生产实测把 image 计数抬成实际值的两倍）。记在此处的另一个好处是
 		// 「最终结果为准」自动成立：上面的 GIF / 非图片媒体分支已经 return，被丢掉的那张图
@@ -725,12 +729,26 @@ func chatImageBlockToPart(block Block, loss *LossCollector, direction string) *V
 			Set("image_url", NewObject().Set("url", NewString(chatToDataURL(block.MediaType, block.Data))))
 	}
 	if block.URL != "" {
+		// 类型可辨的 GIF 仍按「上游不收」丢掉；类型未知时不猜也不丢，交上游裁决。
+		if strings.HasSuffix(block.MediaType, "/gif") {
+			loss.Dropped(LossImage, direction, "image/gif")
+			return nil
+		}
 		return NewObject().
 			Set("type", NewString("image_url")).
 			Set("image_url", NewObject().Set("url", NewString(block.URL)))
 	}
 	loss.Dropped(LossImage, direction, "no_data_or_url")
 	return nil
+}
+
+// imageMediaTypeDetail 让「类型不可用」这条记损可判读：空类型写明 unknown，
+// 不留 `media_type:` 这种看不出是「空值」还是「漏写」的尾巴。
+func imageMediaTypeDetail(mediaType string) string {
+	if mediaType == "" {
+		return "unknown"
+	}
+	return mediaType
 }
 
 func chatRenderToolMessage(item Item, options *chatRenderOptions) *Value {

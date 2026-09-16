@@ -116,13 +116,10 @@ func imageChainDirections() []struct {
 			name: "responses → chat", source: ProtocolOpenAIResponses, target: ProtocolOpenAIChat,
 			expect: func(role string, form mediaForm) chainOutcome {
 				if form.name == "远程 URL" {
-					// 此处钉的是**当前行为**，而它是一处已上报、本次未修的缺陷：
-					// responses 线解码出的 URL 图不带媒体类型（Block.MediaType 为空），
-					// chat 编码器的 media-type 闸门把「类型未知」当成「不是图片」而整幅丢弃。
-					// 记损本身是真的（detail 里类型为空串），但图没能送出去——传法与证据见报告。
-					// 矩阵不替它背书：一旦闸门改成只对携带 data 的块生效（或按 URL 猜类型），
-					// 这四格会转红并提醒改期望。
-					return chainOutcome{action: LossDropped, detail: "media_type:"}
+					// 远程 URL 原样透传：responses 的 input_image 不带媒体类型，而 chat 的
+					// image_url 不需要它（闸门只对需合成 data URL 的内联块成立）。
+					// 此前这一格是 dropped / `media_type:`（空类型）——图整幅没送出去。
+					return chainOutcome{delivered: true}
 				}
 				// chat 线不收 GIF（chatImageBlockToPart 的 image/gif 分支）。
 				if form.name == "GIF data URL" {
@@ -147,8 +144,8 @@ func imageChainDirections() []struct {
 			name: "anthropic → chat", source: ProtocolAnthropicMessages, target: ProtocolOpenAIChat,
 			expect: func(role string, form mediaForm) chainOutcome {
 				if form.name == "远程 URL" {
-					// 与 responses→chat 同一缺陷同一根因：anthropic 的 `source.type=url` 也不带媒体类型。
-					return chainOutcome{action: LossDropped, detail: "media_type:"}
+					// 与 responses→chat 同一根因（`source.type=url` 不带媒体类型），同一修法：送达。
+					return chainOutcome{delivered: true}
 				}
 				if form.name == "GIF data URL" {
 					return chainOutcome{action: LossDropped, detail: "image/gif"}
@@ -235,6 +232,45 @@ func clientFormatFor(source WireProtocol) ClientFormat {
 		return FormatResponse
 	default:
 		return FormatOpenAI
+	}
+}
+
+// TestChatImageLossDetailIsReadable 钉住「记损 detail 必须可判读」。
+//
+// anthropic 的 source.type=base64 允许省略 media_type，而 chat 线要合成 data URL 就必须知道
+// 类型，故这一形态确实送不出去，如实记 dropped——但 detail 不得留成空类型的 `media_type:`，
+// 须写明 unknown，否则事后无法分辨「客户端没给」与「我们漏写」。
+func TestChatImageLossDetailIsReadable(t *testing.T) {
+	body := `{"model":"m","max_tokens":64,"messages":[{"role":"user","content":[` +
+		`{"type":"image","source":{"type":"base64","data":"` + testImagePNGBase64 + `"}}]}]}`
+	ctx := ConvertCtx{
+		ClientFormat:   FormatClaude,
+		TargetProto:    ProtocolOpenAIChat,
+		Model:          "m",
+		ToWireToolName: NormalizeToolName,
+	}
+	decoded, ok := DecodeRequest(ProtocolAnthropicMessages, mustParsePayload(t, body), ctx)
+	if !ok {
+		t.Fatal("anthropic 正文必须能解码")
+	}
+	encoded, ok := EncodeRequest(ProtocolOpenAIChat, decoded.Value, ctx)
+	if !ok {
+		t.Fatal("chat 目标必须能编码")
+	}
+	imageEntries := []LossEntry{}
+	for _, entry := range append(append([]LossEntry{}, decoded.Loss.Entries...), encoded.Loss.Entries...) {
+		if entry.Capability == LossImage {
+			imageEntries = append(imageEntries, entry)
+		}
+	}
+	if len(imageEntries) != 1 {
+		t.Fatalf("一张图只该记一条，实际 %d 条：%+v", len(imageEntries), imageEntries)
+	}
+	if imageEntries[0].Action != LossDropped || imageEntries[0].Detail != "media_type:unknown" {
+		t.Fatalf("应为 dropped / media_type:unknown，实际 %s / %q", imageEntries[0].Action, imageEntries[0].Detail)
+	}
+	if strings.Contains(string(encoded.Body.MarshalCompact()), testImagePNGBase64) {
+		t.Fatal("没有媒体类型的内联图无法合成 data URL，不该出现在目标正文里")
 	}
 }
 
