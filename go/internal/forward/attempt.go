@@ -369,11 +369,28 @@ func forwardLoop(
 		}
 	}()
 
-	// 候选扫描有两本独立账：attempted 只记**真正进入尝试**的候选（计划构造成功），跳过只
-	// 记计划阶段因状态型字段被拒的候选。两者必须分开——把跳过也计进尝试额度，同线候选排在
-	// 第 21 位时就永远轮不到它，可用性被白扔。
-	// 跳过的上界不靠额度兜底：每次跳过都把该供应商记进排除集，候选集单调收缩；seen 再兜一层
-	// 「选路不守排除列表」的异常实现，避免退化成死循环。
+	// 零尝试的退出一律交回 nil Result。判据只有一条，所有错误退出都经它收口，不逐分支各写一份
+	// （reviewer F1'）：调用方只在 result == nil 时把「候选不可服务」翻成方言化 400 **并结算**，
+	// 而本函数的结算 defer 以 len(Attempts) > 0 为前提。于是「非 nil + 零 attempt」两头落空——
+	// 既被译成通用 502（客户端据 502 会重试，而正解是改道），又没有任何终态，请求在账上凭空
+	// 消失（故障转移选路失败那条分支曾正是如此）。
+	exitWithError := func(err error) (*Result, error) {
+		result.EndedAt = deps.now()
+		if len(result.Attempts) == 0 {
+			return nil, err
+		}
+		return result, err
+	}
+
+	// 候选扫描有三本独立账：
+	//   - attempted 记**真正进入尝试的候选数**（计划构造成功），且每个候选只记一次：内层重试
+	//     不是「换了一家供应商」（见 counted）。按重试次数计会让首家重试两次就吃光
+	//     MaxProviderSwitches，排在后面的供应商永远轮不到。
+	//   - TotalProvidersAttempted 记尝试过的供应商（同样每供应商一次，重试不重复写）。
+	//   - 跳过只记计划阶段因状态型字段被拒的候选，它不占上面两本账中的任何一本——把跳过计进
+	//     尝试额度，同线候选排在第 21 位时就永远轮不到它，可用性被白扔。
+	// 终止性不靠额度兜底：每轮外层迭代要么消耗一次额度、要么把候选记进 seen 与排除集，两者
+	// 都单调，故有界；seen 再兜一层「选路不守排除列表」的异常实现，避免退化成死循环。
 	seen := make(map[int64]struct{}, 4)
 	for attempted := 0; attempted < limits.MaxProviderSwitches; {
 		if _, repeat := seen[current.Provider.ID]; repeat {
@@ -383,6 +400,9 @@ func forwardLoop(
 			break
 		}
 		seen[current.Provider.ID] = struct{}{}
+		// counted 守卫「每候选一次」：候选的首个计划构造成功即计额度，之后的内层重试不再计
+		// （reviewer F2'：原先把自增写在重试循环里，首家重试两次就把额度用光）。
+		counted := false
 
 		skipRetryAndSwitch := current.RawPassthrough && !current.RawCrossProviderFallback
 		maxAttempts := ResolveMaxAttempts(current.Provider, limits)
@@ -451,14 +471,19 @@ func forwardLoop(
 					// 跳出重试循环换候选：同一供应商的正文相同，重试拿到的还是同一条拒绝。
 					break
 				}
-				// 计划构造失败属本地配置/请求问题：重试同一供应商或换供应商都不会变好。
-				return nil, err
+				// 计划构造失败属本地配置/请求问题：重试同一供应商或换供应商都不会变好。但若此前
+				// 已有真实尝试，那些尝试仍须交回调用方——零 attempt 才归 nil。
+				return exitWithError(err)
 			}
 
-			// 计划构造成功＝这个候选真的进入尝试：此刻才计尝试额度与留痕。被跳过的候选两者都不占
-			// （它从未拨号，把它记成「尝试过的供应商」是假账）。
-			attempted++
-			result.TotalProvidersAttempted = append(result.TotalProvidersAttempted, current.Provider.ID)
+			// 计划构造成功＝这个候选真的进入尝试：此刻才计尝试额度与留痕，而且**每个候选只计
+			// 一次**——内层重试不是「换了一家供应商」。被跳过的候选两者都不占（它从未拨号，把
+			// 它记成「尝试过的供应商」是假账）。
+			if !counted {
+				counted = true
+				attempted++
+				result.TotalProvidersAttempted = append(result.TotalProvidersAttempted, current.Provider.ID)
+			}
 
 			outcome := AttemptOutcome{
 				ProviderID:            current.Provider.ID,
@@ -531,8 +556,7 @@ func forwardLoop(
 					// already_retried / not_applicable：Node 归为不可重试的客户端错误并直接终止
 					// （不重试、不切换、不计入熔断器）。
 					failure.Category = CategoryNonRetryableClientError
-					result.EndedAt = deps.now()
-					return result, failure
+					return exitWithError(failure)
 				}
 				if rectified.Applied {
 					// 整流成立：确保即使重试上限为 1 也能完成这次额外重试（Node 的
@@ -547,13 +571,11 @@ func forwardLoop(
 
 			// 客户端中断、客户端输入错误与本地过载：不重试、不切换，立即终止。
 			if !failure.Category.RetriesSameProvider() && !failure.Category.SwitchesProvider() {
-				result.EndedAt = deps.now()
-				return result, failure
+				return exitWithError(failure)
 			}
 
 			if skipRetryAndSwitch {
-				result.EndedAt = deps.now()
-				return result, failure
+				return exitWithError(failure)
 			}
 
 			// 网络错误与上游超时（524）推进端点索引：这两种失败往往与具体端点相关。
@@ -563,8 +585,7 @@ func forwardLoop(
 
 			if attempt < maxAttempts {
 				if err := deps.sleep(ctx, limits.RetryDelay); err != nil {
-					result.EndedAt = deps.now()
-					return result, &Failure{
+					return exitWithError(&Failure{
 						Category:     CategoryClientAbort,
 						Message:      "等待重试期间请求被取消",
 						ProviderID:   current.Provider.ID,
@@ -573,7 +594,7 @@ func forwardLoop(
 						EndpointURL:  plan.URL,
 						Attempt:      attempt,
 						Err:          err,
-					}
+					})
 				}
 				continue
 			}
@@ -596,8 +617,9 @@ func forwardLoop(
 		}
 		next, err := deps.Select(ctx, failedProviders)
 		if err != nil {
-			result.EndedAt = deps.now()
-			return result, err
+			// 变更前的缺陷：这里返回非 nil、零 Attempts 的 result，于是「翻 400」与「结算」
+			// 两条路都走不到（见上面 exitWithError 的注释）。
+			return exitWithError(err)
 		}
 		if next == nil {
 			break
@@ -605,24 +627,19 @@ func forwardLoop(
 		current = next
 	}
 
-	result.EndedAt = deps.now()
 	if lastFailure == nil {
-		// 没有任何一次尝试真正开始（候选都在计划阶段就被拒），故按 Forward 的返回值契约给
-		// **nil Result**——「尝试开始前即失败」这一档必须让调用方自己结算。
-		//
-		// 两处代价说明为什么不能返回非 nil：（1）调用方只在 result == nil 分支把状态型字段
-		// 拒绝翻成 400，非 nil 会走「尝试耗尽」分支被译成 502（客户端据 502 会去重试，而正解
-		// 是改道）；（2）forward 的结算 defer 以 len(Attempts) > 0 为前提，而这条路径 Attempts
-		// 恒为空，于是非 nil 返回会同时构成「502 + 请求不留终态」——账目上一个请求凭空消失。
+		// 没有任何一次尝试真正开始（候选都在计划阶段就被拒），故「尝试开始前即失败」这一档
+		// 必须让调用方自己结算——判据统一在 exitWithError，此处只说为什么这一档恒为空尝试：
+		// 尝试只会在成功或失败时入账，而成功当场返回，故 lastFailure == nil ⟺ Attempts 为空。
 		//
 		// 全池候选都因状态型字段不可服务与「供应商都失败」必须分开：前者要客户端改道，
 		// 后者只需重试。
 		if statefulRejection != nil {
-			return nil, statefulRejection
+			return exitWithError(statefulRejection)
 		}
-		return nil, fmt.Errorf("%w: provider#%d", ErrProvidersExhausted, initial.Provider.ID)
+		return exitWithError(fmt.Errorf("%w: provider#%d", ErrProvidersExhausted, initial.Provider.ID))
 	}
-	return result, fmt.Errorf("%w: %w", ErrProvidersExhausted, lastFailure)
+	return exitWithError(fmt.Errorf("%w: %w", ErrProvidersExhausted, lastFailure))
 }
 
 // statusUpstreamTimeout 是上游超时的合成状态码（524 = A Timeout Occurred）。
