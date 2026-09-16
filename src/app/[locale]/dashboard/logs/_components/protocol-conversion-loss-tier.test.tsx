@@ -12,7 +12,7 @@
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test, vi } from "vitest";
-import type { SpecialSetting } from "@/types/special-settings";
+import type { ConversionLossAction, SpecialSetting } from "@/types/special-settings";
 import { ProtocolConversionDisplay } from "./protocol-conversion-display";
 
 // 把参数拼进返回值：徽章数字（{count}）必须断言到具体值，只验键名在场会被口径回归骗过。
@@ -136,6 +136,52 @@ describe("损失徽章降噪口径", () => {
     expect(html).not.toContain('data-slot="protocol-conversion-loss"');
     // 成功徽章不受影响：该行确实转换过协议，只是没有值得占列表位置的改写。
     expect(html).toContain('data-slot="protocol-conversion"');
+  });
+
+  test("历史条目：thinking.block 被丢属改写档，与同能力的降级分开算，不被降噪吞掉", () => {
+    const legacyThinkingBlockDropped: SpecialSetting = {
+      type: "protocol_conversion_loss",
+      scope: "request",
+      hit: true,
+      clientProtocol: "anthropic-messages",
+      targetProtocol: "openai-chat",
+      total: 129,
+      groups: [
+        { capability: "thinking.block", action: "dropped", count: 1 },
+        { capability: "thinking.block", action: "downgraded", count: 128 },
+      ],
+    };
+    const html = render(converted, legacyThinkingBlockDropped);
+
+    // 思考整块被删是**内容变化**（后端 LossSeverityOf 同口径）；若把 thinking 整族按前缀判成降级，
+    // 这枚徽章会消失——正是「降噪吞掉真损失」的回归形态。
+    expect(html).toContain('data-slot="protocol-conversion-loss"');
+    expect(html).toContain("lossBadge(count=1)");
+    expect(html).toContain("lossTier.rewrite：</span>1");
+    expect(html).toContain("lossTier.degrade：</span>128");
+  });
+
+  test("历史条目：thinking.block 的未知动作归改写档（宁可多画，也不漏报）", () => {
+    const legacyThinkingBlockUnknownAction: SpecialSetting = {
+      type: "protocol_conversion_loss",
+      scope: "request",
+      hit: true,
+      clientProtocol: "anthropic-messages",
+      targetProtocol: "openai-chat",
+      total: 2,
+      // 动作取比联合类型更新的值：读取侧**故意**保留未知动作（剔掉整组会让损失被少报），
+      // 这里如实摹写「库里的行来自更新的后端」这一形状。
+      groups: [
+        {
+          capability: "thinking.block",
+          action: "brand_new_action" as ConversionLossAction,
+          count: 2,
+        },
+      ],
+    };
+    const html = render(converted, legacyThinkingBlockUnknownAction);
+
+    expect(html).toContain("lossBadge(count=2)");
   });
 
   test("历史条目：参数被丢（top_k）仍进列表数字，不被降噪吞掉", () => {

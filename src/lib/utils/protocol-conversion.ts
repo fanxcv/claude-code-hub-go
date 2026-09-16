@@ -88,6 +88,10 @@ function normalizeNonNegativeCount(value: unknown): number | null {
  * 匹配规则：等于该名或以「该名 + .」开头（`unknown_field` 会被后端细分成
  * `unknown_field.<reason>`，前缀不变）。**未知能力归 rewrite**：宁可多画一个徽章，
  * 也不让真损失被降噪吞掉；漏报一旦发生，用户在没有徽章的行上永远不会去查。
+ *
+ * **本表只按能力名判档**，故 `thinking.block` 不在其列：同一能力不同动作分属两档，
+ * 由下面的动作相关例外表先行判定（`thinking` 前缀仍覆盖 `thinking.signature` 与
+ * `thinking.derived`，两者与动作无关）。
  */
 const REWRITE_CAPABILITY_PREFIXES = [
   "unknown_field",
@@ -129,11 +133,36 @@ function lossSeverityForCapability(capability: string): ConversionLossSeverity {
   return "rewrite";
 }
 
-/** 后端给的档位优先（宽进严出：未知取值当作未给，退回按能力名推导）。 */
-function normalizeSeverity(value: unknown, capability: string): ConversionLossSeverity {
+/**
+ * 同一能力**按动作**分档的例外表：`thinking.block` 的两种事实档位不同。
+ *
+ * 为何要连动作一起看：「块被丢」是客户端的思考内容消失（改写档），「块被降级」只是强度载体的
+ * 换算（降级档）。表里只有这一项——Go 的 `convert.LossSeverityOf` 同样只对 `thinking.block`
+ * 连 action 一起看，其余能力一律按名判档（已逐条比对）。
+ *
+ * 影响面：库里历史条目没有 `severity` 字段，只能在这里判。若把 `thinking.block` 整族判成降级，
+ * 含「思考整块被丢」的历史行会算不出改写档 ⇒ 徽章不画 ⇒ 真损失被降噪吞掉。
+ */
+const ACTION_DEPENDENT_SEVERITY: Record<string, (action: string) => ConversionLossSeverity> = {
+  // 与 Go 同口径：除 downgraded 外一律改写档（未知动作也不许被降噪藏起来）。
+  "thinking.block": (action) => (action === "downgraded" ? "degrade" : "rewrite"),
+};
+
+/** 按 (能力, 动作) 推导档位：先查动作相关例外，再退回能力名前缀表。 */
+function lossSeverityForGroup(capability: string, action: string): ConversionLossSeverity {
+  const byAction = ACTION_DEPENDENT_SEVERITY[capability];
+  return byAction ? byAction(action) : lossSeverityForCapability(capability);
+}
+
+/** 后端给的档位优先（宽进严出：未知取值当作未给，退回按 (能力, 动作) 推导）。 */
+function normalizeSeverity(
+  value: unknown,
+  capability: string,
+  action: string
+): ConversionLossSeverity {
   return (
     LOSS_SEVERITIES.find((candidate) => candidate === value) ??
-    lossSeverityForCapability(capability)
+    lossSeverityForGroup(capability, action)
   );
 }
 
@@ -214,7 +243,8 @@ export function getProtocolConversionFailure(
  * 宽进严出：只剔除「不可能成立」的项（能力名为空、计数非正数），未知动作**原样保留**——
  * 丢掉整组会让损失被少报，而动作名与协议名同属机器标识符，直接展示不损失可读性。
  *
- * 档位：优先读后端给的 `severity`，缺失时按能力名推导（历史条目没有该字段，见前缀表注释）。
+ * 档位：优先读后端给的 `severity`，缺失时按 (能力, 动作) 推导（历史条目没有该字段，见前缀表与
+ * 动作相关例外表的注释）。
  * 三档合计同样先读后端声明，缺失时按分组现算；**没有明细只有总数**时把总数归入改写档，
  * 宁可多画一个徽章，也不让整条损失从列表里消失。
  */
@@ -245,7 +275,7 @@ export function getProtocolConversionLoss(
         if (!capability || !action || count === null) {
           continue;
         }
-        const severity = normalizeSeverity(group.severity, capability);
+        const severity = normalizeSeverity(group.severity, capability, action);
         computedTotals[severity] += count;
         groups.push({ capability, action, count, severity });
       }

@@ -89,11 +89,15 @@ export type ConversionLossAction = "dropped" | "downgraded" | "rewritten";
  * 损失档位（与 Go 的 `convert.LossSeverity` 同取值域）。
  *
  * 三档的分界是「值不值得让用户在列表里看一眼」：
- *  - rewrite：内容元素被改写或删除（image、document、tool 定义类、unknown_field 细分），
- *    以及客户端显式给出的采样参数被丢（top_k、stop_sequences…）——行为或输出形态会变，
- *    故列表徽章**只数这一档**；
- *  - degrade：能力仍在但保真度弱化（thinking 降级、签名丢失、reasoning 重放、cache_control 提示丢失）；
+ *  - rewrite：内容元素被改写或删除（image、document、tool 定义类、unknown_field 细分、
+ *    `thinking.block` 被丢），以及客户端显式给出的采样参数被丢（top_k、stop_sequences…）
+ *    ——行为或输出形态会变，故列表徽章**只数这一档**；
+ *  - degrade：能力仍在但保真度弱化（`thinking.block` 降级、签名丢失、reasoning 重放、
+ *    cache_control 提示丢失）；
  *  - info：对行为无影响的账目（store 默认值、prompt_cache_key）。
+ *
+ * 分档**有时要连动作一起看**：`thinking.block` 被丢是内容消失（改写档）、被降级只是载体换算
+ * （降级档）；其余能力只看名字（同 Go 的 `convert.LossSeverityOf`）。
  *
  * 降级与信息档不进列表数字，只在 tooltip 与详情里列示：它们在一行长会话里能累到上百条
  * （thinking 每回合一条），画成徽章会让几乎每一行都挂个两位数，真损失反而被淹没。
@@ -141,7 +145,10 @@ export type ProtocolConversionLossSpecialSetting = {
     capability: string;
     action: ConversionLossAction;
     count: number;
-    /** 档位；历史条目缺失，读取侧按能力名推导。 */
+    /**
+     * 档位；历史条目缺失，读取侧按 **(能力, 动作)** 推导——`thinking.block` 的丢失属改写档、
+     * 降级属降级档，只看能力名会把它归错档。
+     */
     severity?: ConversionLossSeverity;
   }>;
 };
