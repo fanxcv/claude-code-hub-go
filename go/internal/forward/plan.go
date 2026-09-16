@@ -25,7 +25,29 @@ var (
 	ErrInvalidBody = errors.New("forward: 请求正文不是合法 JSON 对象")
 	// ErrMissingMethod 表示请求方法为空。
 	ErrMissingMethod = errors.New("forward: 请求方法为空")
+	// ErrStatefulConversion 是「状态型字段跨协议线无承载位」的 sentinel。
+	//
+	// 为什么是 fail-closed 而不是记损继续：丢的不是可降级的约束，而是**上一次上下文的引用**
+	// （previous_response_id / conversation）或**客户端显式要求的落库语义**（store:true）。
+	// 静默继续时上游只能用一个缺了历史的对话作答，客户端拿到的是「形状正确但答非所问」的 200
+	// ——比一个 400 难查得多（对齐 new-api 在 Responses→Chat 上的显式报错）。
+	ErrStatefulConversion = errors.New("forward: 状态型字段在跨协议转换下无法承载")
 )
+
+// StatefulConversionError 携带具体的冲突字段名，供响应侧写出可自查的文案。
+//
+// 字段名必须到手：客户端要能据此自救（把历史放进 input，或改走同协议供应商），
+// 而不是只看到一个「请求无效」。
+type StatefulConversionError struct {
+	Field string
+}
+
+func (e *StatefulConversionError) Error() string {
+	return ErrStatefulConversion.Error() + ": " + e.Field
+}
+
+// Is 让 errors.Is(err, ErrStatefulConversion) 成立（否则调用方只能做类型断言）。
+func (e *StatefulConversionError) Is(target error) bool { return target == ErrStatefulConversion }
 
 // Provider 是转发视角的供应商投影。
 //
@@ -340,6 +362,9 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 	case !in.Client.HasBody:
 		body = nil
 	case plan.Conversion != nil:
+		if err := rejectUnservableStateful(in.Client, plan.Conversion); err != nil {
+			return nil, err
+		}
 		converted, loss, restore, err := convertBody(in.Client, plan.Conversion)
 		if err != nil {
 			// Node 语义：转换不可用时退回原生直通，而不是把未转换正文发到目标端点上。
@@ -475,6 +500,31 @@ func buildGeminiPassthroughPlan(in PlanInput, baseURL string) (*Plan, error) {
 		UserAgentModified: in.UserAgentModified,
 	})
 	return plan, nil
+}
+
+// rejectUnservableStateful 在转换真的会把状态型字段丢掉时返回 fail-closed 错误。
+//
+// 只对 OpenAI 两族客户端判定：这几个键本就是 Responses 线的参数，其它方言里出现同名字段只是
+// 杂项键；同时客户端收到的错误体是 OpenAI 形状（`guard.BuildError`），只有这两族读得懂——
+// 不能因为一个杂项键给 claude 客户端发一个形状不对的 400。
+//
+// 已知边界：判定发生在**该次尝试**的计划上（attempt.go 对计划错误不重试、不换供应商），
+// 故候选池里同时存在同协议供应商时不会自动改投——宁可真话（400）也不要静默降级。
+func rejectUnservableStateful(client ClientRequest, plan *convert.ConversionPlan) error {
+	if client.Format != convert.FormatResponse && client.Format != convert.FormatOpenAI {
+		return nil
+	}
+	if plan == nil || !client.HasBody || len(client.Body) == 0 {
+		return nil
+	}
+	body, err := convert.ParseJSON(client.Body)
+	if err != nil {
+		return nil
+	}
+	if field := convert.StatefulConversionConflict(plan.ClientProtocol, body); field != "" {
+		return &StatefulConversionError{Field: field}
+	}
+	return nil
 }
 
 // convertBody 用枢纽编解码把客户端协议正文转换为目标协议正文。

@@ -338,6 +338,18 @@ const (
 	// 客户端只给预算而目标是只有等级的那两条线时，旧实现直接丢弃——用户表现为「思考强度整个消失」。
 	// 现按阈值反查降级为等级并记本类损失（detail 形如 `budget_tokens=8192→effort=high`）。
 	LossThinkingDerived = "thinking.derived"
+
+	// 以下四个是**请求侧高层字段跨线丢弃**的专用归因类别（详见 stateful.go）。
+	//
+	// 为何单独设类：这些字段此前落进 passthrough 逃生舱后再没被任何编码器读过（request 侧
+	// passthrough 无消费者），于是 Node 与本仓都表现为**静默丢弃**——客户端拿到一个合法的
+	// 回答，却不知道缓存路由键与结构化输出约束早已失效。类别用于聚合，键名进 detail 用于定位。
+	// store 记的是 `store:false`（等价于「不额外落库」的默认语义，可降级继续）；`store:true`
+	// 与其它状态型字段不走记损，而由 forward 侧 fail-closed（见 convert.StatefulConversionConflict）。
+	LossPromptCacheKey = "prompt_cache_key"
+	LossResponseFormat = "response_format"
+	LossTextControls   = "text.controls"
+	LossStoreFlag      = "store"
 )
 
 // nonFunctionToolLossClass 把「目标线无法承载的非 function 工具/工具项」归到专用损失类别。

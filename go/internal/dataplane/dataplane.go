@@ -27,6 +27,36 @@ var (
 	ErrMissingBaseDeps = errors.New("dataplane: 缺少守卫链基础依赖")
 )
 
+// statefulConversionStatus 把「状态型字段跨协议线 fail-closed」翻成客户端响应；不是该错误时 ok 为假。
+//
+// 为什么单独成函数：它是流水线上唯一的 status/message 决策点，抽成纯函数才能被用例钉死
+// （否则只能靠整条 HTTP 链路才能覆盖到「到底返回了什么码与什么文案」）。
+func statefulConversionStatus(err error) (int, string, bool) {
+	field := statefulConversionRejection(err)
+	if field == "" {
+		return 0, "", false
+	}
+	return http.StatusBadRequest, statefulConversionMessage(field), true
+}
+
+// statefulConversionRejection 取「状态型字段跨协议线 fail-closed」的具体字段名；不是该错误时返回空串。
+func statefulConversionRejection(err error) string {
+	var rejected *forward.StatefulConversionError
+	if errors.As(err, &rejected) {
+		return rejected.Field
+	}
+	return ""
+}
+
+// statefulConversionMessage 是给客户端自查用的 400 文案。
+//
+// 必须点名是哪个字段：客户端要能据此自救（改走同协议供应商，或把历史放进 input），
+// 只给一个「请求无效」会把它推回提交者那侧反复试探。文案里不含任何上游主机名或凭据。
+func statefulConversionMessage(field string) string {
+	return "请求字段 " + field + " 依赖服务端会话状态，而本次路由到的供应商协议线无法承载：" +
+		"请改走同协议供应商，或把上下文放进 input 后重试"
+}
+
 // SelectionFacts 是一次选路所需的请求级事实。
 type SelectionFacts struct {
 	// Model 是原始请求模型（来自已解析的正文）。
@@ -539,6 +569,12 @@ func (h *Handler) forward(
 	if result == nil {
 		h.logger.Error("dataplane.forward_failed", map[string]any{"error": errorText(err)})
 		status, message := h.failoverStatusFor(requestCtx, errorFailure(nil, err))
+		// 状态型字段跨线无承载属**客户端请求**的问题（不是上游/网关故障）：计划阶段就已 fail-closed，
+		// 且 attempt 对计划错误不重试、不换供应商。故这里翻成 400 并把字段名交给客户端自查，
+		// 不走「上游不可用」类文案。
+		if mappedStatus, mappedMessage, ok := statefulConversionStatus(err); ok {
+			status, message = mappedStatus, mappedMessage
+		}
 		h.settleFailure(requestCtx, state, status, message)
 		h.writeGuardResponse(writer, state, guard.BuildError(status, message, ""))
 		return
