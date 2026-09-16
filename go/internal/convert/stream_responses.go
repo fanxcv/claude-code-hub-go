@@ -381,8 +381,9 @@ func (d *responsesStreamDecoder) handleDelta(out *[]Chunk, eventType string, pay
 	d.emitDeltaChunk(out, decoded, delta)
 }
 
-// releaseSuspended 在悬置到达上限（或首片本身超过上限）时放弃等声明，按既有兜底口径交付，并把
-// 这一块交回普通流式路径：此后 emitted 非空，不会再进入悬置分支。
+// releaseSuspended 在悬置到达上限时放弃等声明，按既有兜底口径交付，并把这一块交回普通流式
+// 路径：此后 emitted 非空，不会再进入悬置分支。（「首个增量本身超过上限」不经过此处——它根本
+// 放不进窗口，走的是普通路径的 flushSeed + emitDeltaChunk。）
 //
 // 取舍与 closeBlock 的兜底完全一致——两种来源各交付一次（重发型的首片在这里多出一份），也不肯
 // 继续攒着等一个可能永远不来的声明。声明若随后到达，reconcile 仍会尝试对账，只是此时 emitted 已
