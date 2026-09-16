@@ -126,18 +126,26 @@ func (d *chatStreamDecoder) consumeChoice(choice *Value, out *[]Chunk) {
 		delta = choice.ObjectField("message")
 	}
 	if delta != nil {
+		// 工具调用分两趟：先落「已打开块的参数续片」，再处理会关闭当前块的推理/正文，
+		// 最后才开新工具块。上游在同一帧里同时带正文与工具参数续片是合法形态（工具调用
+		// 途中模型再吐一句正文），若按「正文先、工具后」消费，续片会落在刚被正文关掉的
+		// 块上——工具 JSON 参数被截断成非法 JSON，且丢在暗处。详见 consumeToolCalls。
+		calls := d.collectToolCalls(delta)
+		for _, call := range calls {
+			if _, opened := d.toolBlocks[call.index]; opened {
+				d.consumeToolCall(call, out)
+			}
+		}
+
 		if reasoning, ok := decodeChatReasoning(delta); ok && len(reasoning) > 0 {
 			d.emitReasoning(reasoning, out)
 		}
 		d.emitContent(fieldOrNil(delta, "content"), out)
 
-		toolCalls, hasToolCalls := delta.Get("tool_calls")
-		if hasToolCalls && toolCalls.IsArray() {
-			for _, call := range toolCalls.Items() {
+		for _, call := range calls {
+			if _, opened := d.toolBlocks[call.index]; !opened {
 				d.consumeToolCall(call, out)
 			}
-		} else if hasToolCalls && !toolCalls.IsNull() {
-			d.ignoredEvents++
 		}
 	}
 
@@ -222,16 +230,38 @@ func (d *chatStreamDecoder) emitReasoning(text string, out *[]Chunk) {
 	})
 }
 
-func (d *chatStreamDecoder) consumeToolCall(raw *Value, out *[]Chunk) {
-	if raw == nil || !raw.IsObject() {
+// chatToolCallEntry 是一帧里的一项工具调用及其已解析的下标。
+//
+// 下标单独存一份：同一帧要分两趟处理（先递续片、后开新块），下标解析必须只做一次，
+// 否则「缺省下标沿用上一个」的语义会在两趟之间漂移。
+type chatToolCallEntry struct {
+	raw   *Value
+	index int
+}
+
+// collectToolCalls 解析一帧里的 tool_calls 数组并定出每项的「仅工具调用的相对下标」。
+func (d *chatStreamDecoder) collectToolCalls(delta *Value) []chatToolCallEntry {
+	raw, hasToolCalls := delta.Get("tool_calls")
+	if !hasToolCalls || raw.IsNull() {
+		return nil
+	}
+	if !raw.IsArray() {
 		d.ignoredEvents++
-		return
+		return nil
 	}
-	fn := raw.ObjectField("function")
-	if fn == nil {
-		fn = NewObject()
+	entries := make([]chatToolCallEntry, 0, len(raw.Items()))
+	for _, item := range raw.Items() {
+		if item == nil || !item.IsObject() {
+			d.ignoredEvents++
+			continue
+		}
+		entries = append(entries, chatToolCallEntry{raw: item, index: d.toolCallIndexOf(item)})
 	}
-	// tool_calls 的 index 是「仅工具调用的相对下标」；缺省的续片沿用上一个。
+	return entries
+}
+
+// toolCallIndexOf 定出该项的工具下标，并更新「上一个下标」（缺省的续片沿用上一个）。
+func (d *chatStreamDecoder) toolCallIndexOf(raw *Value) int {
 	index := d.lastToolIndex
 	if index < 0 {
 		index = 0
@@ -240,20 +270,29 @@ func (d *chatStreamDecoder) consumeToolCall(raw *Value, out *[]Chunk) {
 		index = int(*value)
 	}
 	d.lastToolIndex = index
+	return index
+}
 
-	blockIndex, exists := d.toolBlocks[index]
+// consumeToolCall 处理一项工具调用：首次见到该下标时先发带 id/name 的块起始事件，
+// 再发参数分片（顺序契约：参数分片到达前必须先有块起始）。
+func (d *chatStreamDecoder) consumeToolCall(call chatToolCallEntry, out *[]Chunk) {
+	raw := call.raw
+	fn := raw.ObjectField("function")
+	if fn == nil {
+		fn = NewObject()
+	}
+	blockIndex, exists := d.toolBlocks[call.index]
 	if !exists {
-		// 参数分片到达前必须先发出带 id/name 的块起始事件
 		d.closeBlock(out)
 		blockIndex = d.nextBlockIndex
 		d.nextBlockIndex++
-		d.toolBlocks[index] = blockIndex
+		d.toolBlocks[call.index] = blockIndex
 		d.openBlock = &chatOpenBlock{index: blockIndex, kind: chatBlockTool}
 		rawID, _ := stringField(raw, "id")
 		wireName, _ := stringField(fn, "name")
 		id := rawID
 		if id == "" {
-			id = MakeToolCallID("stream:" + strconv.Itoa(index))
+			id = MakeToolCallID("stream:" + strconv.Itoa(call.index))
 		}
 		*out = append(*out, Chunk{
 			Kind:       ChunkBlockStart,
