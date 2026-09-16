@@ -23,6 +23,7 @@ package specialsettings
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -86,6 +87,26 @@ const TypeProtocolConversion = "protocol_conversion"
 //
 // 前端消费点：`protocol-conversion-display.tsx`（「协议转换」列显示失败态而非空白）。
 const TypeProtocolConversionFailed = "protocol_conversion_failed"
+
+// TypeProtocolConversionLoss 是「本次协议转换**丢/降/改**了哪些能力」的审计类型
+// （**Go 侧新增，超出 Node parity**）。
+//
+// 为何需要（本条的由来）：`convert.LossReport` 一直是**只写不读的死数据**——转换器（decode/encode）
+// 逐项记下「某个能力被丢弃/降级/改写」，`forward.BuildPlan` 把它挂到 `plan.ConversionLoss`，
+// 然后**没有任何消费者**：不写日志、不写审计、不落库。后果是使用记录页与库里都看不到
+// 「这次跨线转换把 cache_control / 思考签名 / MCP 工具声明丢了」——只能读代码或跑单测才知道。
+// 本条把损失集变成随行落库的审计事实，使「哪些跨线请求在丢东西」可在生产上直接查询。
+//
+// 与 TypeProtocolConversion 的关系（**可共存，不是互斥**）：那条只说「转换发生了」，本条说
+// 「转换丢了什么」。转换成功且零损失时**只有** protocol_conversion（不写零损失的噪声条目）；
+// 转换它本身失败时走 TypeProtocolConversionFailed，此时根本没有损失集（转换没做，无从丢）。
+//
+// 形状：
+//
+//	{"type":"protocol_conversion_loss","scope":"request","hit":true,
+//	 "clientProtocol":"openai-responses","targetProtocol":"openai-chat",
+//	 "total":3,"groups":[{"capability":"cache_control","action":"dropped","count":2}, …]}
+const TypeProtocolConversionLoss = "protocol_conversion_loss"
 
 // maxConversionFailureReasonLength 是失败原因落库的字节上限。
 //
@@ -364,6 +385,62 @@ func ConversionFailureEntry(failure *convert.ConversionFailure) map[string]any {
 		"phase":          string(failure.Phase),
 		"reason":         SanitizeReason(failure.Reason),
 		"fallback":       failure.Fallback,
+	}
+}
+
+// ConversionLossEntry 产出协议转换损失的审计条目；plan 为 nil（本次未转换）或本次零损失时返回 nil。
+//
+// 聚合口径：按 (capability, action) 分组计数，**不逐条展开**。理由是损失条目的 detail 来自数据
+// （工具名、字段路径、`synthesized:<tool_call id>` 之类），逐条落库会做两件坏事：把一次工具密集
+// 请求的 jsonb 撑到不可读，以及把审计面变成第二份请求体（连带把上游/客户端的数据搬进审计列）。
+// 故 detail 一律不进条目——定位靠 capability + action + fix 代码，逐条细节由单测与复现取。
+//
+// 体积上界（可核）：capability 取自 convert 的 17 个 `Loss*` 常量，action 只有
+// dropped/downgraded/rewritten 三种，故 groups **至多 17×3=51 组**、每组约 60 字节，
+// 加上协议对与 total 共约 3KB 的硬上界（远小于同层既有条目如 provider_parameter_override）。
+//
+// 分组顺序按 (capability, action) 字典序固定：同一份损失集必须序列化成同一份字节，
+// 否则测试无法断言、前端按内容去重（buildUnifiedSpecialSettings）也会把同一条事实当成两条。
+func ConversionLossEntry(plan *convert.ConversionPlan, loss *convert.LossReport) map[string]any {
+	if plan == nil || loss == nil || len(loss.Entries) == 0 {
+		return nil
+	}
+	type lossGroup struct {
+		capability string
+		action     string
+	}
+	counts := make(map[lossGroup]int, len(loss.Entries))
+	for _, entry := range loss.Entries {
+		counts[lossGroup{capability: entry.Capability, action: string(entry.Action)}]++
+	}
+	groups := make([]lossGroup, 0, len(counts))
+	for group := range counts {
+		groups = append(groups, group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].capability != groups[j].capability {
+			return groups[i].capability < groups[j].capability
+		}
+		return groups[i].action < groups[j].action
+	})
+	aggregated := make([]map[string]any, 0, len(groups))
+	for _, group := range groups {
+		aggregated = append(aggregated, map[string]any{
+			"capability": group.capability,
+			"action":     group.action,
+			"count":      counts[group],
+		})
+	}
+	return map[string]any{
+		"type":           TypeProtocolConversionLoss,
+		"scope":          "request",
+		"hit":            true,
+		"clientProtocol": string(plan.ClientProtocol),
+		"targetProtocol": string(plan.TargetProtocol),
+		// total 是**未聚合**的损失条目数：与 groups 的分组数一起读，才能看出
+		// 「同类丢了 1 次」还是「同类丢了 50 次」。
+		"total":  len(loss.Entries),
+		"groups": aggregated,
 	}
 }
 

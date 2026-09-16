@@ -453,3 +453,96 @@ func TestCodexSessionCompletionEntrySkipsNoneAndEmpty(t *testing.T) {
 		})
 	}
 }
+
+// TestConversionLossEntryAggregatesByCapabilityAndAction 钉住损失审计的聚合口径、字段集与确定性。
+//
+// 为何要这一组：这条审计是本任务新开的口子（`LossReport` 此前**只写不读**），没有 Node 对拍可依，
+// 只有本文件的断言能发现它回归。三种回归各自意味着什么：
+//   - 不产出 → 跨线丢字段再次变成生产上不可见（回到原状）；
+//   - 逐条展开（把 detail 落进条目）→ 一次工具密集的请求把 jsonb 撑大，且把工具名/字段路径
+//     这类请求数据搬进审计列；
+//   - 分组顺序不定 → 同一份损失集序列化出不同字节，前端按内容去重（buildUnifiedSpecialSettings）
+//     会把它当成两条不同事实。
+func TestConversionLossEntryAggregatesByCapabilityAndAction(t *testing.T) {
+	plan := &convert.ConversionPlan{
+		ClientProtocol: convert.ProtocolOpenAIResponses,
+		TargetProtocol: convert.ProtocolOpenAIChat,
+	}
+	loss := &convert.LossReport{Entries: []convert.LossEntry{
+		{Capability: convert.LossCacheControl, Direction: "request", Action: convert.LossDropped, Detail: "text"},
+		{Capability: convert.LossCacheControl, Direction: "request", Action: convert.LossDropped, Detail: "image"},
+		{Capability: convert.LossUnknownField, Direction: "request", Action: convert.LossDropped, Detail: "refusal"},
+		// 同一 capability、不同 action 必须分成两组（动作不同 = 事实不同：丢了 vs 改了）。
+		{Capability: convert.LossUnknownField, Direction: "request", Action: convert.LossRewritten, Detail: "message.role"},
+		{Capability: convert.LossThinkingDerived, Direction: "request", Action: convert.LossDowngraded, Detail: "budget_tokens=8192→effort=high"},
+	}}
+	entry := ConversionLossEntry(plan, loss)
+	if entry == nil {
+		t.Fatal("转换成功且有损失时必须产出条目")
+	}
+	want := map[string]any{
+		"type":           TypeProtocolConversionLoss,
+		"scope":          "request",
+		"hit":            true,
+		"clientProtocol": "openai-responses",
+		"targetProtocol": "openai-chat",
+		"total":          5,
+	}
+	for key, expected := range want {
+		if got, ok := entry[key]; !ok || got != expected {
+			t.Errorf("字段 %s 应为 %v，实际 %v（全条目：%v）", key, expected, got, entry)
+		}
+	}
+	wantGroups := []map[string]any{
+		{"capability": "cache_control", "action": "dropped", "count": 2},
+		{"capability": "thinking.derived", "action": "downgraded", "count": 1},
+		{"capability": "unknown_field", "action": "dropped", "count": 1},
+		{"capability": "unknown_field", "action": "rewritten", "count": 1},
+	}
+	groups, ok := entry["groups"].([]map[string]any)
+	if !ok {
+		t.Fatalf("groups 应为聚合数组，实际 %T（%v）", entry["groups"], entry["groups"])
+	}
+	if len(groups) != len(wantGroups) {
+		t.Fatalf("应聚合成 %d 组，实际 %d：%v", len(wantGroups), len(groups), groups)
+	}
+	for index, expected := range wantGroups {
+		got := groups[index]
+		if got["capability"] != expected["capability"] || got["action"] != expected["action"] || got["count"] != expected["count"] {
+			t.Errorf("第 %d 组应为 %v，实际 %v", index, expected, got)
+		}
+	}
+	// detail 不落进条目：序列化结果里不得出现任何 detail 原文（同时证明没有整条展开）。
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		t.Fatalf("条目应可序列化：%v", err)
+	}
+	for _, detail := range []string{"budget_tokens=8192→effort=high", "message.role", "refusal", "text", "image"} {
+		if strings.Contains(string(raw), detail) {
+			t.Errorf("detail %q 不得进审计条目（会撑大 jsonb 并把请求数据搬进审计列）：%s", detail, raw)
+		}
+	}
+}
+
+// TestConversionLossEntrySkipsZeroLossAndNative 钉住「零损失不写噪声条目」。
+//
+// 为什么必须区分「零损失」与「没转换」：转换成功且零损失时只该有 protocol_conversion 一条；
+// 给每个零损失的转换请求白写一条空 groups，会让按 type 过滤的查询淹在噪声里——
+// 这与 TypeProtocolConversion 注释里「未转换不写反向标记」是同一条取舍。
+func TestConversionLossEntrySkipsZeroLossAndNative(t *testing.T) {
+	plan := &convert.ConversionPlan{
+		ClientProtocol: convert.ProtocolAnthropicMessages,
+		TargetProtocol: convert.ProtocolOpenAIChat,
+	}
+	if got := ConversionLossEntry(plan, &convert.LossReport{}); got != nil {
+		t.Errorf("零损失不得产出条目，实际 %v", got)
+	}
+	if got := ConversionLossEntry(plan, nil); got != nil {
+		t.Errorf("损失集为 nil 时不得产出条目，实际 %v", got)
+	}
+	if got := ConversionLossEntry(nil, &convert.LossReport{Entries: []convert.LossEntry{{
+		Capability: convert.LossCacheControl, Action: convert.LossDropped,
+	}}}); got != nil {
+		t.Errorf("未施加转换（plan 为 nil）时不得产出条目：协议对无从取，实际 %v", got)
+	}
+}

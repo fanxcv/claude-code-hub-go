@@ -52,9 +52,11 @@ func (h *Handler) captureRequestedEffort(state *RequestState, spec routeSpec, bo
 //   - `thinking_effort_forwarded`：转换后思考强度探针（Go 新增，超出 Node parity）；
 //   - `protocol_conversion`：本次上游尝试确实施加了协议转换（与 Node 逐字同形）；
 //   - `protocol_conversion_failed`：本次**本来要**转换但失败（Go 新增，超出 Node parity；
-//     与上一条互斥——成功写 `protocol_conversion`，失败写本条，原生同协议两条都不写）。
+//     与上一条互斥——成功写 `protocol_conversion`，失败写本条，原生同协议两条都不写）；
+//   - `protocol_conversion_loss`：本次转换**丢/降/改**了哪些能力（Go 新增，超出 Node parity；
+//     与 `protocol_conversion` **可共存**，零损失时不写——见 specialsettings.ConversionLossEntry）。
 //
-// 三者合成一个数组一次追加：存储层的追加是 `COALESCE(col,'[]') || $n`
+// 四条合成一个数组一次追加：存储层的追加是 `COALESCE(col,'[]') || $n`
 // store.DetailsPatch.SpecialSettingsAppend），多次调用会多出每请求写入，而本仓的纪律是
 // 「零额外每请求写入」。故失败条目**不会**让成功路径多写一次——它只是同一个数组里的另一个元素。
 //
@@ -95,6 +97,9 @@ func specialSettingsAppendEntries(state *RequestState, plan *forward.Plan) []byt
 	entries := []map[string]any{
 		specialsettings.ProbeEntry(requested, forwarded, converted),
 		conversionEntry,
+		// 损失集与转换条目紧邻：它们是同一件事的两半（转了 / 转丢了什么），
+		// 排在一起可以让「转换发生了但呈现为空」不可能再被误读。
+		specialsettings.ConversionLossEntry(plan.Conversion, plan.ConversionLoss),
 		// Codex 会话标识补全条目（守卫链产物，见 codex_session_audit.go）。
 		codexSessionEntry(state),
 	}
