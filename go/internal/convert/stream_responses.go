@@ -52,18 +52,16 @@ type responsesStreamDecoder struct {
 	usage          *Usage
 	stopReason     *StopReason
 
-	byKey             map[string]*responsesDecodedBlock
-	openBlocks        []*responsesDecodedBlock
-	seenOutputIndexes map[int]bool
+	byKey      map[string]*responsesDecodedBlock
+	openBlocks []*responsesDecodedBlock
 
 	ignoredEvents int
 }
 
 func newResponsesStreamDecoder(ctx ConvertCtx) StreamDecoder {
 	return &responsesStreamDecoder{
-		ctx:               ctx,
-		byKey:             map[string]*responsesDecodedBlock{},
-		seenOutputIndexes: map[int]bool{},
+		ctx:   ctx,
+		byKey: map[string]*responsesDecodedBlock{},
 	}
 }
 
@@ -92,7 +90,6 @@ func (d *responsesStreamDecoder) startBlock(
 	decoded := &responsesDecodedBlock{blockIndex: blockIndex, outputIndex: outputIndex, kind: kind}
 	d.byKey[key] = decoded
 	d.openBlocks = append(d.openBlocks, decoded)
-	d.seenOutputIndexes[outputIndex] = true
 	*out = append(*out, Chunk{Kind: ChunkBlockStart, BlockIndex: intPtr(blockIndex), Block: block})
 	return decoded
 }
@@ -100,6 +97,12 @@ func (d *responsesStreamDecoder) startBlock(
 func (d *responsesStreamDecoder) closeBlock(out *[]Chunk, decoded *responsesDecodedBlock) {
 	if decoded.closed {
 		return
+	}
+	// 上游把整段正文放在 content_part.added 的 part.text 里、之后不发任何增量时，seed 是唯一
+	// 的内容来源：关闭前补发，否则整段正文随块一起消失。只在此块从未发出任何内容时补，故不重复。
+	if decoded.emitted == "" && decoded.seed != "" {
+		d.emitDeltaChunk(out, decoded, decoded.seed)
+		decoded.seed = ""
 	}
 	decoded.closed = true
 	for i, open := range d.openBlocks {
@@ -203,6 +206,7 @@ func (d *responsesStreamDecoder) terminal(out *[]Chunk, response *Value) {
 		reason := stopReasonFromResponses(status, hasStatus, incompleteReason)
 		d.stopReason = &reason
 	}
+	d.recoverTerminalOutput(out, response)
 	d.closeAll(out)
 	d.emitDelta(out)
 	*out = append(*out, Chunk{Kind: ChunkEnd})
@@ -224,7 +228,6 @@ func (d *responsesStreamDecoder) handleOutputItemAdded(out *[]Chunk, payload *Va
 			itemID = strconv.Itoa(outputIndex)
 		}
 	}
-	d.seenOutputIndexes[outputIndex] = true
 	d.captureUsage(payload)
 
 	itemType, _ := stringField(item, "type")
@@ -328,8 +331,7 @@ func (d *responsesStreamDecoder) handleDone(out *[]Chunk, eventType string, payl
 	kind := responsesDoneKinds[eventType]
 	d.ensureStart(out)
 	decoded := d.findBlock(payload, kind)
-	full, hasFull := stringField(payload, "text")
-	_ = hasFull
+	full, _ := stringField(payload, "text")
 	if full == "" {
 		if refusal, ok := stringField(payload, "refusal"); ok {
 			full = refusal
@@ -369,29 +371,35 @@ func (d *responsesStreamDecoder) handleDone(out *[]Chunk, eventType string, payl
 		d.closeBlock(out, created)
 		return
 	}
-	if len(decoded.emitted) == 0 {
-		fallback := full
-		if fallback == "" {
-			fallback = decoded.seed
-		}
-		if len(fallback) > 0 {
-			d.emitDeltaChunk(out, decoded, fallback)
-		}
+	if full == "" {
+		full = decoded.seed
+	}
+	// done 载荷是声明式全文：只补已发内容之后的差额，绝不重发已发部分。
+	if tail := declaredTextTail(decoded.emitted, full); len(tail) > 0 {
+		d.emitDeltaChunk(out, decoded, tail)
 	}
 	d.closeBlock(out, decoded)
 }
 
+// handleOutputItemDone 处理 item 收尾：先按 item 载荷对账未交付的内容，再按 output_index 关块。
+//
+// 为什么两者都要：上游可能一个增量都不发、只在 item 载荷里给全文（此时靠对账补出正文）；也可能
+// 增量齐全、item 载荷只是确认（此时对账算不出差额，不会重复）。
 func (d *responsesStreamDecoder) handleOutputItemDone(out *[]Chunk, payload *Value) {
 	outputIndex := intOrDefault(payload, "output_index", 0)
-	if outputIndex >= 0 && d.seenOutputIndexes[outputIndex] {
+	item := payload.ObjectField("item")
+	if item == nil {
 		d.closeByOutputIndex(out, outputIndex)
 		return
 	}
-	// 只收到 done 帧（无 added）的上游：按 item 载荷补出内容后关闭
-	item := payload.ObjectField("item")
-	if item == nil {
-		return
-	}
+	d.recoverItemContent(out, payload, item, outputIndex)
+	d.closeByOutputIndex(out, outputIndex)
+}
+
+// recoverItemContent 按 item 载荷补出该 item 尚未交付的正文 / 推理 / 工具参数。
+//
+// 共享同一套规则：块不存在就补建（上游可能跳过 added），存在就只补差额（已交付部分绝不重发）。
+func (d *responsesStreamDecoder) recoverItemContent(out *[]Chunk, payload *Value, item *Value, outputIndex int) {
 	itemID, _ := stringField(item, "id")
 	if itemID == "" {
 		if fallback, ok := stringField(payload, "item_id"); ok && fallback != "" {
@@ -400,11 +408,6 @@ func (d *responsesStreamDecoder) handleOutputItemDone(out *[]Chunk, payload *Val
 			itemID = strconv.Itoa(outputIndex)
 		}
 	}
-	if _, ok := d.byKey["item:"+itemID]; ok {
-		d.closeByOutputIndex(out, outputIndex)
-		return
-	}
-	d.ensureStart(out)
 	itemType, _ := stringField(item, "type")
 	switch itemType {
 	case "function_call":
@@ -413,34 +416,58 @@ func (d *responsesStreamDecoder) handleOutputItemDone(out *[]Chunk, payload *Val
 			callID = itemID
 		}
 		name, _ := stringField(item, "name")
+		d.ensureStart(out)
 		decoded := d.startBlock(out, "item:"+itemID, responsesKindToolCall,
 			&Block{Kind: BlockToolCall, ID: callID, Name: d.ctx.fromWireName(name)}, outputIndex)
 		if args, ok := stringField(item, "arguments"); ok && len(args) > 0 {
-			d.emitDeltaChunk(out, decoded, args)
+			if tail := declaredTextTail(decoded.emitted, args); len(tail) > 0 {
+				d.emitDeltaChunk(out, decoded, tail)
+			}
 		}
-		d.closeBlock(out, decoded)
 	case "reasoning":
 		text := responsesReasoningTextOf(item)
 		if len(text) == 0 {
 			return
 		}
+		d.ensureStart(out)
 		decoded := d.startBlock(out, "item:"+itemID, responsesKindThinking,
 			&Block{Kind: BlockThinking}, outputIndex)
-		d.emitDeltaChunk(out, decoded, text)
-		d.closeBlock(out, decoded)
+		if tail := declaredTextTail(decoded.emitted, text); len(tail) > 0 {
+			d.emitDeltaChunk(out, decoded, tail)
+		}
 	case "message":
-		contents := item.ArrayField("content")
-		for index, part := range contents {
+		for index, part := range item.ArrayField("content") {
 			text, ok := stringField(part, "text")
 			if !ok || len(text) == 0 {
 				continue
 			}
+			d.ensureStart(out)
 			decoded := d.startBlock(out,
 				"part:"+strconv.Itoa(outputIndex)+":"+strconv.Itoa(index),
 				responsesKindText, &Block{Kind: BlockText}, outputIndex)
-			d.emitDeltaChunk(out, decoded, text)
-			d.closeBlock(out, decoded)
+			if tail := declaredTextTail(decoded.emitted, text); len(tail) > 0 {
+				d.emitDeltaChunk(out, decoded, tail)
+			}
 		}
+	}
+}
+
+// recoverTerminalOutput 从终态载荷的 output[] 里捡回「一个增量都没发」的内容。
+//
+// 只发 response.created + response.completed 的上游（全文在 output[] 里）在修此路径前会让客户端
+// 拿到空正文；这里按 output[] 下标当 output_index 复用 item 级对账逻辑。已由增量交付的内容算不出
+// 差额，故不会重复；尚未建块的 item 则连同块一起补出。
+func (d *responsesStreamDecoder) recoverTerminalOutput(out *[]Chunk, response *Value) {
+	if response == nil {
+		return
+	}
+	for index, item := range response.ArrayField("output") {
+		if item == nil || !item.IsObject() {
+			continue
+		}
+		d.handleOutputItemDone(out, NewObject().
+			Set("output_index", NewNumberInt(int64(index))).
+			Set("item", item))
 	}
 }
 
@@ -731,6 +758,16 @@ func (e *responsesStreamEncoder) openBlock(out *[][]byte, chunk Chunk) {
 				Set("type", NewString("output_text")).
 				Set("text", NewString("")).
 				Set("annotations", NewArray()))))
+		// 块起始就带正文的上游（Anthropic 的 content_block_start 允许带 text）：本线没有
+		// 「起始帧带正文」的位置，必须转成增量帧，否则整段正文随块一起消失。
+		if len(block.Text) > 0 {
+			state.text = block.Text
+			*out = append(*out, e.frame("response.output_text.delta", NewObject().
+				Set("item_id", NewString(itemID)).
+				Set("output_index", NewNumberInt(int64(outputIndex))).
+				Set("content_index", NewNumberInt(0)).
+				Set("delta", NewString(block.Text))))
+		}
 		return
 
 	case BlockToolCall:

@@ -393,6 +393,7 @@ func (e *chatStreamEncoder) Push(chunk Chunk) [][]byte {
 					Set("name", NewString(block.Name)).
 					Set("arguments", NewString("")))))))
 		}
+		out = append(out, e.startPayloadFrames(block)...)
 
 	case ChunkBlockDelta:
 		out = append(out, e.ensureStart()...)
@@ -464,6 +465,31 @@ func (e *chatStreamEncoder) ensureStart() [][]byte {
 	return [][]byte{e.frame(NewObject().
 		Set("role", NewString("assistant")).
 		Set("content", NewString("")))}
+}
+
+// startPayloadFrames 把块起始帧携带的载荷转成本线的增量帧。
+//
+// 为什么需要：Anthropic 的 content_block_start 允许自带 text / thinking 正文，而 Chat 线没有
+// 「起始帧带正文」的位置；不转就在跨线时把整段载荷丢掉（上游一个增量都不发时正文全无）。
+// 只搬当前块声明过的正文，不臆造（签名字段不在本线表示，略过）。
+func (e *chatStreamEncoder) startPayloadFrames(block *Block) [][]byte {
+	if block == nil {
+		return nil
+	}
+	switch block.Kind {
+	case BlockText:
+		if block.Text == "" {
+			return nil
+		}
+		return [][]byte{e.frame(NewObject().Set("content", NewString(block.Text)))}
+	case BlockThinking:
+		if block.Text == "" {
+			return nil
+		}
+		return [][]byte{e.frame(NewObject().Set("reasoning_content", NewString(block.Text)))}
+	default:
+		return nil
+	}
 }
 
 func (e *chatStreamEncoder) allocateToolIndex(blockIndex int) int {

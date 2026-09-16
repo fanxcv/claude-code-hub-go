@@ -393,6 +393,26 @@ func mergeUsage(base *Usage, delta *Usage) *Usage {
 	return out
 }
 
+// declaredTextTail 计算「声明式全文里尚未发出的尾巴」。
+//
+// 用途：done / 终态 / item 载荷里的 text（含 arguments）是对「这一块应当有哪些字」的权威声明，
+// 而上游可能只发了部分增量、甚至一个增量都没发；此时按声明补差额，否则客户端拿到的是残句。
+//
+// 硬约束是「绝不重复」：仅当已发内容恰好是声明全文的前缀时才补差额，否则返回空串——不构成
+// 前缀关系说明上游顺序反常（重排或回退），补任何东西都会让客户端看到重复或乱序，宁可不补。
+//
+// 只许用于**声明式**载荷（done / 终态 / item / content_part.added 的初始文本），禁止用于
+// 增量帧：增量之间没有前缀保证，合法的重复文本（如两个同字增量）会被误判成重复而吞掉。
+func declaredTextTail(emitted string, declared string) string {
+	if len(declared) == 0 || emitted == declared {
+		return ""
+	}
+	if strings.HasPrefix(declared, emitted) {
+		return declared[len(emitted):]
+	}
+	return ""
+}
+
 func cloneUsage(usage *Usage) *Usage {
 	if usage == nil {
 		return &Usage{}
