@@ -514,24 +514,31 @@ func a14BuildErrorRuleIndex(rules []store.AdminErrorRule) a14ErrorRuleIndex {
 // detect 复刻 detector.detect 的判定顺序：contains -> exact -> regex，任一命中即返回。
 //
 // 顺序是可见行为：:test 返回的命中规则随之不同。
+//
+// 一处有意差异：命中「上游声明不支持该输入形态」那一族时，还要过一道瞬时措辞的否定判定
+// （store.SuppressUnsupportedInputMatch），命中被作废后**继续往下扫**。数据面走的是同一道闸门
+// （guard/adapters_rules.go 的 matchedCategories），:test 若不跟，就会向运营报告一条实际不会生效的命中。
 func (index a14ErrorRuleIndex) detect(message string) (a14ErrorRuleEntry, bool) {
 	if message == "" {
 		return a14ErrorRuleEntry{}, false
 	}
 	lowered := strings.ToLower(message)
+	suppressed := func(entry a14ErrorRuleEntry) bool {
+		return store.SuppressUnsupportedInputMatch(entry.rule.Category, lowered)
+	}
 	for _, entry := range index.contains {
-		if strings.Contains(lowered, entry.lowered) {
+		if strings.Contains(lowered, entry.lowered) && !suppressed(entry) {
 			return entry, true
 		}
 	}
 	trimmed := strings.TrimSpace(lowered)
 	for _, entry := range index.exact {
-		if trimmed == entry.lowered {
+		if trimmed == entry.lowered && !suppressed(entry) {
 			return entry, true
 		}
 	}
 	for _, entry := range index.regex {
-		if entry.compiled.MatchString(message) {
+		if entry.compiled.MatchString(message) && !suppressed(entry) {
 			return entry, true
 		}
 	}

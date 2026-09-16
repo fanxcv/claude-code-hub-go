@@ -171,6 +171,8 @@ func TestExportRetryCount(t *testing.T) {
 		{"两次成功", `[{"reason":"request_success","statusCode":200},{"reason":"retry_success","statusCode":200}]`, 1},
 		{"一次成功", `[{"reason":"request_success","statusCode":200}]`, 0},
 		{"失败也算实际请求", `[{"reason":"retry_failed"},{"reason":"request_success","statusCode":200}]`, 1},
+		// Go 侧新增档：上游声明不支持该输入形态，同家不重试但已是一次真实尝试。
+		{"上游不支持输入形态也算实际请求", `[{"reason":"unsupported"},{"reason":"request_success","statusCode":200}]`, 1},
 		{"hedge 竞速归零", `[{"reason":"hedge_triggered"},{"reason":"hedge_winner","statusCode":200}]`, 0},
 		{"中间状态不计", `[{"reason":"initial_selection"},{"reason":"request_success","statusCode":200}]`, 0},
 		{"成功但无状态码不计", `[{"reason":"request_success"}]`, 0},

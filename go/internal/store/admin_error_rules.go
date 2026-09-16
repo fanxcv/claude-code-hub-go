@@ -804,8 +804,9 @@ var adminNodeDefaultErrorRules = []AdminDefaultErrorRule{
 // **一种送达形态**而非模态本身。因此下列情形**有意不命中**，仍走重试与切换：
 //   - 模态陈述：「This model does not support image inputs」「本模型不支持图片识别」「不支持图片」
 //   - 模型/参数能力：「unsupported value for reasoning_effort」「model does not support tool calling」
-//   - **瞬时/稍后重试类**：「temporarily unsupported image URL because the fetch service is
-//     unavailable; retry later」——瞬时的仍须同家重试，被本族吞掉就是误伤
+//   - **瞬时/稍后重试类**：「image URLs are not currently supported because the fetch
+//     service is temporarily unavailable; retry later」——与判据同形，样式本身挡不住，
+//     故由匹配后的 SuppressUnsupportedInputMatch 作废该次命中（详见 transientUnsupportedMarkers）
 //   - **前缀形态**：「unsupported image url in content part」「不支持图片链接形式」——
 //     Go 的 regexp 是 RE2、无 lookbehind，前缀形态与瞬时口语**同形**（`temporarily unsupported
 //     image URL` / `暂时不支持图片链接`），收下就无法在同一条样式里排除瞬时，故有意不收，
@@ -845,7 +846,55 @@ var adminUnsupportedInputErrorRules = []AdminDefaultErrorRule{
 // 顺序只影响装载顺序：判定是扫全表取命中的**并集**（guard/adapters_rules.go 的
 // matchedCategories），多族同时命中时由 forward 取更保守的一档，故增补放尾部不改变既有规则的
 // 命中结果。
+//
+// 本表最后那一族（adminUnsupportedInputErrorRules）的 category 取值与匹配后的否定判定
+// 定义在下两处：RuleCategoryProviderUnsupportedInput / SuppressUnsupportedInputMatch。
 var adminDefaultErrorRules = append(
 	append([]AdminDefaultErrorRule{}, adminNodeDefaultErrorRules...),
 	adminUnsupportedInputErrorRules...,
 )
+
+// RuleCategoryProviderUnsupportedInput 是这一族的 category 取值。
+//
+// 跨包契约：forward 侧同名的常量取自这里（见 forward.CategoryForRuleCategory），
+// 管理面的取值域（adminapi 的 a14ErrorRuleCategories）与前端 zod 镜像同表维护。
+const RuleCategoryProviderUnsupportedInput = "provider_unsupported_input"
+
+// transientUnsupportedMarkers 是「瞬时/稍后重试」措辞词表，用于作废本族中属于瞬时故障的命中。
+//
+// 为什么需要它：Go 的 regexp 是 RE2，没有 lookahead/lookbehind，本族样式（「<媒体> <URL> … 不支持」）
+// 无法在同一条样式里表达「且不含瞬时措辞」，而下列文案确实与判据同形却属瞬时故障（2026-09-16 审查给出）：
+//   - image URLs are not currently supported because the fetch service is temporarily unavailable; retry later
+//   - image URL format unsupported due to a temporary outage; retry later
+//   - 图片URL暂时不支持，服务异常，请稍后重试
+//
+// 故否定判定放在匹配之后：命中本族后再查一次词表，带任一标记即作废该次命中，回到可重试路径
+// （同家重试保留）——瞬时故障换一家往往同样失败，省掉的那次尝试不值得拿自救机会去换。
+//
+// 校准方向：**宁可漏判（多试一次）也不误判（把可换家自救的请求判死）**，故词表取宽；代价是
+// 「上游先说瞬时、后又说该形态不支持」的长正文会失去本可省下的尝试。判定一律在小写正文上做。
+var transientUnsupportedMarkers = []string{
+	// 英文：瞬时副词 / 故障名词 / 明确的重试建议。
+	"temporarily", "temporary", "transient", "momentarily",
+	"outage", "service unavailable", "service is unavailable", "server unavailable",
+	"retry later", "try again later", "retry afterwards", "please retry", "please try again",
+	// 中文：同上三类（中文无空格，故标记取词组）。
+	"暂时", "临时", "服务异常", "服务不可用", "服务器异常", "稍后重试", "稍后再试", "请稍后", "请重试",
+}
+
+// SuppressUnsupportedInputMatch 报告一次命中是否应因瞬时措辞作废。
+//
+// category 是命中规则的 category 列，loweredContent 是**小写化后**的上游正文——只对本族生效，
+// 别的族（Prompt 超限、内容过滤等）不受影响。三处判定实现（数据面 guard、管理面 :test、
+// 默认表的纯单测镜像）都必须调本函数，否则三处口径会分叉。
+func SuppressUnsupportedInputMatch(category, loweredContent string) bool {
+	if category != RuleCategoryProviderUnsupportedInput {
+		return false
+	}
+	for _, marker := range transientUnsupportedMarkers {
+		if strings.Contains(loweredContent, marker) {
+			return true
+		}
+	}
+	return false
+}

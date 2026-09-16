@@ -31,13 +31,15 @@ import (
 //	PATCH  /error-rules/{id}             部分更新
 //	DELETE /error-rules/{id}             删除（204）
 //
-// 三条登记进对拍白名单的差异（都写在对应函数注释里）：
+// 四条登记进对拍白名单的差异（都写在对应函数注释里）：
 //  1. 正则校验用 Go 的 RE2（环视/回溯引用会被拒），Node 用 JS RegExp + safe-regex。
 //  2. cache:stats 的 lastReloadTime 是「本进程最近一次装载/刷新的时刻」，未装载过为 0；
 //     Node 报的是其进程内检测器的最近装载时刻。
 //  3. 状态码按显式错误码映射（error_rule.not_found / error_rule.action_failed），不移植 Node 的
 // `detail.includes("不存在")` 子串判定——。
 // 本模块的 action 文案是仓库里的中文字面量（不随 locale 变），故两端状态码仍然一致。
+//  4. `:test` 的命中判定比 Node 多一道闸门：Go 侧新增的那族规则（上游声明不支持该输入形态）
+//     命中后还要过瞬时措辞的否定判定（见 error_rules_shared.go 的 detect）。
 //
 // 审计：Node 侧这两个模块的写路径**一条审计都不写**（§3.3-11 实测：error-rules 与
 // request-filters 的目标函数调用数为 0，只有 cache 失效广播）。Go 侧照此：不写审计，只广播。

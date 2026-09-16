@@ -430,6 +430,8 @@ func exportIsActualRequest(item exportChainItem) bool {
 	case "concurrent_limit_failed",
 		"retry_failed", "response_incomplete", "system_error", "resource_not_found",
 		"client_error_non_retryable", "endpoint_pool_exhausted", "vendor_type_all_timeout",
+		// Go 侧新增档（上游声明不支持该输入形态）同样是一次真实尝试，否则重试次数会少计。
+		"unsupported",
 		"client_abort", "client_abort_no_first_byte",
 		"hedge_winner", "hedge_loser_cancelled", "hedge_loser_billed",
 		"http2_fallback":

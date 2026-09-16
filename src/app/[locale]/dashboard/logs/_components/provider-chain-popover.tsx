@@ -253,7 +253,8 @@ function getItemStatus(item: ProviderChainItem): {
       bgColor: "bg-amber-50 dark:bg-amber-950/30",
     };
   }
-  if (item.reason === "client_error_non_retryable") {
+  if (item.reason === "unsupported" || item.reason === "client_error_non_retryable") {
+    // 上游不背这一档：一边是「本家不支持该输入形态」（可换家），一边是「客户端输入本身不对」。
     return {
       icon: AlertTriangle,
       color: "text-orange-600",

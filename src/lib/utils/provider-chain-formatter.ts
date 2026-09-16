@@ -108,6 +108,7 @@ function getProviderStatus(item: ProviderChainItem): "✓" | "✗" | "⚡" | "�
     item.reason === "system_error" ||
     item.reason === "resource_not_found" ||
     item.reason === "client_error_non_retryable" ||
+    item.reason === "unsupported" ||
     item.reason === "endpoint_pool_exhausted" ||
     item.reason === "vendor_type_all_timeout" ||
     item.reason === "client_abort" ||
@@ -152,6 +153,7 @@ export function isActualRequest(item: ProviderChainItem): boolean {
     item.reason === "system_error" ||
     item.reason === "resource_not_found" ||
     item.reason === "client_error_non_retryable" ||
+    item.reason === "unsupported" ||
     item.reason === "endpoint_pool_exhausted" ||
     item.reason === "vendor_type_all_timeout" ||
     item.reason === "client_abort" ||

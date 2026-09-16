@@ -227,9 +227,15 @@ const (
 	ExclusionClientAbort       ExclusionFamily = "client_abort"
 	ExclusionLocalCapacity     ExclusionFamily = "local_capacity"
 	ExclusionLocalNonRetryable ExclusionFamily = "local_non_retryable"
-	ExclusionHedgeLoser        ExclusionFamily = "hedge_loser"
-	ExclusionQuotaOrRateLimit  ExclusionFamily = "quota_or_rate_limit"
-	ExclusionNoAvailableProv   ExclusionFamily = "no_available_provider"
+	// ExclusionProviderUnsupportedInput 是「当前供应商不支持该输入形态」的族名（Go 侧新增，
+	// 对应 forward.CategoryProviderUnsupportedInput 与链上 reason `unsupported`）。
+	//
+	// 为何必须排除：这一档不计供应商熔断器（拒一种它不支持的输入形态不是健康度问题），
+	// 若落入 failure 兜底，就会把「同一份输入换一家可能就成」的请求计进供应商可用率。
+	ExclusionProviderUnsupportedInput ExclusionFamily = "provider_unsupported_input"
+	ExclusionHedgeLoser               ExclusionFamily = "hedge_loser"
+	ExclusionQuotaOrRateLimit         ExclusionFamily = "quota_or_rate_limit"
+	ExclusionNoAvailableProv          ExclusionFamily = "no_available_provider"
 )
 
 // RequestOutcomeTaxonomy 是分类结果（request-outcome.ts:18-24）。
@@ -283,6 +289,8 @@ var excludedReasons = map[string]ExclusionFamily{
 	"hedge_loser_billed":         ExclusionHedgeLoser,
 	"client_error_non_retryable": ExclusionLocalNonRetryable,
 	"client_abort":               ExclusionClientAbort,
+	// Go 侧新增档（Node 的 EXCLUDED_REASONS 里没有这个词）：上游声明不支持该输入形态。
+	"unsupported": ExclusionProviderUnsupportedInput,
 }
 
 // quotaOrRateLimitPatterns 复刻 QUOTA_OR_RATE_LIMIT_PATTERNS（request-outcome.ts:62-70）。

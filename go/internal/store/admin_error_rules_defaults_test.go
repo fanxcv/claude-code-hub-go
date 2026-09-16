@@ -20,7 +20,7 @@ import (
 type defaultRuleMatcher struct {
 	contains           []string
 	containsCategories []string
-	exact              map[string]string
+	exact              map[string][]string
 	regex              []*regexp.Regexp
 	regexCategories    []string
 }
@@ -28,7 +28,7 @@ type defaultRuleMatcher struct {
 // compileDefaultRules 按 guard 的装载口径编译一组规则。
 func compileDefaultRules(t *testing.T, rules []AdminDefaultErrorRule) defaultRuleMatcher {
 	t.Helper()
-	matcher := defaultRuleMatcher{exact: map[string]string{}}
+	matcher := defaultRuleMatcher{exact: map[string][]string{}}
 	for _, rule := range rules {
 		pattern := strings.TrimSpace(rule.Pattern)
 		switch rule.MatchType {
@@ -36,7 +36,8 @@ func compileDefaultRules(t *testing.T, rules []AdminDefaultErrorRule) defaultRul
 			matcher.contains = append(matcher.contains, strings.ToLower(pattern))
 			matcher.containsCategories = append(matcher.containsCategories, rule.Category)
 		case "exact":
-			matcher.exact[strings.ToLower(pattern)] = rule.Category
+			key := strings.ToLower(pattern)
+			matcher.exact[key] = append(matcher.exact[key], rule.Category)
 		case "regex":
 			compiled, err := regexp.Compile("(?i)" + pattern)
 			if err != nil {
@@ -63,6 +64,10 @@ func (m defaultRuleMatcher) matchedCategories(content string) []string {
 	matched := make([]string, 0, 2)
 	seen := map[string]bool{}
 	record := func(category string) {
+		// 与数据面同一道闸门（guard/adapters_rules.go 调的是同一个函数）。
+		if SuppressUnsupportedInputMatch(category, lower) {
+			return
+		}
 		if seen[category] {
 			return
 		}
@@ -75,7 +80,7 @@ func (m defaultRuleMatcher) matchedCategories(content string) []string {
 		}
 	}
 	if len(m.exact) > 0 {
-		if category, ok := m.exact[strings.TrimSpace(lower)]; ok {
+		for _, category := range m.exact[strings.TrimSpace(lower)] {
 			record(category)
 		}
 	}
@@ -172,6 +177,22 @@ func TestAdminUnsupportedInputErrorRulesMatchUpstreamRejections(t *testing.T) {
 			body: "image URLs are temporarily unsupported by the fetch service",
 			want: false,
 		},
+		// 以下三条与判据**同形**（样式挡不住，靠瞬时措辞词表作废）：审查 2026-09-16 给出。
+		{
+			name: "边界：瞬时故障带原因子句（temporarily unavailable；retry later）",
+			body: "image URLs are not currently supported because the fetch service is temporarily unavailable; retry later",
+			want: false,
+		},
+		{
+			name: "边界：瞬时故障（temporary outage；retry later）",
+			body: "image URL format unsupported due to a temporary outage; retry later",
+			want: false,
+		},
+		{
+			name: "边界：中文瞬时故障（暂时不支持、服务异常、稍后重试）",
+			body: "图片URL暂时不支持，服务异常，请稍后重试",
+			want: false,
+		},
 		{
 			name: "边界：前缀形态（unsupported image url）——RE2 无 lookbehind，与瞬时口语同形，有意不收",
 			body: `{"error":{"message":"unsupported image url in content part"}}`,
@@ -209,6 +230,47 @@ func TestAdminUnsupportedInputErrorRulesMatchUpstreamRejections(t *testing.T) {
 				t.Fatalf("matchedCategories(%q) = %v，期望恰好 [%s]", tc.body, matched, tc.category)
 			}
 		})
+	}
+}
+
+// TestSuppressUnsupportedInputMatchScope 钉住瞬时措辞闸门的**作用范围**：只对本族生效，
+// 且只作废识别得出瞬时语义的正文。
+func TestSuppressUnsupportedInputMatchScope(t *testing.T) {
+	cases := []struct {
+		name     string
+		category string
+		content  string
+		want     bool
+	}{
+		{"本族且非瞬时：保留命中", RuleCategoryProviderUnsupportedInput, "image urls are not currently supported", false},
+		{"本族且非瞬时：上游建议换家", RuleCategoryProviderUnsupportedInput, "image urls are not supported; retry with another provider", false},
+		{"本族＋瞬时副词", RuleCategoryProviderUnsupportedInput, "image urls are not currently supported; temporarily unavailable", true},
+		{"本族加故障名词", RuleCategoryProviderUnsupportedInput, "image url format unsupported due to a service outage", true},
+		{"本族加重试建议", RuleCategoryProviderUnsupportedInput, "image urls are not supported; please try again later", true},
+		{"本族加中文瞬时", RuleCategoryProviderUnsupportedInput, "图片URL暂时不支持，服务异常，请稍后重试", true},
+		{"本族加中文请重试", RuleCategoryProviderUnsupportedInput, "图片URL不支持，请重试", true},
+		{"别的族不受瞬时措辞影响", "invalid_request", "context length exceeded; retry later", false},
+		{"空 category 不受影响", "", "image urls are not supported; retry later", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SuppressUnsupportedInputMatch(tc.category, strings.ToLower(tc.content)); got != tc.want {
+				t.Fatalf("SuppressUnsupportedInputMatch(%q, %q) = %v，期望 %v", tc.category, tc.content, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDefaultRuleMatcherKeepsEveryExactCategory 钉住默认表镜像的 exact 口径与 guard 一致：
+// 同一规范化键下的多条 category 必须全部报出（丢一条就丢了解档）。
+func TestDefaultRuleMatcherKeepsEveryExactCategory(t *testing.T) {
+	matcher := compileDefaultRules(t, []AdminDefaultErrorRule{
+		{Pattern: "Foo", Category: RuleCategoryProviderUnsupportedInput, MatchType: "exact"},
+		{Pattern: "foo", Category: "invalid_request", MatchType: "exact"},
+	})
+	got := matcher.matchedCategories("FOO")
+	if len(got) != 2 || got[0] != RuleCategoryProviderUnsupportedInput || got[1] != "invalid_request" {
+		t.Fatalf("同一规范化键下的两条 category 都必须报出，得到 %v", got)
 	}
 }
 

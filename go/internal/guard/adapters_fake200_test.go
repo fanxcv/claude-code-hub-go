@@ -126,7 +126,7 @@ func TestCompiledRuleMatchesSemantics(t *testing.T) {
 	snapshot := &compiledErrorRule{
 		contains:           []string{"context length exceeded"},
 		containsCategories: []string{"invalid_request"},
-		exact:              map[string]string{"invalid request": "invalid_request"},
+		exact:              map[string][]string{"invalid request": {"invalid_request"}},
 		regex:              []*regexp.Regexp{regexp.MustCompile(`(?i)model .* is not supported`)},
 		regexCategories:    []string{"provider_unsupported_input"},
 	}
@@ -164,6 +164,44 @@ func TestCompiledRuleMatchesSemantics(t *testing.T) {
 	// 未命中必须返回空，而不是空字符串元素。
 	if got := snapshot.matchedCategories("some other provider error"); len(got) != 0 {
 		t.Fatalf("未命中应返回空，得到 %v", got)
+	}
+}
+
+// TestCompiledRuleExactCollisionAndUnsupportedTransientGate 钉住两件事：
+//
+//  1. exact 表是「一个规范化键 → 全部 category」：库上的唯一索引只约束原始 pattern
+//     （drizzle 的 unique_pattern），故 `Foo` 与 `foo` 可并存；用单值 map 装会让后装载的那条
+//     顶掉前一条，从而丢掉更保守的一档；
+//  2. 本族（provider_unsupported_input）命中后还要过瞬时措辞闸门，瞬时的必须回到可重试路径。
+func TestCompiledRuleExactCollisionAndUnsupportedTransientGate(t *testing.T) {
+	snapshot := &compiledErrorRule{
+		exact: map[string][]string{
+			"model foo": {"invalid_request", "provider_unsupported_input"},
+		},
+		regex: []*regexp.Regexp{
+			regexp.MustCompile(`(?i)(image|audio)s?\s+(urls?|links?)\s+(is|are)\s+not\s+(currently\s+)?supported`),
+		},
+		regexCategories: []string{"provider_unsupported_input"},
+	}
+
+	both := snapshot.matchedCategories("MODEL FOO")
+	if len(both) != 2 || both[0] != "invalid_request" || both[1] != "provider_unsupported_input" {
+		t.Fatalf("同一规范化键下的两条 category 都必须报出，得到 %v", both)
+	}
+
+	hit := snapshot.matchedCategories("image URLs are not currently supported, please use base64 encoded data instead")
+	if len(hit) != 1 || hit[0] != "provider_unsupported_input" {
+		t.Fatalf("非瞬时的本族命中必须保留，得到 %v", hit)
+	}
+	transientBodies := []string{
+		"image URLs are not currently supported because the fetch service is temporarily unavailable; retry later",
+		"image URLs are not currently supported; retry later",
+		"image URLs are not currently supported，服务异常，请稍后重试",
+	}
+	for _, body := range transientBodies {
+		if got := snapshot.matchedCategories(body); len(got) != 0 {
+			t.Fatalf("瞬时措辞必须作废本族命中（回到可重试路径），%q 得到 %v", body, got)
+		}
 	}
 }
 

@@ -379,3 +379,36 @@ describe("LogicTraceTab 候选池里参与过的家（接线钉子）", () => {
     expect(source).toMatch(/if \(skipped\.length === 0\) return null;/);
   });
 });
+
+describe("LogicTraceTab 把 unsupported 当作「已失败并继续」", () => {
+  /**
+   * `unsupported` 是上游声明「不支持该输入形态」的一次真实尝试（同家不重试、可换家）。
+   * 漏了这一档会让时间线把它当 `pending`（未完成），与「已失败并已换家」的事实相反：
+   * 失败态的卡片底色是 rose、pending 是 slate（StepCard 的 statusConfig）。
+   */
+  test("unsupported 链项渲染为失败态，而不是 pending", () => {
+    const html = renderWithIntl(
+      <LogicTraceTab
+        statusCode={200}
+        errorMessage={null}
+        providerChain={[
+          {
+            id: 156,
+            name: "HC Chat",
+            reason: "unsupported",
+            attemptNumber: 1,
+            statusCode: 400,
+            errorMessage:
+              "image URLs are not currently supported, please use base64 encoded data instead",
+            timestamp: 1_700_000_000_000,
+          } as ProviderChainItem,
+        ]}
+        sessionId={null}
+        initialExpandedChainIndex={0}
+      />
+    );
+
+    expect(html).toContain("bg-rose-50");
+    expect(html).not.toContain("bg-slate-50");
+  });
+});

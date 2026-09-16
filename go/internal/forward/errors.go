@@ -128,9 +128,9 @@ type RuleCategoryMatcher interface {
 
 // RuleCategoryProviderUnsupportedInput 是「上游不支持该输入形态」类规则的 category 取值。
 //
-// 它是管理面规则类型取值域的一员（go/internal/adminapi/error_rules.go 的
-// a14ErrorRuleCategories 与前端 zod 镜像同表维护），默认规则里的那一族用它。
-const RuleCategoryProviderUnsupportedInput = "provider_unsupported_input"
+// 真源在 store（默认规则那一族与匹配后的瞬时措辞否定判定同属一处），此处只是转发常量；
+// 管理面的取值域（adminapi 的 a14ErrorRuleCategories）与前端 zod 镜像同表维护。
+const RuleCategoryProviderUnsupportedInput = store.RuleCategoryProviderUnsupportedInput
 
 // CategoryForRuleCategory 把错误规则的 category 列映射为转发分类。
 //

@@ -57,10 +57,14 @@ const errorRulesQuery = `SELECT row_to_json(t)::text FROM (
 //
 // category 与样式**同序存放**：判定要同时回答「命中没」与「命中的是哪一类」，
 // 而两者必须出自同一条规则。
+//
+// exact 的值是**一个键下的全部 category**（切片，非单值）：键是小写化后的样式，而库上的唯一索引
+// 只约束原始 pattern（drizzle 的 unique_pattern），故 `Foo` 与 `foo` 可并存——用单值 map 装会让
+// 后装载的那条把前一条的 category 顶掉，从而丢掉更保守的一档。
 type compiledErrorRule struct {
 	contains           []string
 	containsCategories []string
-	exact              map[string]string
+	exact              map[string][]string
 	regex              []*regexp.Regexp
 	regexCategories    []string
 	pattern            []string
@@ -101,7 +105,7 @@ func (c *ErrorRuleCache) load(ctx context.Context) (*compiledErrorRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	compiled := &compiledErrorRule{exact: map[string]string{}}
+	compiled := &compiledErrorRule{exact: map[string][]string{}}
 	for _, raw := range rows {
 		var row ErrorRule
 		if err := json.Unmarshal([]byte(raw), &row); err != nil {
@@ -117,7 +121,8 @@ func (c *ErrorRuleCache) load(ctx context.Context) (*compiledErrorRule, error) {
 			compiled.containsCategories = append(compiled.containsCategories, row.Category)
 			compiled.pattern = append(compiled.pattern, row.Pattern)
 		case "exact":
-			compiled.exact[strings.ToLower(pattern)] = row.Category
+			key := strings.ToLower(pattern)
+			compiled.exact[key] = append(compiled.exact[key], row.Category)
 			compiled.pattern = append(compiled.pattern, row.Pattern)
 		case "regex":
 			re, err := regexp.Compile("(?i)" + pattern)
@@ -174,6 +179,9 @@ func (c *ErrorRuleCache) MatchedCategoriesContext(ctx context.Context, content s
 // 与「任一命中即返回」的差别：本函数**扫完全表**并去重返回所有命中的 category。
 // 保守取舍（多族同时命中时按哪一档）属转发语义，只告知事实、不替调用方选。
 // 表只有几十条且只在错误路径上跑，扫完的代价可忽。
+//
+// 翻口：命中「上游不支持该输入形态」那一族后，还要查一次瞬时措辞词表
+// （store.SuppressUnsupportedInputMatch）——瞬时的必须回到可重试路径，否则会白丢同家重试。
 func (c *compiledErrorRule) matchedCategories(content string) []string {
 	if strings.TrimSpace(content) == "" {
 		return nil
@@ -182,6 +190,9 @@ func (c *compiledErrorRule) matchedCategories(content string) []string {
 	matched := make([]string, 0, 2)
 	seen := make(map[string]struct{}, 2)
 	record := func(category string) {
+		if store.SuppressUnsupportedInputMatch(category, lower) {
+			return
+		}
 		if _, ok := seen[category]; ok {
 			return
 		}
@@ -194,7 +205,7 @@ func (c *compiledErrorRule) matchedCategories(content string) []string {
 		}
 	}
 	if len(c.exact) > 0 {
-		if category, ok := c.exact[strings.TrimSpace(lower)]; ok {
+		for _, category := range c.exact[strings.TrimSpace(lower)] {
 			record(category)
 		}
 	}

@@ -81,6 +81,8 @@ vi.mock("@/components/ui/badge", () => ({
 }));
 
 import { ProviderChainPopover } from "./provider-chain-popover";
+import { isActualRequest } from "@/lib/utils/provider-chain-formatter";
+import type { ProviderChainItem } from "@/types/message";
 
 const messages = {
   dashboard: {
@@ -1166,5 +1168,26 @@ describe("provider-chain-popover Discovery summary", () => {
 
     expect(html).not.toContain("Single-route protection");
     expect(html).not.toContain("lucide-shield-check");
+  });
+});
+
+describe("provider chain 请求计数把 unsupported 算作一次真实尝试", () => {
+  /**
+   * `unsupported`（上游声明不支持该输入形态）是一次真实的上游尝试：同家不重试、可换家。
+   * 漏进失败态清单会让「N 次请求」与实际链路对不上（实测链 [unsupported, request_success]
+   * 只显示 1 次），而同一判定在 CSV 导出与公开状态侧都另有一份实现。
+   */
+  test("计数与链路条目一致（选路条不计、失败一次与成功一次各计一次）", () => {
+    const chain: ProviderChainItem[] = [
+      { id: 1, name: "p1", reason: "initial_selection" },
+      { id: 1, name: "p1", reason: "unsupported", statusCode: 400 },
+      { id: 2, name: "p2", reason: "request_success", statusCode: 200 },
+    ];
+
+    expect(chain.filter(isActualRequest)).toHaveLength(2);
+
+    const html = renderWithIntl(<ProviderChainPopover chain={chain} finalProvider="p2" />);
+    const badges = Array.from(parseHtml(html).querySelectorAll('#root [data-slot="badge"]'));
+    expect(badges.map((node) => node.textContent ?? "")).toContain("2 times");
   });
 });
