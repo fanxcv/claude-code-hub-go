@@ -558,6 +558,11 @@ func chatRenderThinking(block Block, role string, reasoning *[]string, options *
 }
 
 func chatRenderToolCall(block Block, seed string, options *chatRenderOptions) *Value {
+	// chat 线的 tool_calls[] 只有 id / type / function 三层，没有块级 cache_control 承载位
+	// （只有 anthropic 线渲染它，见 hub.go 的 CacheHint 说明）；与文本/图片等同口径记损。
+	if block.CacheHint != nil {
+		options.loss.Dropped(LossCacheControl, options.direction, "tool_call")
+	}
 	id := chatResolveEmitToolCallID(block.ID, seed, options)
 	rawArgs := block.Args
 	if rawArgs == "" {
@@ -732,6 +737,10 @@ func chatRenderToolMessage(item Item, options *chatRenderOptions) *Value {
 			continue
 		}
 		options.loss.Dropped(LossUnknownField, options.direction, "tool_result."+string(block.Kind))
+	}
+	// tool_result 块自身的 cache_control：chat 线的 role:tool 消息只有 content，无承载位。
+	if item.CacheHint != nil {
+		options.loss.Dropped(LossCacheControl, options.direction, "tool_result")
 	}
 	if item.IsError {
 		options.loss.Dropped(LossToolResultIsError, options.direction, "chat_has_no_is_error")

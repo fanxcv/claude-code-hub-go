@@ -79,7 +79,7 @@ func decodeAnthropicBlock(part *Value, loss *LossCollector, direction string, fr
 		if input := fieldOrNil(part, "input"); input != nil {
 			args = input.MarshalCompact()
 		}
-		return Block{Kind: BlockToolCall, ID: id, Name: name, Args: args}, true
+		return Block{Kind: BlockToolCall, ID: id, Name: name, Args: args, CacheHint: decodeAnthropicCacheHint(part)}, true
 	case "thinking":
 		text, _ := stringField(part, "thinking")
 		signature, _ := stringField(part, "signature")
@@ -121,6 +121,9 @@ func decodeAnthropicMedia(part *Value, kind BlockKind, loss *LossCollector, dire
 }
 
 // decodeAnthropicToolResult 把 tool_result 块解为独立 item；is_error 无法承载时声明损失。
+//
+// 块自身的 cache_control 解为 Item.CacheHint：目标线（chat / responses）都没有承载位，
+// 由各自编码器记 LossCacheControl。不回写：anthropic -> anthropic 走原生直通、不经编码器。
 func decodeAnthropicToolResult(part *Value, loss *LossCollector, direction string) Item {
 	toolUseID, _ := stringField(part, "tool_use_id")
 	isError, _ := boolField(part, "is_error")
@@ -129,6 +132,7 @@ func decodeAnthropicToolResult(part *Value, loss *LossCollector, direction strin
 		ToolCallID: toolUseID,
 		Blocks:     decodeAnthropicBlocks(fieldOrNil(part, "content"), loss, direction, nil),
 		IsError:    isError,
+		CacheHint:  decodeAnthropicCacheHint(part),
 	}
 }
 

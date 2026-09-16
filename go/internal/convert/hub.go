@@ -41,7 +41,7 @@ type Block struct {
 	ID   string
 	Name string
 	Args string
-	// cacheHint（text / image / document 可携带）
+	// cacheHint（text / image / document / tool_call 可携带）
 	CacheHint *CacheHint
 	// opaque
 	Wire  WireProtocol
@@ -80,6 +80,8 @@ type Item struct {
 	Blocks     []Block
 	ToolCallID string // tool_result 专用
 	IsError    bool   // tool_result 专用
+	// CacheHint 是 tool_result 块自身的缓存提示（tool_result 专用）。
+	CacheHint *CacheHint
 }
 
 // Tool 是归一化工具定义；CacheHint 仅在 Anthropic 线渲染为 cache_control。

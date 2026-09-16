@@ -555,6 +555,10 @@ func responsesReasoningItem(blocks []Block, options *responsesRenderOptions) *Va
 }
 
 func responsesFunctionCallItem(block Block, seed string, options *responsesRenderOptions) *Value {
+	// responses 的 function_call 项只有 type / call_id / name / arguments，无块级 cache_control 承载位。
+	if block.CacheHint != nil {
+		options.loss.Dropped(LossCacheControl, options.direction, "tool_call")
+	}
 	name := block.Name
 	if options.toWire != nil {
 		name = options.toWire(name)
@@ -579,6 +583,10 @@ func responsesFunctionCallOutputItem(item Item, options *responsesRenderOptions)
 			continue
 		}
 		options.loss.Dropped(LossUnknownField, options.direction, "function_call_output."+string(block.Kind))
+	}
+	// tool_result 块自身的 cache_control：function_call_output 只有 output，无承载位。
+	if item.CacheHint != nil {
+		options.loss.Dropped(LossCacheControl, options.direction, "tool_result")
 	}
 	if item.IsError {
 		options.loss.Dropped(LossToolResultIsError, options.direction, "responses_has_no_is_error")
