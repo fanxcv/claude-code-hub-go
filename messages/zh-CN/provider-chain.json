@@ -58,6 +58,7 @@
     "system_error": "系统错误",
     "resource_not_found": "资源不存在（404）",
     "client_error_non_retryable": "客户端错误",
+    "unsupported": "上游不支持该输入形态",
     "concurrent_limit_failed": "并发限制",
     "http2_fallback": "HTTP/2 回退",
     "session_reuse": "会话复用",

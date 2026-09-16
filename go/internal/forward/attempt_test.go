@@ -225,6 +225,120 @@ func TestForwardNonRetryableClientErrorStopsImmediately(t *testing.T) {
 	}
 }
 
+// TestForwardProviderUnsupportedInputSwitchesWithoutSameProviderRetry 断言新增那一档的端到端走向：
+// 命中「供应商不支持该输入形态」时，**同一家只试一次**，但**会换家**。
+//
+// 为何两端都要断言：该档的全部价值就是这对取舍，两边错法都不会让分类单测变红——
+// 不换家会让分类与结果码都对，只是少了自救机会；同家重试则会把 10 家×2=20 次尝试照旧跑完
+// （即修复前实测的 14.7s）。
+func TestForwardProviderUnsupportedInputSwitchesWithoutSameProviderRetry(t *testing.T) {
+	const rejectedBody = `{"error":{"message":"image URLs are not currently supported, please use base64 encoded data instead"}}`
+
+	var firstHits, secondHits int32
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&firstHits, 1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(rejectedBody))
+	}))
+	t.Cleanup(first.Close)
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&secondHits, 1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(rejectedBody))
+	}))
+	t.Cleanup(second.Close)
+
+	switched := false
+	deps := Deps{
+		Dial:   newTestDial(t),
+		Facts:  newTestFacts(),
+		Limits: Limits{RetryDelay: time.Millisecond},
+		Rules:  stubCategoryRules{match: true, categories: []string{RuleCategoryProviderUnsupportedInput}},
+		Select: func(_ context.Context, excludeIDs []int64) (*Candidate, error) {
+			if len(excludeIDs) == 0 {
+				t.Fatal("切换时未带上已失败的供应商")
+			}
+			if switched {
+				// 候选池只有两家，第二家也失败后不再有下一家。
+				return nil, nil
+			}
+			if excludeIDs[0] != 1 {
+				t.Fatalf("排除列表 = %v", excludeIDs)
+			}
+			switched = true
+			return newTestCandidate(2, "供应商乙", second.URL, 2), nil
+		},
+	}
+
+	result, err := Forward(context.Background(), nil, newTestCandidate(1, "供应商甲", first.URL, 2), deps)
+	if err == nil {
+		t.Fatal("两家都拒绝时应返回失败")
+	}
+	if got := atomic.LoadInt32(&firstHits); got != 1 {
+		t.Fatalf("同家被调 %d 次，期望 1（该档不得同家重试）", got)
+	}
+	if got := atomic.LoadInt32(&secondHits); got != 1 {
+		t.Fatalf("换家后被调 %d 次，期望 1", got)
+	}
+	if !switched {
+		t.Fatal("该档必须允许换家：另一家供应商可能支持该输入形态")
+	}
+	var failure *Failure
+	if !errors.As(err, &failure) || failure.Category != CategoryProviderUnsupportedInput {
+		t.Fatalf("最终归因 = %v，期望 CategoryProviderUnsupportedInput", err)
+	}
+	if len(result.Attempts) != 2 {
+		t.Fatalf("尝试留痕 = %d 条，期望 2（每家一条）", len(result.Attempts))
+	}
+	for index, attempt := range result.Attempts {
+		if attempt.Reason != ReasonUnsupported {
+			t.Fatalf("第 %d 条留痕原因 = %q，期望 %q", index+1, attempt.Reason, ReasonUnsupported)
+		}
+	}
+}
+
+// TestForwardRetriesSameProviderWhenRulesDoNotMatch 是上一条的反面：规则未命中（例如
+// 「temporarily unsupported … retry later」这类瞬时文案）时，400 仍是供应商故障，
+// 同家重试就照旧发生——降噪不得把瞬时的同家重试一并吞掉。
+func TestForwardRetriesSameProviderWhenRulesDoNotMatch(t *testing.T) {
+	const transientBody = `{"error":{"message":"temporarily unsupported image URL because the fetch service is unavailable; retry later"}}`
+
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(transientBody))
+	}))
+	t.Cleanup(server.Close)
+
+	selectCalls := 0
+	deps := Deps{
+		Dial:   newTestDial(t),
+		Facts:  newTestFacts(),
+		Limits: Limits{RetryDelay: time.Millisecond},
+		Rules:  stubCategoryRules{match: false},
+		Select: func(_ context.Context, excludeIDs []int64) (*Candidate, error) {
+			selectCalls++
+			if len(excludeIDs) != 1 || excludeIDs[0] != 1 {
+				t.Fatalf("排除列表 = %v，期望 [1]", excludeIDs)
+			}
+			return nil, nil
+		},
+	}
+
+	_, err := Forward(context.Background(), nil, newTestCandidate(1, "供应商甲", server.URL, 2), deps)
+	if err == nil {
+		t.Fatal("应返回失败")
+	}
+	if got := atomic.LoadInt32(&hits); got != 2 {
+		t.Fatalf("同家被调 %d 次，期望 2（瞬时文案仍须同家重试）", got)
+	}
+	// 重试耗尽后才问选路要下一家；池子里只剩一家已在排除集里，故不再有真实尝试。
+	if selectCalls != 1 {
+		t.Fatalf("选路被调 %d 次，期望 1", selectCalls)
+	}
+}
+
 // TestForwardNetworkErrorAdvancesEndpoint 断言网络错误推进端点索引。
 func TestForwardNetworkErrorAdvancesEndpoint(t *testing.T) {
 	// 第一个端点指向已关闭端口，第二个端点可用。

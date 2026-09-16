@@ -10,6 +10,7 @@ export const ErrorRuleCategorySchema = z
     "parameter_error",
     "invalid_request",
     "cache_limit",
+    "provider_unsupported_input",
   ])
   .describe("Error rule category.");
 

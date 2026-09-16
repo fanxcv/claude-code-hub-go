@@ -52,6 +52,9 @@ var a14ErrorRuleCategories = []string{
 	"parameter_error",
 	"invalid_request",
 	"cache_limit",
+	// Go 侧增补：命中该类的规则归 forward.CategoryProviderUnsupportedInput
+	// （同家不重试、可换家），其余取值均归不可重试的客户端错误。
+	"provider_unsupported_input",
 }
 
 // a14ErrorRuleMatchTypes 与 ErrorRuleMatchTypeSchema 一致。

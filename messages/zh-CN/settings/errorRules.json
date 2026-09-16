@@ -142,7 +142,8 @@
     "thinking_error": "Thinking 格式错误",
     "parameter_error": "参数验证失败",
     "invalid_request": "非法请求",
-    "cache_limit": "缓存控制限制"
+    "cache_limit": "缓存控制限制",
+    "provider_unsupported_input": "上游不支持该输入形态"
   },
   "regexTester": {
     "title": "正则测试器",

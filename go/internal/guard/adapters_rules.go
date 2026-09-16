@@ -13,7 +13,7 @@ import (
 )
 
 // 本文件实现错误规则匹配（对应 Node 的 error-rule-detector.ts），供转发层判定
-// 「上游错误是否属于客户端输入错误」——命中即不重试、不切换供应商。
+// 「上游错误属于哪一类」——命中不重试；是否换家由规则的 category 列决定（见下）。
 //
 // 语义对齐（Node 的 detect()）：
 //  1. 命中顺序固定为 contains -> exact -> regex，且任一命中即返回（顺序是可见行为：
@@ -27,6 +27,10 @@ import (
 //     无回溯爆炸，故只做「能否编译」的过滤。
 //   - Node 在装载期校验 override_response 形状并顺带做部分丢弃；本适配器只做匹配，
 //     覆写响应属于尚未落地的缝隙（见 Assembly.Missing），故不在此解析该列。
+//   - Node 的 category 列只用于展示（命中即归不可重试客户端错误）；Go 侧它参与判定：
+//     forward 按命中的 category 决定「不重试」还是「不重试但换家」。本适配器只负责
+//     **把命中的 category 全报出去**，取舍归 forward——它无需 import forward，也不该
+//     知道哪一档更保守。
 //
 // 失败语义：读库失败时沿用缓存里的旧规则（ValueCache 的既有语义），没有旧值时按
 // 「无规则」处理——与 Node 冷启动规则未装载时一致（此时客户端输入错误会退化为
@@ -50,11 +54,16 @@ const errorRulesQuery = `SELECT row_to_json(t)::text FROM (
 ) t`
 
 // compiledErrorRule 是装载后的规则：判定只读这两张表，不再看原始行。
+//
+// category 与样式**同序存放**：判定要同时回答「命中没」与「命中的是哪一类」，
+// 而两者必须出自同一条规则。
 type compiledErrorRule struct {
-	contains []string
-	exact    map[string]struct{}
-	regex    []*regexp.Regexp
-	pattern  []string
+	contains           []string
+	containsCategories []string
+	exact              map[string]string
+	regex              []*regexp.Regexp
+	regexCategories    []string
+	pattern            []string
 }
 
 // ErrorRuleCache 是错误规则快照（域规格为事件驱动，无 TTL）。
@@ -92,7 +101,7 @@ func (c *ErrorRuleCache) load(ctx context.Context) (*compiledErrorRule, error) {
 	if err != nil {
 		return nil, err
 	}
-	compiled := &compiledErrorRule{exact: map[string]struct{}{}}
+	compiled := &compiledErrorRule{exact: map[string]string{}}
 	for _, raw := range rows {
 		var row ErrorRule
 		if err := json.Unmarshal([]byte(raw), &row); err != nil {
@@ -105,9 +114,10 @@ func (c *ErrorRuleCache) load(ctx context.Context) (*compiledErrorRule, error) {
 		switch row.MatchType {
 		case "contains":
 			compiled.contains = append(compiled.contains, strings.ToLower(pattern))
+			compiled.containsCategories = append(compiled.containsCategories, row.Category)
 			compiled.pattern = append(compiled.pattern, row.Pattern)
 		case "exact":
-			compiled.exact[strings.ToLower(pattern)] = struct{}{}
+			compiled.exact[strings.ToLower(pattern)] = row.Category
 			compiled.pattern = append(compiled.pattern, row.Pattern)
 		case "regex":
 			re, err := regexp.Compile("(?i)" + pattern)
@@ -119,6 +129,7 @@ func (c *ErrorRuleCache) load(ctx context.Context) (*compiledErrorRule, error) {
 				continue
 			}
 			compiled.regex = append(compiled.regex, re)
+			compiled.regexCategories = append(compiled.regexCategories, row.Category)
 			compiled.pattern = append(compiled.pattern, row.Pattern)
 		default:
 			c.logger.Warn("guard.error_rules.unknown_match_type", map[string]any{
@@ -145,29 +156,52 @@ func (c *ErrorRuleCache) Matches(content string) bool {
 
 // MatchesContext 用调用方的 context 读快照（请求路径用这条）。
 func (c *ErrorRuleCache) MatchesContext(ctx context.Context, content string) bool {
-	return c.rules(ctx).matches(content)
+	return len(c.rules(ctx).matchedCategories(content)) > 0
 }
 
-// matches 是判定本体，判定顺序与 Node 的 detect() 一致：contains -> exact -> regex。
-func (c *compiledErrorRule) matches(content string) bool {
+// MatchedCategories 实现 forward.RuleCategoryMatcher：报告命中的全部规则 category。
+func (c *ErrorRuleCache) MatchedCategories(content string) []string {
+	return c.MatchedCategoriesContext(context.Background(), content)
+}
+
+// MatchedCategoriesContext 用调用方的 context 读快照。
+func (c *ErrorRuleCache) MatchedCategoriesContext(ctx context.Context, content string) []string {
+	return c.rules(ctx).matchedCategories(content)
+}
+
+// matchedCategories 是判定本体，判定顺序与 Node 的 detect() 一致：contains -> exact -> regex。
+//
+// 与「任一命中即返回」的差别：本函数**扫完全表**并去重返回所有命中的 category。
+// 保守取舍（多族同时命中时按哪一档）属转发语义，只告知事实、不替调用方选。
+// 表只有几十条且只在错误路径上跑，扫完的代价可忽。
+func (c *compiledErrorRule) matchedCategories(content string) []string {
 	if strings.TrimSpace(content) == "" {
-		return false
+		return nil
 	}
 	lower := strings.ToLower(content)
-	for _, pattern := range c.contains {
+	matched := make([]string, 0, 2)
+	seen := make(map[string]struct{}, 2)
+	record := func(category string) {
+		if _, ok := seen[category]; ok {
+			return
+		}
+		seen[category] = struct{}{}
+		matched = append(matched, category)
+	}
+	for index, pattern := range c.contains {
 		if strings.Contains(lower, pattern) {
-			return true
+			record(c.containsCategories[index])
 		}
 	}
 	if len(c.exact) > 0 {
-		if _, ok := c.exact[strings.TrimSpace(lower)]; ok {
-			return true
+		if category, ok := c.exact[strings.TrimSpace(lower)]; ok {
+			record(category)
 		}
 	}
-	for _, re := range c.regex {
+	for index, re := range c.regex {
 		if re.MatchString(content) {
-			return true
+			record(c.regexCategories[index])
 		}
 	}
-	return false
+	return matched
 }

@@ -30,6 +30,7 @@ const categoryColors: Record<string, { bg: string; text: string }> = {
   parameter_error: { bg: "bg-orange-500/10", text: "text-orange-400" },
   invalid_request: { bg: "bg-pink-500/10", text: "text-pink-400" },
   cache_limit: { bg: "bg-cyan-500/10", text: "text-cyan-400" },
+  provider_unsupported_input: { bg: "bg-teal-500/10", text: "text-teal-400" },
 };
 
 export function RuleListTable({ rules }: RuleListTableProps) {

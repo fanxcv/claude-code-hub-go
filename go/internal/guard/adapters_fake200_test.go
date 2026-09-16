@@ -121,12 +121,14 @@ func TestFake200DetectorBOMStripped(t *testing.T) {
 }
 
 // TestCompiledRuleMatchesSemantics 钉住三条判定语义：contains 走小写子串、
-// exact 走「trim 后小写全等」、regex 大小写不敏感。
+// exact 走「trim 后小写全等」、regex 大小写不敏感；并钉住 category 跟着样式同序走。
 func TestCompiledRuleMatchesSemantics(t *testing.T) {
 	snapshot := &compiledErrorRule{
-		contains: []string{"context length exceeded"},
-		exact:    map[string]struct{}{"invalid request": {}},
-		regex:    []*regexp.Regexp{regexp.MustCompile(`(?i)model .* is not supported`)},
+		contains:           []string{"context length exceeded"},
+		containsCategories: []string{"invalid_request"},
+		exact:              map[string]string{"invalid request": "invalid_request"},
+		regex:              []*regexp.Regexp{regexp.MustCompile(`(?i)model .* is not supported`)},
+		regexCategories:    []string{"provider_unsupported_input"},
 	}
 	cases := []struct {
 		content string
@@ -141,9 +143,27 @@ func TestCompiledRuleMatchesSemantics(t *testing.T) {
 		{"some other provider error", false},
 	}
 	for _, testCase := range cases {
-		if got := snapshot.matches(testCase.content); got != testCase.want {
-			t.Fatalf("matches(%q) = %v，期望 %v", testCase.content, got, testCase.want)
+		if got := len(snapshot.matchedCategories(testCase.content)) > 0; got != testCase.want {
+			t.Fatalf("matchedCategories(%q) 命中=%v，期望 %v", testCase.content, got, testCase.want)
 		}
+	}
+
+	// category 必须跟着命中的那一条走：报错档会让「可换家」的请求被判死。
+	if got := snapshot.matchedCategories("Error: Context Length Exceeded"); len(got) != 1 || got[0] != "invalid_request" {
+		t.Fatalf("contains 命中的 category = %v，期望 [invalid_request]", got)
+	}
+	if got := snapshot.matchedCategories("MODEL foo IS NOT SUPPORTED"); len(got) != 1 || got[0] != "provider_unsupported_input" {
+		t.Fatalf("regex 命中的 category = %v，期望 [provider_unsupported_input]", got)
+	}
+	// 多族同时命中：**全部**报出且去重（取哪一档属转发语义，本适配器不替它选）。
+	// 该正文同时命中 contains 与 regex 两族。
+	both := snapshot.matchedCategories("context length exceeded and MODEL foo IS NOT SUPPORTED")
+	if len(both) != 2 {
+		t.Fatalf("两族同时命中时应报出两条且去重，得到 %v", both)
+	}
+	// 未命中必须返回空，而不是空字符串元素。
+	if got := snapshot.matchedCategories("some other provider error"); len(got) != 0 {
+		t.Fatalf("未命中应返回空，得到 %v", got)
 	}
 }
 

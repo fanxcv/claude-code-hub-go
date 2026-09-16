@@ -58,6 +58,7 @@
     "system_error": "System Error",
     "resource_not_found": "Resource Not Found (404)",
     "client_error_non_retryable": "Client Error",
+    "unsupported": "Upstream Rejects This Input Form",
     "concurrent_limit_failed": "Concurrent Limit",
     "http2_fallback": "HTTP/2 Fallback",
     "session_reuse": "Session Reuse",

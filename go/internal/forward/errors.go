@@ -34,6 +34,13 @@ const (
 	// CategoryLocalOverload 表示本地准入过载（数据库连接池准入、入站内存准入）。
 	// 不重试、不切换、不计任何熔断器——问题在本进程，惩罚供应商是错的。
 	CategoryLocalOverload
+	// CategoryProviderUnsupportedInput 表示上游**明确声明该客户端输入形态不受支持**
+	// （例如「image URLs are not currently supported, please use base64 encoded data instead」）。
+	//
+	// 属性：**不在同一供应商重试、但允许换供应商**。判据是「同一份必然再被拒」应用在**这一家**：
+	// 同家重试只是把同一份输反复送上去，而候选池里另一家可能本来就支持该形态。也不计熔断器
+	// ——供应商拒绝一种它不支持的输入形态，不是它的健康度问题。
+	CategoryProviderUnsupportedInput
 )
 
 // String 返回与 Node 侧错误分类同名的英文标识，供日志与落链使用。
@@ -53,6 +60,8 @@ func (c Category) String() string {
 		return ReasonClientErrorNonRetryable
 	case CategoryResourceNotFound:
 		return ReasonResourceNotFound
+	case CategoryProviderUnsupportedInput:
+		return ReasonUnsupported
 	case CategoryLocalOverload:
 		return "local_overload"
 	default:
@@ -73,7 +82,7 @@ func (c Category) RetriesSameProvider() bool {
 // SwitchesProvider 报告该分类在重试耗尽后是否切换到下一个供应商。
 func (c Category) SwitchesProvider() bool {
 	switch c {
-	case CategoryProviderError, CategorySystemError, CategoryResourceNotFound:
+	case CategoryProviderError, CategorySystemError, CategoryResourceNotFound, CategoryProviderUnsupportedInput:
 		return true
 	default:
 		return false
@@ -102,6 +111,36 @@ var RetryableStatusMarker = []string{
 // 归为 CategoryProviderError，退化为「重试并切换」，与 Node 冷启动规则未装载时的行为一致。
 type RuleMatcher interface {
 	Matches(content string) bool
+}
+
+// RuleCategoryMatcher 是 RuleMatcher 的可选扩展：报告**命中的全部规则的 category 列**（去重）。
+//
+// 为何需要它：「命中即终止」对「Prompt 超限」「内容过滤」是对的（换一家也一样会被拒），
+// 但对「本供应商不支持该输入形态」就错了——后者是供应商局部能力缺口，换家可能成。
+// 两族规则在库里只差 category 一列，所以区分只能由规则自身给出。
+//
+// 报全部而非一条：多族同时命中时取哪一档属转发语义，归 forward 决定；实现方只做结构
+// 匹配，不该知道哪一档更保守。未实现本接口、或未命中时，一律按
+// CategoryNonRetryableClientError 处理（与扩展前行为一致）。
+type RuleCategoryMatcher interface {
+	MatchedCategories(content string) []string
+}
+
+// RuleCategoryProviderUnsupportedInput 是「上游不支持该输入形态」类规则的 category 取值。
+//
+// 它是管理面规则类型取值域的一员（go/internal/adminapi/error_rules.go 的
+// a14ErrorRuleCategories 与前端 zod 镜像同表维护），默认规则里的那一族用它。
+const RuleCategoryProviderUnsupportedInput = "provider_unsupported_input"
+
+// CategoryForRuleCategory 把错误规则的 category 列映射为转发分类。
+//
+// 只有 provider_unsupported_input 一档不是「客户输入错误」；其余（含空值与未知值）都按不可
+// 重试的客户端错误处理——这是引入本映射之前的既有语义，不得因为出现新词而改变。
+func CategoryForRuleCategory(ruleCategory string) Category {
+	if strings.EqualFold(strings.TrimSpace(ruleCategory), RuleCategoryProviderUnsupportedInput) {
+		return CategoryProviderUnsupportedInput
+	}
+	return CategoryNonRetryableClientError
 }
 
 // BodyErrorDetector 判定「HTTP 200 但正文实为错误」的上游响应（Node 的 fake-200 检测）。
@@ -225,7 +264,8 @@ type ClassifyInput struct {
 //  4. 传输错误：始终系统错误，不受正文内容影响。
 //  5. 供应商局部模型缺口（404）：可换供应商重试，不按客户端错误处理。
 //  6. 以 400 回传的存储容量故障：属供应商故障，必须先于宽泛的客户端错误规则。
-//  7. 错误规则命中：客户端输入错误。
+//  7. 错误规则命中：按规则的 category 分档——默认是不重试不切换的客户端输入错误，
+//     只有「上游不支持该输入形态」那一档换成「不重试但可换家」（见 RuleCategoryMatcher）。
 //  8. 其余 HTTP 错误：404 单列，其余都是供应商故障。
 //  9. 空响应：供应商故障。
 //  10. 兜底：系统错误。
@@ -248,8 +288,8 @@ func Classify(in ClassifyInput) Category {
 	if in.StatusCode == 400 && !in.Synthetic && hasStorageCapacityMarker(in.Body) {
 		return CategoryProviderError
 	}
-	if in.Rules != nil && in.Rules.Matches(in.Body) {
-		return CategoryNonRetryableClientError
+	if category, matched := classifyByRules(in.Rules, in.Body); matched {
+		return category
 	}
 	if in.StatusCode > 0 {
 		if in.StatusCode == 404 {
@@ -261,6 +301,32 @@ func Classify(in ClassifyInput) Category {
 		return CategoryProviderError
 	}
 	return CategorySystemError
+}
+
+// classifyByRules 在规则命中时给出分类；第二个返回值为「是否命中」。
+//
+// 判据取两族的并集而非「第一条命中」：装载顺序由规则的 (priority, id) 决定，那是运营可改的
+// 数据，把语义挂在它上面会让「改个优先级」悄悄换掉重试行为。同一正文同时命中两族时取更保守
+// 的一档（不可重试），于是本函数只能让**此前没有任何规则命中**的文案多一条「换家」机会，
+// 不会改变任何既有命中文案的走向。
+func classifyByRules(rules RuleMatcher, body string) (Category, bool) {
+	if rules == nil || !rules.Matches(body) {
+		return CategoryNonRetryableClientError, false
+	}
+	categorizer, ok := rules.(RuleCategoryMatcher)
+	if !ok {
+		return CategoryNonRetryableClientError, true
+	}
+	categories := categorizer.MatchedCategories(body)
+	if len(categories) == 0 {
+		return CategoryNonRetryableClientError, true
+	}
+	for _, ruleCategory := range categories {
+		if CategoryForRuleCategory(ruleCategory) != CategoryProviderUnsupportedInput {
+			return CategoryNonRetryableClientError, true
+		}
+	}
+	return CategoryProviderUnsupportedInput, true
 }
 
 func hasStorageCapacityMarker(body string) bool {

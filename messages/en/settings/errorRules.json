@@ -21,6 +21,7 @@
     "parameter_error": "Parameter Validation Failed",
     "pdf_limit": "PDF Page Limit",
     "prompt_limit": "Prompt Length Limit",
+    "provider_unsupported_input": "Upstream Rejects This Input Form",
     "thinking_error": "Thinking Format Error"
   },
   "confirmDelete": "Are you sure you want to delete error rule \"{pattern}\"?",

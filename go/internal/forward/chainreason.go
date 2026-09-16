@@ -41,6 +41,14 @@ const (
 	ReasonClientErrorNonRetryable = "client_error_non_retryable"
 	// ReasonResourceNotFound 是上游 404（触发故障转移但不计熔断器）。
 	ReasonResourceNotFound = "resource_not_found"
+	// ReasonUnsupported 是「当前供应商明确声明该输入形态不受支持」的结局原因。
+	//
+	// 属**供应商局部能力缺口**：同一份输入换一家可能成，故换家继续；但在同一家重试没有意义
+	// （同一份必然再被拒），故本分类只换家不重试。
+	//
+	// 词取自冻结的 Node 词表（testdata/node_chain_reasons.txt），本包自造词会被词表钉子拒绝：
+	// 消费者按精确词判定，不在词表里的词会被归进「失败」兜底。
+	ReasonUnsupported = "unsupported"
 	// ReasonLocalOverload 是本进程过载（本地准入拒绝）。
 	ReasonLocalOverload = "local_overload"
 	// ReasonVendorTypeAllTimeout 是供应商类型全端点超时（触发 vendor-type 临时熔断）。

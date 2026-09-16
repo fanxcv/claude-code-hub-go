@@ -120,7 +120,8 @@ export function EditRuleDialog({ rule, open, onOpenChange }: EditRuleDialogProps
           | "thinking_error"
           | "parameter_error"
           | "invalid_request"
-          | "cache_limit",
+          | "cache_limit"
+          | "provider_unsupported_input",
         description: description.trim() || undefined,
         overrideResponse: parsedOverrideResponse,
         overrideStatusCode: parsedStatusCode,
@@ -213,6 +214,9 @@ export function EditRuleDialog({ rule, open, onOpenChange }: EditRuleDialogProps
                   </SelectItem>
                   <SelectItem value="cache_limit">
                     {t("errorRules.categories.cache_limit")}
+                  </SelectItem>
+                  <SelectItem value="provider_unsupported_input">
+                    {t("errorRules.categories.provider_unsupported_input")}
                   </SelectItem>
                 </SelectContent>
               </Select>

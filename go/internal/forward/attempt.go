@@ -583,7 +583,10 @@ func forwardLoop(
 				endpointIndex++
 			}
 
-			if attempt < maxAttempts {
+			// 同家重试只对「重试可能改变结果」的分类成立：CategoryProviderUnsupportedInput
+			// 声明的是「同一份输入再送也一样被拒」，重试只是把同一份反复送上去，故跳过重试、
+			// 直接走下面的换家分支（Category.RetriesSameProvider 是这一判断的唯一真源）。
+			if failure.Category.RetriesSameProvider() && attempt < maxAttempts {
 				if err := deps.sleep(ctx, limits.RetryDelay); err != nil {
 					return exitWithError(&Failure{
 						Category:     CategoryClientAbort,
@@ -661,6 +664,8 @@ func reasonForCategory(category Category, statusCode int) string {
 		return ReasonClientErrorNonRetryable
 	case CategoryResourceNotFound:
 		return ReasonResourceNotFound
+	case CategoryProviderUnsupportedInput:
+		return ReasonUnsupported
 	case CategoryLocalOverload:
 		return ReasonLocalOverload
 	default:
