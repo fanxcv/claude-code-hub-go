@@ -209,6 +209,49 @@ func TestResponsesArgumentsDoneAppendsOnlyMissingTail(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// responses 解码器：content_part.added 的初始文本与后续增量并存
+// ---------------------------------------------------------------------------
+
+// TestResponsesContentPartSeedAndFollowingDeltaReachesClient 钉住「块起始帧给了初始文本、
+// 之后又来了增量，且初始文本是最终正文的前缀」这一形态。
+//
+// 与 TestStreamDeclaredPayloadReachesClientExactlyOnce 的区别：那条覆盖的是「只给初始文本、
+// 一个增量都不发」，初始文本是唯一来源；本条覆盖的是初始文本 + 续写增量。此形态下「关闭块时才补
+// seed」的兜底永远不会触发（emitted 已非空），而 done / item 的对账也补不回来——emitted 不是
+// 声明全文的前缀，按「宁可不补、绝不重复」的保守策略算不出差额，于是整段前缀静默消失。
+func TestResponsesContentPartSeedAndFollowingDeltaReachesClient(t *testing.T) {
+	const input = "event: response.created\n" +
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"m","status":"in_progress","output":[]}}` + "\n\n" +
+		"event: response.output_item.added\n" +
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"id":"i1","type":"message","role":"assistant","status":"in_progress","content":[]}}` + "\n\n" +
+		"event: response.content_part.added\n" +
+		`data: {"type":"response.content_part.added","output_index":0,"content_index":0,"item_id":"i1","part":{"type":"output_text","text":"起始"}}` + "\n\n" +
+		"event: response.output_text.delta\n" +
+		`data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"i1","delta":"正文"}` + "\n\n" +
+		"event: response.output_text.done\n" +
+		`data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"i1","text":"起始正文"}` + "\n\n" +
+		"event: response.output_item.done\n" +
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"id":"i1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"起始正文"}]}}` + "\n\n" +
+		"event: response.completed\n" +
+		`data: {"type":"response.completed","response":{"id":"resp_1","model":"m","status":"completed","output":[{"id":"i1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"起始正文"}]}],"usage":{"input_tokens":5,"output_tokens":3}}}` + "\n\n"
+
+	const want = "起始正文"
+	for _, client := range []WireProtocol{ProtocolOpenAIChat, ProtocolAnthropicMessages} {
+		client := client
+		t.Run(string(client), func(t *testing.T) {
+			for _, chunkSize := range []int{0, 1} {
+				out := runDeclaredPayloadPipe(t, ProtocolOpenAIResponses, client, input, chunkSize)
+				if got := clientDialectText(t, client, out); got != want {
+					t.Fatalf("chunkSize=%d：got %q want %q（初始文本丢失或被重复）\n原文：%q",
+						chunkSize, got, want, out)
+				}
+				assertClientTerminator(t, client, out)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // anthropic 块起始帧携带的正文（含 thinking）不得跨线消失
 // ---------------------------------------------------------------------------
 

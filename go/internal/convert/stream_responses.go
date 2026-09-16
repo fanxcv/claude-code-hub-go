@@ -99,7 +99,8 @@ func (d *responsesStreamDecoder) closeBlock(out *[]Chunk, decoded *responsesDeco
 		return
 	}
 	// 上游把整段正文放在 content_part.added 的 part.text 里、之后不发任何增量时，seed 是唯一
-	// 的内容来源：关闭前补发，否则整段正文随块一起消失。只在此块从未发出任何内容时补，故不重复。
+	// 的内容来源：关闭前补发，否则整段正文随块一起消失。只在此块从未发出任何内容时补，故不重复
+	// （增量路径已由 flushSeed 兜住，走到这里的只剩“一个增量都没发”）。
 	if decoded.emitted == "" && decoded.seed != "" {
 		d.emitDeltaChunk(out, decoded, decoded.seed)
 		decoded.seed = ""
@@ -159,6 +160,22 @@ func (d *responsesStreamDecoder) findBlock(payload *Value, kind responsesDecoded
 		}
 	}
 	return candidates[len(candidates)-1]
+}
+
+// flushSeed 在块内首次交付增量之前，先把 content_part.added 读到的初始文本交付出去。
+//
+// 为什么不能只靠 closeBlock 的兜底：部分上游先给 part.text、再给续写增量（part.text 是最终正文的
+// 前缀）。那时 emitted 已非空，兜底不再触发，初始文本就随块消失；而 done / item 的对账也补不回来
+// ——emitted 不含这段前缀，不构成声明全文的前缀，按「宁可不补」的策略算不出差额。
+// 单点在这里发出去后，「seed 非空 ⇒ emitted 为空」在本块上始终成立，所有对账路径看到的 emitted
+// 都已经是声明全文的前缀。
+func (d *responsesStreamDecoder) flushSeed(out *[]Chunk, decoded *responsesDecodedBlock) {
+	if decoded.seed == "" {
+		return
+	}
+	seed := decoded.seed
+	decoded.seed = ""
+	d.emitDeltaChunk(out, decoded, seed)
 }
 
 func (d *responsesStreamDecoder) emitDeltaChunk(out *[]Chunk, decoded *responsesDecodedBlock, delta string) {
@@ -324,6 +341,7 @@ func (d *responsesStreamDecoder) handleDelta(out *[]Chunk, eventType string, pay
 		}
 		decoded = d.startBlock(out, key, kind, block, outputIndex)
 	}
+	d.flushSeed(out, decoded)
 	d.emitDeltaChunk(out, decoded, delta)
 }
 

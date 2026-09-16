@@ -395,9 +395,9 @@ func ConversionFailureEntry(failure *convert.ConversionFailure) map[string]any {
 // 请求的 jsonb 撑到不可读，以及把审计面变成第二份请求体（连带把上游/客户端的数据搬进审计列）。
 // 故 detail 一律不进条目——定位靠 capability + action + fix 代码，逐条细节由单测与复现取。
 //
-// 体积上界（可核）：capability 取自 convert 的 17 个 `Loss*` 常量，action 只有
-// dropped/downgraded/rewritten 三种，故 groups **至多 17×3=51 组**、每组约 60 字节，
-// 加上协议对与 total 共约 3KB 的硬上界（远小于同层既有条目如 provider_parameter_override）。
+// 体积上界（可核）：capability 取自 convert 的 21 个 `Loss*` 常量（hub.go 的两段 capability
+// const 块），action 只有 dropped/downgraded/rewritten 三种，故 groups **至多 21×3=63 组**、
+// 每组约 60 字节，加上协议对与 total 共约 4KB 的硬上界（远小于同层既有条目如 provider_parameter_override）。
 //
 // 分组顺序按 (capability, action) 字典序固定：同一份损失集必须序列化成同一份字节，
 // 否则测试无法断言、前端按内容去重（buildUnifiedSpecialSettings）也会把同一条事实当成两条。
