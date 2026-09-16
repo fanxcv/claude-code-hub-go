@@ -898,7 +898,7 @@ func chatEncodeToolChoice(choice *ToolChoice, ctx ConvertCtx) *Value {
 	return NewValueString(string(choice.Kind))
 }
 
-func chatEncodeTools(tools []Tool, ctx ConvertCtx) []*Value {
+func chatEncodeTools(tools []Tool, ctx ConvertCtx, loss *LossCollector) []*Value {
 	out := []*Value{}
 	for _, tool := range tools {
 		name := tool.Name
@@ -913,6 +913,11 @@ func chatEncodeTools(tools []Tool, ctx ConvertCtx) []*Value {
 			fn.Set("parameters", NewObject())
 		} else {
 			fn.Set("parameters", tool.Parameters)
+		}
+		// chat 线的 tools[] 只有 type/function 两层，没有工具级 cache_control 承载位（只有 anthropic
+		// 线渲染它，见 hub.go 的 CacheHint 说明）；与 responses 编码器同口径记损，避免跨线静默丢失。
+		if tool.CacheHint != nil {
+			loss.Dropped(LossCacheControl, "request", "tool")
 		}
 		out = append(out, NewObject().Set("type", NewString("function")).Set("function", fn))
 	}
@@ -940,7 +945,7 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	out.Set("messages", NewArray(messages...))
 
 	if len(request.Tools) > 0 {
-		out.Set("tools", NewArray(chatEncodeTools(request.Tools, ctx)...))
+		out.Set("tools", NewArray(chatEncodeTools(request.Tools, ctx, loss)...))
 	}
 	if request.ToolChoice != nil {
 		out.Set("tool_choice", chatEncodeToolChoice(request.ToolChoice, ctx))

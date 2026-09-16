@@ -5,10 +5,11 @@ import (
 	"testing"
 )
 
-// 本文件钉住三件本次新增/修复的行为（矩阵审计 §2.3 / §2.4 / §2.6）：
+// 本文件钉住四件本次新增/修复的行为（矩阵审计 §2.3 / §2.4 / §2.6）：
 //  1. 思考强度代数（预算 ↔ 等级双向、阈值口径、不凭空发明）；
 //  2. 非 function 工具（MCP / web_search）跨线的**专用损失类别**；
-//  3. `parallel_tool_calls` 在 Anthropic 线的取反映射（解码与编码两向）。
+//  3. `parallel_tool_calls` 在 Anthropic 线的取反映射（解码与编码两向）；
+//  4. 工具级 `cache_control` 跨线到 chat 时的记损（该线无承载位）。
 //
 // 为何单测而不是只靠语料：跨语言语料是「与 Node 逐字节对齐」的门，其中 Node 自己在
 // 预算→等级、跨线空内容上会丢弃/产出空数组，那些格位由 corpus_test.go 的有意分歧登记覆盖；
@@ -318,6 +319,61 @@ func TestParallelToolCallsRoundTripAcrossLines(t *testing.T) {
 		if value, present := disable.Bool(); !present || !value {
 			t.Fatalf("回程 disable_parallel_tool_use 必须为 true：%s", backEncoded.Body.MarshalCompact())
 		}
+	}
+}
+
+// ——————————————————————————————————————————————————————————————
+// 4. 工具级 cache_control 跨线（→chat）
+// ——————————————————————————————————————————————————————————————
+
+// TestChatToolCacheControlRecordedAsLoss 钉住 chat 侧的工具级 cache_control 记损。
+//
+// 为何需要：chat 线的 tools[] 只有 type/function 两层，没有 cache_control 承载位（只有
+// anthropic 线渲染它），而 responses 编码器的同位置早已记 LossCacheControl(detail=tool)。
+// chat 侧此前既不写出也不记损，于是「anthropic 客户端给工具打的缓存断点」跨线到 chat 时
+// 从损失报告里彻底消失——既不能从上游行为看出，也不能从账目看出。
+func TestChatToolCacheControlRecordedAsLoss(t *testing.T) {
+	body := mustParsePayload(t, `{
+		"model":"claude-sonnet-4-5","max_tokens":512,
+		"messages":[{"role":"user","content":"查天气"}],
+		"tools":[{"name":"get_weather","description":"查天气",
+			"input_schema":{"type":"object"},
+			"cache_control":{"type":"ephemeral","ttl":"5m"}}]
+	}`)
+	decoded, ok := DecodeRequest(ProtocolAnthropicMessages, body, ConvertCtx{})
+	if !ok {
+		t.Fatal("anthropic 解码入口应可用")
+	}
+	if len(decoded.Value.Tools) != 1 || decoded.Value.Tools[0].CacheHint == nil {
+		t.Fatalf("前置：anthropic 工具级 cache_control 必须解出 CacheHint，实际 %+v", decoded.Value.Tools)
+	}
+
+	ctx := ConvertCtx{ClientFormat: FormatOpenAI, TargetProto: ProtocolOpenAIChat}
+	encoded, ok := EncodeRequest(ProtocolOpenAIChat, decoded.Value, ctx)
+	if !ok {
+		t.Fatal("chat 编码入口应可用")
+	}
+
+	assertLossEntry(t, encoded.Loss, LossCacheControl, string(LossDropped), "tool")
+	// 精确一条：多即误报损失（本用例只有一个工具带提示），少即静默丢弃。
+	count := 0
+	for _, entry := range encoded.Loss.Entries {
+		if entry.Capability == LossCacheControl {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("工具级 cache_control 跨线到 chat 应恰好记一条 cache_control 损失，实际 %d 条：%+v",
+			count, encoded.Loss.Entries)
+	}
+
+	// 承载面：该线无工具级承载位，出站不得凭空写出 cache_control（上游只会判它非法）。
+	tools, present := encoded.Body.Get("tools")
+	if !present || len(tools.Items()) != 1 {
+		t.Fatalf("chat 出站必须仍带一个工具：%s", encoded.Body.MarshalCompact())
+	}
+	if strings.Contains(encoded.Body.MarshalCompact(), "cache_control") {
+		t.Fatalf("chat 线无工具级承载位，出站不得出现 cache_control：%s", encoded.Body.MarshalCompact())
 	}
 }
 
