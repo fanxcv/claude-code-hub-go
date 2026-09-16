@@ -29,7 +29,7 @@ import (
 // current；而 Go 二进制里没有 package.json（生产镜像只拷二进制与 CA）。两者的相等关系由
 // TestFallbackMatchesPackageJSON 钉住——一旦分叉，「页面显示的版本」与「仓库声明的版本」
 // 又会各说各话，正是本次要修的病。
-const Fallback = "v1.9.0"
+const Fallback = "v1.9.1"
 
 // envNames 是注入版本用的环境变量名，**按优先级排列**。
 //
