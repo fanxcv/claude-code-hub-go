@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { postAdminMutation } from "@/lib/api-client/v1/fetcher";
 
 export function LogCleanupPanel() {
   const t = useTranslations("settings.data.cleanup");
@@ -39,14 +40,9 @@ export function LogCleanupPanel() {
       const beforeDate = new Date();
       beforeDate.setDate(beforeDate.getDate() - parseInt(timeRange, 10));
 
-      const response = await fetch("/api/admin/log-cleanup/manual", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          beforeDate: beforeDate.toISOString(),
-          dryRun: true,
-        }),
+      const response = await postAdminMutation("/api/admin/log-cleanup/manual", {
+        beforeDate: beforeDate.toISOString(),
+        dryRun: true,
       });
 
       const result = await response.json();
@@ -81,13 +77,8 @@ export function LogCleanupPanel() {
       const beforeDate = new Date();
       beforeDate.setDate(beforeDate.getDate() - parseInt(timeRange, 10));
 
-      const response = await fetch("/api/admin/log-cleanup/manual", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          beforeDate: beforeDate.toISOString(),
-        }),
+      const response = await postAdminMutation("/api/admin/log-cleanup/manual", {
+        beforeDate: beforeDate.toISOString(),
       });
 
       const result = await response.json();

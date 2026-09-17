@@ -5,6 +5,7 @@ import { useEffect, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { postAdminMutation } from "@/lib/api-client/v1/fetcher";
 import { cn } from "@/lib/utils";
 
 type LogLevel = "fatal" | "error" | "warn" | "info" | "debug" | "trace";
@@ -28,6 +29,7 @@ export function LogLevelForm() {
 
   useEffect(() => {
     setIsLoading(true);
+    // 读路径是 GET，不带 CSRF（后端只对写方法校验）。
     fetch("/api/admin/log-level")
       .then((res) => res.json())
       .then((data) => {
@@ -47,11 +49,7 @@ export function LogLevelForm() {
 
     startTransition(async () => {
       try {
-        const response = await fetch("/api/admin/log-level", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ level: selectedLevel }),
-        });
+        const response = await postAdminMutation("/api/admin/log-level", { level: selectedLevel });
 
         const result = await response.json();
 

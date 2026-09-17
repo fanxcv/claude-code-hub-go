@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { postAdminMutation } from "@/lib/api-client/v1/fetcher";
 import type { SystemSettings } from "@/types/system-config";
 
 const autoCleanupSchema = z.object({
@@ -54,15 +55,10 @@ export function AutoCleanupForm({ settings, onSuccess }: AutoCleanupFormProps) {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch("/api/admin/system-config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          siteTitle: settings.siteTitle,
-          allowGlobalUsageView: settings.allowGlobalUsageView,
-          ...data,
-        }),
+      const response = await postAdminMutation("/api/admin/system-config", {
+        siteTitle: settings.siteTitle,
+        allowGlobalUsageView: settings.allowGlobalUsageView,
+        ...data,
       });
 
       if (!response.ok) {
