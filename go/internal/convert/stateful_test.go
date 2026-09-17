@@ -5,7 +5,8 @@ import "testing"
 // 本文件钉住「请求侧高层字段跨线无承载位」的两条处置：
 //   - 状态型字段（previous_response_id / conversation / store:true）：只**判定**冲突，由
 //     forward.BuildPlan 据此 fail-closed（见 forward/plan_test.go 的对应用例）；
-//   - 约束型字段（prompt_cache_key / response_format / text / store:false）：记损，不阻断。
+//   - 约束型字段（response_format / text / store:false）：记损，不阻断；
+//   - 缓存路由键（prompt_cache_key）：能带就带（chat/responses 两线原样回写），anthropic 线才记损。
 //
 // 为什么要钉：这些字段此前落进 passthrough 逃生舱后**没有任何消费者**（request 侧 passthrough
 // 只在目标线取用，而跨线时目标线与来源线不同），于是 Node 与本仓都表现为静默丢弃——客户端
@@ -59,14 +60,15 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 		wantLoss []string
 	}{
 		{
-			name:   "responses→chat：缓存键、结构化输出",
+			// 缓存路由键**不再记损**：它已进枢纽并由 chat/responses 两线原样回写（守卫链主动补它是为了
+			// 命中供应商前缀缓存，丢掉等于白补）。这里只钉住剩下的结构型字段。
+			name:   "responses→chat：结构化输出记损（缓存键改为转发）",
 			source: ProtocolOpenAIResponses,
 			target: ProtocolOpenAIChat,
 			body: `{"model":"gpt-5","input":"hi","prompt_cache_key":"k1",` +
 				`"text":{"format":{"type":"json_schema","name":"r","schema":{"type":"object"}}},` +
 				`"store":false}`,
 			wantLoss: []string{
-				LossPromptCacheKey + "/dropped/prompt_cache_key",
 				LossTextControls + "/dropped/text",
 			},
 		},
@@ -170,22 +172,20 @@ var foreignDroppableClasses = []string{
 	LossPromptCacheKey, LossResponseFormat, LossTextControls, LossStoreFlag,
 }
 
-// TestGatewayInjectedPromptCacheKeyNotRecorded 钉住「客户端原文里没有的字段不算客户端约束」。
+// TestPromptCacheKeyCarriedExceptAnthropic 钉住缓存路由键的新处置：能带就带，带不了才记损。
 //
-// 为何必须钉：Codex 客户端用 `session_id` 头表达会话身份时，守卫链会把 `prompt_cache_key`
-// 补进正文（见 guard.completeCodexSession），而它随后会被当成「客户端声明的缓存路由键」记进
-// 损失台账——于是**每一个转换请求都凭空多一条**（生产实测：每一行 +1，卡在 total 上）。
-// 判据只能是「客户端原文里是否出现」，故守卫链把注入事实传进 ConvertCtx。
-//
-// 两个方向都要钉：注入了不记 → 这条用例；未注入仍记 → 同一份 body 不带该事实时必须有一条，
-// 否则修法会把真·客户端声明的缓存键一起辟掉。
-func TestGatewayInjectedPromptCacheKeyNotRecorded(t *testing.T) {
+// 为何必须钉两面：
+//   - chat 线**必须带**：守卫链为了让供应商命中前缀缓存会主动补 prompt_cache_key
+//     （guard.completeCodexSession），若编码器把它丢掉，补了等于没补、且每个请求白多一条损失；
+//   - anthropic 线**必须记**：它无此概念（缓存由 cache_control 显式标记），静默丢才是缺陷；
+//   - 网关注入的字段在 anthropic 线上也不算客户端约束（不记损）。
+func TestPromptCacheKeyCarriedExceptAnthropic(t *testing.T) {
 	const body = `{"model":"gpt-5","input":"hi","prompt_cache_key":"sess_1"}`
-	run := func(t *testing.T, injected []string) []string {
+	run := func(t *testing.T, target WireProtocol, injected []string) ([]string, string) {
 		t.Helper()
 		ctx := ConvertCtx{
 			ClientFormat:              FormatResponse,
-			TargetProto:               ProtocolOpenAIChat,
+			TargetProto:               target,
 			Model:                     "m",
 			ToWireToolName:            NormalizeToolName,
 			GatewayInjectedBodyFields: injected,
@@ -194,24 +194,34 @@ func TestGatewayInjectedPromptCacheKeyNotRecorded(t *testing.T) {
 		if !ok {
 			t.Fatal("responses 线必须能解码")
 		}
-		encoded, ok := EncodeRequest(ProtocolOpenAIChat, decoded.Value, ctx)
+		encoded, ok := EncodeRequest(target, decoded.Value, ctx)
 		if !ok {
-			t.Fatal("chat 线必须能编码")
+			t.Fatal("目标线必须能编码")
 		}
 		got := []string{}
-		for _, entry := range encoded.Loss.Entries {
+		for _, entry := range append(append([]LossEntry{}, decoded.Loss.Entries...), encoded.Loss.Entries...) {
 			if entry.Capability == LossPromptCacheKey {
 				got = append(got, entry.Detail)
 			}
 		}
-		return got
+		key, _ := stringField(encoded.Body, "prompt_cache_key")
+		return got, key
 	}
 
-	if got := run(t, []string{"prompt_cache_key"}); len(got) != 0 {
-		t.Fatalf("网关注入的 prompt_cache_key 不得记损，实际 %v", got)
+	if losses, key := run(t, ProtocolOpenAIChat, nil); key != "sess_1" {
+		t.Fatalf("chat 出站必须带上客户端的 prompt_cache_key，实际出站 %q（损失 %v）", key, losses)
 	}
-	if got := run(t, nil); len(got) != 1 {
-		t.Fatalf("客户端原文里确实出现的 prompt_cache_key 必须记损（恰好一条），实际 %v", got)
+	if losses, _ := run(t, ProtocolOpenAIChat, []string{"prompt_cache_key"}); len(losses) != 0 {
+		t.Fatalf("chat 线不丢该字段，不得记损，实际 %v", losses)
+	}
+	if losses, key := run(t, ProtocolOpenAIResponses, nil); key != "sess_1" || len(losses) != 0 {
+		t.Fatalf("responses 线原样带回，实际出站 %q、损失 %v", key, losses)
+	}
+	if losses, _ := run(t, ProtocolAnthropicMessages, nil); len(losses) != 1 {
+		t.Fatalf("anthropic 线无承载位，客户端声明的缓存键必须恰好记一条损失，实际 %v", losses)
+	}
+	if losses, _ := run(t, ProtocolAnthropicMessages, []string{"prompt_cache_key"}); len(losses) != 0 {
+		t.Fatalf("网关注入的 prompt_cache_key 不算客户端约束，不得记损，实际 %v", losses)
 	}
 }
 

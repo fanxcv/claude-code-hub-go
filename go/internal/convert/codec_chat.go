@@ -296,6 +296,15 @@ func decodeChatTools(raw *Value, loss *LossCollector) []Tool {
 			if member.Value.IsNull() {
 				continue
 			}
+			if member.Key == "strict" {
+				// 与 responses 侧同口径：false 等于缺省，不记损；true 是真声明。
+				if strict, ok := member.Value.Bool(); ok {
+					tool.Strict, tool.HasStrict = strict, true
+				} else {
+					loss.Dropped(LossUnknownField, "request", "tool.strict")
+				}
+				continue
+			}
 			loss.Dropped(LossUnknownField, "request", "tool."+member.Key)
 		}
 		for _, member := range entry.Members() {
@@ -547,7 +556,10 @@ func chatRenderThinking(block Block, role string, reasoning *[]string, options *
 		return
 	}
 	if block.Redacted {
-		options.loss.Dropped(LossThinkingBlock, options.direction, "redacted")
+		// 密文思考（OpenAI encrypted_content）：chat 线只有 reasoning_content（明文载体），
+		// 密文无处安放。它不是内容损失（目标上游本就解不开），而是「无法续接上游自己的思考」
+		// 的保真弱化，故走专用类别而非 thinking.block。
+		options.loss.Dropped(LossThinkingEncrypted, options.direction, "redacted")
 		return
 	}
 	if block.Signature != "" {
@@ -948,6 +960,12 @@ func chatEncodeTools(tools []Tool, ctx ConvertCtx, loss *LossCollector) []*Value
 		} else {
 			fn.Set("parameters", tool.Parameters)
 		}
+		// 只在 true 时写：strict 缺省即 false（Codex 对每个工具都显式写 false），写 false 只是
+		// 给挑剔的 chat 上游多一个未知字段风险，而语义为零。true 则必须带上——它是客户端声明的
+		// schema 约束，丢了上游就可能返回不合 schema 的参数。
+		if tool.HasStrict && tool.Strict {
+			fn.Set("strict", NewBool(true))
+		}
 		// chat 线的 tools[] 只有 type/function 两层，没有工具级 cache_control 承载位（只有 anthropic
 		// 线渲染它，见 hub.go 的 CacheHint 说明）；与 responses 编码器同口径记损，避免跨线静默丢失。
 		if tool.CacheHint != nil {
@@ -980,6 +998,11 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 
 	if len(request.Tools) > 0 {
 		out.Set("tools", NewArray(chatEncodeTools(request.Tools, ctx, loss)...))
+	}
+	// 缓存路由键原样送出：守卫链为了命中供应商前缀缓存会主动补它（guard.completeCodexSession），
+	// 此前它只活在 responses 线 passthrough 里，responses→chat 时被静默丢掉，等于白补。
+	if request.HasPromptCacheKey {
+		out.Set("prompt_cache_key", NewString(request.PromptCacheKey))
 	}
 	if request.ToolChoice != nil {
 		out.Set("tool_choice", chatEncodeToolChoice(request.ToolChoice, ctx))
@@ -1019,8 +1042,11 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 			}
 		}
 		if request.Reasoning.HasSummary && request.Reasoning.Summary != "" {
-			// Chat 线无 reasoning summary 载体（与 Node 同类别、同处置）。
-			loss.Dropped(LossUnknownField, direction, "reasoning.summary")
+			// Chat 线无 reasoning summary 载体（与 Node 同类别、同处置）：丢的是「要不要回传
+			// 思考摘要」这一显示偏好，不影响作答（上游照旧回 reasoning_content，我方再回译）。
+			// 注：供应商级覆写（provider.codex_reasoning_summary_preference）在此之后另写一份
+			// reasoning.summary，那是管理员策略而非客户端声明，不影响本条归因。
+			loss.Dropped(LossReasoningSummary, direction, "chat_has_no_summary")
 		}
 	}
 	return EncodeResult{Body: out, Loss: loss.Report()}

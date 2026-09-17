@@ -150,6 +150,51 @@ func decodeResponsesFunctionCall(item *Value, loss *LossCollector, fromWire func
 	}}
 }
 
+// appendResponsesCustomToolCall 把 custom 工具（freeform，如 Codex 的 exec）的调用项降级为普通工具调用。
+//
+// 为何不继续整项丢：custom_tool_call 是客户端的「我跑了什么」历史（实测一条会话里 18 条调用 +
+// 18 条结果），整项丢意味着上游看不到代理做过什么——而它的结果项若单独保留则变成孤儿工具结果
+// （严格上游直接 400），所以要么两个都保、要么两个都丢。
+//
+// 降级形状取 `{"input": <原文本>}`：freeform 载荷本身不是 JSON，而 chat 线的 arguments 必须是
+// JSON 字符串；包一层对象既保住原文，也让上游看到的是一个正常形态的函数调用。调用名不加前缀
+// （与 namespace 展平同口径，客户端按裸名派发）。
+//
+// 不在本层做「把 custom 工具声明变成 function 工具」：那会让上游能发出对 exec 的调用，而响应
+// 侧回到客户端时必须还原成 custom_tool_call 形态才可用（Codex 只认自己声明的 custom 工具），
+// 那一半未实现——先把“能调但回不来”的口子留着，比修一半更安全。
+func appendResponsesCustomToolCall(
+	items []Item,
+	entry *Value,
+	loss *LossCollector,
+	fromWire func(string) string,
+) []Item {
+	const direction = "request"
+	callID, _ := stringField(entry, "call_id")
+	if callID == "" {
+		callID, _ = stringField(entry, "id")
+	}
+	name, _ := stringField(entry, "name")
+	if fromWire != nil {
+		name = fromWire(name)
+	}
+	input, _ := stringField(entry, "input")
+	loss.Rewritten(LossNonFunctionTool, direction, "custom_tool_call")
+	payload := NewObject().Set("input", NewString(input))
+	item := Item{Kind: ItemMessage, Role: "assistant", Blocks: []Block{{
+		Kind: BlockToolCall, ID: callID, Name: name, Args: payload.MarshalCompact(),
+	}}}
+	// 与 function_call 同规则：并入前一条 assistant 消息（契约 §2.3 规则 3）。
+	if len(items) > 0 {
+		last := items[len(items)-1]
+		if last.Kind == ItemMessage && last.Role == "assistant" {
+			items[len(items)-1].Blocks = append(items[len(items)-1].Blocks, item.Blocks...)
+			return items
+		}
+	}
+	return append(items, item)
+}
+
 func decodeResponsesFunctionCallOutput(item *Value, loss *LossCollector) []Item {
 	const direction = "request"
 	callID, _ := stringField(item, "call_id")
@@ -225,20 +270,23 @@ func decodeResponsesReasoningItem(item *Value, loss *LossCollector) []Item {
 	return []Item{{Kind: ItemReasoning, Role: "assistant", Blocks: blocks}}
 }
 
-func decodeResponsesInput(raw *Value, loss *LossCollector, fromWire func(string) string) []Item {
+// decodeResponsesInput 解 input 项序列；一并返回从 input 里拾到的工具声明（见 additional_tools）。
+func decodeResponsesInput(raw *Value, loss *LossCollector, fromWire func(string) string) ([]Item, []Tool, []*Value) {
 	if raw == nil || raw.IsNull() {
-		return nil
+		return nil, nil, nil
 	}
 	const direction = "request"
 	if raw.Kind() == "string" {
 		text, _ := raw.String()
-		return []Item{{Kind: ItemMessage, Role: "user", Blocks: []Block{textBlock(text)}}}
+		return []Item{{Kind: ItemMessage, Role: "user", Blocks: []Block{textBlock(text)}}}, nil, nil
 	}
 	if !raw.IsArray() {
 		loss.Dropped(LossUnknownField, direction, "input")
-		return nil
+		return nil, nil, nil
 	}
 	items := []Item{}
+	tools := []Tool{}
+	preserved := []*Value{}
 	for _, entry := range raw.Items() {
 		if entry.Kind() == "string" {
 			text, _ := entry.String()
@@ -267,8 +315,22 @@ func decodeResponsesInput(raw *Value, loss *LossCollector, fromWire func(string)
 			items = appendResponsesFunctionCall(items, entry, loss, fromWire)
 		case "function_call_output":
 			items = append(items, decodeResponsesFunctionCallOutput(entry, loss)...)
+		case "custom_tool_call":
+			items = appendResponsesCustomToolCall(items, entry, loss, fromWire)
+		case "custom_tool_call_output":
+			// custom 工具的调用结果：载荷形状与 function_call_output 完全一致（id/call_id/output），
+			// 但归因要分得清，故单独记一条 rewritten 而不是复用 function 的类别。
+			loss.Rewritten(LossNonFunctionTool, direction, "custom_tool_call_output")
+			items = append(items, decodeResponsesFunctionCallOutput(entry, loss)...)
 		case "reasoning":
 			items = append(items, decodeResponsesReasoningItem(entry, loss)...)
+		case "additional_tools":
+			// Codex 0.154 的新工具传输：工具声明放在 input 的 additional_tools item 里
+			// （role=developer，内容与顶层 tools[] 同构，实测内含 namespace.functions /
+			// namespace.agents）。它与消息序列无关，故不产出消息项，只并入 request.Tools。
+			// 不处理的话整项走下面的 opaque 分支，跨线时被当成一件“非 function 工具”丢掉——
+			// 上游于是连一个工具都看不到。
+			appendResponsesToolEntries(asUnknownArray(fieldOrNil(entry, "tools")), &tools, &preserved, loss)
 		default:
 			// web_search_call / mcp_call / local_shell_call / item_reference 等：枢纽无对应表示，
 			// **原样装箱**（Node 的 default 分支：`items.push({kind:"message",role:"user",blocks:[opaqueBlock(WIRE, entry)]})`）。
@@ -285,7 +347,7 @@ func decodeResponsesInput(raw *Value, loss *LossCollector, fromWire func(string)
 			})
 		}
 	}
-	return items
+	return items, tools, preserved
 }
 
 // appendResponsesMessageItem 复刻 Node 的 decodeMessageItem：
@@ -338,20 +400,41 @@ func decodeResponsesTools(raw *Value, loss *LossCollector) ([]Tool, []*Value) {
 		return nil, nil
 	}
 	tools := []Tool{}
-	// preserved 是本线无枢纽表示的非 function 工具定义（web_search / mcp / local_shell …）。
+	// preserved 是本线无枢纽表示的非 function 工具定义（web_search / mcp / local_shell / custom …）。
 	// Node 把它们留在 passthrough（`passthrough.tools = preserved`），编码同线时接在
 	// canonical 工具之后（`body.tools = [...tools, ...extraTools]`），从而**同线往返字节保留**。
 	// 旧实现直接丢弃 → 同线也丢 MCP 工具声明。
 	preserved := []*Value{}
-	for _, entry := range raw.Items() {
+	appendResponsesToolEntries(raw.Items(), &tools, &preserved, loss)
+	return tools, preserved
+}
+
+// appendResponsesToolEntries 把一批工具声明解为枢纽工具（function）与 preserved（其余类型）。
+//
+// 为何展平 `namespace`：它只是 Codex 给模型看的归组（实测 0.154 顶层 tools[] 里的
+// `namespace.agents`，成员本身就是普通 function 工具），而枢纽与另外两条线都没有这个概念。
+// 此前整组落入 preserved，跨线（尤其 chat）时整组被丢——上游看不到这些工具，模型只能纯文本
+// 作答。展平**不加前缀**：客户端本就按裸名派发调用（实测其 custom_tool_call 项的 name 即裸名），
+// 加前缀反而会让回传的 function_call 名字对不上客户端的工具表。
+func appendResponsesToolEntries(entries []*Value, tools *[]Tool, preserved *[]*Value, loss *LossCollector) {
+	for _, entry := range entries {
 		if !isRecord(entry) {
 			loss.Dropped(LossUnknownField, "request", "tools[]")
 			continue
 		}
 		entryType, _ := stringField(entry, "type")
+		if entryType == "namespace" {
+			inner := fieldOrNil(entry, "tools")
+			if inner == nil || !inner.IsArray() {
+				*preserved = append(*preserved, entry)
+				continue
+			}
+			appendResponsesToolEntries(inner.Items(), tools, preserved, loss)
+			continue
+		}
 		name, hasName := stringField(entry, "name")
 		if entryType != "function" || !hasName || name == "" {
-			preserved = append(preserved, entry)
+			*preserved = append(*preserved, entry)
 			continue
 		}
 		tool := Tool{Name: name, Parameters: NewObject()}
@@ -366,11 +449,20 @@ func decodeResponsesTools(raw *Value, loss *LossCollector) ([]Tool, []*Value) {
 			if responsesFunctionFields.contains(member.Key) || member.Value.IsNull() {
 				continue
 			}
+			if member.Key == "strict" {
+				// Codex 给每个 function 工具都显式写 `strict:false`，而该值恰好等于两线的缺省——
+				// 记损等于给每个请求凭空添 N 条“改写”（实测 10 个工具 = 10 条）。仅 true 入枢纽。
+				if strict, ok := member.Value.Bool(); ok {
+					tool.Strict, tool.HasStrict = strict, true
+				} else {
+					loss.Dropped(LossUnknownField, "request", "tool.strict")
+				}
+				continue
+			}
 			loss.Dropped(LossUnknownField, "request", "tool."+member.Key)
 		}
-		tools = append(tools, tool)
+		*tools = append(*tools, tool)
 	}
-	return tools, preserved
 }
 
 func decodeResponsesToolChoice(raw *Value, loss *LossCollector) *ToolChoice {
@@ -430,9 +522,10 @@ func decodeResponsesRequest(body *Value, ctx ConvertCtx) DecodeResult[*Request] 
 		source = NewObject()
 	}
 
+	items, inputTools, inputPreserved := decodeResponsesInput(fieldOrNil(source, "input"), loss, ctx.FromWireToolName)
 	request := &Request{
 		Model:       firstString(stringOrEmpty(source, "model"), ctx.Model),
-		Items:       decodeResponsesInput(fieldOrNil(source, "input"), loss, ctx.FromWireToolName),
+		Items:       items,
 		Stream:      responsesIsStream(source),
 		Passthrough: map[WireProtocol]*Value{},
 	}
@@ -440,8 +533,17 @@ func decodeResponsesRequest(body *Value, ctx ConvertCtx) DecodeResult[*Request] 
 		request.System = system
 	}
 	tools, preservedTools := decodeResponsesTools(fieldOrNil(source, "tools"), loss)
+	// input 里的 additional_tools item 也是工具声明，与顶层 tools[] 合并（同名前缀不冲突：
+	// 实测两种传输互斥，同时出现时二者本就不重名）。
+	tools = append(tools, inputTools...)
+	preservedTools = append(preservedTools, inputPreserved...)
 	if len(tools) > 0 {
 		request.Tools = tools
+	}
+	// 缓存路由键进枢纽（而非只活在 passthrough）：chat 编码器要原样写出，见 Request.PromptCacheKey。
+	if key, ok := stringField(source, "prompt_cache_key"); ok && key != "" {
+		request.PromptCacheKey = key
+		request.HasPromptCacheKey = true
 	}
 	if choice := decodeResponsesToolChoice(fieldOrNil(source, "tool_choice"), loss); choice != nil {
 		request.ToolChoice = choice
@@ -703,6 +805,10 @@ func responsesEncodeTools(tools []Tool, ctx ConvertCtx, loss *LossCollector) []*
 			entry.Set("description", NewString(tool.Description))
 		}
 		entry.Set("parameters", schema)
+		// 只在 true 时写：responses 线 strict 缺省也是 false，写 false 徒增上游对未知取值的挑剔风险。
+		if tool.HasStrict && tool.Strict {
+			entry.Set("strict", NewBool(true))
+		}
 		if tool.CacheHint != nil {
 			loss.Dropped(LossCacheControl, "request", "tool")
 		}
@@ -790,6 +896,10 @@ func encodeResponsesRequest(request *Request, ctx ConvertCtx) EncodeResult {
 		if len(reasoning.Members()) > 0 {
 			out.Set("reasoning", reasoning)
 		}
+	}
+	// 缓存路由键原样回写：本线原生时它本就在 passthrough 里，跨线过来时靠枢纽带过。
+	if request.HasPromptCacheKey {
+		out.Set("prompt_cache_key", NewString(request.PromptCacheKey))
 	}
 	return EncodeResult{Body: out, Loss: loss.Report()}
 }

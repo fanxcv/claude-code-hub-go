@@ -219,6 +219,10 @@ func decodeAnthropicTools(raw *Value, loss *LossCollector) []Tool {
 		if schema := fieldOrNil(entry, "input_schema"); schema != nil && schema.IsObject() {
 			tool.Parameters = schema
 		}
+		if strict, ok := boolField(entry, "strict"); ok {
+			// anthropic 无 strict 承载位（schema 本来就是硬约束）；只收 true 供 chat/responses 侧回写。
+			tool.Strict, tool.HasStrict = strict, true
+		}
 		tools = append(tools, tool)
 	}
 	return tools
@@ -675,7 +679,7 @@ func encodeAnthropicToolChoiceWithParallel(choice *ToolChoice, parallel *bool, c
 	return encoded
 }
 
-func encodeAnthropicTools(tools []Tool, ctx ConvertCtx) []*Value {
+func encodeAnthropicTools(tools []Tool, ctx ConvertCtx, loss *LossCollector) []*Value {
 	out := []*Value{}
 	for _, tool := range tools {
 		name := tool.Name
@@ -691,6 +695,10 @@ func encodeAnthropicTools(tools []Tool, ctx ConvertCtx) []*Value {
 			Set("input_schema", schema)
 		if tool.HasDescript {
 			entry.Set("description", NewString(tool.Description))
+		}
+		if tool.HasStrict && tool.Strict {
+			// anthropic 的 input_schema 本就是硬约束、无 strict 开关；客户端显式要求严格校验时报失。
+			loss.Dropped(LossToolStrict, "request", "anthropic_has_no_strict")
 		}
 		encodeAnthropicCacheHint(entry, tool.CacheHint)
 		out = append(out, entry)
@@ -731,7 +739,12 @@ func encodeAnthropicRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	}
 
 	if len(request.Tools) > 0 {
-		out.Set("tools", NewArray(encodeAnthropicTools(request.Tools, ctx)...))
+		out.Set("tools", NewArray(encodeAnthropicTools(request.Tools, ctx, loss)...))
+	}
+	if request.HasPromptCacheKey && !ctx.isGatewayInjectedField("prompt_cache_key") {
+		// anthropic 线无缓存路由键概念（其缓存由 cache_control 显式标记），丢的是路由提示而非约束。
+		// 网关注入的那条不算客户端声明（守卫链为命中前缀缓存而补，见 ConvertCtx.GatewayInjectedBodyFields）。
+		loss.Dropped(LossPromptCacheKey, direction, "anthropic_has_no_prompt_cache_key")
 	}
 	if choice := encodeAnthropicToolChoiceWithParallel(request.ToolChoice, request.ParallelToolCalls, ctx); choice != nil {
 		out.Set("tool_choice", choice)

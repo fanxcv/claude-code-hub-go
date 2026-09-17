@@ -22,9 +22,12 @@ export const LOSS_SEVERITY_BY_CAPABILITY: Readonly<
   cache_control: "degrade",
   prompt_cache_key: "info",
   "reasoning.replay": "degrade",
+  "reasoning.summary": "info",
   store: "info",
   "thinking.derived": "degrade",
+  "thinking.encrypted": "degrade",
   "thinking.signature": "degrade",
+  "tool.strict": "degrade",
 };
 
 /** (能力, 动作) -> 档位；同一能力的其它动作退回上表，仍无命中则 rewrite。 */

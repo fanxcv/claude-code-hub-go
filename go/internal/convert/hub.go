@@ -99,6 +99,14 @@ type Tool struct {
 	HasDescript bool
 	Parameters  *Value
 	CacheHint   *CacheHint
+	// Strict 是客户端声明的「上游须按 schema 严格校验参数」（responses / chat 两线的 tools[].strict）。
+	//
+	// 为何只在 true 时对外写、且只在该值为 true 时记损：OpenAI 两线 `strict` 缺省即 false，
+	// 而 Codex 实测给每个 function 工具都显式写 `strict:false`——把它当损失记进台账，等于
+	// 给每个请求凭空添 N 条「改写」（实测 10 个工具 = 10 条），真损失反被淹没。`strict:true`
+	// 则是有约束力的声明，目标线无承载位时必须记损（见各编码器）。
+	Strict    bool
+	HasStrict bool
 }
 
 // ToolChoiceKind 是工具选择类型。
@@ -147,6 +155,14 @@ type Request struct {
 	Sampling          Sampling
 	Reasoning         *Reasoning
 	Stream            bool
+	// PromptCacheKey 是客户端的缓存路由键（OpenAI 两线同名）。
+	//
+	// 为何要进枢纽：它此前只活在 passthrough 里，而 chat 编码器只读本线 passthrough，于是
+	// responses→chat 一律丢弃——偏偏守卫链为了让供应商命中前缀缓存，会**主动**给 Codex
+	// 会话补这个字段（guard.completeCodexSession），补完在下游被丢掉等于白补。现由 chat
+	// 编码器原样写出，anthropic（无此概念）仍记 info 档损失。
+	PromptCacheKey    string
+	HasPromptCacheKey bool
 	Passthrough       map[WireProtocol]*Value
 }
 
@@ -385,6 +401,28 @@ const (
 	LossResponseFormat = "response_format"
 	LossTextControls   = "text.controls"
 	LossStoreFlag      = "store"
+
+	// LossReasoningSummary 是请求侧 `reasoning.summary` 在无承载位目标线上的丢弃。
+	//
+	// 为何单独设类而不是继续走 catch-all：Codex 每个请求都带 `reasoning.summary:"auto"`，
+	// 它是「要不要把思考摘要回传给我」的显示偏好，与本次作答无关（上游照旧回 reasoning_content，
+	// 我方再回译成 responses 的 reasoning 项）。按 catch-all 记成改写档的后果是：生产上几乎每行
+	// 都挂一枚「内容改写」徽章（实测 1228/1238 行），真损失被淹没。故单列并降到 info 档。
+	LossReasoningSummary = "reasoning.summary"
+
+	// LossThinkingEncrypted 是「加密思考块（OpenAI 的 encrypted_content / 红化思考）被丢」的专用类别。
+	//
+	// 为何与 thinking.block 分开：thinking.block 被丢的是**可读的思考内容**（真损失，rewrite 档）；
+	// 这里丢的是目标线根本解不开的密文 blob（chat / anthropic 无承载位），密文本身不构成内容，
+	// 只是「无法续接上游自己的思考」这一保真弱化。两者混在一格会让 rewrite 档被密文条数抬高。
+	LossThinkingEncrypted = "thinking.encrypted"
+
+	// LossToolStrict 是「客户端要求严格 schema 校验（tools[].strict=true），目标线无承载位」的类别。
+	//
+	// 为何不是 unknown_field.tool：`strict:true` 是**有约束力**的声明，丢了意味着上游可能返回不合
+	// schema 的参数；单列才能与「未知工具成员」区分。`strict:false`（Codex 默认写法）与本字段缺省
+	// 等价，一律不记损——记了就是每请求 N 条噪声。
+	LossToolStrict = "tool.strict"
 )
 
 // 以下七个是 catch-all `unknown_field` 的细分类别（按 detail 的来源归类）。
@@ -479,10 +517,13 @@ const (
 var lossSeverityByCapability = map[string]LossSeverity{
 	LossStoreFlag:         SeverityInfo,
 	LossPromptCacheKey:    SeverityInfo,
+	LossReasoningSummary:  SeverityInfo,
 	LossThinkingSignature: SeverityDegrade,
 	LossThinkingDerived:   SeverityDegrade,
 	LossReasoningReplay:   SeverityDegrade,
 	LossCacheControl:      SeverityDegrade,
+	LossThinkingEncrypted: SeverityDegrade,
+	LossToolStrict:        SeverityDegrade,
 }
 
 // lossSeverityByCapabilityAction 是「同一能力按动作分档」的例外表。

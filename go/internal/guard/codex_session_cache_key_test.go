@@ -85,6 +85,10 @@ func TestSessionStepCacheKeyPresenceContractIsNonNull(t *testing.T) {
 //
 // 为何要跨包钉在一起：两侧各自绿而中间断掉时没有任何用例会红——守卫链若登记成注入，
 // 转换层就永远不会记这一条；转换层若不再认这个能力，登记与否也都看不出差别。
+//
+// 为何取 anthropic 做目标线：chat 线现已**原样转发**这个字段（守卫链补它是为了命中前缀缓存，
+// 丢掉等于白补），声明与注入在出站正文里看不出差别；anthropic 无此概念，两者的差别恰好就是
+// 那一条损失。
 func TestClientProvidedCacheKeySurvivesAsDeclaredConstraintInConversion(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -111,7 +115,7 @@ func TestClientProvidedCacheKeySurvivesAsDeclaredConstraintInConversion(t *testi
 			// 与 dataplane 的装配同形：pctx 的注入事实经 ClientRequest 传进 ConvertCtx。
 			convertCtx := convert.ConvertCtx{
 				ClientFormat:              convert.FormatResponse,
-				TargetProto:               convert.ProtocolOpenAIChat,
+				TargetProto:               convert.ProtocolAnthropicMessages,
 				Model:                     "m",
 				ToWireToolName:            convert.NormalizeToolName,
 				GatewayInjectedBodyFields: ctx.GatewayInjectedBodyFields(),
@@ -120,9 +124,9 @@ func TestClientProvidedCacheKeySurvivesAsDeclaredConstraintInConversion(t *testi
 			if !ok {
 				t.Fatal("responses 线必须能解码")
 			}
-			encoded, ok := convert.EncodeRequest(convert.ProtocolOpenAIChat, decoded.Value, convertCtx)
+			encoded, ok := convert.EncodeRequest(convert.ProtocolAnthropicMessages, decoded.Value, convertCtx)
 			if !ok {
-				t.Fatal("chat 线必须能编码")
+				t.Fatal("anthropic 线必须能编码")
 			}
 			entries := []convert.LossEntry{}
 			for _, entry := range append(append([]convert.LossEntry{}, decoded.Loss.Entries...), encoded.Loss.Entries...) {
@@ -137,7 +141,7 @@ func TestClientProvidedCacheKeySurvivesAsDeclaredConstraintInConversion(t *testi
 			if testCase.wantCount == 0 {
 				return
 			}
-			if entries[0].Action != convert.LossDropped || entries[0].Detail != "prompt_cache_key" {
+			if entries[0].Action != convert.LossDropped || entries[0].Detail != "anthropic_has_no_prompt_cache_key" {
 				t.Fatalf("损失形状不符：%+v", entries[0])
 			}
 			// 档位必须是信息档：丢掉它本次作答不变（只是缓存路由失效），不该在列表徽章上占位。

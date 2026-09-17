@@ -61,11 +61,13 @@ type foreignDroppableField struct {
 
 // foreignDroppableFields 是有承载体但与目标线不兼容的顶层字段清单。
 //
-// 键名与线的关系：prompt_cache_key / store 在 OpenAI 两线都有；response_format 是 chat 线的
-// 结构化输出载体，responses 线走 text.format——故 responses 侧记的是整键 `text.controls`
-// （含 format 与 verbosity，两者在 anthropic/chat 上都没有等价物）。
+// 键名与线的关系：response_format 是 chat 线的结构化输出载体，responses 线走 text.format——
+// 故 responses 侧记的是整键 `text.controls`（含 format 与 verbosity，两者在 anthropic/chat 上
+// 都没有等价物）。
+//
+// `prompt_cache_key` **不在本表**：它已进枢纽（Request.PromptCacheKey），由 chat / responses
+// 两线原样回写，只有 anthropic（无此概念）在编码器里记损。留在这里会把它重复记一遍。
 var foreignDroppableFields = []foreignDroppableField{
-	{key: "prompt_cache_key", class: LossPromptCacheKey},
 	{key: "response_format", class: LossResponseFormat},
 	{key: "text", class: LossTextControls},
 	{key: "store", class: LossStoreFlag, requireTruthy: true},
