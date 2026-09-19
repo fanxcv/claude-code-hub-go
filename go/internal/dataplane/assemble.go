@@ -11,7 +11,6 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/appversion"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/cfgsync"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/clientver"
-	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/forward"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/gate"
@@ -473,18 +472,11 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			Now:    options.Now,
 			// 上游 WS：资格判定逐条对齐 Node 的四条件，且**每请求**判定（设置开关读快照，不是构造期一次）。
 			//
-			// 缺任何一条都维持现状走 HTTP 隧道、且不留任何降级痕迹——与当前行为逐字一致。
-			WS: wsDialer,
-			WSEligible: func(ctx context.Context, pc *pctx.Context, provider forward.Provider) bool {
-				if !forward.IsWebSocketClientRequest(pc) {
-					return false
-				}
-				if provider.Type != convert.ProviderCodex {
-					return false
-				}
-				settings, settingsErr := adapters.Settings.FindSystemSettings(ctx)
-				return settingsErr == nil && settings != nil && settings.EnableOpenAIResponsesWebsocket
-			},
+			// 缺任何一条都维持现状走 HTTP 隧道、且不留任何降级痕迹；但不留痕迹不等于不可观测：
+			// 每次跳过经 WSNotice 上报一条（见 ws_wiring.go 的 newWSNotice）。
+			WS:         wsDialer,
+			WSEligible: wsEligibility(adapters.Settings),
+			WSNotice:   newWSNotice(logger),
 			// 占位思考签名的主动剥离开关：发往 ANTHROPIC 供应商前剥掉客户端回传的自家占位签名。
 			PlaceholderThinkingSignature: options.PlaceholderThinkingSignature,
 			// 错误规则与假 200 检测共用守卫侧的快照（同一个 cfgsync 通道，避免两套真相）。

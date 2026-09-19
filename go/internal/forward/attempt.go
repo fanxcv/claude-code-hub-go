@@ -95,6 +95,13 @@ type Deps struct {
 	// 为什么带上 *pctx.Context：这三条判定的事实分别来自入口 headers（隧道标记）、候选供应商
 	// 与系统设置快照，而 Deps 是跨请求共享的——判定必须是**每请求**的函数，不能烘进构造期。
 	WSEligible func(ctx context.Context, pc *pctx.Context, provider Provider) bool
+	// WSNotice 是「本该走上游 WS 却没走」的上报缝（见 WSSkip 与 WSSkipCause）；
+	// nil 表示不上报。
+	//
+	// 为什么必须逐请求调用而由实现侧去重：跳过是每请求发生的事，而可读的信号是「哪条原因、
+	// 哪家供应商」的组合——去重键与限频窗口是运维口径，属于实现侧（热路径上只付一次函数调用）。
+	// 回调只在客户端为 WS 通道时触发（见 noticeWSSkip）。
+	WSNotice func(skip WSSkip)
 	// CountNetworkFailureTowardCircuit 对应 ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS。
 	CountNetworkFailureTowardCircuit bool
 	// RecordFailure 计一次供应商熔断失败；nil 时跳过。仅在分类计入熔断时调用。

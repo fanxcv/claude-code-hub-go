@@ -257,3 +257,100 @@ func TestExecuteStreamAttemptGatesUpstreamWSFrames(t *testing.T) {
 		t.Fatalf("关闭上游流失败: %v", err)
 	}
 }
+
+// TestWSAttemptReportsEverySkipPath 钉住「跳过不写链、但**必然上报**」这条可观测性契约。
+//
+// 为什么它是缺陷修复的一部分：三条跳过路径刻意不留链痕迹（链词表冻结，且「没尝试」不该记成
+// 「尝试过但降级」），于是 2026-09-19 排障时无法从外部区分是资格不成立、端点被缓存还是压根
+// 没接线——只能靠猜，而真相是第四条路径（竞速绕过）压根不在这个函数里。
+func TestWSAttemptReportsEverySkipPath(t *testing.T) {
+	collect := func(skips *[]WSSkip) func(WSSkip) {
+		return func(skip WSSkip) { *skips = append(*skips, skip) }
+	}
+	provider := Provider{ID: 7, Type: convert.ProviderCodex}
+	plan := wsTestPlan(t, "http://127.0.0.1:1/v1/responses")
+	pc := wsTestContext(t, "websocket")
+
+	t.Run("未接线", func(t *testing.T) {
+		var skips []WSSkip
+		bare := Deps{WSNotice: collect(&skips)}
+		if response := bare.wsAttempt(context.Background(), pc, provider, plan, &AttemptOutcome{}); response != nil {
+			t.Fatal("未接线时不该返回响应")
+		}
+		if len(skips) != 1 || skips[0].Cause != WSSkipCauseNotWired {
+			t.Fatalf("应上报一条 %q，得到 %+v", WSSkipCauseNotWired, skips)
+		}
+	})
+
+	t.Run("资格不成立", func(t *testing.T) {
+		var skips []WSSkip
+		deps := wsTestDeps(func(context.Context, *pctx.Context, Provider) bool { return false })
+		deps.WSNotice = collect(&skips)
+		if response := deps.wsAttempt(context.Background(), pc, provider, plan, &AttemptOutcome{}); response != nil {
+			t.Fatal("资格不成立时不该返回响应")
+		}
+		if len(skips) != 1 || skips[0].Cause != WSSkipCauseNotEligible {
+			t.Fatalf("应上报一条 %q，得到 %+v", WSSkipCauseNotEligible, skips)
+		}
+		if skips[0].ProviderID != 7 || skips[0].ProviderType != string(convert.ProviderCodex) {
+			t.Fatalf("跳过事实应带供应商身份，得到 %+v", skips[0])
+		}
+	})
+
+	t.Run("端点命中不支持缓存", func(t *testing.T) {
+		// 先真打一次必然被拒的握手：端点至此进短期缓存，这正是「未发起握手」的唯一来源。
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusUnauthorized)
+		}))
+		defer server.Close()
+		var skips []WSSkip
+		deps := wsTestDeps(func(context.Context, *pctx.Context, Provider) bool { return true })
+		deps.WSNotice = collect(&skips)
+		cachedPlan := wsTestPlan(t, server.URL+"/v1/responses")
+		first := &AttemptOutcome{ProviderID: 7}
+		if response := deps.wsAttempt(context.Background(), pc, provider, cachedPlan, first); response != nil {
+			t.Fatal("被拒的握手不该返回响应")
+		}
+		if first.WS == nil || !first.WS.Attempted {
+			t.Fatalf("第一次应真的发起握手，得到 %+v", first.WS)
+		}
+		second := &AttemptOutcome{ProviderID: 7}
+		if response := deps.wsAttempt(context.Background(), pc, provider, cachedPlan, second); response != nil {
+			t.Fatal("缓存命中时不该返回响应")
+		}
+		if second.WS != nil {
+			t.Fatalf("缓存命中不写链事实（与资格不成立同语义），得到 %+v", second.WS)
+		}
+		if len(skips) != 1 || skips[0].Cause != WSSkipCauseEndpointCached {
+			t.Fatalf("应上报一条 %q，得到 %+v", WSSkipCauseEndpointCached, skips)
+		}
+	})
+
+	t.Run("非 Responses 线", func(t *testing.T) {
+		var skips []WSSkip
+		deps := wsTestDeps(func(context.Context, *pctx.Context, Provider) bool { return true })
+		deps.WSNotice = collect(&skips)
+		chatPlan := wsTestPlan(t, "http://127.0.0.1:1/v1/responses")
+		chatPlan.Protocol = convert.ProtocolOpenAIChat
+		if response := deps.wsAttempt(context.Background(), pc, provider, chatPlan, &AttemptOutcome{}); response != nil {
+			t.Fatal("非 Responses 线不该返回响应")
+		}
+		if len(skips) != 1 || skips[0].Cause != WSSkipCauseProtocolMismatch {
+			t.Fatalf("应上报一条 %q，得到 %+v", WSSkipCauseProtocolMismatch, skips)
+		}
+	})
+
+	t.Run("客户端不是 WS 不上报", func(t *testing.T) {
+		// 普通 HTTP 请求走同一路径：跳过是常态，逐条上报只会淹没日志。
+		var skips []WSSkip
+		deps := wsTestDeps(func(context.Context, *pctx.Context, Provider) bool { return false })
+		deps.WSNotice = collect(&skips)
+		plain := wsTestContext(t, "")
+		if response := deps.wsAttempt(context.Background(), plain, provider, plan, &AttemptOutcome{}); response != nil {
+			t.Fatal("客户端不是 WS 时不该返回响应")
+		}
+		if len(skips) != 0 {
+			t.Fatalf("客户端不是 WS 通道时不得上报跳过，得到 %+v", skips)
+		}
+	})
+}

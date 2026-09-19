@@ -140,6 +140,13 @@ type hedgeAttempt struct {
 	startedAt time.Time
 	// dispatched 为真表示已进入传输调用（阈值从这里起算）。
 	dispatched bool
+	// ws 是本次 attempt 的上游 WS 事实（nil 表示与上游 WS 无关）。
+	//
+	// 为什么要存到 attempt 上而不是只留在 runAttempt 的局部变量里：竞速的**胜者/失败/输家**
+	// 三类留痕各自在自己的代码路径上**重新构造** AttemptOutcome（不像串行路径那样复用同一个
+	// 指针），不传播就会得到「真的走了 WS，但链上一条 WS 事实也没有」——修复前生产正是这样。
+	// 写与读都在 race 锁下（见 recordWSFacts / wsFactsOf）：本 attempt 的留痕可能由胜者协程读。
+	ws *AttemptWSFacts
 	// outcomeRecorded 为真表示本 attempt 的结局留痕已落过一条；必须持有 race.mu 访问。
 	// 胜者裁决时会先给在途输家各落一条（Node 的 abortAttempt 即在此时记录），此后
 	// 输家自身的收尾路径（取消 / 引流计费 / 在途失败）不得再落第二条。
@@ -396,13 +403,27 @@ func (r *hedgeRace) runAttempt(c *Candidate, seq int, maxInFlight int) {
 		ModelRedirect: attemptModelRedirect(plan),
 	}
 
-	response, cancelDial, failure := r.deps.dialAttempt(attemptCtx, plan, &outcome, true)
-	if failure != nil {
-		r.finishAttemptFailed(attempt, failure)
-		return
+	// 上游 WS 与串行路径同一条缝：竞速的每一次 attempt 都先试 WS，失败再回落 HTTP。
+	//
+	// 为什么必须在这里也试：竞速一旦生效，**所有**流式请求都走本函数（阈值 > 0 且设置允许时），
+	// 绕过 executeStreamAttempt——2026-09-19 生产上「上游 WS 72 小时零尝试、链上无键、
+	// 日志无痕」就是这么来的：codex 供应商的首字节阈值 60000ms 让每个请求都命中竞速。
+	// 只修串行路径等于「看起来支持，实则从不生效」。
+	// 走到这里即为「真的尝试」：链上的 WS 事实由下面的 result 分支写。
+	response := r.deps.wsAttempt(attemptCtx, r.pc, c.Provider, plan, &outcome)
+	cancelDial := context.CancelFunc(func() {})
+	if response == nil {
+		var failure *Failure
+		response, cancelDial, failure = r.deps.dialAttempt(attemptCtx, plan, &outcome, true)
+		if failure != nil {
+			r.finishAttemptFailed(attempt, failure)
+			return
+		}
 	}
 	defer cancelDial()
 	attempt.dispatched = true
+	// WS 事实在**任何留痕之前**发布：胜者/失败/输家三条留痕路径都要带上它。
+	r.recordWSFacts(attempt, outcome.WS)
 
 	// 非 2xx：完整读回错误正文，按串行路径同一口径分类。
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -862,6 +883,7 @@ func (r *hedgeRace) reportContent(attempt *hedgeAttempt, content *streamAttempt)
 			DurationMS:    r.now().Sub(r.startedOffset()).Milliseconds(),
 			StartedAt:     attempt.startedAt,
 			FinishedAt:    r.now(),
+			WS:            r.wsFactsOf(attempt),
 		})
 	} else {
 		r.appendOutcome(AttemptOutcome{
@@ -876,6 +898,7 @@ func (r *hedgeRace) reportContent(attempt *hedgeAttempt, content *streamAttempt)
 			DurationMS:    r.now().Sub(r.startedOffset()).Milliseconds(),
 			StartedAt:     attempt.startedAt,
 			FinishedAt:    r.now(),
+			WS:            r.wsFactsOf(attempt),
 		})
 	}
 
@@ -1054,6 +1077,8 @@ func (r *hedgeRace) finishAttemptFailed(attempt *hedgeAttempt, failure *Failure)
 		ModelRedirect: attemptModelRedirect(attempt.plan),
 		StartedAt:     attempt.startedAt,
 		FinishedAt:    r.now(),
+		// 上游 WS 事实与结局无关：降级后 HTTP 失败也是「本次尝试试过 WS」的事。
+		WS: r.wsFactsOf(attempt),
 	}
 	if attempt.plan != nil {
 		outcome.EndpointURL = attempt.plan.URL
@@ -1169,6 +1194,26 @@ func (r *hedgeRace) appendOutcomeLocked(outcome AttemptOutcome) {
 	r.outcomes = append(r.outcomes, outcome)
 }
 
+// recordWSFacts 发布本次 attempt 的上游 WS 事实（nil 不写，保持「无事实即无痕迹」）。
+func (r *hedgeRace) recordWSFacts(attempt *hedgeAttempt, facts *AttemptWSFacts) {
+	if facts == nil {
+		return
+	}
+	r.mu.Lock()
+	attempt.ws = facts
+	r.mu.Unlock()
+}
+
+// wsFactsOf 读本次 attempt 的上游 WS 事实。
+//
+// 用锁而非直接读字段：留痕可能由**别的协程**构造（胜者协程给在途输家落结局），
+// 而事实是那个 attempt 自己的协程发布的。
+func (r *hedgeRace) wsFactsOf(attempt *hedgeAttempt) *AttemptWSFacts {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return attempt.ws
+}
+
 // markLoserOutcomeLocked 在胜者裁决时给一条在途 attempt 落输家结局；必须持有 mu。
 //
 // 原因按「此刻能否计费」二选一：与 Node 的 attempt.billAsLoser 同一判定——链上先标记，
@@ -1249,6 +1294,9 @@ func (r *hedgeRace) appendLoserOutcomeLocked(attempt *hedgeAttempt, reason strin
 		EndpointID:   attempt.endpoint.ID,
 		Attempt:      attempt.seq,
 		Reason:       reason,
+		// 输家同样带上本次尝试的 WS 事实：一个「已连上上游 WS 却被取消」的输家与
+		// 「连 HTTP 都没发出去」的输家是不同的运维事实。
+		WS: attempt.ws,
 		// 输家不写 statusCode：Node 在 hedge_loser_billed 上传的是
 		// `attempt.response?.status`（`forwarder.ts:5229`），而它同样**多数时候是 undefined**
 		// ——裁决发生在胜者首字节到达时，输家未必已收到响应头；Go 的输家结局也在同一时刻

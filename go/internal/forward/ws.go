@@ -22,6 +22,37 @@ const (
 	wsClientTransportValue  = "websocket"
 )
 
+// WSSkipCause 是「本该走上游 WS 却没走」的路径标识，每条跳过路径一个词。
+//
+// 为什么需要它：wsAttempt 的三条跳过路径**刻意不留链痕迹**（链词表是冻结的 Node 词表，
+// 没有对应词，且「没尝试」不该记成「尝试过但降级」）。代价是生产上「上游 WS 一直没生效」
+// 只能靠猜——2026-09-19 的排障正是卡在这里：链上无键、日志无痕，无法区分是资格不成立、
+// 端点被缓存还是压根没接线。故这四条路径改为**必然通知**：不改行为、不写链，只让事实可见。
+//
+// 类型名刻意不含 `Reason`：那些词不是链上的 reason（不写 provider_chain），而
+// chainreason_test.go 的词表钉子按 `…Reason = "…"` 的形状扫本包源码，用 Reason 命名会被
+// 当成「自造链词」而报错——钉子是对的，该改的是命名。
+type WSSkipCause string
+
+const (
+	// WSSkipCauseNotWired 表示转发层没接上 WS 拨号器或资格判定（装配缺口）。
+	WSSkipCauseNotWired WSSkipCause = "not_wired"
+	// WSSkipCauseNotEligible 表示资格判定不成立（客户端不是 WS / 供应商不是 codex / 开关关闭）。
+	WSSkipCauseNotEligible WSSkipCause = "not_eligible"
+	// WSSkipCauseEndpointCached 表示端点命中「不支持 WS」短期缓存，未发起握手。
+	WSSkipCauseEndpointCached WSSkipCause = "endpoint_cached"
+	// WSSkipCauseProtocolMismatch 表示本次尝试的协议线不是 Responses 线（正文不能当 WS 首帧发出）。
+	WSSkipCauseProtocolMismatch WSSkipCause = "protocol_mismatch"
+)
+
+// WSSkip 是一条跳过事实，交给 Deps.WSNotice。
+type WSSkip struct {
+	Cause        WSSkipCause
+	ProviderID   int64
+	ProviderType string
+	EndpointURL  string
+}
+
 // IsWebSocketClientRequest 判定入口请求是否来自客户端 WS 通道。
 //
 // 供接线层构造 Deps.WSEligible 用：把「怎么认客户端 WS」这件事留在本包一处，
@@ -47,21 +78,29 @@ func (d Deps) wsAttempt(
 	plan *Plan,
 	outcome *AttemptOutcome,
 ) *dial.Response {
-	if d.WS == nil || d.WSEligible == nil || plan == nil || outcome == nil {
+	if plan == nil || outcome == nil {
+		return nil
+	}
+	if d.WS == nil || d.WSEligible == nil {
+		d.noticeWSSkip(pc, WSSkipCauseNotWired, provider, plan.URL)
 		return nil
 	}
 	if !d.WSEligible(ctx, pc, provider) {
+		d.noticeWSSkip(pc, WSSkipCauseNotEligible, provider, plan.URL)
 		return nil
 	}
 	// 端点此前失败过（短期缓存）：不尝试、也不留痕——与「不具备资格」同语义：什么都没发生。
 	if !d.WS.EndpointEligible(plan.URL) {
+		d.noticeWSSkip(pc, WSSkipCauseEndpointCached, provider, plan.URL)
 		return nil
 	}
 	// 防御：WS 通道的帧就是 Responses 事件，正文必须属于 Responses 线。不是该线时宁可不走，
 	// 也不把别的协议线的正文当 response.create 帧发出去——那是把请求发错形态，不是降级。
 	if plan.Protocol != convert.ProtocolOpenAIResponses {
+		d.noticeWSSkip(pc, WSSkipCauseProtocolMismatch, provider, plan.URL)
 		return nil
 	}
+	// 走到这里即为「真的尝试」：链上的 WS 事实由下面的 result 分支写。
 
 	result := d.WS.DialWS(ctx, upws.Request{
 		EndpointURL: plan.URL,
@@ -91,6 +130,23 @@ func (d Deps) wsAttempt(
 		// 上下文已取消（客户端中断）或压根没发起握手：不写降级——前者不是降级，后者没发生。
 		return nil
 	}
+}
+
+// noticeWSSkip 上报一条「跳过上游 WS」的事实。
+//
+// 两类静默：未接 WSNotice（调用方不关心）、客户端不是 WS 通道（普通 HTTP 请求跳过是常态，
+// 逐条上报只会淹没日志）。后者也是本钩子唯一能过滤的维度——供应商类型与开关状态由
+// 实现侧自行记录。
+func (d Deps) noticeWSSkip(pc *pctx.Context, cause WSSkipCause, provider Provider, endpointURL string) {
+	if d.WSNotice == nil || !IsWebSocketClientRequest(pc) {
+		return
+	}
+	d.WSNotice(WSSkip{
+		Cause:        cause,
+		ProviderID:   provider.ID,
+		ProviderType: string(provider.Type),
+		EndpointURL:  endpointURL,
+	})
 }
 
 // wsSessionID 取本次客户端 WS 会话 id；缺失时新生成一个 UUID v4。
