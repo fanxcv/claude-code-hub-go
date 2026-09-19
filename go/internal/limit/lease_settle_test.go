@@ -122,6 +122,9 @@ func TestLeaseSettlementTargetsFromPlanDropsOutOfDomainValues(t *testing.T) {
 // 为什么日志也算验收面：这一维不入计划就永远不会被结算，租约余额会比实际更宽，
 // 而它在账面上没有任何其他痕迹——日志是唯一的排查入口。
 func TestRememberLeaseTargetDropsOutOfDomainDimensions(t *testing.T) {
+	// 丢留痕已按目标限频（见 allowLeaseDropLog）：同一进程内重复跑同一维度时先清状态，
+	// 否则第二次运行会被上一轮的限频窗口挡住。
+	resetLeaseDropLogLimiter()
 	cases := []struct {
 		name      string
 		dimension costDimension

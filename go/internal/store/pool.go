@@ -431,10 +431,17 @@ func (p *Pool) Outstanding() int64 { return p.outstanding.Load() }
 func (p *Pool) Raw() *pgxpool.Pool { return p.raw }
 
 func (p *Pool) acquire() (func(), error) {
-	if int(p.outstanding.Load()) >= p.maxOutstanding {
-		return nil, &AdmissionError{lane: p.lane, maxOutstanding: p.maxOutstanding}
+	// CAS 循环而不是「先读后加」：两次操作之间会被并发调用者插进来，
+	// 结果是多个请求同时越过上限，准入形同虚设（瞬时在途数可以超过 maxOutstanding）。
+	for {
+		current := p.outstanding.Load()
+		if int(current) >= p.maxOutstanding {
+			return nil, &AdmissionError{lane: p.lane, maxOutstanding: p.maxOutstanding}
+		}
+		if p.outstanding.CompareAndSwap(current, current+1) {
+			break
+		}
 	}
-	p.outstanding.Add(1)
 	var once sync.Once
 	return func() { once.Do(func() { p.outstanding.Add(-1) }) }, nil
 }

@@ -283,7 +283,7 @@ func (s *Service) check(
 			})
 		}
 		if exceeded {
-			return s.costBlock(dimension, current, now), nil
+			return s.costBlock(ctx, dimension, current, now), nil
 		}
 	}
 	rememberLeasePlan(req, leasePlan)
@@ -708,7 +708,9 @@ func FixedWindowKey(e Entity, id int64, period Period, resetTime string) string 
 }
 
 // costBlock 把触顶的周期维度翻译成拦截块。
-func (s *Service) costBlock(dimension costDimension, current float64, now time.Time) *guard.RateLimitBlock {
+//
+// 带 ctx 是因为其中一分支要反查 5h 固定窗口的 TTL（一次 Redis 往返）。
+func (s *Service) costBlock(ctx context.Context, dimension costDimension, current float64, now time.Time) *guard.RateLimitBlock {
 	var (
 		code      string
 		limitType string
@@ -719,7 +721,7 @@ func (s *Service) costBlock(dimension costDimension, current float64, now time.T
 		limitType = "usd_5h"
 		if dimension.resetMode == ResetFixed {
 			code = Message5hExceeded
-			resetAt = ResetAtFromTTL(now, s.fixed5hTTL(dimension, now))
+			resetAt = ResetAtFromTTL(now, s.fixed5hTTL(ctx, dimension, now))
 		} else {
 			code = Message5hRollingExceeded
 		}
@@ -772,11 +774,14 @@ func (s *Service) costBlock(dimension costDimension, current float64, now time.T
 }
 
 // fixed5hTTL 取 5h 固定窗口键剩余 TTL，用于给出重置时刻。
-func (s *Service) fixed5hTTL(dimension costDimension, now time.Time) *int64 {
+//
+// 用调用方的 ctx 而不是 context.Background()：客户端已经断开时，这一读还会白占一次
+// Redis 往返与连接池名额（调用点处于限流判定后的封顶响应路径）。
+func (s *Service) fixed5hTTL(ctx context.Context, dimension costDimension, now time.Time) *int64 {
 	if !s.windows.Ready() {
 		return nil
 	}
-	state, err := s.windows.Fixed5hWindowState(context.Background(), dimension.entity, dimension.id, now)
+	state, err := s.windows.Fixed5hWindowState(ctx, dimension.entity, dimension.id, now)
 	if err != nil || state.ResetAt == nil {
 		return nil
 	}

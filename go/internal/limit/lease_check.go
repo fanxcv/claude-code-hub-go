@@ -23,19 +23,31 @@ func rememberLeasePlan(req *pctx.Context, plan pctx.LeaseSettlementPlan) {
 // 刷新窗口内判定会放行本该拒的请求（“少扣”在账面上与“多扣”一样是错）。
 // 两类丢弃都走同一条日志：取值域漂移（leaseSettlementTargetFor 返 false）与
 // 结构不完整（Add 返 false），两者的排查手段相同——比对库里的实体/窗口/重置模式取值。
+//
+// 日志本身按「目标」限频（见 allowLeaseDropLog，在 lease_drop_log.go）：这条路径是逐请求
+// 逐维触发的，取值域一旦整体漂移（例如库里新增了一个周期），高 QPS 下会以「请求数×维数」的
+// 速率刷 Error 级日志，把日志面自身变成故障面；被压掉的条数在下次放行时随 suppressed 报回。
 func rememberLeaseTarget(log *logx.Logger, plan *pctx.LeaseSettlementPlan, dimension costDimension) {
 	target, inDomain := leaseSettlementTargetFor(dimension)
 	if inDomain && plan.Add(target) {
 		return
 	}
-	log.Error("limit.lease.plan_target_dropped", map[string]any{
+	fields := map[string]any{
 		"entity":    string(dimension.entity),
 		"period":    string(dimension.period),
 		"resetMode": string(dimension.resetMode),
 		"entityId":  dimension.id,
 		"inDomain":  inDomain,
 		"note":      "该维已走租约判定但目标不在结算取值域内，本维不结算；租约余额可能偏宽",
-	})
+	}
+	allowed, suppressed := allowLeaseDropLog(leaseDropLogKey(dimension), time.Now())
+	if !allowed {
+		return
+	}
+	if suppressed > 0 {
+		fields["suppressed"] = suppressed
+	}
+	log.Error("limit.lease.plan_target_dropped", fields)
 }
 
 // leaseSettlementTargetFor 把一次**以租约完成判定**的维度翻成结算目标。
@@ -126,5 +138,5 @@ func (s *Service) leaseCostLimit(
 	if allowed {
 		return nil, true
 	}
-	return s.costBlock(dimension, current, now), true
+	return s.costBlock(ctx, dimension, current, now), true
 }

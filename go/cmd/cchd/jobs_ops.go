@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -169,6 +170,14 @@ func startOpsRuntime(
 // REPLAY_CLEANUP_BATCH_SIZE 也是 100）。
 const replayCleanupBatchSize = 100
 
+// opsRoundTimeout 是单轮执行的上限，与 jobs.Scheduler 的 defaultTaskTimeout 对齐（10m）。
+//
+// 少了这一层，一个卡住的探活（上游不响应且无客户端超时）会把该任务的 goroutine 连同 ticker
+// 一起拖住：后续轮次全部跳过，而日志里只会看到「上一轮还没结束」。
+//
+// 是变量而非常量：用例要把它压到毫秒级，才能验「超时确实取消了任务 ctx」。
+var opsRoundTimeout = 10 * time.Minute
+
 // runOpsRound 执行一轮并把结果落日志；错误只降级不冒泡。
 func runOpsRound(
 	ctx context.Context,
@@ -177,7 +186,10 @@ func runOpsRound(
 	run func(context.Context) (jobs.OpsOutcome, error),
 ) {
 	startedAt := time.Now()
-	outcome, err := run(ctx)
+	// 单轮超时只收本轮：父 ctx 仍管进程退出，defer cancel 保证不泄漏定时器。
+	roundCtx, cancel := context.WithTimeout(ctx, opsRoundTimeout)
+	defer cancel()
+	outcome, err := run(roundCtx)
 	fields := map[string]any{
 		"task":     name,
 		"duration": time.Since(startedAt).Milliseconds(),
@@ -190,6 +202,11 @@ func runOpsRound(
 	}
 	if err != nil {
 		fields["error"] = err.Error()
+		// 超时是与普通失败不同的一类信号：前者说明任务体卡住（或没尊重 ctx），
+		// 排查方向是「哪个下游不响应」，不是「任务逻辑错」。给日志一个可判别的字段。
+		if errors.Is(err, context.DeadlineExceeded) {
+			fields["timeout"] = true
+		}
 		logger.Warn("ops_job_round_failed", fields)
 		return
 	}

@@ -675,7 +675,12 @@ type computeInput struct {
 }
 
 // runSingleFlight 复刻 runPublicStatusRebuild 的单飞语义：同键并发只算一次。
-func runSingleFlight(flightKey string, compute func() (RebuildResult, error)) (RebuildResult, error) {
+//
+// 收尾一律走 defer：compute 一旦 panic，原本「算完再 close(done) + 删条目」的写法会让
+// done 永不关闭、条目永不删除，同键的等待者全部永久阻塞在 <-entry.done 上——
+// 一个后台重建的 panic 会因此变成整条投影链的静默挂死。恢复后的 panic 转成错误返回，
+// 由调用方按普通失败处理（不向调用者重新抛出，免得一个脏代数带走整个进程）。
+func runSingleFlight(flightKey string, compute func() (RebuildResult, error)) (result RebuildResult, err error) {
 	inFlightMu.Lock()
 	if entry, ok := inFlightRebuilds[flightKey]; ok {
 		inFlightMu.Unlock()
@@ -686,13 +691,21 @@ func runSingleFlight(flightKey string, compute func() (RebuildResult, error)) (R
 	inFlightRebuilds[flightKey] = entry
 	inFlightMu.Unlock()
 
-	entry.result, entry.err = compute()
-	close(entry.done)
+	// 具名返回值不是风格选择：panic 被 recover 后，函数返回的是返回值变量的当前值，
+	// 写 entry.err 只能让等待者看到错误，调用方仍会拿到零值 nil——两边必须同时可见。
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("pubstatus: rebuild panicked: %v", recovered)
+		}
+		entry.result, entry.err = result, err
+		close(entry.done)
+		inFlightMu.Lock()
+		delete(inFlightRebuilds, flightKey)
+		inFlightMu.Unlock()
+	}()
 
-	inFlightMu.Lock()
-	delete(inFlightRebuilds, flightKey)
-	inFlightMu.Unlock()
-	return entry.result, entry.err
+	result, err = compute()
+	return result, err
 }
 
 // computeGeneration 复刻 worker 里 `computeGeneration` 那段（rebuild-worker.ts:366-...）：
