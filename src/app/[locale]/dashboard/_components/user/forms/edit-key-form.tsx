@@ -32,6 +32,7 @@ import { Switch } from "@/components/ui/switch";
 import { editKey, resetKeyLimitsOnly } from "@/lib/api-client/v1/actions/keys";
 import { getAvailableProviderGroups } from "@/lib/api-client/v1/actions/providers";
 import { PROVIDER_GROUP } from "@/lib/constants/provider.constants";
+import { clearUsageCache } from "@/lib/dashboard/user-limit-usage-cache";
 import { useZodForm } from "@/lib/hooks/use-zod-form";
 import { getErrorMessage } from "@/lib/utils/error-messages";
 import { parseProviderGroups } from "@/lib/utils/provider-group";
@@ -101,8 +102,12 @@ export function EditKeyForm({ keyData, user, isAdmin = false, onSuccess }: EditK
       }
       toast.success(t("resetLimits.success"));
       setResetLimitsDialogOpen(false);
+      // 该端点只推进 Key 的限额基准（cost_reset_at），本页受影响的只有 users 列表里的 Key 数据
+      // （costResetAt）与用户限额用量——后者存在模块级缓存里，React Query 失效覆盖不到，
+      // 与 user-key-table-row 的限额快改保持同一处置。无参失效会牵动全站查询，故收窄。
+      if (user) clearUsageCache(user.id);
+      queryClient.invalidateQueries({ queryKey: ["users"] });
       router.refresh();
-      queryClient.invalidateQueries();
     } catch (error) {
       console.error("[EditKeyForm] reset limits only failed", error);
       toast.error(t("resetLimits.error"));
