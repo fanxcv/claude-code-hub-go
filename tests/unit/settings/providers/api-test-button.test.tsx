@@ -519,4 +519,78 @@ describe("ApiTestButton", () => {
 
     unmount();
   });
+
+  test("Gemini 失败按本端 HTTP 状态码定档，不依赖上游回显语言", async () => {
+    testProviderGeminiMock.mockResolvedValue({
+      ok: true,
+      data: {
+        success: false,
+        message: "API 返回错误: HTTP 429",
+        details: { responseTime: 12 },
+      },
+    });
+
+    const { container, unmount } = render(
+      <NextIntlClientProvider locale="en" timeZone="UTC" messages={buildMessages()}>
+        <ApiTestButton
+          providerUrl="https://generativelanguage.googleapis.com"
+          apiKey="AIzaSy-test"
+          providerType="gemini"
+          enableMultiProviderTypes
+        />
+      </NextIntlClientProvider>
+    );
+
+    await flushTicks(2);
+
+    const button = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes(apiTestMessages.testApi)
+    );
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushTicks(3);
+
+    expect(testProviderGeminiMock).toHaveBeenCalled();
+    expect(container.textContent).toContain("rate_limit");
+
+    unmount();
+  });
+
+  test("英文传输层错误文案归到 network_error", async () => {
+    testProviderGeminiMock.mockResolvedValue({
+      ok: true,
+      data: {
+        success: false,
+        message: "连接失败: dial tcp 127.0.0.1:443: connect: connection refused",
+        details: { responseTime: 5 },
+      },
+    });
+
+    const { container, unmount } = render(
+      <NextIntlClientProvider locale="en" timeZone="UTC" messages={buildMessages()}>
+        <ApiTestButton
+          providerUrl="https://generativelanguage.googleapis.com"
+          apiKey="AIzaSy-test"
+          providerType="gemini"
+          enableMultiProviderTypes
+        />
+      </NextIntlClientProvider>
+    );
+
+    await flushTicks(2);
+
+    const button = Array.from(container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes(apiTestMessages.testApi)
+    );
+    await act(async () => {
+      button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushTicks(3);
+
+    expect(testProviderGeminiMock).toHaveBeenCalled();
+    expect(container.textContent).toContain("network_error");
+
+    unmount();
+  });
 });

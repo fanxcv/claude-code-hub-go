@@ -36,6 +36,7 @@
   "chart": {
     "requestUnit": "requests",
     "countLabel": "Count",
+    "noData": "No data",
     "switchLocale": "Switch language: {locale}"
   }
 }

@@ -1162,6 +1162,7 @@
     "activeKeys": "Active Keys",
     "totalKeys": "Total Keys",
     "expiresAt": "Expiration",
+    "expiresAtHint": "The user is automatically disabled once expired",
     "status": {
       "active": "Active",
       "expiringSoon": "Expiring Soon",
@@ -1451,6 +1452,18 @@
       "label": "Allowed Models",
       "placeholder": "Enter model name (press Enter to add)",
       "description": "Restrict this user to specific AI models. Leave empty for no restrictions (max 50 models, 64 chars each)"
+    }
+  },
+  "deleteUserConfirm": {
+    "title": "Delete User",
+    "question": "Are you sure you want to delete user \"{name}\"?",
+    "warning": "This will also delete the user's {count} keys and cannot be undone.",
+    "cancel": "Cancel",
+    "confirm": "Delete",
+    "confirmLoading": "Deleting...",
+    "errors": {
+      "deleteFailed": "Delete failed",
+      "retryError": "Delete failed, please try again later"
     }
   },
   "deleteKeyConfirm": {

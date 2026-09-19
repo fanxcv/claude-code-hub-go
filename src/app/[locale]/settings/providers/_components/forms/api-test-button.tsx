@@ -256,6 +256,16 @@ export function ApiTestButton({
           | "rate_limit" => {
           if (isSuccess) return "success";
           const msg = cleanMessage.toLowerCase();
+          // 先按本端生成的 HTTP 状态码判定（格式「API 返回错误: HTTP 401」），
+          // 与上游回显语言无关，命中即定档，不再依赖文案措辞。
+          const httpStatusCode = /http\s*(\d{3})/.exec(msg)?.[1];
+          if (httpStatusCode) {
+            const status = Number(httpStatusCode);
+            if (status === 429) return "rate_limit";
+            if (status === 401 || status === 403) return "auth_error";
+            if (status >= 500) return "server_error";
+            return "client_error";
+          }
           if (
             msg.includes("429") ||
             msg.includes("rate") ||
@@ -268,6 +278,8 @@ export function ApiTestButton({
             msg.includes("401") ||
             msg.includes("403") ||
             msg.includes("认证") ||
+            msg.includes("unauthorized") ||
+            msg.includes("forbidden") ||
             msg.includes("auth")
           ) {
             return "auth_error";
@@ -275,8 +287,12 @@ export function ApiTestButton({
           if (
             msg.includes("timeout") ||
             msg.includes("超时") ||
+            msg.includes("deadline exceeded") ||
             msg.includes("econnrefused") ||
-            msg.includes("dns")
+            msg.includes("connection refused") ||
+            msg.includes("连接失败") ||
+            msg.includes("dns") ||
+            msg.includes("no such host")
           ) {
             return "network_error";
           }

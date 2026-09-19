@@ -1,5 +1,6 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Activity,
@@ -35,7 +36,6 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import useSWR from "swr";
 import { type Locale, localeLabels, locales } from "@/i18n/config";
 import { normalizePathnameForLocaleNavigation } from "@/i18n/pathname";
 import { usePathname, useRouter } from "@/i18n/routing";
@@ -660,7 +660,7 @@ const ModelDistribution = ({
           {t("sections.modelDist")}
         </div>
         <div className="flex-1 flex items-center justify-center">
-          <span className={`text-xs ${theme.text} opacity-50`}>暂无数据</span>
+          <span className={`text-xs ${theme.text} opacity-50`}>{t("chart.noData")}</span>
         </div>
       </div>
     );
@@ -739,27 +739,28 @@ export default function BigScreenPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // 使用 SWR 获取数据，2秒刷新
-  const { data, error, mutate } = useSWR(
-    "dashboard-realtime",
-    async () => {
+  // 实时数据：与全站一致用 react-query（原先误用幽灵依赖 swr，其仅因 @lobehub/ui 传递引入）。
+  // 2 秒轮询；后台不刷新与失焦不刷新沿用全局默认（providers.tsx 的 QUERY_CLIENT_DEFAULTS）。
+  const {
+    data,
+    error,
+    refetch: refreshRealtime,
+  } = useQuery({
+    queryKey: ["dashboard-realtime"],
+    queryFn: async () => {
       const result = await getDashboardRealtimeData();
       if (!result.ok) {
         throw new Error(result.error || "Failed to fetch data");
       }
       return result.data;
     },
-    {
-      refreshInterval: 2000,
-      revalidateOnFocus: false,
-      refreshWhenHidden: false,
-    }
-  );
+    refetchInterval: 2000,
+  });
 
-  // Fetch system settings for currency display
-  const { data: systemSettings } = useSWR("system-settings", getSystemSettings, {
-    revalidateOnFocus: false,
-    refreshWhenHidden: false,
+  // 系统设置（货币符号展示用）：与设置页共用同一 query key，缓存可复用。
+  const { data: systemSettings } = useQuery({
+    queryKey: ["system-settings"],
+    queryFn: getSystemSettings,
   });
 
   const currencySymbol = CURRENCY_CONFIG[systemSettings?.currencyDisplay ?? "USD"]?.symbol ?? "$";
@@ -831,7 +832,7 @@ export default function BigScreenPage() {
                 {themeMode === "dark" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
               <button
-                onClick={() => mutate()}
+                onClick={() => refreshRealtime()}
                 className={`p-1.5 rounded hover:bg-white/5 ${theme.text} transition-colors`}
               >
                 <RefreshCw size={18} />

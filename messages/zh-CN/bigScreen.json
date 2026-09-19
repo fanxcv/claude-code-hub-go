@@ -36,6 +36,7 @@
   "chart": {
     "requestUnit": "请求",
     "countLabel": "数量",
+    "noData": "暂无数据",
     "switchLocale": "切换语言: {locale}"
   }
 }

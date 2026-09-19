@@ -1,5 +1,6 @@
 "use client";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { useTransition } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { removeUser } from "@/lib/api-client/v1/actions/users";
+import { getErrorMessage } from "@/lib/utils/error-messages";
 
 interface DeleteUserConfirmProps {
   user?: {
@@ -26,6 +28,8 @@ export function DeleteUserConfirm({
 }: DeleteUserConfirmProps & { onSuccess?: () => void }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
+  const t = useTranslations("dashboard.deleteUserConfirm");
+  const tErrors = useTranslations("errors");
 
   const handleConfirm = () => {
     if (!user) return;
@@ -33,14 +37,18 @@ export function DeleteUserConfirm({
       try {
         const res = await removeUser(user.id);
         if (!res.ok) {
-          toast.error(res.error || "删除失败");
+          // REST 桥接返回的 error 是通用 detail，真实原因在 errorCode 中
+          const message = res.errorCode
+            ? getErrorMessage(tErrors, res.errorCode, res.errorParams)
+            : res.error || t("errors.deleteFailed");
+          toast.error(message);
           return;
         }
         onSuccess?.();
         router.refresh();
       } catch (error) {
         console.error("删除用户失败:", error);
-        toast.error("删除失败，请稍后重试");
+        toast.error(t("errors.retryError"));
       }
     });
   };
@@ -48,22 +56,22 @@ export function DeleteUserConfirm({
   return (
     <>
       <DialogHeader>
-        <DialogTitle>确认删除用户</DialogTitle>
+        <DialogTitle>{t("title")}</DialogTitle>
         <DialogDescription>
-          您确定要删除用户 &ldquo;<strong>{user?.name}</strong>&rdquo; 吗？
+          {t("question", { name: user?.name ?? "" })}
           <br />
-          此操作将同时删除该用户的 {user?.keys.length || 0} 个密钥，且无法撤销。
+          {t("warning", { count: user?.keys.length || 0 })}
         </DialogDescription>
       </DialogHeader>
 
       <DialogFooter>
         <DialogClose asChild>
           <Button type="button" variant="outline" disabled={isPending}>
-            取消
+            {t("cancel")}
           </Button>
         </DialogClose>
         <Button variant="destructive" onClick={handleConfirm} disabled={isPending}>
-          {isPending ? "删除中..." : "确认删除"}
+          {isPending ? t("confirmLoading") : t("confirm")}
         </Button>
       </DialogFooter>
     </>

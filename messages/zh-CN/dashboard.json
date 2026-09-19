@@ -1454,6 +1454,18 @@
       "description": "限制用户只能使用指定的AI模型。留空表示无限制（最多50个模型，每个最长64字符）"
     }
   },
+  "deleteUserConfirm": {
+    "title": "确认删除用户",
+    "question": "您确定要删除用户 “{name}” 吗？",
+    "warning": "此操作将同时删除该用户的 {count} 个密钥，且无法撤销。",
+    "cancel": "取消",
+    "confirm": "确认删除",
+    "confirmLoading": "删除中...",
+    "errors": {
+      "deleteFailed": "删除失败",
+      "retryError": "删除失败，请稍后重试"
+    }
+  },
   "deleteKeyConfirm": {
     "title": "确认删除密钥",
     "description": "您确定要删除密钥 \"{name}\" 吗？\n{maskedKey}\n此操作无法撤销，删除后所有使用此密钥的应用将无法访问。",
@@ -2099,7 +2111,47 @@
       },
       "alreadySet": "已配置",
       "confirmAdd": "添加",
-      "cancel": "取消"
+      "cancel": "取消",
+      "title": "添加限额规则",
+      "description": "选择限额类型并设置数值",
+      "confirm": "保存",
+      "fields": {
+        "type": {
+          "label": "限额类型",
+          "placeholder": "请选择"
+        },
+        "value": {
+          "label": "数值",
+          "placeholder": "请输入"
+        }
+      },
+      "daily": {
+        "mode": {
+          "label": "每日重置模式",
+          "fixed": "固定时间重置",
+          "rolling": "滚动窗口（24小时）",
+          "helperRolling": "从首次请求开始计算24小时滚动窗口"
+        },
+        "time": {
+          "label": "重置时间",
+          "placeholder": "HH:mm"
+        }
+      },
+      "limitTypes": {
+        "limitRpm": "RPM 限额",
+        "limit5h": "5小时限额",
+        "limitDaily": "每日限额",
+        "limitWeekly": "周限额",
+        "limitMonthly": "月限额",
+        "limitTotal": "总限额",
+        "limitSessions": "并发 Session"
+      },
+      "errors": {
+        "missingType": "请选择限额类型",
+        "invalidValue": "请输入有效数值",
+        "invalidTime": "请输入有效时间（HH:mm）"
+      },
+      "overwriteHint": "该类型已存在，保存后会覆盖现有配置"
     },
     "quickExpire": {
       "oneWeek": "一周后",
@@ -2162,7 +2214,9 @@
     "keySettings": {
       "balanceQueryPage": {
         "label": "启用独立余额查询页",
-        "description": "允许用户通过专属页面查看余额"
+        "description": "允许用户通过专属页面查看余额",
+        "descriptionEnabled": "启用后，此密钥在登录时将进入独立的个人用量页面。但不可修改自己密钥的供应商分组。",
+        "descriptionDisabled": "关闭后，用户将无法进入个人独立用量页面 UI，而是进入受限的 Web UI。"
       },
       "cacheTtlOverride": {
         "label": "Cache TTL 覆写",
@@ -2353,6 +2407,13 @@
           }
         },
         "overwriteHint": "此类型已存在，保存将覆盖原有值"
+      },
+      "accessRestrictions": {
+        "title": "访问限制",
+        "models": "允许的模型",
+        "clients": "允许的客户端",
+        "noRestrictions": "无限制",
+        "inheritedFromUser": "继承用户设置"
       }
     }
   },
