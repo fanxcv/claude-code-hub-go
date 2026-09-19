@@ -283,3 +283,30 @@ describe("UsageLogsViewVirtualized filter navigation", () => {
     unmount();
   });
 });
+
+describe("UsageLogsViewVirtualized height chain", () => {
+  beforeEach(() => {
+    searchParamMocks.value = new URLSearchParams();
+    document.body.innerHTML = "";
+  });
+
+  it("passes the available height down to the logs card through a growable flex column", () => {
+    const { container, unmount } = renderUsageLogsView();
+
+    // 表格卡片上方的两层容器都必须能把「视口高减 header」的余量往下传，
+    // 否则滚动体只能停在 600px 基线高度，大屏下方留下空白。
+    const viewRoot = container.firstElementChild as HTMLElement | null;
+    const card = container.querySelector('[data-testid="virtualized-logs-table"]')
+      ?.parentElement as HTMLElement | null;
+
+    expect(viewRoot).not.toBeNull();
+    expect(card).not.toBeNull();
+    for (const element of [viewRoot, card]) {
+      expect(element?.className).toContain("flex-col");
+      expect(element?.className).toContain("grow");
+      expect(element?.className).toContain("shrink-0");
+    }
+
+    unmount();
+  });
+});

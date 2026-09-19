@@ -45,7 +45,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   if (target) return null;
 
   return (
-    <div className="min-h-[var(--cch-viewport-height,100vh)] bg-background">
+    <div className="flex min-h-[var(--cch-viewport-height,100vh)] flex-col bg-background">
       <DashboardHeader session={session} />
       <DashboardMain>{children}</DashboardMain>
       <WebhookMigrationDialog />

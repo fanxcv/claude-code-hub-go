@@ -683,7 +683,7 @@ export function VirtualizedLogsTable({
   };
 
   return (
-    <div className="space-y-4">
+    <div className="flex grow shrink-0 flex-col gap-4">
       {/* Status bar */}
       {hideStatusBar ? null : (
         <div className="flex items-center justify-between text-xs text-muted-foreground/70 px-3 pt-2">
@@ -699,8 +699,8 @@ export function VirtualizedLogsTable({
       )}
 
       {/* Table with virtual scrolling */}
-      <div className="overflow-x-auto">
-        <div className="min-w-[900px]">
+      <div className="flex grow shrink-0 flex-col overflow-x-auto">
+        <div className="flex grow shrink-0 flex-col min-w-[900px]">
           {/* Fixed header */}
           <div className="bg-muted/30 border-b sticky top-0 z-10">
             <div className="flex items-center h-8 text-[11px] font-medium text-muted-foreground/80 tracking-wide">
@@ -810,10 +810,13 @@ export function VirtualizedLogsTable({
             </div>
           </div>
 
-          {/* Virtualized body */}
+          {/* Virtualized body：h-[600px] 是基线高度，也是离开这条 flex 链时的兜底（非 flex 宿主，
+              如 /my-usage，高度就取它）；链上有多余高度时由 grow 吃掉，shrink-0 保证小屏不被压小。
+              不要再把它换成 min-h-[600px]：height:auto 的滚动容器内禀高度等于虚拟列表总高（上万 px），
+              会直接把整个页面撑高。 */}
           <div
             ref={parentRef}
-            className={cn("h-[600px] overflow-auto", bodyClassName)}
+            className={cn("h-[600px] grow shrink-0 overflow-auto", bodyClassName)}
             onScroll={handleScroll}
           >
             <div

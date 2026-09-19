@@ -334,7 +334,7 @@ function UsageLogsViewContent({
 
   return (
     <>
-      <div className="space-y-3">
+      <div className="flex grow shrink-0 flex-col gap-3">
         {/* Stats Summary */}
         {hasStatsFilters && (
           <UsageLogsStatsPanel
@@ -450,7 +450,7 @@ function UsageLogsViewContent({
         </Collapsible>
 
         {/* Table */}
-        <div className="rounded-lg border border-border/60 overflow-hidden">
+        <div className="flex grow shrink-0 flex-col overflow-hidden rounded-lg border border-border/60">
           <VirtualizedLogsTable
             filters={filters}
             currencyCode={resolvedCurrencyCode}

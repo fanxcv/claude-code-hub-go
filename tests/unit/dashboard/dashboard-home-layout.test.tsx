@@ -201,6 +201,24 @@ describe("DashboardMain layout classes", () => {
 
     unmount();
   });
+  test("logs route main is a growable flex column so the table can fill the viewport", () => {
+    routingMocks.usePathname.mockReturnValue("/dashboard/logs");
+    const { container, unmount } = renderSimple(
+      <DashboardMain>
+        <div data-testid="content" />
+      </DashboardMain>
+    );
+
+    // 撑满可用高度靠这条链：main 必须是列 flex 且可增高（grow，basis 保持在 auto），
+    // 否则使用记录页的表格只能停在滚动体的 600px 基线高度。
+    const main = container.querySelector("main");
+    expect(main).toBeTruthy();
+    expect(main?.className).toContain("flex-col");
+    expect(main?.className).toContain("grow");
+    expect(main?.className).toContain("shrink-0");
+
+    unmount();
+  });
 });
 
 describe("DashboardBento admin layout", () => {

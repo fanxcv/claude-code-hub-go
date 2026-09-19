@@ -56,7 +56,7 @@ function UsageLogsContent() {
   const timeZone = timeZoneQuery.data?.ok ? timeZoneQuery.data.data.timeZone : undefined;
 
   return (
-    <div className="space-y-4">
+    <div className="flex grow shrink-0 flex-col gap-4">
       {!settings?.enableHighConcurrencyMode && (
         <UsageLogsActiveSessionsSection currencyCode={settings?.currencyDisplay ?? "USD"} />
       )}

@@ -27,5 +27,13 @@ export function DashboardMain({ children }: DashboardMainProps) {
     );
   }
 
-  return <main className="mx-auto w-full max-w-[100rem] px-6 py-8">{children}</main>;
+  // 使用记录页要「表格撑满可用高度」：main 是根容器（列 flex）里唯一可增高的一项，
+  // 把「视口高减 header」的余量交给页面内容（页面链见 logs/page.tsx 与 usage-logs-view-virtualized）。
+  // 链上取 grow/shrink-0（flex-basis:auto）而不是 flex-1（basis:0）：基线取自内容高度，
+  // 只有真正多出来的空间才向下分配，小屏内容更高时不压缩链上任何一段，页面照常整体滚动。
+  return (
+    <main className="mx-auto flex w-full max-w-[100rem] grow shrink-0 flex-col px-6 py-8">
+      {children}
+    </main>
+  );
 }

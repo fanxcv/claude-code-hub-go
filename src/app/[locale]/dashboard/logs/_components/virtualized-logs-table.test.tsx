@@ -624,6 +624,47 @@ describe("virtualized-logs-table multiplier badge", () => {
     container.remove();
   });
 
+  test("keeps a growable flex chain from the table root down to the scroll body", async () => {
+    mockIsLoading = false;
+    mockIsError = false;
+    mockError = null;
+    mockHasNextPage = false;
+    mockIsFetchingNextPage = false;
+    mockLogs = [makeLog({ id: 1, costMultiplier: null })];
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<VirtualizedLogsTable filters={{}} autoRefreshEnabled={false} />);
+    });
+
+    // 600px 只是基线高度：宿主给出了增高余量时（使用记录页），要靠这条可增高的 flex 列把余量
+    // 一直送到滚动体；shrink-0 保证小屏下滚动体不被压到 600px 以下。
+    for (const wrappers of [
+      container.querySelector("div.overflow-x-auto"),
+      container.querySelector("div.min-w-\\[900px\\]"),
+    ]) {
+      expect(wrappers).not.toBeNull();
+      expect(wrappers?.className).toContain("flex-col");
+      expect(wrappers?.className).toContain("grow");
+      expect(wrappers?.className).toContain("shrink-0");
+    }
+
+    const scroller = container.querySelector(
+      "div.h-\\[600px\\].overflow-auto"
+    ) as HTMLElement | null;
+    expect(scroller).not.toBeNull();
+    expect(scroller?.className).toContain("grow");
+    expect(scroller?.className).toContain("shrink-0");
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+  });
+
   test("renders blocked badge and loader row when applicable", () => {
     mockIsLoading = false;
     mockIsError = false;
