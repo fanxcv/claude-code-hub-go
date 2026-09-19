@@ -41,6 +41,10 @@ type HedgeWiring struct {
 	LoserDrainTimeout time.Duration
 	// LoserMaxDrainBytes 是单个输家引流的字节上限；0 取 forward 出厂默认（64 MiB）。
 	LoserMaxDrainBytes int64
+	// LeaseSettler 是租约结算面（terminal.LeaseSettler）：每条输家成本入库后按自己的
+	// 增量与标记结算一次（见 hedgeLoserBiller.settleLoserLease 与 terminal/lease_settle.go）。
+	// nil 表示未装配：输家成本的租约扣减整段跳过，行为与接线前一致。
+	LeaseSettler terminal.LeaseSettler
 	// Logger 为空时写 stderr。
 	Logger *logx.Logger
 }
@@ -237,6 +241,7 @@ func (b *hedgeLoserBiller) BillLoser(ctx context.Context, bill forward.HedgeLose
 	if err != nil {
 		return err
 	}
+	b.settleLoserLease(ctx, bill, cost.Total)
 	if b.logger != nil {
 		b.logger.Info("dataplane.hedge_loser_billed", map[string]any{
 			"requestId":    bill.RequestID,
@@ -247,6 +252,30 @@ func (b *hedgeLoserBiller) BillLoser(ctx context.Context, bill forward.HedgeLose
 		})
 	}
 	return nil
+}
+
+// settleLoserLease 把这条输家成本增量结算到判定时用过的切片上。
+//
+// 为什么输家要单独结算而不是等胜者那一笔：store.UpdateWinnerCost 只把 winner 自己的成本
+// 写入（已入库的输家另由子查询求和加入），而输家引流在后台完成（forward 的 billLoser，
+// fire-and-forget）——胜者结算与输家写入的先后顺序不确定：输家先入库时它已被胜者那一笔
+// 的求和包含，但胜者传的是 winner 自己的成本，故不会重复扣；输家后入库时由它自己的标记补扣。
+// 两种顺序都算对。
+//
+// 幂等靠独立标记：`{行 id}:loser:{providerId}:{attempt}`，与 store.AddHedgeLoserCost 的
+// 去重键（hedge_losers @> {providerId, attemptNumber}）同构。重试时要么没写库、要么命中标记。
+// 成本文本直接用交给落库的那一份（cost.Total），结算与计费不会在定点位数上分叉。
+func (b *hedgeLoserBiller) settleLoserLease(ctx context.Context, bill forward.HedgeLoserBill, costText string) {
+	if b == nil || b.wiring.LeaseSettler == nil || b.state == nil || b.state.PC == nil {
+		return
+	}
+	plan, ok := b.state.PC.LeaseSettlementPlan()
+	if !ok || plan.Empty() {
+		return
+	}
+	marker := strconv.FormatInt(bill.RequestID, 10) + ":loser:" +
+		strconv.FormatInt(bill.ProviderID, 10) + ":" + strconv.Itoa(bill.Sequence)
+	b.wiring.LeaseSettler.SettleLeases(ctx, marker, costText, plan)
 }
 
 // hedgeLoserEntry 把用量翻成落库条目（字段与 Node 的 HedgeLoserBilling 同形）。

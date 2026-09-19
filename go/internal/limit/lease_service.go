@@ -23,8 +23,13 @@ import (
 //     quota_db_refresh_interval_seconds 刷新，窗口内靠结算扣减。
 //
 // Node 的 rate-limit-guard 与 provider-selector 用的都是**租约**路径（service.ts:1852
-// checkCostLimitsWithLease，调用点见 rate-limit-guard.ts:236/282/328/402/479/514/551/588），
-// 故 Go 侧补齐这族设置时，判定口径也一并切到租约。
+// checkCostLimitsWithLease，调用点见 rate-limit-guard.ts:236/282/328/402/479/514/551/588）。
+//
+// **Go 侧的实际范围**（与上述 Node 事实分清）：只有 Key 与 User 两个周期的限额判定已经切到
+// 租约路径（limit.Service.check 的 dimensions 表）；**供应商限额仍走账本路径**
+// （provider_cost.go 的 costLimit），故本进程不产生 provider 维度的切片，结算计划里也不会
+// 出现 provider（见 pctx.LeaseSettlementPlan）。租约就绪时判定也不会静默回退：
+// leaseCostLimit 的 decided=false 只在租约不可用时出现，此时由调用方回落账本路径并留痕。
 type LeaseService struct {
 	client   *ratelimit.Client
 	settings QuotaLeaseSettingsReader
@@ -360,8 +365,25 @@ type SettleLeaseBudgetsResult struct {
 //
 // 幂等：请求 id 作标记键，重放时 Lua 直接返回上一次的结果（status=duplicate），
 // 因此结算可以安全重试——这一点很重要，结算路径的调用方通常是「终态写入后的旁路」。
+//
+// 契约对照用途：本方法从「主体集合」展开出四窗口的全部切片（Node buildSettlementTargets 口
+// 径），保留给 Node 语义对拍与既有调用方。**生产路径走 settleLeaseTargets**：判定侧只记了
+// 真正用过的切片（见 pctx.LeaseSettlementPlan），按主体展开会去扣没参与本次判定的窗口。
 func (l *LeaseService) SettleLeaseBudgets(ctx context.Context, in SettleLeaseInput) SettleLeaseBudgetsResult {
-	requestID := trimSpace(in.RequestID)
+	return l.settleLeaseTargets(ctx, in.RequestID, in.Cost, buildLeaseSettlementTargets(in))
+}
+
+// settleLeaseTargets 把成本结算到**显式给定**的切片上（主体、窗口、重置模式均不由本层推定）。
+//
+// markerID 是幂等标记：同一条请求可以结算多次（胜者一笔、每条竞速输家各一笔），每次用不同标记、
+// 带各自的成本增量，故合计扣减等于本次请求的总成本。
+func (l *LeaseService) settleLeaseTargets(
+	ctx context.Context,
+	markerID string,
+	cost float64,
+	targets []leaseSettlementTarget,
+) SettleLeaseBudgetsResult {
+	requestID := trimSpace(markerID)
 	failOpen := func(reason string, fields map[string]any) SettleLeaseBudgetsResult {
 		if fields == nil {
 			fields = map[string]any{}
@@ -374,11 +396,14 @@ func (l *LeaseService) SettleLeaseBudgets(ctx context.Context, in SettleLeaseInp
 	if !l.Ready() {
 		return failOpen("redis_missing", nil)
 	}
-	if requestID == "" || !(in.Cost > 0) {
-		return failOpen("invalid_input", map[string]any{"cost": in.Cost})
+	if requestID == "" || !(cost > 0) {
+		return failOpen("invalid_input", map[string]any{"cost": cost})
+	}
+	if len(targets) == 0 {
+		// 空切片集合不该走到这里（调用方已按空计划返回）：走到就是调用方漏了判定。
+		return failOpen("no_targets", nil)
 	}
 
-	targets := buildLeaseSettlementTargets(in)
 	keys := make([]string, 0, len(targets)+1)
 	keys = append(keys, leaseSettlementMarkerPrefix+requestID)
 	for _, target := range targets {
@@ -386,7 +411,7 @@ func (l *LeaseService) SettleLeaseBudgets(ctx context.Context, in SettleLeaseInp
 	}
 
 	res, err := l.settleScript.Run(ctx, l.client.Raw(), keys,
-		strconv.FormatFloat(in.Cost, 'f', -1, 64),
+		strconv.FormatFloat(cost, 'f', -1, 64),
 		strconv.Itoa(leaseSettlementMarkerTTLSeconds)).Result()
 	if err != nil {
 		return failOpen("script_failed", map[string]any{"error": err.Error()})
@@ -421,6 +446,11 @@ type leaseSettlementTarget struct {
 
 // buildLeaseSettlementTargets 复刻 Node `buildSettlementTargets`：主体外层、窗口内层，
 // 顺序即 KEYS 顺序（Lua 按下标回填结果）。
+//
+// 与 Node 有意的差异：**主体 id <= 0 的维度不生成键**。id<=0 意味着本次没有这一维的切片
+// （供应商维度的租约判定尚未接线；User/Key 在未鉴权时也走不到这里），带着 id=0 去查只会多
+// 四次 Redis 往返，并在结果里留下四条恒为 missing 的噪声——而 missing 在生产上是要用来
+// 发现「判定与结算的键不合一」的线索，不该被这类占位项模糊。
 func buildLeaseSettlementTargets(in SettleLeaseInput) []leaseSettlementTarget {
 	byEntity := map[LeaseEntity]LeaseSettlementEntity{
 		EntityKey:      in.Key,
@@ -430,6 +460,9 @@ func buildLeaseSettlementTargets(in SettleLeaseInput) []leaseSettlementTarget {
 	targets := make([]leaseSettlementTarget, 0, len(leaseSettlementEntityOrder)*len(LeaseWindows))
 	for _, entity := range leaseSettlementEntityOrder {
 		detail := byEntity[entity]
+		if detail.ID <= 0 {
+			continue
+		}
 		for _, window := range LeaseWindows {
 			var resetMode ResetMode
 			switch window {

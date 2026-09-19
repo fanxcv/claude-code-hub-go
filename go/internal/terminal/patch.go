@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
@@ -59,6 +60,11 @@ type Settlement struct {
 	// 只有 SettleContext 路径会发放它：亲和写回的事实（scope、指纹、generation）
 	// 存在 pctx 里，没有 pctx 的 Settle/SettleBlocked 无从写。
 	Affinity AffinityDirective
+
+	// LeaseSettlement 是本次终态的**租约结算事实**：判定时用过的切片（主体 id + 生效重置模式）。
+	// 与 Affinity 同规矩：不进 patch、不写任何列，只做「成本落库后发放的副作用」的入参
+	// （见 lease_settle.go）。零值表示本次不走租约结算（未装配，或该路径没有 pctx）。
+	LeaseSettlement pctx.LeaseSettlementPlan
 }
 
 // AffinityDirective 是一次终态的亲和写回指令。

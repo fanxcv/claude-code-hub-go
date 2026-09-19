@@ -473,6 +473,11 @@ func (s *storeSettler) Stream(ctx context.Context, pc *pctx.Context, outcome for
 // 变成静默的账务缺口（终态列悄悄留空），那正是最难发现的一类缺陷。
 func (s *storeSettler) logSettle(_ context.Context, pc *pctx.Context, settlement terminal.Settlement) error {
 	_, hasRow := pc.MessageRequestID()
+	// 租约结算事实随终态一起交给结算器：判定时用过的切片只在 pctx 里（守卫链的限流步写），
+	// 而结算器只看得到 Settlement 这一份输入。未走租约判定时保持零值，旁路自动跳过。
+	if plan, ok := pc.LeaseSettlementPlan(); ok {
+		settlement.LeaseSettlement = plan
+	}
 	settleCtx, cancel := context.WithTimeout(context.Background(), settleTimeout)
 	defer cancel()
 	err := s.settle(settleCtx, pc, settlement)

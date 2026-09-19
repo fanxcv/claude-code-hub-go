@@ -23,6 +23,9 @@ type Options struct {
 	// NewRows 是「请求日志有新行落库」的旁路接收面（见 notify.go 的文件头）。
 	// nil 表示未装配：使用记录页的推送模式收不到信号，前端照旧轮询。
 	NewRows NewRowsNotifier
+	// LeaseSettler 是「把本次请求的成本结算到预算租约上」的旁路接收面（见 lease_settle.go 的文件头）。
+	// nil 表示未装配：租约结算整段跳过，结算路径行为与接线前一致。
+	LeaseSettler LeaseSettler
 	// Logger 供旁路记 warn（旁路失败不得冒泡成结算错误，故只能记日志）。
 	// nil 时静默。
 	Logger Logger
@@ -46,7 +49,9 @@ type Settler struct {
 	rollup RollupRecorder
 	// newRows 是「有新行落库」的旁路接收面；nil 即未装配。
 	newRows NewRowsNotifier
-	logger  Logger
+	// leaseSettler 是租约结算的旁路接收面；nil 即未装配。
+	leaseSettler LeaseSettler
+	logger       Logger
 }
 
 // New 构造结算器。
@@ -60,12 +65,13 @@ func New(writer Writer, options Options) *Settler {
 		backoff = DefaultBackoff
 	}
 	return &Settler{
-		writer:      writer,
-		maxAttempts: attempts,
-		backoff:     backoff,
-		rollup:      options.Rollup,
-		newRows:     options.NewRows,
-		logger:      options.Logger,
+		writer:       writer,
+		maxAttempts:  attempts,
+		backoff:      backoff,
+		rollup:       options.Rollup,
+		newRows:      options.NewRows,
+		leaseSettler: options.LeaseSettler,
+		logger:       options.Logger,
 	}
 }
 
@@ -131,6 +137,9 @@ func (s *Settler) Settle(ctx context.Context, id int64, settlement Settlement) (
 		return result, fmt.Errorf("%w: %w", ErrCostWriteFailed, err)
 	}
 	result.CostWritten = true
+	// 租约结算放在**成本写成功之后、其余旁路之前**：租约决定后续请求能不能进（并发下越早
+	// 看到扣减越好），而它成立的前提正是这笔成本已经进了账本。失败只留痕，不改返回值。
+	s.settleLeases(ctx, id, settlement)
 	// 「有新行」放在成本写之后：与旁路副作用的既有顺序一致（终态 → 计费 → 旁路），
 	// 也让「带金额的行已就绪」成为前端下一次增量拉取看到的状态。
 	s.notifyNewRow(id)

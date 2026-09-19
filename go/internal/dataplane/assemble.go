@@ -77,6 +77,9 @@ type StoreOptions struct {
 	//
 	// nil 表示未装配：使用记录页的推送模式收不到信号（前端仍可轮询）。
 	NewRows terminal.NewRowsNotifier
+	// LeaseSettler 是租约结算面（terminal.Options.LeaseSettler）：终态成本落库后扣减
+	// 判定时用过的预算切片。nil 表示未装配（整段跳过，行为与接线前一致）。
+	LeaseSettler terminal.LeaseSettler
 	// RouteOptions 覆盖选路器参数（健康、亲和、闸门）；Source 恒由本函数填。
 	RouteOptions route.Options
 	// DialOptions 覆盖拨号参数（超时、上游连接上限）。
@@ -268,7 +271,9 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			Rollup: publicStatusRollupRecorder(options, logger),
 			// 使用记录页推送模式的信号源（终态提交后发一条「有新行」）。
 			NewRows: options.NewRows,
-			Logger:  logger,
+			// 租约结算：成本落库后把这次请求的成本扣到判定时用过的切片上（见 limit.SettleLeases）。
+			LeaseSettler: options.LeaseSettler,
+			Logger:       logger,
 		})
 	}
 
@@ -486,6 +491,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			Pools:              options.Pools,
 			LoserDrainTimeout:  time.Duration(options.HedgeLoserDrainTimeoutMS) * time.Millisecond,
 			LoserMaxDrainBytes: 0,
+			LeaseSettler:       options.LeaseSettler,
 			Logger:             logger,
 		},
 	})

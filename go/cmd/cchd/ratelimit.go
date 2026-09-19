@@ -16,6 +16,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/ratelimit"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/terminal"
 )
 
 // 本文件把限流服务接进数据面：限额快照来源、时区、脚本客户端，以及服务本身的装配。
@@ -254,6 +255,26 @@ func openRateLimiter(
 		"abuse":    limit.ProxyAuthAbuseConfig,
 	})
 	return service
+}
+
+// 编译期钉子：限流服务必须满足数据面要求的租约结算面。
+// 少了它，签名一变就只会表现为「租约结算静默不接线」（nil 接口 + 跳过），没有任何报错。
+var _ terminal.LeaseSettler = (*limit.Service)(nil)
+
+// leaseSettlerFor 取限流实现兼任的租约结算面。
+//
+// 为什么由限流实例兼任：只有它在判定时按租约切片（limit.Service.Check 写下结算计划），
+// 也只有它知道该扣哪几份键——换一个实例就等于换一套键。
+// 未实现（含限流未装配）时返回 nil：数据面把租约结算整段跳过，而不是拿半份实现当已接线。
+func leaseSettlerFor(limiter guard.RateLimiter) terminal.LeaseSettler {
+	if limiter == nil {
+		return nil
+	}
+	settler, ok := limiter.(terminal.LeaseSettler)
+	if !ok {
+		return nil
+	}
+	return settler
 }
 
 // readSystemTimezone 读 system_settings.timezone，供时区取值链使用；读不到时返回 nil（下一级兜底）。

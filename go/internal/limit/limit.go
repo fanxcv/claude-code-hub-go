@@ -236,6 +236,14 @@ func (s *Service) check(
 		return block, nil
 	}
 
+	// 租约结算计划：只记**本次确实以租约完成判定**的切片（主体 id + 窗口 + 生效的重置模式）。
+	// 终态结算靠它扣减，判定与结算必须落在同一组键上，否则会扣到另一份键上而静默不生效。
+	//
+	// 为什么逐维记而不是开局按主体粗记一份：同一条请求的维度可以一半走租约、一半回退账本
+	// （leaseCostLimit 的 decided=false，见下），粗记会让结算去扣**没有参与本次判定**的切片。
+	// 为什么判完之后才落进上下文：中途读者不该看到半份计划。
+	var leasePlan pctx.LeaseSettlementPlan
+
 	// 第三层与第四层：短期到中长期周期限额，同窗口内 Key 先行。
 	dimensions := []costDimension{
 		{entity: EntityKey, id: keyQuota.KeyID, keyHash: keyQuota.KeyHash, period: Period5h, amount: keyQuota.Limit5hUSD, resetMode: defaultMode(keyQuota.Limit5hResetMode, ResetRolling), costResetAt: keyCostResetAt},
@@ -253,7 +261,12 @@ func (s *Service) check(
 		}
 		if s.leases != nil {
 			if block, decided := s.leaseCostLimit(ctx, dimension, now); decided {
+				// 这一维确实用租约判定了：它的切片必须进计划，哪怕后面被拒或 fail-open。
+				// 取值域外的取值（例如库里写了一个既非 rolling 也非 fixed 的模式）会在这里
+				// 被拦下并留痕，不静默少扣（见 rememberLeaseTarget）。
+				rememberLeaseTarget(s.log, &leasePlan, dimension)
 				if block != nil {
+					// 触顶即拒：被拒的请求不产生上游成本，没有要扣的东西。
 					return block, nil
 				}
 				continue
@@ -261,6 +274,9 @@ func (s *Service) check(
 		}
 		current, exceeded, checkErr := s.costLimit(ctx, dimension, now)
 		if checkErr != nil {
+			// Fail Open 放行的请求照样会花钱：已经用租约判过的切片必须留在计划里，
+			// 否则那些切片在刷新窗口内会比实际更宽——正是本接线要修的缺口。
+			rememberLeasePlan(req, leasePlan)
 			return s.failOpen("limit.check.cost_failed", checkErr, map[string]any{
 				"entity": string(dimension.entity),
 				"period": string(dimension.period),
@@ -270,6 +286,7 @@ func (s *Service) check(
 			return s.costBlock(dimension, current, now), nil
 		}
 	}
+	rememberLeasePlan(req, leasePlan)
 	return nil, nil
 }
 

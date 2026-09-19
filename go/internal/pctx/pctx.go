@@ -138,6 +138,10 @@ type Context struct {
 	// gatewayInjectedBodyFields 是**网关注入**（客户端原文里没有）的正文顶层字段名，
 	// 守卫链写、转换与终态读（见 codex_session.go 的说明）。
 	gatewayInjectedBodyFields []string
+	// leaseSettlementPlan 是本次请求判定时用过的预算租约（守卫链的限流步写、终态结算读，
+	// 见 lease_settlement.go）。
+	leaseSettlementPlan    LeaseSettlementPlan
+	leaseSettlementPlanSet bool
 
 	// selectionChainEntry 是选择期 provider_chain 条目（链首）的原样快照，见 selection_chain.go。
 	selectionChainEntry []byte

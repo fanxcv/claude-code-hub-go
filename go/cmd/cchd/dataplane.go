@@ -104,6 +104,8 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 		// 三档拨号超时：FETCH_CONNECT/HEADERS/BODY_TIMEOUT（毫秒）。不接进来的话拨号层只会用
 		// 自己的硬默认，运维改这三个变量就是静默无效——而它们恰是「上游卡住」时最先被调的旋钮。
 		DialOptions: dialOptionsFromEnv(options.Cfg.Env),
+		// 租约结算：由限流实例兼任（判定与结算必须落在同一组键上，见 leaseSettlerFor）。
+		LeaseSettler: leaseSettlerFor(rateLimiter),
 		// 新行信号：不装配时照旧写库、只是不发信号（前端仍可用轮询），不静默错数。
 		NewRows: usageRows,
 		RouteOptions: route.Options{
