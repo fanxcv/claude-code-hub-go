@@ -135,6 +135,8 @@ type fakeSettler struct {
 type settledNonStream struct {
 	ID     int64
 	Status int
+	// Attempts 是本次转发的尝试留痕。失败轮次的链事实只能从这里取：失败不走流式结算缝。
+	Attempts []forward.AttemptOutcome
 }
 
 func (f *fakeSettler) NonStream(_ context.Context, pc *pctx.Context, result *forward.Result, failure *forward.Failure) error {
@@ -149,7 +151,7 @@ func (f *fakeSettler) NonStream(_ context.Context, pc *pctx.Context, result *for
 		// 与生产实现同口径：尝试耗尽时状态码来自失败归因（见 storeSettler.NonStream）。
 		status = failure.StatusCode
 	}
-	f.nonStream = append(f.nonStream, settledNonStream{ID: id, Status: status})
+	f.nonStream = append(f.nonStream, settledNonStream{ID: id, Status: status, Attempts: attemptsOf(result)})
 	return nil
 }
 
@@ -161,6 +163,14 @@ func (f *fakeSettler) Stream(_ context.Context, _ *pctx.Context, outcome forward
 	defer f.mu.Unlock()
 	f.stream = append(f.stream, outcome)
 	return nil
+}
+
+// attemptsOf 取一次非流式转发结果上的尝试留痕（nil 结果返回 nil）。
+func attemptsOf(result *forward.Result) []forward.AttemptOutcome {
+	if result == nil {
+		return nil
+	}
+	return result.Attempts
 }
 
 // settleCount 返回已完成的流式结算次数。

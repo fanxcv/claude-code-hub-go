@@ -409,8 +409,14 @@ func (r *hedgeRace) runAttempt(c *Candidate, seq int, maxInFlight int) {
 	// 绕过 executeStreamAttempt——2026-09-19 生产上「上游 WS 72 小时零尝试、链上无键、
 	// 日志无痕」就是这么来的：codex 供应商的首字节阈值 60000ms 让每个请求都命中竞速。
 	// 只修串行路径等于「看起来支持，实则从不生效」。
-	// 走到这里即为「真的尝试」：链上的 WS 事实由下面的 result 分支写。
+	// 走到这里即为「真的尝试」：链上的 WS 事实由 wsAttempt 写进 outcome。
 	response := r.deps.wsAttempt(attemptCtx, r.pc, c.Provider, plan, &outcome)
+	// WS 事必在**回落 HTTP 之前**发布，理由有两条，都是「晚一步就丢事实」：
+	//  1. 回落之后 dialAttempt 失败时直接走 finishAttemptFailed，那条失败留痕会拿不到 WS 事实
+	//     （链上不会产生 WS 信息性条目），于是「试过 WS、回落了、HTTP 也挂了」看起来像「压根没试」。
+	//  2. 竞速胜者可能在**本 attempt 仍在途**时裁决（markLoserOutcomeLocked 落输家结局），
+	//     而裁决发生在别的协程、不回填已落的条目——输家同样会丢 WS 事实。
+	r.recordWSFacts(attempt, outcome.WS)
 	cancelDial := context.CancelFunc(func() {})
 	if response == nil {
 		var failure *Failure
@@ -422,8 +428,6 @@ func (r *hedgeRace) runAttempt(c *Candidate, seq int, maxInFlight int) {
 	}
 	defer cancelDial()
 	attempt.dispatched = true
-	// WS 事实在**任何留痕之前**发布：胜者/失败/输家三条留痕路径都要带上它。
-	r.recordWSFacts(attempt, outcome.WS)
 
 	// 非 2xx：完整读回错误正文，按串行路径同一口径分类。
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -1195,6 +1199,9 @@ func (r *hedgeRace) appendOutcomeLocked(outcome AttemptOutcome) {
 }
 
 // recordWSFacts 发布本次 attempt 的上游 WS 事实（nil 不写，保持「无事实即无痕迹」）。
+//
+// 调用点必须在**任何留痕之前**（见 ForwardStreamHedge 里的说明）：留痕可能由胜者协程构造，
+// 而事实由本 attempt 自己的协程发布；发布晚了就会丢。
 func (r *hedgeRace) recordWSFacts(attempt *hedgeAttempt, facts *AttemptWSFacts) {
 	if facts == nil {
 		return
