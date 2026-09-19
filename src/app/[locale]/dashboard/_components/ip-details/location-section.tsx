@@ -1,9 +1,11 @@
 "use client";
 
 import { Clock, MapPin } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useLocale, useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { IpGeoCountry, IpGeoLookupResult } from "@/types/ip-geo";
 import {
   FieldRow,
@@ -13,7 +15,19 @@ import {
   Section,
   SubCard,
 } from "./atoms";
-import { LocationMapCard } from "./location-map-card";
+
+/**
+ * 地图整包（maplibre-gl，约 1 MiB）不进首屏：只有对话框展开、且该 IP 有坐标时
+ * 才拉取这条异步 chunk。占位块按卡片实际高度（头部 54px + 地图 h-52/h-60）留位，
+ * 避免懒加载完成时对话框跳一下。
+ */
+const LocationMapCard = dynamic(
+  () => import("./location-map-card").then((mod) => ({ default: mod.LocationMapCard })),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-[262px] rounded-xl sm:h-[294px]" />,
+  }
+);
 
 /**
  * Upstream uses these sentinel values when a country is not resolvable

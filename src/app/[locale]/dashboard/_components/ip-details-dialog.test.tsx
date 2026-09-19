@@ -599,7 +599,7 @@ describe("IpDetailsDialog: location layout", () => {
     });
   });
 
-  test("shows non-zero coordinates and map even when accuracy radius is null", () => {
+  test("shows non-zero coordinates and map even when accuracy radius is null", async () => {
     const { unmount } = render(
       <NextIntlClientProvider locale="en" messages={messages}>
         <IpDetailsDialog ip="198.51.100.24" open onOpenChange={() => {}} />
@@ -609,6 +609,10 @@ describe("IpDetailsDialog: location layout", () => {
     const text = allText();
     expect(text).toContain("22.2855205535889, 114.157691955566");
     expect(text).not.toContain(ipDetailsMessages.fields.accuracyRadius);
+
+    // 地图整包走惰性 chunk（首屏不加载），需等懒边界解析完成地图才落地。
+    await act(async () => {});
+
     expect(document.querySelector('[data-testid="ip-location-map"]')).toBeTruthy();
     expect(document.querySelector('[data-testid="ip-location-map-popup"]')?.textContent).toContain(
       "Hong Kong"
