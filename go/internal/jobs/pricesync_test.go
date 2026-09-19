@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -31,6 +32,11 @@ type fakePriceStore struct {
 	catalogWrites []store.CloudPricingCatalogInput
 	// failInsert 用于让特定模型写入失败（Node 的 failed 分类）。
 	failInsert map[string]bool
+	// 调用计数：钉住「正常路径只走批量原语、逐条只用于失败后的退化写」。
+	batchInsertCalls  int
+	batchReplaceCalls int
+	rowInsertCalls    int
+	rowUpsertCalls    int
 }
 
 func newFakePriceStore() *fakePriceStore {
@@ -50,6 +56,7 @@ func (f *fakePriceStore) ListLatestPriceRowsForSync(context.Context) (map[string
 }
 
 func (f *fakePriceStore) InsertModelPrice(_ context.Context, modelName string, _ []byte, _ string) (int64, error) {
+	f.rowInsertCalls++
 	if f.failInsert[modelName] {
 		return 0, errors.New("插入失败（测试注入）")
 	}
@@ -59,8 +66,35 @@ func (f *fakePriceStore) InsertModelPrice(_ context.Context, modelName string, _
 }
 
 func (f *fakePriceStore) AdminUpsertModelPrice(_ context.Context, modelName string, _ json.RawMessage, _ string) (store.AdminModelPrice, error) {
+	f.rowUpsertCalls++
 	f.upserts = append(f.upserts, modelName)
 	return store.AdminModelPrice{ModelName: modelName}, nil
+}
+
+// InsertModelPrices / ReplaceModelPrices 模拟真库的**原子**批量写：
+// 先校验全部入参，任一条不可写就整批不落副作用地失败（对应真实事务回滚），
+// 于是生产侧的退化写能拿到与改前逐条写完全相同的调用序列。
+func (f *fakePriceStore) InsertModelPrices(_ context.Context, writes []store.ModelPriceWrite) error {
+	f.batchInsertCalls++
+	for _, write := range writes {
+		if f.failInsert[write.ModelName] {
+			return errors.New("批量插入失败（测试注入）")
+		}
+	}
+	for _, write := range writes {
+		f.inserts = append(f.inserts, write.ModelName)
+		f.cloudCount++
+	}
+	return nil
+}
+
+func (f *fakePriceStore) ReplaceModelPrices(_ context.Context, writes []store.ModelPriceWrite) error {
+	f.batchReplaceCalls++
+	// 与逐条 AdminUpsertModelPrice 同口径：本替身不对替换注入失败。
+	for _, write := range writes {
+		f.upserts = append(f.upserts, write.ModelName)
+	}
+	return nil
 }
 
 func (f *fakePriceStore) DeleteCloudPricesNotIn(_ context.Context, keep []string) (int64, error) {
@@ -475,5 +509,71 @@ func TestPriceSyncRequestSyncThrottles(t *testing.T) {
 	}
 	if syncer.RequestSync("missing-model", time.Hour) {
 		t.Fatal("节流窗口内不应再次触发")
+	}
+}
+
+// TestPriceSyncUsesBatchWritesNotRowByRow 钉住本次改动的性能契约：
+// 一轮同步的写往返是**常数次**（新增一次、替换一次），而不是每个模型一次。
+//
+// 改前：每个「新增」一次 InsertModelPrice；每个「替换」四次往返（BEGIN/DELETE/INSERT/COMMIT）。
+// 改后：两类各一次；逐条方法只在批量失败后的退化写里出现。
+func TestPriceSyncUsesBatchWritesNotRowByRow(t *testing.T) {
+	fake := newFakePriceStore()
+	// 既有行来源不同 → 判 updated（走批量替换）；别名 sonnet-4-5 不存在 → added（走批量插入）。
+	fake.existing["claude-sonnet-4-5"] = store.PriceSyncExistingRow{
+		ModelName: "claude-sonnet-4-5", Source: "litellm",
+		PriceData: map[string]any{"mode": "chat"},
+	}
+	syncer := newPriceSyncFixture(t, fake, cptFixture("v1"))
+
+	result, err := syncer.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("同步失败: %v", err)
+	}
+	if len(result.Added) == 0 || len(result.Updated) == 0 {
+		t.Fatalf("夹具应同时产生 added 与 updated：added=%v updated=%v", result.Added, result.Updated)
+	}
+	if fake.batchInsertCalls != 1 {
+		t.Fatalf("新增应只走一次批量插入，实际 %d 次", fake.batchInsertCalls)
+	}
+	if fake.batchReplaceCalls != 1 {
+		t.Fatalf("替换应只走一次批量替换，实际 %d 次", fake.batchReplaceCalls)
+	}
+	if fake.rowInsertCalls != 0 || fake.rowUpsertCalls != 0 {
+		t.Fatalf("批量成功时不该退化逐条写：insert=%d upsert=%d", fake.rowInsertCalls, fake.rowUpsertCalls)
+	}
+	if len(fake.inserts) != len(result.Added) || len(fake.upserts) != len(result.Updated) {
+		t.Fatalf("落库行数应与分类结果一致：inserts=%v added=%v upserts=%v updated=%v",
+			fake.inserts, result.Added, fake.upserts, result.Updated)
+	}
+}
+
+// TestPriceSyncFallsBackToRowByRowOnBatchFailure 钉住退化写的语义：
+// 批量语句是原子的，任一行不可写就整批回滚；此时必须逐条重放，才能把
+// 「哪个模型进了 failed」恢复得与改前逐条写一致。
+func TestPriceSyncFallsBackToRowByRowOnBatchFailure(t *testing.T) {
+	fake := newFakePriceStore()
+	fake.failInsert["sonnet-4-5"] = true
+	syncer := newPriceSyncFixture(t, fake, cptFixture("v1"))
+
+	result, err := syncer.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("同步失败: %v", err)
+	}
+	if fake.batchInsertCalls != 1 {
+		t.Fatalf("应先试一次批量插入，实际 %d 次", fake.batchInsertCalls)
+	}
+	if fake.rowInsertCalls == 0 {
+		t.Fatal("批量失败后必须退化回逐条写，实际一次逐条插入都没发生")
+	}
+	if len(result.Failed) != 1 || result.Failed[0] != "sonnet-4-5" {
+		t.Fatalf("失败归因应精确到 model：期望 [sonnet-4-5]，实际 %v", result.Failed)
+	}
+	// 同一批里的其他项照旧落库（夹具里还有 manual-model，故不要求恰好一条）。
+	if !slices.Contains(result.Added, "claude-sonnet-4-5") {
+		t.Fatalf("未失败的行应照旧落库：实际 added=%v", result.Added)
+	}
+	if slices.Contains(result.Added, "sonnet-4-5") {
+		t.Fatalf("注入失败的行不该出现在 added：%v", result.Added)
 	}
 }

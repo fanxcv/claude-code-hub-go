@@ -20,6 +20,11 @@ type fakeStore struct {
 	inserted []capturedWrite
 	upserted []capturedWrite
 	failOn   map[string]bool
+	// 调用计数：钉住「正常路径只走批量原语、逐条只用于失败后的退化写」。
+	batchInsertCalls  int
+	batchReplaceCalls int
+	rowInsertCalls    int
+	rowUpsertCalls    int
 }
 
 type capturedWrite struct {
@@ -45,6 +50,7 @@ func (f *fakeStore) ListLatestPriceRowsForSync(context.Context) (map[string]stor
 }
 
 func (f *fakeStore) InsertModelPrice(_ context.Context, modelName string, priceData []byte, source string) (int64, error) {
+	f.rowInsertCalls++
 	if f.failOn[modelName] {
 		return 0, errWriteRefused
 	}
@@ -53,11 +59,45 @@ func (f *fakeStore) InsertModelPrice(_ context.Context, modelName string, priceD
 }
 
 func (f *fakeStore) AdminUpsertModelPrice(_ context.Context, modelName string, priceData json.RawMessage, source string) (store.AdminModelPrice, error) {
+	f.rowUpsertCalls++
 	if f.failOn[modelName] {
 		return store.AdminModelPrice{}, errWriteRefused
 	}
 	f.upserted = append(f.upserted, capturedWrite{modelName: modelName, source: source, priceData: string(priceData)})
 	return store.AdminModelPrice{ModelName: modelName, Source: source, PriceData: priceData}, nil
+}
+
+// InsertModelPrices / ReplaceModelPrices 模拟真库的**原子**批量写：
+// 先校验全部入参，任一条不可写就整批不落副作用地失败（对应真实事务回滚）。
+// 这样生产侧的退化写拿到的 captured 序列与改前逐条写逐字相同。
+func (f *fakeStore) InsertModelPrices(_ context.Context, writes []store.ModelPriceWrite) error {
+	f.batchInsertCalls++
+	for _, write := range writes {
+		if f.failOn[write.ModelName] {
+			return errWriteRefused
+		}
+	}
+	for _, write := range writes {
+		f.inserted = append(f.inserted, capturedWrite{
+			modelName: write.ModelName, source: write.Source, priceData: string(write.PriceData),
+		})
+	}
+	return nil
+}
+
+func (f *fakeStore) ReplaceModelPrices(_ context.Context, writes []store.ModelPriceWrite) error {
+	f.batchReplaceCalls++
+	for _, write := range writes {
+		if f.failOn[write.ModelName] {
+			return errWriteRefused
+		}
+	}
+	for _, write := range writes {
+		f.upserted = append(f.upserted, capturedWrite{
+			modelName: write.ModelName, source: write.Source, priceData: string(write.PriceData),
+		})
+	}
+	return nil
 }
 
 var errWriteRefused = &writeRefusedError{}
@@ -274,6 +314,62 @@ func TestWriteEntriesEmptyIsSuccess(t *testing.T) {
 	if result.Total != 0 || len(result.Added) != 0 || len(result.Updated) != 0 ||
 		len(result.Unchanged) != 0 || len(result.Failed) != 0 || len(result.SkippedConflicts) != 0 {
 		t.Fatalf("空表结果应全空：%+v", result)
+	}
+}
+
+// TestWriteEntriesUsesBatchWritesNotRowByRow 钉住分类器的写路径也是批量的：
+// 新增走一次批量插入、替换走一次批量替换，逐条方法一次也不该被调到。
+func TestWriteEntriesUsesBatchWritesNotRowByRow(t *testing.T) {
+	fake := newFakeStore()
+	fake.existing["changed-source"] = store.PriceSyncExistingRow{
+		ModelName: "changed-source", Source: "litellm",
+		PriceData: map[string]any{"mode": "chat", "input_cost_per_token": 0.5},
+	}
+	result, err := WriteEntries(context.Background(), fake, []Entry{
+		entry("brand-new", `{"mode":"chat","input_cost_per_token":0.1}`),
+		entry("changed-source", `{"mode":"chat","input_cost_per_token":0.9}`),
+	}, SourceCloud, nil, testLogger())
+	if err != nil {
+		t.Fatalf("WriteEntries 失败: %v", err)
+	}
+	if got, want := strings.Join(result.Added, ","), "brand-new"; got != want {
+		t.Errorf("added: got=%q want=%q", got, want)
+	}
+	if got, want := strings.Join(result.Updated, ","), "changed-source"; got != want {
+		t.Errorf("updated: got=%q want=%q", got, want)
+	}
+	if fake.batchInsertCalls != 1 || fake.batchReplaceCalls != 1 {
+		t.Fatalf("新增/替换应各走一次批量写，实际 insert=%d replace=%d",
+			fake.batchInsertCalls, fake.batchReplaceCalls)
+	}
+	if fake.rowInsertCalls != 0 || fake.rowUpsertCalls != 0 {
+		t.Fatalf("批量成功时不该退化逐条写：insert=%d upsert=%d", fake.rowInsertCalls, fake.rowUpsertCalls)
+	}
+}
+
+// TestWriteEntriesFallsBackToRowByRowOnBatchFailure 钉住退化写的语义：
+// 批量语句原子，任一条不可写就整批回滚；此时逐条重放才能保住「哪个模型进了 failed」。
+func TestWriteEntriesFallsBackToRowByRowOnBatchFailure(t *testing.T) {
+	fake := newFakeStore()
+	fake.failOn["boom"] = true
+	result, err := WriteEntries(context.Background(), fake, []Entry{
+		entry("brand-new", `{"mode":"chat","input_cost_per_token":0.1}`),
+		entry("boom", `{"mode":"chat","input_cost_per_token":0.2}`),
+	}, SourceCloud, nil, testLogger())
+	if err != nil {
+		t.Fatalf("WriteEntries 失败: %v", err)
+	}
+	if fake.batchInsertCalls != 1 {
+		t.Fatalf("应先试一次批量插入，实际 %d", fake.batchInsertCalls)
+	}
+	if fake.rowInsertCalls != 2 {
+		t.Fatalf("退化写应对两个待写项各试一次，实际 %d", fake.rowInsertCalls)
+	}
+	if got, want := strings.Join(result.Added, ","), "brand-new"; got != want {
+		t.Errorf("added: got=%q want=%q", got, want)
+	}
+	if got, want := strings.Join(result.Failed, ","), "boom"; got != want {
+		t.Errorf("failed: got=%q want=%q", got, want)
 	}
 }
 

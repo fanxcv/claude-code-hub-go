@@ -138,7 +138,30 @@ func (f *fakeProjectionRedis) Scan(_ context.Context, pattern string, limit int)
 
 // ---- RollupWriter ----
 
-func (f *fakeProjectionRedis) HIncrByFloat(_ context.Context, key, field string, increment float64) error {
+// ApplyBatch 复刻 pipeline 的语义：一次事件的所有写入按序落到内存
+// （N 条 HINCRBYFLOAT → coverage 的 SET NX → 两个键的 TTL），任一步出错即返回。
+// 与真写入器一致：只有**一个**方法，因此 dump 出来的键值与逐条写入时逐个相同。
+func (f *fakeProjectionRedis) ApplyBatch(
+	_ context.Context,
+	key, coverageKey, coverageValue string,
+	increments []RollupIncrement,
+	ttlSeconds int,
+) error {
+	for _, increment := range increments {
+		if err := f.hincrByFloat(key, BuildRollupField(increment.GroupID, increment.ModelKey, increment.Metric), increment.Value); err != nil {
+			return err
+		}
+	}
+	if _, err := f.setNX(coverageKey, coverageValue); err != nil {
+		return err
+	}
+	if err := f.expire(key, ttlSeconds); err != nil {
+		return err
+	}
+	return f.expire(coverageKey, ttlSeconds)
+}
+
+func (f *fakeProjectionRedis) hincrByFloat(key, field string, increment float64) error {
 	fields := f.hash[key]
 	if fields == nil {
 		fields = map[string]string{}
@@ -155,8 +178,8 @@ func (f *fakeProjectionRedis) HIncrByFloat(_ context.Context, key, field string,
 	return nil
 }
 
-// SetNX 复刻 Redis 语义：键已存在（无论类型）都不写，返回 false。
-func (f *fakeProjectionRedis) SetNX(_ context.Context, key, value string) (bool, error) {
+// setNX 复刻 Redis 语义：键已存在（无论类型）都不写，返回 false。
+func (f *fakeProjectionRedis) setNX(key, value string) (bool, error) {
 	if _, exists := f.raw[key]; exists {
 		return false, nil
 	}
@@ -167,7 +190,7 @@ func (f *fakeProjectionRedis) SetNX(_ context.Context, key, value string) (bool,
 	return true, nil
 }
 
-func (f *fakeProjectionRedis) Expire(_ context.Context, key string, ttlSeconds int) error {
+func (f *fakeProjectionRedis) expire(key string, ttlSeconds int) error {
 	f.ttls[key] = float64(ttlSeconds)
 	return nil
 }

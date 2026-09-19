@@ -35,6 +35,52 @@ type AdminDashboardOverview struct {
 	RecentMinuteRequests             int64
 }
 
+// adminDashboardOverviewQuery 是一次扫描出全部概览指标。
+//
+// 为何合并：原先 8 个标量子查询各扫一遍 usage_ledger 的同一批行（同一时区界 + 同一
+// BillingCondition + 同一 user 过滤），8 次扫描换来的是同一批行的 8 种聚合。
+//
+// 等价性依据（逐条，语义零变化）：
+//   - 原子查询的 WHERE 都是 `BillingCondition AND (user) AND <窗口>`；合并后外层 WHERE 只留
+//     `BillingCondition AND (user)`，窗口条件原样搬进各自的 FILTER——参与聚合的行集合
+//     逐条等价；
+//   - 外层补的 `created_at >= bounds.yesterday_start` 是三个窗口下界的**最小值**
+//     （yesterday_start ≤ today_start ≤ now - 1min），对每个 FILTER 都是必要条件，
+//     不改变任何聚合结果，但让规划器仍能走 created_at 上的索引而不是全表扫；
+//   - sum/avg 外层的 COALESCE(...,0) 与 ::text / ::float8 转换逐字保留：FILTER 不命中即不参与
+//     聚合，与「子查询无行」同义，空集仍得 0；avg 仍忽略 NULL 的 duration_ms；
+//   - `NOT is_success` 仍在 FILTER 里判空（NULL 不计），与子查询写法一致；
+//   - RPM 那一档在 Node 侧本就没有上界（`created_at >= now - 1 minute`），逐字保留。
+var adminDashboardOverviewQuery = `
+		WITH bounds AS (
+			SELECT
+				(DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1) AT TIME ZONE $1) AS today_start,
+				((DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1) + INTERVAL '1 day') AT TIME ZONE $1)
+					AS tomorrow_start,
+				((DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1) - INTERVAL '1 day') AT TIME ZONE $1)
+					AS yesterday_start,
+				(((DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1) - INTERVAL '1 day')
+					+ (CURRENT_TIMESTAMP AT TIME ZONE $1 - DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1)))
+					AT TIME ZONE $1) AS yesterday_end
+		)
+		SELECT
+			count(*) FILTER (WHERE created_at >= bounds.today_start AND created_at < bounds.tomorrow_start),
+			COALESCE(sum(cost_usd) FILTER (
+				WHERE created_at >= bounds.today_start AND created_at < bounds.tomorrow_start), 0)::text,
+			COALESCE(avg(duration_ms) FILTER (
+				WHERE created_at >= bounds.today_start AND created_at < bounds.tomorrow_start), 0)::float8,
+			count(*) FILTER (WHERE NOT is_success
+				AND created_at >= bounds.today_start AND created_at < bounds.tomorrow_start),
+			count(*) FILTER (WHERE created_at >= bounds.yesterday_start AND created_at < bounds.yesterday_end),
+			COALESCE(sum(cost_usd) FILTER (
+				WHERE created_at >= bounds.yesterday_start AND created_at < bounds.yesterday_end), 0)::text,
+			COALESCE(avg(duration_ms) FILTER (
+				WHERE created_at >= bounds.yesterday_start AND created_at < bounds.yesterday_end), 0)::float8,
+			count(*) FILTER (WHERE created_at >= CURRENT_TIMESTAMP - INTERVAL '1 minute')
+		FROM usage_ledger, bounds
+		WHERE ` + BillingCondition + ` AND ($2::bigint IS NULL OR user_id = $2)
+		  AND created_at >= bounds.yesterday_start`
+
 // AdminDashboardOverview 复刻 getOverviewMetricsWithComparison 的三段聚合。
 //
 // 口径细节（逐条照抄）：
@@ -54,47 +100,10 @@ func (p *Pools) AdminDashboardOverview(
 	if err != nil {
 		return AdminDashboardOverview{}, err
 	}
-	query := `
-		WITH bounds AS (
-			SELECT
-				(DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1) AT TIME ZONE $1) AS today_start,
-				((DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1) + INTERVAL '1 day') AT TIME ZONE $1)
-					AS tomorrow_start,
-				((DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1) - INTERVAL '1 day') AT TIME ZONE $1)
-					AS yesterday_start,
-				(((DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1) - INTERVAL '1 day')
-					+ (CURRENT_TIMESTAMP AT TIME ZONE $1 - DATE_TRUNC('day', CURRENT_TIMESTAMP AT TIME ZONE $1)))
-					AT TIME ZONE $1) AS yesterday_end
-		)
-		SELECT
-			(SELECT count(*) FROM usage_ledger, bounds
-				WHERE ` + BillingCondition + ` AND ($2::bigint IS NULL OR user_id = $2)
-				  AND created_at >= bounds.today_start AND created_at < bounds.tomorrow_start),
-			COALESCE((SELECT sum(cost_usd) FROM usage_ledger, bounds
-				WHERE ` + BillingCondition + ` AND ($2::bigint IS NULL OR user_id = $2)
-				  AND created_at >= bounds.today_start AND created_at < bounds.tomorrow_start), 0)::text,
-			COALESCE((SELECT avg(duration_ms) FROM usage_ledger, bounds
-				WHERE ` + BillingCondition + ` AND ($2::bigint IS NULL OR user_id = $2)
-				  AND created_at >= bounds.today_start AND created_at < bounds.tomorrow_start), 0)::float8,
-			(SELECT count(*) FILTER (WHERE NOT is_success) FROM usage_ledger, bounds
-				WHERE ` + BillingCondition + ` AND ($2::bigint IS NULL OR user_id = $2)
-				  AND created_at >= bounds.today_start AND created_at < bounds.tomorrow_start),
-			(SELECT count(*) FROM usage_ledger, bounds
-				WHERE ` + BillingCondition + ` AND ($2::bigint IS NULL OR user_id = $2)
-				  AND created_at >= bounds.yesterday_start AND created_at < bounds.yesterday_end),
-			COALESCE((SELECT sum(cost_usd) FROM usage_ledger, bounds
-				WHERE ` + BillingCondition + ` AND ($2::bigint IS NULL OR user_id = $2)
-				  AND created_at >= bounds.yesterday_start AND created_at < bounds.yesterday_end), 0)::text,
-			COALESCE((SELECT avg(duration_ms) FROM usage_ledger, bounds
-				WHERE ` + BillingCondition + ` AND ($2::bigint IS NULL OR user_id = $2)
-				  AND created_at >= bounds.yesterday_start AND created_at < bounds.yesterday_end), 0)::float8,
-			(SELECT count(*) FROM usage_ledger
-				WHERE ` + BillingCondition + ` AND ($2::bigint IS NULL OR user_id = $2)
-				  AND created_at >= CURRENT_TIMESTAMP - INTERVAL '1 minute')`
 
 	var overview AdminDashboardOverview
 	var todayCostText, yesterdayCostText string
-	row := pool.QueryRow(ctx, query, timezone, userID)
+	row := pool.QueryRow(ctx, adminDashboardOverviewQuery, timezone, userID)
 	if err := row.Scan(
 		&overview.TodayRequests,
 		&todayCostText,

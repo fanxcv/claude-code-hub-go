@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -29,29 +30,44 @@ type RollupFacts struct {
 	DurationMS *int `json:"duration_ms"`
 }
 
+// rollupFactsQuery 是 FindRollupFacts 的查询：四列直扫，不过 row_to_json。
+//
+// 抽出来是为了能钉住「不再白付一遍 JSON 编解码」——返回值与旧查询逐列相同，
+// 行为层面测不出差别，只能对着语句本身钉。
+var rollupFactsQuery = `
+	SELECT created_at, model, original_model, duration_ms
+	FROM message_request
+	WHERE id = $1
+	  AND deleted_at IS NULL
+	  AND ` + ExcludeWarmupCondition
+
 // FindRollupFacts 读一行请求日志的 rollup 事实。
 //
 // 过滤条件与 Node 的回退查询逐条对齐（`message.ts:187-198`）：
 //   - `deleted_at IS NULL`：软删行不计入公开统计；
 //   - `ExcludeWarmupCondition`：预热抢答不是真实用户请求，Node 从公开统计里排除。
 //
+// 直接扫四列（不经过 `row_to_json`）：这是按主键取单行的窄查询，四列都是可以直扫的类型，
+// 把整行编成 JSON 文本再反序列化只是白付一遭编解码。列与过滤条件逐字同前一条查询。
+//
 // 找不到行时返回 `ErrNotFound`（调用方按「本次不写 rollup」处理）。
 func (p *Pools) FindRollupFacts(ctx context.Context, id int64) (*RollupFacts, error) {
-	var facts RollupFacts
-	err := p.readSingleRowAs(
-		ctx,
-		`SELECT row_to_json(t)::text FROM (
-			SELECT created_at, model, original_model, duration_ms
-			FROM message_request
-			WHERE id = $1
-			  AND deleted_at IS NULL
-			  AND `+ExcludeWarmupCondition+`
-		) t`,
-		&facts,
-		[]any{id},
-	)
+	pool, err := p.Data()
 	if err != nil {
 		return nil, err
+	}
+
+	var facts RollupFacts
+	if err := pool.QueryRow(ctx, rollupFactsQuery, id).Scan(
+		&facts.CreatedAt,
+		&facts.Model,
+		&facts.OriginalModel,
+		&facts.DurationMS,
+	); err != nil {
+		if isNoRows(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("store: rollup 事实回读失败: %w", err)
 	}
 	return &facts, nil
 }

@@ -110,33 +110,79 @@ func (t *ProjectionTx) ClaimOutboxBatch(ctx context.Context, limit int) ([]Proje
 	return claimed, nil
 }
 
-// InsertAppliedRequest 在事务内做幂等登记；返回 true 表示本次是新应用（投影应继续累加）。
+// AppliedRequestEntry 是一条待登记的幂等记录（request_id → event_id）。
 //
-// SQL 与 projection.go 的 InsertProjAppliedRequestWith 逐字相同——那份走 *Pool（非事务路径），
-// 这份走 tx；两份共用一个语义：幂等键是 request_id。
-func (t *ProjectionTx) InsertAppliedRequest(ctx context.Context, requestID int64, eventID string) (bool, error) {
-	var returned int64
-	err := t.tx.QueryRow(ctx,
-		`INSERT INTO proj_applied_requests (request_id, event_id)
-		 VALUES ($1, $2::uuid)
-		 ON CONFLICT (request_id) DO NOTHING
-		 RETURNING request_id`,
-		requestID, eventID,
-	).Scan(&returned)
-	if err == pgx.ErrNoRows {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("store: 投影去重写入失败: %w", err)
-	}
-	return true, nil
+// 入参必须按 request_id 去重且保留**首次出现**的那条：改前的逐条路径对同一 request_id 的
+// 两次出现是「首次 fresh=true、次次 fresh=false」，而 ON CONFLICT 只能回一行，
+// 故「谁是首次」只有编排知道（见 jobs 侧 processBatch）。
+type AppliedRequestEntry struct {
+	RequestID int64
+	EventID   string
 }
 
-// UpsertAvailBuckets 按 (provider_id, bucket_start) 升序累加写桶。
+// InsertAppliedRequests 复刻 N 次 InsertAppliedRequest，只花一次往返。
+//
+// 返回**本次实际新插入**的 request_id 集合：已存在的与批内重复的都不会出现在集合里
+// （批内重复由 PG 的投机插入处理：首次落行、次次冲突跳过）。
+//
+// SQL 与 projection.go 的 InsertProjAppliedRequestWith 同一幂等键（request_id），
+// 只是这里走事务、走 unnest 批形态。
+func (t *ProjectionTx) InsertAppliedRequests(
+	ctx context.Context,
+	entries []AppliedRequestEntry,
+) (map[int64]struct{}, error) {
+	fresh := make(map[int64]struct{}, len(entries))
+	if len(entries) == 0 {
+		return fresh, nil
+	}
+
+	requestIDs := make([]int64, len(entries))
+	eventIDs := make([]string, len(entries))
+	for index, entry := range entries {
+		requestIDs[index] = entry.RequestID
+		eventIDs[index] = entry.EventID
+	}
+
+	rows, err := t.tx.Query(ctx,
+		`INSERT INTO proj_applied_requests (request_id, event_id)
+		 SELECT u.request_id, u.event_id::uuid
+		 FROM unnest($1::bigint[], $2::text[]) AS u(request_id, event_id)
+		 ON CONFLICT (request_id) DO NOTHING
+		 RETURNING request_id`,
+		requestIDs, eventIDs,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: 投影幂等批量登记失败: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var returned int64
+		if err := rows.Scan(&returned); err != nil {
+			return nil, fmt.Errorf("store: 读投影幂等登记结果失败: %w", err)
+		}
+		fresh[returned] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: 遍历投影幂等登记结果失败: %w", err)
+	}
+	return fresh, nil
+}
+
+// UpsertAvailBuckets 按 (provider_id, bucket_start) 升序累加写桶，**一条语句**写完这一批。
 //
 // 复刻 projection-worker.ts:369-405：冲突时**相加**（不是覆盖），last_request_at 取 GREATEST。
-// 升序是为并发实例取锁顺序一致（Node 同注释：avoids deadlocks）。
+// 升序是为并发实例取锁顺序一致（Node 同注释：avoids deadlocks）——改前是逐桶 ORDER BY 后逐个
+// Exec，现在把排序后的数组交给 unnest，行序仍是升序，锁顺序不变。
+//
+// 为什么先合并同键增量：PG 的 `ON CONFLICT DO UPDATE` 不允许同一条语句内两次命中同一行
+// （会报 cannot affect row a second time）。改前的逐桶 Exec 对同键输入是「先加一次、再加一次」，
+// 等价于计数求和 + last_request_at 取最大；这里在内存里先合并成一行，语义相同且不会报错。
 func (t *ProjectionTx) UpsertAvailBuckets(ctx context.Context, deltas []ProjectionBucketDelta) error {
+	if len(deltas) == 0 {
+		return nil
+	}
+
 	sorted := make([]ProjectionBucketDelta, len(deltas))
 	copy(sorted, deltas)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -146,33 +192,71 @@ func (t *ProjectionTx) UpsertAvailBuckets(ctx context.Context, deltas []Projecti
 		return sorted[i].BucketStart.Before(sorted[j].BucketStart)
 	})
 
+	merged := make([]ProjectionBucketDelta, 0, len(sorted))
 	for _, delta := range sorted {
-		if _, err := t.tx.Exec(ctx,
-			`INSERT INTO avail_bucket_1m AS b (
-			   provider_id, bucket_start, success_cnt, failure_cnt, excluded_cnt,
-			   latency_cnt, latency_sum_ms, last_request_at
-			 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-			 ON CONFLICT (provider_id, bucket_start) DO UPDATE SET
-			   success_cnt = b.success_cnt + EXCLUDED.success_cnt,
-			   failure_cnt = b.failure_cnt + EXCLUDED.failure_cnt,
-			   excluded_cnt = b.excluded_cnt + EXCLUDED.excluded_cnt,
-			   latency_cnt = b.latency_cnt + EXCLUDED.latency_cnt,
-			   latency_sum_ms = b.latency_sum_ms + EXCLUDED.latency_sum_ms,
-			   last_request_at = GREATEST(
-			     COALESCE(b.last_request_at, EXCLUDED.last_request_at),
-			     EXCLUDED.last_request_at
-			   )`,
-			delta.ProviderID,
-			delta.BucketStart,
-			delta.SuccessCnt,
-			delta.FailureCnt,
-			delta.ExcludedCnt,
-			delta.LatencyCnt,
-			delta.LatencySumMS,
-			delta.LastRequestAt,
-		); err != nil {
-			return fmt.Errorf("store: 累加可用性桶失败: %w", err)
+		last := len(merged) - 1
+		if last >= 0 && merged[last].ProviderID == delta.ProviderID &&
+			merged[last].BucketStart.Equal(delta.BucketStart) {
+			merged[last].SuccessCnt += delta.SuccessCnt
+			merged[last].FailureCnt += delta.FailureCnt
+			merged[last].ExcludedCnt += delta.ExcludedCnt
+			merged[last].LatencyCnt += delta.LatencyCnt
+			merged[last].LatencySumMS += delta.LatencySumMS
+			if delta.LastRequestAt.After(merged[last].LastRequestAt) {
+				merged[last].LastRequestAt = delta.LastRequestAt
+			}
+			continue
 		}
+		merged = append(merged, delta)
+	}
+
+	providerIDs := make([]int64, len(merged))
+	bucketStarts := make([]time.Time, len(merged))
+	successCnts := make([]int, len(merged))
+	failureCnts := make([]int, len(merged))
+	excludedCnts := make([]int, len(merged))
+	latencyCnts := make([]int, len(merged))
+	latencySums := make([]int64, len(merged))
+	lastRequestAts := make([]time.Time, len(merged))
+	for index, delta := range merged {
+		providerIDs[index] = delta.ProviderID
+		bucketStarts[index] = delta.BucketStart
+		successCnts[index] = delta.SuccessCnt
+		failureCnts[index] = delta.FailureCnt
+		excludedCnts[index] = delta.ExcludedCnt
+		latencyCnts[index] = delta.LatencyCnt
+		latencySums[index] = delta.LatencySumMS
+		lastRequestAts[index] = delta.LastRequestAt
+	}
+
+	if _, err := t.tx.Exec(ctx,
+		`INSERT INTO avail_bucket_1m AS b (
+		   provider_id, bucket_start, success_cnt, failure_cnt, excluded_cnt,
+		   latency_cnt, latency_sum_ms, last_request_at
+		 )
+		 SELECT u.provider_id, u.bucket_start, u.success_cnt, u.failure_cnt, u.excluded_cnt,
+		        u.latency_cnt, u.latency_sum_ms, u.last_request_at
+		 FROM unnest(
+		   $1::bigint[], $2::timestamptz[], $3::int[], $4::int[], $5::int[],
+		   $6::int[], $7::bigint[], $8::timestamptz[]
+		 ) AS u(
+		   provider_id, bucket_start, success_cnt, failure_cnt, excluded_cnt,
+		   latency_cnt, latency_sum_ms, last_request_at
+		 )
+		 ON CONFLICT (provider_id, bucket_start) DO UPDATE SET
+		   success_cnt = b.success_cnt + EXCLUDED.success_cnt,
+		   failure_cnt = b.failure_cnt + EXCLUDED.failure_cnt,
+		   excluded_cnt = b.excluded_cnt + EXCLUDED.excluded_cnt,
+		   latency_cnt = b.latency_cnt + EXCLUDED.latency_cnt,
+		   latency_sum_ms = b.latency_sum_ms + EXCLUDED.latency_sum_ms,
+		   last_request_at = GREATEST(
+		     COALESCE(b.last_request_at, EXCLUDED.last_request_at),
+		     EXCLUDED.last_request_at
+		   )`,
+		providerIDs, bucketStarts, successCnts, failureCnts, excludedCnts,
+		latencyCnts, latencySums, lastRequestAts,
+	); err != nil {
+		return fmt.Errorf("store: 累加可用性桶失败: %w", err)
 	}
 	return nil
 }

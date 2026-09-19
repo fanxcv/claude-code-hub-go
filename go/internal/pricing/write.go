@@ -28,6 +28,9 @@ type UpdateStore interface {
 	ListLatestPriceRowsForSync(ctx context.Context) (map[string]store.PriceSyncExistingRow, error)
 	InsertModelPrice(ctx context.Context, modelName string, priceData []byte, source string) (int64, error)
 	AdminUpsertModelPrice(ctx context.Context, modelName string, priceData json.RawMessage, source string) (store.AdminModelPrice, error)
+	// 批量写：正常路径只走这两个；逐条方法保留给批量失败后的退化写（归因需要）。
+	InsertModelPrices(ctx context.Context, writes []store.ModelPriceWrite) error
+	ReplaceModelPrices(ctx context.Context, writes []store.ModelPriceWrite) error
 }
 
 // WriteEntries 复刻 processPriceTableInternal（actions/model-prices.ts:112-247）。
@@ -74,6 +77,9 @@ func WriteEntries(
 		SkippedConflicts: make([]string, 0, 8),
 	}
 
+	// 待写队列：分类一条写一条的老路径里，每次「整行替换」都要付一次 BEGIN/DELETE/INSERT/COMMIT。
+	// 这里先把分类结果攒起来，循环结束后整批提交；批量失败再退化回逐条（见 applyEntryWrites）。
+	pending := make([]pendingEntryWrite, 0, len(entries))
 	for _, entry := range entries {
 		// Node 与 manual 记录入库同样用 trim 后的名字，避免云端表里带空白的同名键
 		// 绕过本地手动模型的保护检查。
@@ -105,25 +111,111 @@ func WriteEntries(
 		existing, found := existingRows[modelName]
 		switch {
 		case !found:
-			if _, err := st.InsertModelPrice(ctx, modelName, entry.Data, source); err != nil {
-				result.Failed = append(result.Failed, modelName)
-				logWriteError(logger, modelName, "insert_failed", err)
-				continue
-			}
-			result.Added = append(result.Added, modelName)
+			pending = append(pending, pendingEntryWrite{modelName: modelName, data: entry.Data, added: true})
 		case existing.Source != source || !jobs.PriceDataEqual(existing.PriceData, priceData):
-			if _, err := st.AdminUpsertModelPrice(ctx, modelName, entry.Data, source); err != nil {
-				result.Failed = append(result.Failed, modelName)
-				logWriteError(logger, modelName, "upsert_failed", err)
-				continue
-			}
-			result.Updated = append(result.Updated, modelName)
+			pending = append(pending, pendingEntryWrite{modelName: modelName, data: entry.Data})
 		default:
 			result.Unchanged = append(result.Unchanged, modelName)
 		}
 	}
 
+	applyEntryWrites(ctx, st, pending, source, result, logger)
 	return result, nil
+}
+
+// pendingEntryWrite 是一条已分类、待落库的写入。
+//
+// added=true 表示库中原本无这个模型（走插入）；false 表示已存在且需整行替换。
+// 分类用的 existingRows 快照在循环开始前取一次，故分类与写入顺序无关。
+type pendingEntryWrite struct {
+	modelName string
+	data      json.RawMessage
+	added     bool
+}
+
+// applyEntryWrites 整批落库；批量失败则退化回逐条写。
+//
+// 退化不是可选项：批量语句是原子的，失败会把整批一起回滚，而调用方要的是「哪些进了
+// added/updated、哪些进了 failed」。逐条重放能把结果与归因恢复得与改前一致；成功路径
+// 则省掉 N-1 轮往返。
+//
+// 顺序：结果列表的追加顺序仍是**入参顺序**（先按 pending 原序补齐 added，再补齐 updated）。
+func applyEntryWrites(
+	ctx context.Context,
+	st UpdateStore,
+	pending []pendingEntryWrite,
+	source string,
+	result *jobs.PriceUpdateResult,
+	logger *logx.Logger,
+) {
+	inserts := make([]store.ModelPriceWrite, 0, len(pending))
+	replaces := make([]store.ModelPriceWrite, 0, len(pending))
+	for _, item := range pending {
+		write := store.ModelPriceWrite{ModelName: item.modelName, PriceData: item.data, Source: source}
+		if item.added {
+			inserts = append(inserts, write)
+			continue
+		}
+		replaces = append(replaces, write)
+	}
+
+	insertBatchOK := false
+	if len(inserts) > 0 {
+		if err := st.InsertModelPrices(ctx, inserts); err != nil {
+			logBatchFallback(logger, "insert", len(inserts), err)
+		} else {
+			insertBatchOK = true
+		}
+	}
+	replaceBatchOK := false
+	if len(replaces) > 0 {
+		if err := st.ReplaceModelPrices(ctx, replaces); err != nil {
+			logBatchFallback(logger, "upsert", len(replaces), err)
+		} else {
+			replaceBatchOK = true
+		}
+	}
+
+	for _, item := range pending {
+		if !item.added {
+			continue
+		}
+		if insertBatchOK {
+			result.Added = append(result.Added, item.modelName)
+			continue
+		}
+		if _, err := st.InsertModelPrice(ctx, item.modelName, item.data, source); err != nil {
+			result.Failed = append(result.Failed, item.modelName)
+			logWriteError(logger, item.modelName, "insert_failed", err)
+			continue
+		}
+		result.Added = append(result.Added, item.modelName)
+	}
+
+	for _, item := range pending {
+		if item.added {
+			continue
+		}
+		if replaceBatchOK {
+			result.Updated = append(result.Updated, item.modelName)
+			continue
+		}
+		if _, err := st.AdminUpsertModelPrice(ctx, item.modelName, item.data, source); err != nil {
+			result.Failed = append(result.Failed, item.modelName)
+			logWriteError(logger, item.modelName, "upsert_failed", err)
+			continue
+		}
+		result.Updated = append(result.Updated, item.modelName)
+	}
+}
+
+func logBatchFallback(logger *logx.Logger, phase string, count int, err error) {
+	if logger == nil {
+		return
+	}
+	logger.Warn("price_table_batch_write_failed_fallback", map[string]any{
+		"phase": phase, "count": count, "error": err.Error(),
+	})
 }
 
 // decodePriceData 复刻 Node 对单条 priceData 的两项校验（对象 + 必须含 mode）。

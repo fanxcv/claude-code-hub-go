@@ -119,6 +119,96 @@ func (p *Pools) InsertModelPrice(
 	return id, nil
 }
 
+// ModelPriceWrite 是批量写入的一项（整表同步与手动导入共用）。
+//
+// PriceData 用 json.RawMessage 而不是 string：调用方手里本来就是编码后的 JSON，
+// 这里再转一次字符串只会多一次拷贝。
+type ModelPriceWrite struct {
+	ModelName string
+	PriceData json.RawMessage
+	Source    string
+}
+
+// priceWriteColumns 把写入项摊成三条并行数组（unnest 的入参形态）。
+//
+// 顺序即行顺序：数组下标 i 的三个元素属于同一行。
+func priceWriteColumns(writes []ModelPriceWrite) (names []string, payloads []string, sources []string) {
+	names = make([]string, len(writes))
+	payloads = make([]string, len(writes))
+	sources = make([]string, len(writes))
+	for index, write := range writes {
+		names[index] = write.ModelName
+		payloads[index] = string(write.PriceData)
+		sources[index] = write.Source
+	}
+	return names, payloads, sources
+}
+
+// InsertModelPrices 复刻 N 次 createModelPrice，但只花一次往返。
+//
+// 语义等价性：单条 `INSERT ... SELECT unnest(...)` 本身是原子的——任一行非法则整条失败且
+// 一行不落库，与「逐条插入、每条各自事务」在**全部成功**时结果相同。调用方（价格同步与手动
+// 导入）在批量失败后会退化成逐条写，以保持「哪个模型失败」的精确归因，故失败路径也与改前一致。
+func (p *Pools) InsertModelPrices(ctx context.Context, writes []ModelPriceWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	pool, err := p.Writer()
+	if err != nil {
+		return err
+	}
+	names, payloads, sources := priceWriteColumns(writes)
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO model_prices (model_name, price_data, source)
+		 SELECT u.model_name, u.price_data::jsonb, u.source
+		 FROM unnest($1::text[], $2::text[], $3::text[]) AS u(model_name, price_data, source)`,
+		names, payloads, sources); err != nil {
+		return fmt.Errorf("store: 批量写入模型价格失败: %w", err)
+	}
+	return nil
+}
+
+// ReplaceModelPrices 复刻 N 次 upsertModelPrice（同一事务里先删该模型全部旧行、再插一行），
+// 但把 N 个模型合到**一个事务**里：两条语句、四次往返，而不是每个模型四条。
+//
+// 为什么仍是「先删后插」而不是 ON CONFLICT：与 AdminUpsertModelPrice 同一口径——Node 侧就是硬删除，
+// 改成真 upsert 会让旧行（含 id 与历史）留存，两端行数与 id 分叉。
+//
+// 原子范围的变化：改前每个模型一个事务，改后整批一个事务。成功路径结果相同（每个模型都是
+// 「删净再插一行」）；失败时整批回滚，由调用方退化为逐条写来恢复「部分成功 + 精确归因」。
+// 同一批内出现同名模型时，删除只做一次、插入按出现次数落行，与改前「每个模型各删一次再插」
+// 的终态一致（都是每个出现一次落一行）。
+func (p *Pools) ReplaceModelPrices(ctx context.Context, writes []ModelPriceWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	pool, err := p.Writer()
+	if err != nil {
+		return err
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: 开启模型价格批量事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	names, payloads, sources := priceWriteColumns(writes)
+	if _, err := tx.Exec(ctx, "DELETE FROM model_prices WHERE model_name = ANY($1::text[])", names); err != nil {
+		return fmt.Errorf("store: 清理旧模型价格失败: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO model_prices (model_name, price_data, source)
+		 SELECT u.model_name, u.price_data::jsonb, u.source
+		 FROM unnest($1::text[], $2::text[], $3::text[]) AS u(model_name, price_data, source)`,
+		names, payloads, sources); err != nil {
+		return fmt.Errorf("store: 批量替换模型价格失败: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: 提交模型价格批量事务失败: %w", err)
+	}
+	return nil
+}
+
 // DeleteCloudPricesNotIn 复刻 deleteCloudPricesNotIn：删除不在保留列表中的非 manual 行。
 //
 // 空保留列表直接返回 0（Node 同口径）：否则等同于清空全部非 manual 行。

@@ -48,7 +48,7 @@ const (
 // ProjectionTxOps 是消费侧需要的事务内原语（store.ProjectionTx 满足；单测用假实现）。
 type ProjectionTxOps interface {
 	ClaimOutboxBatch(ctx context.Context, limit int) ([]store.ProjectionOutboxEvent, error)
-	InsertAppliedRequest(ctx context.Context, requestID int64, eventID string) (bool, error)
+	InsertAppliedRequests(ctx context.Context, entries []store.AppliedRequestEntry) (map[int64]struct{}, error)
 	UpsertAvailBuckets(ctx context.Context, deltas []store.ProjectionBucketDelta) error
 	MarkOutboxPublished(ctx context.Context, ids []int64, lastError *string) error
 	RecomputeAvailCurrent(ctx context.Context, providerIDs []int64, windowMinutes int) error
@@ -284,7 +284,19 @@ func (c *AvailProjectionConsumer) processBatch(ctx context.Context) (int, error)
 			return nil
 		}
 
-		// 同一 (provider, 分钟) 的事件在内存里先合并，再逐桶 upsert——Node 同法（bucketDeltas）。
+		// 两遍走：第一遍只解码与校验并攒齐幂等登记，第二遍才累加。
+		// 改前是「每条一次 INSERT ... ON CONFLICT」，批上限 300 就是 300 次往返；
+		// 现在幂等登记与桶累加各只需一次往返。
+		//
+		// 同一 (provider, 分钟) 的事件仍在内存里先合并，再逐桶 upsert——Node 同法（bucketDeltas）。
+		type decodedProjectionEvent struct {
+			rowID      int64
+			eventID    string
+			requestID  int64
+			providerID int64
+			occurredAt time.Time
+			payload    map[string]any
+		}
 		type bucketKey struct {
 			providerID  int64
 			bucketStart time.Time
@@ -293,6 +305,7 @@ func (c *AvailProjectionConsumer) processBatch(ctx context.Context) (int, error)
 		touched := make(map[int64]struct{})
 		published := make([]int64, 0, len(claimed))
 		invalid := make([]int64, 0)
+		valid := make([]decodedProjectionEvent, 0, len(claimed))
 
 		for _, row := range claimed {
 			payload := c.decoder(row.Payload)
@@ -303,11 +316,39 @@ func (c *AvailProjectionConsumer) processBatch(ctx context.Context) (int, error)
 				invalid = append(invalid, row.ID)
 				continue
 			}
+			valid = append(valid, decodedProjectionEvent{
+				rowID: row.ID, eventID: row.EventID, requestID: requestID,
+				providerID: providerID, occurredAt: occurredAt, payload: payload,
+			})
+		}
 
-			fresh, err := tx.InsertAppliedRequest(ctx, requestID, row.EventID)
-			if err != nil {
-				return err
+		// 幂等登记：同一 request_id 只报首次出现的那条（改前逐条时「首次 fresh、次次不 fresh」，
+		// 而 ON CONFLICT 只回一行，故去重必须在编排侧做）。
+		entries := make([]store.AppliedRequestEntry, 0, len(valid))
+		seenRequestIDs := make(map[int64]struct{}, len(valid))
+		for _, event := range valid {
+			if _, duplicate := seenRequestIDs[event.requestID]; duplicate {
+				continue
 			}
+			seenRequestIDs[event.requestID] = struct{}{}
+			entries = append(entries, store.AppliedRequestEntry{RequestID: event.requestID, EventID: event.eventID})
+		}
+		freshRequestIDs, err := tx.InsertAppliedRequests(ctx, entries)
+		if err != nil {
+			return err
+		}
+
+		handled := make(map[int64]struct{}, len(valid))
+		for _, event := range valid {
+			row := store.ProjectionOutboxEvent{ID: event.rowID}
+			payload := event.payload
+			requestID := event.requestID
+			providerID := event.providerID
+			occurredAt := event.occurredAt
+			_, duplicate := handled[requestID]
+			handled[requestID] = struct{}{}
+			_, inserted := freshRequestIDs[requestID]
+			fresh := inserted && !duplicate
 			if fresh {
 				outcome := asProjectionOutcome(payload["outcome"])
 				durationMS, hasDuration := asProjectionFloat(payload["duration_ms"])

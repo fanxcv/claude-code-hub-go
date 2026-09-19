@@ -815,17 +815,17 @@ func (m *MessageWriter) EnsureContext(ctx context.Context, req *pctx.Context) er
 		data.SessionIdentityKind = &kind
 	}
 
-	created, err := m.pools.CreateMessageRequest(ctx, data)
+	createdID, err := m.pools.CreateMessageRequestID(ctx, data)
 	if err != nil {
 		return fmt.Errorf("guard: 建立请求日志上下文失败: %w", err)
 	}
 	m.rows.add()
 	// 行标识交给上下文：终态结算（终态包）靠它认出「guard 开的这一行」。重复开行会在这里
 	// 直接报错，不静默覆盖——那会导致两行、两套账。
-	if err := req.SetMessageRequestID(created.ID); err != nil {
+	if err := req.SetMessageRequestID(createdID); err != nil {
 		return fmt.Errorf("guard: 请求日志行标识写入失败: %w", err)
 	}
-	m.logger.Debug("guard.message_context.created", map[string]any{"requestId": created.ID})
+	m.logger.Debug("guard.message_context.created", map[string]any{"requestId": createdID})
 	return nil
 }
 

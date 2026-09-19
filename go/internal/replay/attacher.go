@@ -269,7 +269,8 @@ func (a *Attacher) writeAuditRow(
 	userAgentPtr := stringPtr(userAgent)
 	endpoint := identity.Endpoint
 	requestSequence := 0
-	if _, err := a.pools.CreateMessageRequest(ctx, store.CreateMessageRequestData{
+	// 审计行只靠行标识（这里连它也不用），用窄路径开行：避免 jsonb 大列随 RETURNING 回传。
+	if _, err := a.pools.CreateMessageRequestID(ctx, store.CreateMessageRequestData{
 		ProviderID:            0,
 		UserID:                identity.UserID,
 		Key:                   auth.APIKey,

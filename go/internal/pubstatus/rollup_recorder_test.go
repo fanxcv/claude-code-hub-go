@@ -53,27 +53,23 @@ func (s *fakeGroupStore) Set(context.Context, string, string) error { return nil
 // failingWriter 记录写入尝试并总是失败（模拟 Redis 写失败）。
 type failingWriter struct{ calls int }
 
-func (w *failingWriter) HIncrByFloat(context.Context, string, string, float64) error {
+func (w *failingWriter) ApplyBatch(context.Context, string, string, string, []RollupIncrement, int) error {
 	w.calls++
 	return errors.New("redis down")
 }
-func (w *failingWriter) SetNX(context.Context, string, string) (bool, error) {
-	return false, errors.New("redis down")
-}
-func (w *failingWriter) Expire(context.Context, string, int) error { return errors.New("redis down") }
 
 // countingWriter 记录成功写入的增量条数。
 type countingWriter struct{ fields map[string]float64 }
 
-func (w *countingWriter) HIncrByFloat(_ context.Context, key, field string, increment float64) error {
+func (w *countingWriter) ApplyBatch(_ context.Context, key, _ string, _ string, increments []RollupIncrement, _ int) error {
 	if w.fields == nil {
 		w.fields = map[string]float64{}
 	}
-	w.fields[key+"\x00"+field] += increment
+	for _, increment := range increments {
+		w.fields[key+"\x00"+BuildRollupField(increment.GroupID, increment.ModelKey, increment.Metric)] += increment.Value
+	}
 	return nil
 }
-func (w *countingWriter) SetNX(context.Context, string, string) (bool, error) { return true, nil }
-func (w *countingWriter) Expire(context.Context, string, int) error           { return nil }
 
 const recorderTestInternalSnapshot = `{
   "configVersion": "cfg-1", "siteTitle": "t", "siteDescription": "",
@@ -212,9 +208,9 @@ func int64PtrValue(value int64) *int64 { return &value }
 // discardWriter 吞掉一切写入，供并发用例使用（countingWriter 记录 map，不是并发安全的）。
 type discardWriter struct{}
 
-func (discardWriter) HIncrByFloat(context.Context, string, string, float64) error { return nil }
-func (discardWriter) SetNX(context.Context, string, string) (bool, error)         { return true, nil }
-func (discardWriter) Expire(context.Context, string, int) error                   { return nil }
+func (discardWriter) ApplyBatch(context.Context, string, string, string, []RollupIncrement, int) error {
+	return nil
+}
 
 // TestSnapshotGroupSourceConcurrentGroups 钉住「分组来源并发调用无数据竞争」。
 //

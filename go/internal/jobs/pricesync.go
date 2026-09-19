@@ -76,6 +76,9 @@ type priceStore interface {
 	ListLatestPriceRowsForSync(ctx context.Context) (map[string]store.PriceSyncExistingRow, error)
 	InsertModelPrice(ctx context.Context, modelName string, priceData []byte, source string) (int64, error)
 	AdminUpsertModelPrice(ctx context.Context, modelName string, priceData json.RawMessage, source string) (store.AdminModelPrice, error)
+	// 批量写：正常路径只走这两个；逐条方法保留给批量失败后的退化写（归因需要）。
+	InsertModelPrices(ctx context.Context, writes []store.ModelPriceWrite) error
+	ReplaceModelPrices(ctx context.Context, writes []store.ModelPriceWrite) error
 	DeleteCloudPricesNotIn(ctx context.Context, keepModelNames []string) (int64, error)
 	CountCloudModelPrices(ctx context.Context) (int, error)
 	GetCloudPricingCatalog(ctx context.Context) (*store.CloudPricingCatalogRow, error)
@@ -404,6 +407,13 @@ func (s *PriceSyncer) apply(
 	}
 
 	started := time.Now()
+	// 待写队列：分类一条写一条的老路径里，每次「整行替换」都要付一次
+	// BEGIN/DELETE/INSERT/COMMIT（4 次往返），一批上万模型就是数万次。这里先把分类结果
+	// 攒下来，循环结束后整批提交（插入 1 次、替换 4 次往返）。
+	pending := make([]pendingPriceWrite, 0, len(names))
+	// 进度日志里的 added/updated 是**已分类待写**数（写入在循环后统一 flush）。
+	// 最终落库真值见 price_sync_completed（由 result 计数驱动）。
+	classifiedAdded, classifiedUpdated := 0, 0
 	for index, rawModelName := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("价格同步被中断（已处理 %d/%d）: %w", index, len(names), err)
@@ -436,24 +446,12 @@ func (s *PriceSyncer) apply(
 		existingRow, found := existing[modelName]
 		switch {
 		case !found:
-			if _, err := s.store.InsertModelPrice(ctx, modelName, encoded, cloudPriceSource); err != nil {
-				result.Failed = append(result.Failed, modelName)
-				s.logger.Warn("price_sync_model_insert_failed", map[string]any{
-					"model": modelName, "error": err.Error(),
-				})
-				continue
-			}
-			result.Added = append(result.Added, modelName)
+			pending = append(pending, pendingPriceWrite{modelName: modelName, encoded: encoded, added: true})
+			classifiedAdded++
 		case existingRow.Source != cloudPriceSource || !priceDataEqual(existingRow.PriceData, priceData):
 			// 与 Node 同口径：整行替换（先删后插），而不是原地更新。
-			if _, err := s.store.AdminUpsertModelPrice(ctx, modelName, encoded, cloudPriceSource); err != nil {
-				result.Failed = append(result.Failed, modelName)
-				s.logger.Warn("price_sync_model_upsert_failed", map[string]any{
-					"model": modelName, "error": err.Error(),
-				})
-				continue
-			}
-			result.Updated = append(result.Updated, modelName)
+			pending = append(pending, pendingPriceWrite{modelName: modelName, encoded: encoded})
+			classifiedUpdated++
 		default:
 			result.Unchanged = append(result.Unchanged, modelName)
 		}
@@ -462,14 +460,103 @@ func (s *PriceSyncer) apply(
 			s.logger.Info("price_sync_progress", map[string]any{
 				"done":      index + 1,
 				"total":     len(names),
-				"added":     len(result.Added),
-				"updated":   len(result.Updated),
+				"added":     classifiedAdded,
+				"updated":   classifiedUpdated,
 				"failed":    len(result.Failed),
 				"elapsedMs": time.Since(started).Milliseconds(),
 			})
 		}
 	}
+	s.applyWrites(ctx, pending, result)
 	return result, nil
+}
+
+// pendingPriceWrite 是一条已分类、待落库的写入。
+//
+// added=true 表示库中原本无这个模型（走插入），false 表示已存在且需要整行替换。
+// 分类用的 existing 快照在循环开始前取一次，故分类结果与写入顺序无关。
+type pendingPriceWrite struct {
+	modelName string
+	encoded   []byte
+	added     bool
+}
+
+// applyWrites 把分类阶段攒下的写入整批交给 store，批量失败则退化回逐条写。
+//
+// 退化不是可选项：批量语句是原子的（插入单条语句、替换单事务），失败会把整批一起回滚，
+// 而调用方要的是「哪些模型进了 added/updated、哪些进了 failed」。逐条重放能把结果与
+// 归因恢复成与改前逐字一致；成功路径则省掉 N-1 轮的往返。
+//
+// 结果列表的追加顺序仍是**循环顺序**（先按 pending 原序补齐 added，再补齐 updated），
+// 与改前逐条写时的顺序一致。
+func (s *PriceSyncer) applyWrites(ctx context.Context, pending []pendingPriceWrite, result *PriceUpdateResult) {
+	inserts := make([]store.ModelPriceWrite, 0, len(pending))
+	replaces := make([]store.ModelPriceWrite, 0, len(pending))
+	for _, item := range pending {
+		write := store.ModelPriceWrite{ModelName: item.modelName, PriceData: json.RawMessage(item.encoded), Source: cloudPriceSource}
+		if item.added {
+			inserts = append(inserts, write)
+			continue
+		}
+		replaces = append(replaces, write)
+	}
+
+	insertBatchOK := false
+	if len(inserts) > 0 {
+		if err := s.store.InsertModelPrices(ctx, inserts); err != nil {
+			s.logger.Warn("price_sync_batch_insert_failed_fallback", map[string]any{
+				"count": len(inserts), "error": err.Error(),
+			})
+		} else {
+			insertBatchOK = true
+		}
+	}
+	replaceBatchOK := false
+	if len(replaces) > 0 {
+		if err := s.store.ReplaceModelPrices(ctx, replaces); err != nil {
+			s.logger.Warn("price_sync_batch_upsert_failed_fallback", map[string]any{
+				"count": len(replaces), "error": err.Error(),
+			})
+		} else {
+			replaceBatchOK = true
+		}
+	}
+
+	for _, item := range pending {
+		if !item.added {
+			continue
+		}
+		if insertBatchOK {
+			result.Added = append(result.Added, item.modelName)
+			continue
+		}
+		if _, err := s.store.InsertModelPrice(ctx, item.modelName, item.encoded, cloudPriceSource); err != nil {
+			result.Failed = append(result.Failed, item.modelName)
+			s.logger.Warn("price_sync_model_insert_failed", map[string]any{
+				"model": item.modelName, "error": err.Error(),
+			})
+			continue
+		}
+		result.Added = append(result.Added, item.modelName)
+	}
+
+	for _, item := range pending {
+		if item.added {
+			continue
+		}
+		if replaceBatchOK {
+			result.Updated = append(result.Updated, item.modelName)
+			continue
+		}
+		if _, err := s.store.AdminUpsertModelPrice(ctx, item.modelName, json.RawMessage(item.encoded), cloudPriceSource); err != nil {
+			result.Failed = append(result.Failed, item.modelName)
+			s.logger.Warn("price_sync_model_upsert_failed", map[string]any{
+				"model": item.modelName, "error": err.Error(),
+			})
+			continue
+		}
+		result.Updated = append(result.Updated, item.modelName)
+	}
 }
 
 // writeCatalog 复刻 cloud-price-updater.ts:125-146 的目录写入。

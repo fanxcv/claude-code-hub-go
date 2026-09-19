@@ -67,6 +67,47 @@ var messageRequestReturning = []string{
 	"status_code", "created_at", "updated_at", "deleted_at",
 }
 
+// messageRequestIDReturning 是「开行只取行标识」的 RETURNING 列表。
+//
+// 为何需要它：RETURNING 会把每一列的值**序列化回客户端**，而 special_settings /
+// routing_trace / affinity_fingerprint_chain 是 jsonb——数据面每次请求开行都得付这三份正文的
+// 序列化与网络代价，而调用点（守卫链的 messageContext 步骤、回放的审计行）只用得上 id。
+// 需要整行回读的调用点（真库集成用例的断言）继续用 messageRequestReturning。
+var messageRequestIDReturning = []string{"id"}
+
+// buildMessageRequestInsert 组装开行的 INSERT 语句与参数。
+//
+// 列集与参数顺序只在这里出现一份：两条开行路径（整行回读 / 只取行标识）共用它，
+// 免得「RETURNING 不同」渗成两份列顺序。
+func buildMessageRequestInsert(data CreateMessageRequestData, returning []string) (string, []any, error) {
+	casts := map[string]string{
+		"cost_usd":                   "::numeric",
+		"cost_multiplier":            "::numeric",
+		"group_cost_multiplier":      "::numeric",
+		"affinity_fingerprint_chain": "::jsonb",
+		"routing_trace":              "::jsonb",
+		"special_settings":           "::jsonb",
+	}
+
+	args := make([]any, 0, len(messageRequestColumns))
+	placeholders := make([]string, 0, len(messageRequestColumns))
+	for index, column := range messageRequestColumns {
+		value, err := insertValue(column, data)
+		if err != nil {
+			return "", nil, err
+		}
+		args = append(args, value)
+		placeholders = append(placeholders, fmt.Sprintf("$%d%s", index+1, casts[column]))
+	}
+
+	return fmt.Sprintf(
+		"INSERT INTO message_request (%s) VALUES (%s) RETURNING %s",
+		quoteColumns(messageRequestColumns),
+		strings.Join(placeholders, ", "),
+		strings.Join(returning, ", "),
+	), args, nil
+}
+
 // CreateMessageRequestData 复刻 CreateMessageRequestData 中本包用到的字段。
 // 指针字段对应 TS 的「未提供即不写」；非指针项对应 NOT NULL 列。
 type CreateMessageRequestData struct {
@@ -142,6 +183,7 @@ type MessageRequest struct {
 // CreateMessageRequest 复刻 src/repository/message.ts 的 createMessageRequest：单条
 // INSERT ... RETURNING。CostUSD 为 nil 或空串时按 TS 的 `formattedCost ?? undefined`
 // 语义写 NULL。
+// CreateMessageRequest 开行并把整行读回（真库集成用例靠它断言写入的列值）。
 func (p *Pools) CreateMessageRequest(
 	ctx context.Context,
 	data CreateMessageRequestData,
@@ -151,38 +193,40 @@ func (p *Pools) CreateMessageRequest(
 		return MessageRequest{}, err
 	}
 
-	casts := map[string]string{
-		"cost_usd":                   "::numeric",
-		"cost_multiplier":            "::numeric",
-		"group_cost_multiplier":      "::numeric",
-		"affinity_fingerprint_chain": "::jsonb",
-		"routing_trace":              "::jsonb",
-		"special_settings":           "::jsonb",
+	query, args, err := buildMessageRequestInsert(data, messageRequestReturning)
+	if err != nil {
+		return MessageRequest{}, err
 	}
-
-	args := make([]any, 0, len(messageRequestColumns))
-	placeholders := make([]string, 0, len(messageRequestColumns))
-	for index, column := range messageRequestColumns {
-		value, err := insertValue(column, data)
-		if err != nil {
-			return MessageRequest{}, err
-		}
-		args = append(args, value)
-		placeholders = append(placeholders, fmt.Sprintf("$%d%s", index+1, casts[column]))
-	}
-
-	query := fmt.Sprintf(
-		"INSERT INTO message_request (%s) VALUES (%s) RETURNING %s",
-		quoteColumns(messageRequestColumns),
-		strings.Join(placeholders, ", "),
-		strings.Join(messageRequestReturning, ", "),
-	)
 
 	request, err := scanMessageRequest(pool.QueryRow(ctx, query, args...))
 	if err != nil {
 		return MessageRequest{}, fmt.Errorf("store: 创建 message_request 失败: %w", err)
 	}
 	return request, nil
+}
+
+// CreateMessageRequestID 开行并**只回行标识**。
+//
+// 生产路径（守卫链开行、回放审计行）只需要 id，用这条避免 jsonb 大列随 RETURNING 回传。
+func (p *Pools) CreateMessageRequestID(
+	ctx context.Context,
+	data CreateMessageRequestData,
+) (int64, error) {
+	pool, err := p.Data()
+	if err != nil {
+		return 0, err
+	}
+
+	query, args, err := buildMessageRequestInsert(data, messageRequestIDReturning)
+	if err != nil {
+		return 0, err
+	}
+
+	var id int64
+	if err := pool.QueryRow(ctx, query, args...).Scan(&id); err != nil {
+		return 0, fmt.Errorf("store: 创建 message_request 失败: %w", err)
+	}
+	return id, nil
 }
 
 func insertValue(column string, data CreateMessageRequestData) (any, error) {

@@ -30,6 +30,10 @@ type fakeProjectionTx struct {
 	recomputed [][]int64
 	// failOnApply 让某次幂等登记报错，用来验证「错误上抛」。
 	failOnApply bool
+	// insertAppliedCalls / upsertBucketCalls 记录批原语的调用次数，
+	// 用来钉住「一批只花一次往返」这个性能契约。
+	insertAppliedCalls int
+	upsertBucketCalls  int
 }
 
 func (f *fakeProjectionTx) ClaimOutboxBatch(_ context.Context, limit int) ([]store.ProjectionOutboxEvent, error) {
@@ -44,18 +48,34 @@ func (f *fakeProjectionTx) ClaimOutboxBatch(_ context.Context, limit int) ([]sto
 	return claimed, nil
 }
 
-func (f *fakeProjectionTx) InsertAppliedRequest(_ context.Context, requestID int64, _ string) (bool, error) {
+// InsertAppliedRequests 模拟真库批形态的幂等登记：入参按 request_id 去重（首次优先），
+// 返回本次新插入的集合；failOnApply 让整批失败（对应真库整条语句报错、一行不落）。
+func (f *fakeProjectionTx) InsertAppliedRequests(
+	_ context.Context,
+	entries []store.AppliedRequestEntry,
+) (map[int64]struct{}, error) {
+	f.insertAppliedCalls++
 	if f.failOnApply {
-		return false, errors.New("fake: 幂等登记失败")
+		return nil, errors.New("fake: 幂等登记失败")
 	}
-	if f.applied[requestID] {
-		return false, nil
+	fresh := make(map[int64]struct{}, len(entries))
+	seen := make(map[int64]struct{}, len(entries))
+	for _, entry := range entries {
+		if _, duplicate := seen[entry.RequestID]; duplicate {
+			continue
+		}
+		seen[entry.RequestID] = struct{}{}
+		if f.applied[entry.RequestID] {
+			continue
+		}
+		f.applied[entry.RequestID] = true
+		fresh[entry.RequestID] = struct{}{}
 	}
-	f.applied[requestID] = true
-	return true, nil
+	return fresh, nil
 }
 
 func (f *fakeProjectionTx) UpsertAvailBuckets(_ context.Context, deltas []store.ProjectionBucketDelta) error {
+	f.upsertBucketCalls++
 	f.deltas = append(f.deltas, deltas...)
 	return nil
 }
