@@ -43,6 +43,9 @@ func wsEligibility(settings guard.SettingsSource) wsEligibleFunc {
 	}
 }
 
+// wsNoticeKeyLimit 是「跳过上游 WS」去重表的键数上界。
+const wsNoticeKeyLimit = 512
+
 // newWSNotice 构造「跳过上游 WS」的上报面。
 //
 // 去重维度是「原因 + 供应商 + 供应商类型」：跳过是每请求发生的，而可读的信号是组合
@@ -69,12 +72,15 @@ func newWSNotice(logger *logx.Logger) func(forward.WSSkip) {
 			mu.Unlock()
 			return
 		}
-		seen[key] = struct{}{}
-		// 键表上界：原因 4 种、类型个位数、供应商数十家，正常规模远低于此；越界即停止上报
-		// （宁可少记，也不让一张无界的表跟着进程长）。
-		if len(seen) > 512 {
+		// 键表上界：原因 4 种、类型个位数、供应商数十家，正常规模远低于此；到顶即停止上报
+		// （宁可少记，也不让一张无界的表跟着进程长）。判据在**写入前**，故表长度严格不超过
+		// wsNoticeKeyLimit——否则这条注释与实际容量对不上，后来者会按错的数字估算内存。
+		if len(seen) >= wsNoticeKeyLimit {
 			enabled = false
+			mu.Unlock()
+			return
 		}
+		seen[key] = struct{}{}
 		mu.Unlock()
 		logger.Warn("forward.ws_skip", map[string]any{
 			"cause":         string(skip.Cause),
