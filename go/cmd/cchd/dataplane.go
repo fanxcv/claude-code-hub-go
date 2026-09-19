@@ -11,6 +11,7 @@ import (
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/config"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/dataplane"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
@@ -100,6 +101,9 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 		Fallback:     options.Fallback,
 		RateLimit:    rateLimiter,
 		AuthThrottle: rateLimiter,
+		// 三档拨号超时：FETCH_CONNECT/HEADERS/BODY_TIMEOUT（毫秒）。不接进来的话拨号层只会用
+		// 自己的硬默认，运维改这三个变量就是静默无效——而它们恰是「上游卡住」时最先被调的旋钮。
+		DialOptions: dialOptionsFromEnv(options.Cfg.Env),
 		// 新行信号：不装配时照旧写库、只是不发信号（前端仍可用轮询），不静默错数。
 		NewRows: usageRows,
 		RouteOptions: route.Options{
@@ -158,6 +162,29 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 			options.Logger.Warn("dataplane_redis_close_failed", map[string]any{"error": closeErr.Error()})
 		}
 	}, nil
+}
+
+// dialOptionsFromEnv 把三档 Fetch 超时配置换算成拨号参数。
+//
+// 单位是**毫秒**：与 src/lib/config/env.schema.ts 的同名变量一致（契约默认 30000 / 600000 / 600000），
+// 也正是 dial.Default* 兜底值的来源。这里只做换算，不替调用方决定兜底数值。
+//
+// MaxUpstreamConnections 不在这里取：配置契约里没有对应的环境变量，取零即「不限制」。
+func dialOptionsFromEnv(env config.EnvConfig) dial.Options {
+	return dial.Options{
+		ConnectTimeout:  fetchTimeout(env.FetchConnectTimeout),
+		HeadersTimeout:  fetchTimeout(env.FetchHeadersTimeout),
+		BodyIdleTimeout: fetchTimeout(env.FetchBodyTimeout),
+	}
+}
+
+// fetchTimeout 把毫秒配置换算为 Duration；非正数（含 0 与负数）回零，
+// 由 dial 的 Default* 兜底——「0 表示用默认」是这一层的显式约定。
+func fetchTimeout(milliseconds float64) time.Duration {
+	if milliseconds <= 0 {
+		return 0
+	}
+	return time.Duration(milliseconds * float64(time.Millisecond))
 }
 
 // openCommandRedis 建命令面的 Redis 连接（数据面与管理面共用同一个构造：两边的超时口径
