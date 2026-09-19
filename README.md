@@ -225,7 +225,7 @@ docker build -f go/deploy/Dockerfile -t fanxcv/claude-code-hub-go:local .
 | `CCH_EGRESS_PAGES` | `off`（**官方镜像内置 `embed`**） | 页面面归属：`embed` 由内嵌 UI 作答，`off` 不服务任何页面。镜像与 compose 模板都已设为 `embed`，**无需手动设置**；显式设 `off` 可关掉页面面 |
 | `CCH_SAME_PROTOCOL_WEIGHT_K` | `2` | 同协议候选的权重倍率（选路偏好）；`1` 表示关闭该偏好 |
 | `DB_POOL_MAX` 等 | 见 `.env.example` | 连接池预算与各阶段超时 |
-| `GOMEMLIMIT` | — | Go 运行时软内存上限（容器限额内建议设置，例如 `512MiB`） |
+| `GOMEMLIMIT` | — | Go 运行时软内存上限（容器限额内建议设置，例如 `448MiB`；须**低于**容器 `mem_limit`，给 Go 提前 GC 留出余量） |
 | `CCH_PPROF_ENABLED` / `CCH_PPROF_ADDR` | `false` / `127.0.0.1:3101` | 剖析面开关与监听地址（只应绑回环） |
 
 > 未知变量会被忽略（不会导致启动失败），因此从上游 Node 版本沿用过来的 `.env` 一般可直接使用。

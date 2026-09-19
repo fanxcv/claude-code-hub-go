@@ -225,7 +225,7 @@ The full list lives in [`.env.example`](./.env.example). The essentials:
 | `CCH_EGRESS_PAGES` | `off` (**image pins `embed`**) | Page serving: `embed` answers from the built-in UI; `off` serves no pages. The image and the compose template both set `embed`, so **no manual setting is needed**; set `off` explicitly to disable page serving |
 | `CCH_SAME_PROTOCOL_WEIGHT_K` | `2` | Weight multiplier for same-protocol candidates (routing preference); `1` disables it |
 | `DB_POOL_MAX`, … | see `.env.example` | Pool budget and per-stage timeouts |
-| `GOMEMLIMIT` | — | Go runtime soft memory limit (set it inside a container limit, e.g. `512MiB`) |
+| `GOMEMLIMIT` | — | Go runtime soft memory limit (set it **below** the container `mem_limit`, e.g. `448MiB`, so the runtime GCs before the cgroup cap) |
 | `CCH_PPROF_ENABLED` / `CCH_PPROF_ADDR` | `false` / `127.0.0.1:3101` | Profiling toggle and address (loopback only) |
 
 > Unknown variables are ignored rather than fatal, so a `.env` inherited from the upstream Node deployment generally keeps working.
