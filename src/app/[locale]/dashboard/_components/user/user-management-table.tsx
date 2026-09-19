@@ -105,6 +105,12 @@ const EMPTY_KEYS_HEIGHT = 68; // py-6 * 2 + line height
 const MIN_TABLE_WIDTH_CLASS = "min-w-[1070px]";
 const GRID_COLUMNS_CLASS = "grid-cols-[minmax(260px,1fr)_120px_repeat(7,90px)_80px]";
 
+// 用户 key 的新增/编辑/删除会触发 router.refresh()，该路由段子树随之卸载重挂，
+// 组件内的展开态会被 useState 初始化器重置（表现为操作完 key 后用户行自动收起）。
+// 这里在模块层留一份展开态，重挂时按 id 还原；同一次挂载内的写入见下方同步 effect。
+// ponytail: 页面整刷/热更新会清空；若将来需跨标签页保留，改 sessionStorage。
+const persistedExpandedUsers = new Map<number, boolean>();
+
 export function UserManagementTable({
   users,
   hasNextPage,
@@ -141,7 +147,7 @@ export function UserManagementTable({
   const selectedUserIdSet = selectedUserIds ?? emptySet;
   const selectedKeyIdSet = selectedKeyIds ?? emptySet;
   const [expandedUsers, setExpandedUsers] = useState<Map<number, boolean>>(
-    () => new Map(users.map((user) => [user.id, false]))
+    () => new Map(users.map((user) => [user.id, persistedExpandedUsers.get(user.id) ?? false]))
   );
   const parentRef = useRef<HTMLDivElement>(null);
   const prevAutoExpandRef = useRef(autoExpandOnFilter);
@@ -160,7 +166,8 @@ export function UserManagementTable({
     setExpandedUsers((prev) => {
       const next = new Map<number, boolean>();
       for (const user of users) {
-        next.set(user.id, prev.get(user.id) ?? false);
+        // prev 缺失（重挂后首帧、或新加载的一页）时回落到模块层记录
+        next.set(user.id, prev.get(user.id) ?? persistedExpandedUsers.get(user.id) ?? false);
       }
 
       if (next.size !== prev.size) return next;
@@ -170,6 +177,14 @@ export function UserManagementTable({
       return prev;
     });
   }, [users]);
+
+  // 展开态变化即回写模块层，供重挂载后还原（已不在列表里的 id 顺带被剔除，不留残影）
+  useEffect(() => {
+    persistedExpandedUsers.clear();
+    for (const [userId, expanded] of expandedUsers) {
+      persistedExpandedUsers.set(userId, expanded);
+    }
+  }, [expandedUsers]);
 
   useEffect(() => {
     if (autoExpandOnFilter && !prevAutoExpandRef.current) {
