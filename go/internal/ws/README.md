@@ -38,14 +38,16 @@ HTTP 处理器（`cmd/cchd/ws.go` 传入的 `api.Handler()`）。因此归属判
 
 ## 未实现项（明确回退，不静默丢弃）
 
-1. **上游 WebSocket 建连**（Node 的 `responses-ws/upstream-adapter.ts`，仅当「客户端为 WS +
-   供应商类型为 codex + 全局 `enableOpenaiResponsesWebsocket` 开启 + 端点不在不支持缓存」时才尝试）。
-   本包对这类请求走 HTTP SSE 隧道——与 Node 在「开关关闭 / 非 codex / 端点不支持」时的降级路径
-   完全一致，客户端可见协议不变，只是少了上游 WS 的延迟收益。对应的 `downgradeReason`
-   （Node 的 `ResponsesWsDowngradeReason`）目前无处记录，因为 Go 数据面还没有 WS 资格判定。
-2. **端点不支持 WS 的短期缓存**（`unsupported-cache.ts`）随第 1 项一起缺席：没有上游 WS 尝试，
-   就没有「尝试失败后短期不复用」的需求。
-3. **每进程内部密钥不是本包的安全边界**：隧道在进程内完成，没有可被外部伪造的 socket；
+1. **上游 WebSocket 建连已实现**（2026-09-19，见 `internal/upws` 与 `internal/forward/ws.go`）：
+   资格四条全真时先试上游 WS，走不成则回落 HTTP 且**不留失败痕迹**（`responses_ws_fallback`
+   入链、`downgradeReason` 落到链项字段、不计熔断）。本包不参与该路径——它只负责客户端侧
+   帧翻译，并写下资格判定要用的那个隧道标记。
+2. **端点不支持的短期缓存已实现**：在 `internal/upws` 的拨号器里（进程内 map + TTL），
+   命中即不发起握手，也不记成「尝试过但降级」。
+3. **本版不做连接池化**：上游单连接串行且服务端有 60 分钟上限
+   （`websocket_connection_limit_reached`），池化必须处理这两件事，而收益只是省一次握手。
+   当前每 turn 新建连接、turn 结束关闭。
+4. **每进程内部密钥不是本包的安全边界**：隧道在进程内完成，没有可被外部伪造的 socket；
    密钥仍随隧道请求携带，使数据面将来若照 Node 的 `verifyInternalRequest` 判定也成立。
    真正的边界是连接建立时剥掉客户端自带的全部 `x-cch-*` 头。
 

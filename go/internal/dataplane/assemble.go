@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
+	"github.com/fanxcv/claude-code-hub-go/go/internal/appversion"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/cfgsync"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/clientver"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/forward"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/gate"
@@ -25,6 +28,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/terminal"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/upws"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -377,6 +381,22 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		return nil, fmt.Errorf("dataplane: 拨号器构造失败: %w", err)
 	}
 
+	// 上游 WebSocket 拨号器（codex 类供应商专用）。
+	//
+	// 它只被「客户端本身走 WS + 候选是 codex + 设置开关开 + 端点未命中不支持缓存」四条全真的
+	// 请求用到；其余请求连构造它的代价都不付（只多一个空结构体与一个 map）。
+	//
+	// ClientVersion 取进程真实版本：上游会把 version / User-Agent 当身份头校验，
+	// 写死一个假版本会在对端改校验规则时静默失败。
+	wsDialer := upws.New(upws.Options{
+		ConnectTimeout:  dialOptions.ConnectTimeout,
+		HeadersTimeout:  dialOptions.HeadersTimeout,
+		BodyIdleTimeout: dialOptions.BodyIdleTimeout,
+		ClientVersion:   appversion.Bare(appversion.Resolve(os.Getenv)),
+		Logger:          logger,
+		Now:             options.Now,
+	})
+
 	// 故障转移用的选路器：Source 由本函数固定为真实快照面，避免「测试用假源、生产用真源」的分叉。
 	gates, providerCostUnwired := buildGates(options)
 
@@ -451,6 +471,20 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			Limits: options.Limits,
 			Logger: logger,
 			Now:    options.Now,
+			// 上游 WS：资格判定逐条对齐 Node 的四条件，且**每请求**判定（设置开关读快照，不是构造期一次）。
+			//
+			// 缺任何一条都维持现状走 HTTP 隧道、且不留任何降级痕迹——与当前行为逐字一致。
+			WS: wsDialer,
+			WSEligible: func(ctx context.Context, pc *pctx.Context, provider forward.Provider) bool {
+				if !forward.IsWebSocketClientRequest(pc) {
+					return false
+				}
+				if provider.Type != convert.ProviderCodex {
+					return false
+				}
+				settings, settingsErr := adapters.Settings.FindSystemSettings(ctx)
+				return settingsErr == nil && settings != nil && settings.EnableOpenAIResponsesWebsocket
+			},
 			// 占位思考签名的主动剥离开关：发往 ANTHROPIC 供应商前剥掉客户端回传的自家占位签名。
 			PlaceholderThinkingSignature: options.PlaceholderThinkingSignature,
 			// 错误规则与假 200 检测共用守卫侧的快照（同一个 cfgsync 通道，避免两套真相）。

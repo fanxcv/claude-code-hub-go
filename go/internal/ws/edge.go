@@ -12,10 +12,11 @@
 // 连接建立时剥掉客户端自带的全部 `x-cch-*` 头（见 stripClientHeaders）；密钥仍然照 Node
 // 的口径随隧道请求携带，使数据面后续若要按 Node 的 `verifyInternalRequest` 判定也成立。
 //
-// 未实现（明确回退，不静默丢弃，见 README 的「未实现项」）：上游 WebSocket 建连
-// （Node 的 `responses-ws/upstream-adapter.ts`，仅当客户端为 WS、供应商类型为 codex 且全局
-// 开关开启时尝试）。本包对这类请求走 HTTP SSE 隧道——与 Node 在「开关关闭 / 端点不支持 /
-// 非 codex」时的降级路径完全一致，客户端可见协议不变，只是少了上游 WS 的延迟收益。
+// 上游 WebSocket（Node 的 `responses-ws/upstream-adapter.ts`）已实现，但它不在本包：本包只负责
+// 客户端侧的帧翻译，上游那条腿在 `internal/upws` 与 `internal/forward` 的接缝里（资格四条：
+// 客户端为 WS + 供应商类型为 codex + 全局 `enableOpenaiResponsesWebsocket` 开启 + 端点不在
+// 不支持短期缓存；不满足则照旧走 HTTP SSE 隧道，客户端可见协议不变）。
+// 本包需要知道的只有一件事：它写的隧道标记 `x-cch-client-transport` 是那条资格判定的输入之一。
 package ws
 
 import (

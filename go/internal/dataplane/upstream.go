@@ -561,45 +561,27 @@ func (s *storeSettler) providerChain(attempts []forward.AttemptOutcome) []byte {
 		items = append(items, entry)
 	}
 	for index, attempt := range attempts {
-		item := route.ChainItem{
-			ID:            attempt.ProviderID,
-			Name:          attempt.ProviderName,
-			AttemptNumber: attempt.Attempt,
-			Reason:        attempt.Reason,
-		}
-		if captured, ok := s.state.selectionFor(attempt.ProviderID); ok && captured.Provider != nil {
-			// 取选路留痕**只为静态配置快照**（身份、优先级、权重、倍率、分组标签、端点快照）：
-			// 尝试期条目的 reason 记的是「这次尝试的结局」，而选路留痕里的 reason/method 是
-			// 「怎么被选中的」——那属于链首，不属尝试条目，故在此清掉。
-			item = captured.ChainItem()
-			item.Reason = ""
-			item.SelectionMethod = ""
-			item.Affinity = nil
-			item.DecisionContext = nil
-			item.AttemptNumber = attempt.Attempt
-			if attempt.Reason != "" {
-				item.Reason = attempt.Reason
-			}
-		} else {
-			// 没有留痕时仍要把「是谁」写全：只有尝试信息的链会丢掉「选的是哪个供应商」。
-			item.ID = attempt.ProviderID
-			item.Name = attempt.ProviderName
-			item.AttemptNumber = attempt.Attempt
+		item := s.attemptChainItem(attempt, index)
+		if attempt.Reason != "" {
+			item.Reason = attempt.Reason
 		}
 		// 端点与结局：Node 的 chain[1..] 带这三项（黄金样本 chain[1] 的键集含
 		// endpointId / endpointUrl / statusCode；失败时另有 errorMessage）。
-		if attempt.EndpointID != 0 {
-			endpointID := attempt.EndpointID
-			item.EndpointID = &endpointID
-		}
-		item.EndpointURL = attempt.EndpointURL
 		if attempt.StatusCode != 0 {
 			statusCode := attempt.StatusCode
 			item.StatusCode = &statusCode
 		}
 		item.ErrorMessage = attempt.Message
-		if item.Timestamp == 0 {
-			item.Timestamp = s.state.StartedAt.Add(time.Duration(index) * time.Millisecond).UnixMilli()
+		if ws := attempt.WS; ws != nil {
+			// 上游 WS 的事实单独成一条**信息性**条目：它描述的是「尝试之前的传输层前置事实」，
+			// 而尝试条目的 reason 记的是这次尝试的结局。两者混为一条会把真实结局
+			// （request_success 等）覆盖成非成功词，让可用率把成功算成失败。
+			//
+			// 两个 WS 词在 pubstatus 里是 neutral（既不算成功也不算失败），与 http2_fallback 同地位。
+			info := s.attemptChainItem(attempt, index)
+			info.Reason = wsChainReason(ws)
+			applyWSAttemptDetails(&info, ws)
+			items = append(items, info)
 		}
 		applyAttemptDetails(&item, attempt)
 		items = append(items, item)
@@ -610,6 +592,66 @@ func (s *storeSettler) providerChain(attempts []forward.AttemptOutcome) []byte {
 		return nil
 	}
 	return payload
+}
+
+// attemptChainItem 构造尝试期条目的**静态部分**：身份、选路快照、端点与时间戳。
+//
+// 结局（reason / statusCode / errorMessage / 重定向细节）不由它写：那是每次尝试各自的结局，
+// 由调用方按条目性质分别填——WS 信息性条目与尝试条目共用静态部分，但结局不同。
+func (s *storeSettler) attemptChainItem(attempt forward.AttemptOutcome, index int) route.ChainItem {
+	item := route.ChainItem{
+		ID:            attempt.ProviderID,
+		Name:          attempt.ProviderName,
+		AttemptNumber: attempt.Attempt,
+	}
+	if captured, ok := s.state.selectionFor(attempt.ProviderID); ok && captured.Provider != nil {
+		// 取选路留痕**只为静态配置快照**（身份、优先级、权重、倍率、分组标签、端点快照）：
+		// 尝试期条目的 reason 记的是「这次尝试的结局」，而选路留痕里的 reason/method 是
+		// 「怎么被选中的」——那属于链首，不属尝试条目，故在此清掉。
+		item = captured.ChainItem()
+		item.Reason = ""
+		item.SelectionMethod = ""
+		item.Affinity = nil
+		item.DecisionContext = nil
+		item.AttemptNumber = attempt.Attempt
+	}
+	if attempt.EndpointID != 0 {
+		endpointID := attempt.EndpointID
+		item.EndpointID = &endpointID
+	}
+	item.EndpointURL = attempt.EndpointURL
+	if item.Timestamp == 0 {
+		item.Timestamp = s.state.StartedAt.Add(time.Duration(index) * time.Millisecond).UnixMilli()
+	}
+	return item
+}
+
+// wsChainReason 给出 WS 信息性条目的 reason 词（两个词均取自冻结的 Node 词表）。
+func wsChainReason(ws *forward.AttemptWSFacts) string {
+	if ws.DowngradedToHTTP {
+		return forward.ReasonResponsesWSFallback
+	}
+	return forward.ReasonResponsesWSAttempted
+}
+
+// applyWSAttemptDetails 把上游 WS 事实写到链项上。无值时**不写键**
+// （Node 侧是 `undefined`，序列化后该键不存在；写 false 会让界面把「压根没走这条传输」
+// 渲染成「走了但没连上」）。
+func applyWSAttemptDetails(item *route.ChainItem, ws *forward.AttemptWSFacts) {
+	item.ClientTransport = ws.ClientTransport
+	if ws.Attempted {
+		attempted := true
+		item.UpstreamWSAttempted = &attempted
+	}
+	if ws.Connected {
+		connected := true
+		item.UpstreamWSConnected = &connected
+	}
+	if ws.DowngradedToHTTP {
+		downgraded := true
+		item.DowngradedToHTTP = &downgraded
+	}
+	item.DowngradeReason = ws.DowngradeReason
 }
 
 // applyAttemptDetails 把一次尝试的结局细节补到链项上（Node 的 addProviderToChain 就写在这三处）。

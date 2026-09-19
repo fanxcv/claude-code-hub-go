@@ -11,6 +11,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/rectify"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/upws"
 )
 
 // 转发路径的不可恢复错误。
@@ -82,6 +83,18 @@ type Deps struct {
 	Rules RuleMatcher
 	// Detector 为 nil 时跳过 fake-200 检测（缺口记录在 Result.DetectorMissing）。
 	Detector BodyErrorDetector
+	// WS 是上游 WebSocket 拨号器（codex 类供应商专用）；nil 表示不尝试上游 WS。
+	//
+	// 何时会用到它：客户端本身走 WS + 候选是 codex + 系统设置开关开 + 端点未命中不支持缓存，
+	// 四条全真（前三条由 WSEligible 判，第四条由 upws.Dialer.EndpointEligible 判）。
+	// 任一条不真都维持现状：走 HTTP 隧道，**不记任何降级痕迹**（与当前行为逐字一致）。
+	WS *upws.Dialer
+	// WSEligible 判定本次尝试是否具备走上游 WS 的资格（客户端传输层 / 供应商类型 / 全局开关）。
+	// nil 表示永远不走 WS。
+	//
+	// 为什么带上 *pctx.Context：这三条判定的事实分别来自入口 headers（隧道标记）、候选供应商
+	// 与系统设置快照，而 Deps 是跨请求共享的——判定必须是**每请求**的函数，不能烘进构造期。
+	WSEligible func(ctx context.Context, pc *pctx.Context, provider Provider) bool
 	// CountNetworkFailureTowardCircuit 对应 ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS。
 	CountNetworkFailureTowardCircuit bool
 	// RecordFailure 计一次供应商熔断失败；nil 时跳过。仅在分类计入熔断时调用。
@@ -185,6 +198,28 @@ type AttemptOutcome struct {
 	ModelRedirect *AttemptModelRedirect
 	// SkippedRetryAndSwitch 为真表示该端点策略禁止重试与切换。
 	SkippedRetryAndSwitch bool
+	// WS 是本次尝试上的上游 WebSocket 事实；nil 表示本次尝试与上游 WS 无关
+	// （客户端不是 WS / 供应商不是 codex / 开关关闭 / 端点命中不支持缓存）。
+	WS *AttemptWSFacts
+}
+
+// AttemptWSFacts 是一次尝试上的上游 WebSocket 事实，逐字对应 Node 写在同一链项上的那组键
+// （src/types/message.ts:294-321：clientTransport / upstreamWsAttempted / upstreamWsConnected /
+// downgradedToHttp / downgradeReason）。
+//
+// 为什么这些事实必须落链而不是只写日志：它们是**跨语言数据契约**——仪表盘的链路弹窗按这些键
+// 渲染「这次到底走没走上游 WS、为什么没走成」，只进日志就查不出「我的 key 为什么没吃到 WS」。
+type AttemptWSFacts struct {
+	// ClientTransport 恒为 websocket：只有该传输层才可能走上游 WS。
+	ClientTransport string
+	// Attempted 为真表示真的发起过握手。
+	Attempted bool
+	// Connected 为真表示握手成功且收到了首个事件。
+	Connected bool
+	// DowngradedToHTTP 为真表示本次回落到了 HTTP。
+	DowngradedToHTTP bool
+	// DowngradeReason 取 Node 的 downgradeReason 取值域（upws.Downgrade）。
+	DowngradeReason string
 }
 
 // AttemptModelRedirect 是一次尝试上的模型重定向快照（链项字段的领域侧形式）。

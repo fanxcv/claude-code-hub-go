@@ -67,6 +67,19 @@ type ChainItem struct {
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	// ModelRedirect 是该次尝试实际生效的模型重定向快照（无重定向时不写这个键）。
 	ModelRedirect *ChainModelRedirect `json:"modelRedirect,omitempty"`
+
+	// === 上游 WebSocket 事实（Node 的 `ProviderChainItem` 同名字段，2026-09-19 接入） ===
+	//
+	// 全部带 omitempty：非 WS 客户端 / 非 codex / 开关关闭时不写这些键，与 Node 的
+	// `undefined` 序列化形态一致（写 false 会让界面把「压根没走这条路」渲染成「走了但失败」）。
+	//
+	// 为什么这几个键要落库：它们是「我的 key 为什么没吃到 WS」的**唯一可查证据**——
+	// 只写日志的话，运维在界面上查不到，只能去翻容器日志。
+	ClientTransport     string `json:"clientTransport,omitempty"`
+	UpstreamWSAttempted *bool  `json:"upstreamWsAttempted,omitempty"`
+	UpstreamWSConnected *bool  `json:"upstreamWsConnected,omitempty"`
+	DowngradedToHTTP    *bool  `json:"downgradedToHttp,omitempty"`
+	DowngradeReason     string `json:"downgradeReason,omitempty"`
 }
 
 // ChainModelRedirect 是链项上的模型重定向快照，逐字对应 Node 的

@@ -272,6 +272,15 @@ var neutralReasons = map[string]struct{}{
 	"hedge_launched":              {},
 	"client_restriction_filtered": {},
 	"http2_fallback":              {},
+	// 上游 WS 的两个信息性原因（`responses_ws_attempted` / `responses_ws_fallback`）
+	//
+	// 它们与 `http2_fallback` 同地位：描述的是**传输层的前置事实**，不是供应商结局。
+	// 不收进来会被下面的兜底分支判成失败（带 reason 而无状态码 ⇒ failure）——那会把
+	// 「WS 没走成、回落 HTTP 后成功」的请求计成失败，正是可用率统计最怕的那种错。
+	// Node 的 NEUTRAL_REASONS 未列这两词（该特性未上线），但两个词自身的注释语义
+	// （“信息性”“不计入熔断器”）与此分类一致。
+	"responses_ws_attempted": {},
+	"responses_ws_fallback":  {},
 }
 
 // successReasons 复刻 SUCCESS_REASONS（request-outcome.ts:44-48）。
@@ -731,17 +740,25 @@ type RollupWriteResult struct {
 	Key            string
 }
 
-// RollupWriter 是写路径需要的 Redis 子集。
+// RollupWriter 是写路径需要的 Redis 面。
 //
-// 与读路径用窄接口同理：桶键布局、字段编码、coverage-start 的 NX 语义都只有真 Redis 才能
-// 全量覆盖，窄接口让每条分支都能确定性测试。
+// 只有**一个**方法：一次事件的全部写入（N 条 HINCRBYFLOAT + coverage 起点的 SET NX +
+// 两个键的 TTL）必须落在同一次往返里。Node 侧用 pipeline 做同一件事
+// （`rollup-store.ts:389-470` 的 `multi()`），逐条发送会把一次事件放大成 N+2 次往返，
+// 而事件捕获挂在请求落库路径上。
+//
+// 失败语义与逐条发送时一致：任一命令失败即整次判为可重试（`RollupWriteFailed`），
+// 结果分类照旧由调用方给。
 type RollupWriter interface {
-	// HIncrByFloat 对哈希字段做浮点累加。
-	HIncrByFloat(ctx context.Context, key, field string, increment float64) error
-	// SetNX 仅当键不存在时写入（coverage-start 用）。
-	SetNX(ctx context.Context, key, value string) (bool, error)
-	// Expire 设置存活时间。
-	Expire(ctx context.Context, key string, ttlSeconds int) error
+	// ApplyBatch 提交一次事件的全部写入。
+	ApplyBatch(
+		ctx context.Context,
+		key string,
+		coverageKey string,
+		coverageValue string,
+		increments []RollupIncrement,
+		ttlSeconds int,
+	) error
 }
 
 // NewRedisRollupWriter 把 go-redis 客户端包成 RollupWriter；client 为 nil 时返回 nil
@@ -757,16 +774,44 @@ type redisRollupWriter struct {
 	client redis.UniversalClient
 }
 
-func (w *redisRollupWriter) HIncrByFloat(ctx context.Context, key, field string, increment float64) error {
-	return w.client.HIncrByFloat(ctx, key, field, increment).Err()
-}
+// ApplyBatch 把整次事件压成一个 pipeline：go-redis 的 `Exec` 会先把队列里所有命令一次写出，
+// 再逐条收答复，因此往返数与命令数无关。
+//
+// 错误可见性：go-redis 的 pipeline `Exec` 返回**第一条非 nil 的命令错误**，所以「某一条
+// increment 失败」不会被当成功——与逐条发送时的分支相同。
+func (w *redisRollupWriter) ApplyBatch(
+	ctx context.Context,
+	key string,
+	coverageKey string,
+	coverageValue string,
+	increments []RollupIncrement,
+	ttlSeconds int,
+) error {
+	pipe := w.client.Pipeline()
+	fieldCmds := make([]*redis.FloatCmd, 0, len(increments))
+	for _, increment := range increments {
+		fieldCmds = append(fieldCmds, pipe.HIncrByFloat(ctx, key, BuildRollupField(increment.GroupID, increment.ModelKey, increment.Metric), increment.Value))
+	}
+	coverageCmd := pipe.SetNX(ctx, coverageKey, coverageValue, 0)
+	ttlCmd := pipe.Expire(ctx, key, time.Duration(ttlSeconds)*time.Second)
+	coverageTTLCmd := pipe.Expire(ctx, coverageKey, time.Duration(ttlSeconds)*time.Second)
 
-func (w *redisRollupWriter) SetNX(ctx context.Context, key, value string) (bool, error) {
-	return w.client.SetNX(ctx, key, value, 0).Result()
-}
-
-func (w *redisRollupWriter) Expire(ctx context.Context, key string, ttlSeconds int) error {
-	return w.client.Expire(ctx, key, time.Duration(ttlSeconds)*time.Second).Err()
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+	// Exec 正常返回时逐条再核一次：不依赖「Exec 必然回第一条错误」这一实现细节，
+	// 避免某个命令的错误被吞掉后整次写入被当成成功。
+	for _, cmd := range fieldCmds {
+		if err := cmd.Err(); err != nil {
+			return err
+		}
+	}
+	for _, cmd := range []*redis.BoolCmd{coverageCmd, ttlCmd, coverageTTLCmd} {
+		if err := cmd.Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // WriteRollupEvent 复刻 writePublicStatusRollupEvent（rollup-store.ts:389-470）。
@@ -775,8 +820,7 @@ func (w *redisRollupWriter) Expire(ctx context.Context, key string, ttlSeconds i
 //   - 无增量 → `ignored`，且**不算可重试**（重试也没意义）；
 //   - 桶键用事件时刻对齐到 5 分钟边界；
 //   - coverage-start 用 `SET NX` 写**首次**覆盖的桶起点，并每次续 TTL；
-//   - 累加与 TTL 在同一次往返里完成（Node 用 pipeline；这里逐条发送也保持同一语义，
-//     因为只影响吞吐不影响结果——事件捕获在请求路径上，失败即降级，不阻塞请求）。
+//   - 累加与 TTL 在**同一次往返**里完成（Node 用 pipeline，Go 侧同形，见 RollupWriter）。
 func WriteRollupEvent(
 	ctx context.Context,
 	writer RollupWriter,
@@ -808,31 +852,11 @@ func WriteRollupEvent(
 		}, nil
 	}
 
-	for _, increment := range increments {
-		if err := writer.HIncrByFloat(ctx, key, BuildRollupField(increment.GroupID, increment.ModelKey, increment.Metric), increment.Value); err != nil {
-			return RollupWriteResult{
-				Written: false, Retryable: true, Reason: RollupWriteFailed,
-				IncrementCount: len(increments), Key: key,
-			}, fmt.Errorf("public status rollup hincrbyfloat failed for %s: %w", key, err)
-		}
-	}
-	if _, err := writer.SetNX(ctx, coverageKey, bucketStart); err != nil {
+	if err := writer.ApplyBatch(ctx, key, coverageKey, bucketStart, increments, RollupTTLSeconds); err != nil {
 		return RollupWriteResult{
 			Written: false, Retryable: true, Reason: RollupWriteFailed,
 			IncrementCount: len(increments), Key: key,
-		}, fmt.Errorf("public status rollup coverage-start failed for %s: %w", coverageKey, err)
-	}
-	if err := writer.Expire(ctx, key, RollupTTLSeconds); err != nil {
-		return RollupWriteResult{
-			Written: false, Retryable: true, Reason: RollupWriteFailed,
-			IncrementCount: len(increments), Key: key,
-		}, fmt.Errorf("public status rollup expire failed for %s: %w", key, err)
-	}
-	if err := writer.Expire(ctx, coverageKey, RollupTTLSeconds); err != nil {
-		return RollupWriteResult{
-			Written: false, Retryable: true, Reason: RollupWriteFailed,
-			IncrementCount: len(increments), Key: key,
-		}, fmt.Errorf("public status rollup expire failed for %s: %w", coverageKey, err)
+		}, fmt.Errorf("public status rollup write failed for %s: %w", key, err)
 	}
 
 	return RollupWriteResult{Written: true, IncrementCount: len(increments), Key: key}, nil

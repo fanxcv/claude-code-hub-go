@@ -2,6 +2,35 @@ package pubstatus
 
 import "testing"
 
+// TestClassifyRequestOutcomeSignalResponsesWSReasonsAreNeutral 钉住上游 WS 两个词的信息性归属。
+//
+// 为什么必须钉：`ClassifyRequestOutcomeSignal` 的兜底是「带 reason 而无状态码 ⇒ failure」。
+// 上游 WS 的降级/尝试条目正是这个形状（它没发生过 HTTP 交换，**没有**状态码），若不收进
+// neutralReasons，则「WS 没走成、回落 HTTP 后成功」的请求会被计成失败——可用率被自己的
+// 降级痕迹拖下水，与 http2_fallback 当年的地位完全一致。
+func TestClassifyRequestOutcomeSignalResponsesWSReasonsAreNeutral(t *testing.T) {
+	for _, word := range []string{"responses_ws_attempted", "responses_ws_fallback"} {
+		reason := word
+		if _, ok := ClassifyRequestOutcomeSignal(RequestOutcomeSignal{Reason: &reason}); ok {
+			t.Fatalf("%q 是传输层信息性原因，不该被分类成结局", word)
+		}
+		item := ProviderChainItem{Reason: &reason}
+		if taxonomy, ok := ClassifyProviderChainItemOutcome(item); ok {
+			t.Fatalf("%q 的链项不该产生结局分类，得到 %q", word, taxonomy.Outcome)
+		}
+		if IsExcludedFromPublicStatusFailure(item) {
+			t.Fatalf("%q 不该走「排除」分支（它本来就是中性，不是被排除的失败）", word)
+		}
+	}
+
+	// 邻居对照：同样形状的未知词仍必须落进 failure，不能因为上面两条把中性面放大。
+	unknown := "some_unknown_reason"
+	taxonomy, ok := ClassifyRequestOutcomeSignal(RequestOutcomeSignal{Reason: &unknown})
+	if !ok || taxonomy.Outcome != OutcomeFailure {
+		t.Fatalf("未知 reason 仍应计失败，得到 ok=%v outcome=%q", ok, taxonomy.Outcome)
+	}
+}
+
 // TestClassifyRequestOutcomeSignalUnsupportedIsExcluded 钉住新增档 `unsupported` 的公开状态归属。
 //
 // 这一档是「当前供应商明确声明该输入形态不受支持」（forward.CategoryProviderUnsupportedInput），

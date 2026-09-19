@@ -211,7 +211,7 @@ func ForwardStream(
 		plan *Plan,
 		outcome *AttemptOutcome,
 	) (*attemptResponse, *Failure) {
-		return deps.executeStreamAttempt(attemptCtx, provider, plan, outcome, options)
+		return deps.executeStreamAttempt(attemptCtx, pc, provider, plan, outcome, options)
 	}
 	var committed *streamAttempt
 	onSuccess := func(result *Result, response *attemptResponse) {
@@ -254,14 +254,23 @@ func ForwardStream(
 //  3. 2xx 但不是流（例如 JSON）：按非流式语义处理，交由调用方决定如何面向客户端。
 func (d Deps) executeStreamAttempt(
 	ctx context.Context,
+	pc *pctx.Context,
 	provider Provider,
 	plan *Plan,
 	outcome *AttemptOutcome,
 	options StreamOptions,
 ) (*attemptResponse, *Failure) {
-	response, cancel, failure := d.dialAttempt(ctx, plan, outcome, true)
-	if failure != nil {
-		return nil, failure
+	// 上游 WS：资格全真时先试 WS。成功时返回的响应与 HTTP 同形（Body 是 SSE 字节流），
+	// 下游（门控/整流/结算/留痕）完全不知道字节来自 WS；失败则继续走 HTTP，
+	// **不记失败、不计熔断**（见 wsAttempt 的回落语义）。
+	response := d.wsAttempt(ctx, pc, provider, plan, outcome)
+	cancel := context.CancelFunc(func() {})
+	if response == nil {
+		var failure *Failure
+		response, cancel, failure = d.dialAttempt(ctx, plan, outcome, true)
+		if failure != nil {
+			return nil, failure
+		}
 	}
 	// 流式尝试没有总超时，cancel 只在传输层需要时才有内容；无论如何都要放行。
 	defer cancel()

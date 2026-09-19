@@ -59,4 +59,14 @@ const (
 	ReasonHedgeWinner      = "hedge_winner"
 	ReasonHedgeLoserCancel = "hedge_loser_cancelled"
 	ReasonHedgeLoserBilled = "hedge_loser_billed"
+
+	// 上游 WebSocket 的两个信息性原因（Node `responses_ws_attempted` / `responses_ws_fallback`）。
+	//
+	// 为什么它们是**独立条目**而不是覆盖尝试条目的 reason：尝试条目上的 reason 记的是这一次尝试的
+	// 结局（`request_success` / `retry_failed`），而 WS 是否尝试过是**传输层的前置事实**——
+	// 覆盖会让成功被写成一个非成功词（同 `http2_fallback` 的地位）。
+	//
+	// 两者都不算成功也不算失败（`pubstatus` 的 neutralReasons 已收）：WS 走不成本身不是供应商故障。
+	ReasonResponsesWSAttempted = "responses_ws_attempted"
+	ReasonResponsesWSFallback  = "responses_ws_fallback"
 )
