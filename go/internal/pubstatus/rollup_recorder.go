@@ -2,6 +2,7 @@ package pubstatus
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -37,6 +38,10 @@ type SnapshotGroupSource struct {
 	now    func() time.Time
 	logger Logger
 
+	// mu 保护下面三个缓存字段。本实例在生产里是单例（dataplane 装配一次），
+	// 而终态结算路径可以并发调用它（见 terminal.RollupRecorder 的约定），
+	// 不加锁时 -race 会同时报读（loaded/expiresAt）与写（cached/loaded/expiresAt）。
+	mu        sync.Mutex
 	cached    []ConfiguredGroup
 	expiresAt time.Time
 	loaded    bool
@@ -54,20 +59,29 @@ func NewSnapshotGroupSource(store PublicStatusStore, prefix string, now func() t
 }
 
 // Groups 实现 RollupGroupSource。
+//
+// 临界区只护缓存字段的读写：加载（会打 Redis）留在锁外，否则并发结算会被整个串行化。
+// 代价是 TTL 到期后可能有一次以上的并发加载，最后一次完成的结果胜出——加锁前后一致。
 func (s *SnapshotGroupSource) Groups(ctx context.Context) ([]ConfiguredGroup, bool) {
 	if s == nil || s.store == nil {
 		return nil, false
 	}
+	s.mu.Lock()
 	if s.loaded && s.now().Before(s.expiresAt) {
-		return s.cached, true
+		cached := s.cached
+		s.mu.Unlock()
+		return cached, true
 	}
+	s.mu.Unlock()
 
 	snapshot := ReadInternalConfigSnapshot(ctx, s.store, s.prefix)
 	if snapshot == nil {
 		// 读不到（未发布/Redis 抖动）：短 TTL 后再试，避免每请求都打 Redis，又不会长期卡住。
+		s.mu.Lock()
 		s.cached = nil
 		s.loaded = true
 		s.expiresAt = s.now().Add(emptyConfiguredGroupsCacheTTL)
+		s.mu.Unlock()
 		if s.logger != nil {
 			s.logger.Warn("public_status_rollup_groups_unavailable", map[string]any{"prefix": s.prefix})
 		}
@@ -75,14 +89,16 @@ func (s *SnapshotGroupSource) Groups(ctx context.Context) ([]ConfiguredGroup, bo
 	}
 
 	groups := ConfiguredGroupsFromSnapshot(snapshot)
+	// 站点没配公开状态：正常情形，用短 TTL 以便配置生效后尽快跟上。
+	ttl := configuredGroupsCacheTTL
+	if len(groups) == 0 {
+		ttl = emptyConfiguredGroupsCacheTTL
+	}
+	s.mu.Lock()
 	s.cached = groups
 	s.loaded = true
-	if len(groups) == 0 {
-		// 站点没配公开状态：正常情形，用短 TTL 以便配置生效后尽快跟上。
-		s.expiresAt = s.now().Add(emptyConfiguredGroupsCacheTTL)
-		return groups, true
-	}
-	s.expiresAt = s.now().Add(configuredGroupsCacheTTL)
+	s.expiresAt = s.now().Add(ttl)
+	s.mu.Unlock()
 	return groups, true
 }
 
@@ -95,9 +111,15 @@ type RollupRecorder struct {
 	prefix  string
 	logger  Logger
 	metrics *RecorderMetrics
+	// metricsMu 保护 metrics 的读写。接收器是单例、被并发结算调用，而计数面是普通结构体，
+	// 所有读写都必须经由本接收器（count / Metrics）走这把锁。
+	metricsMu sync.Mutex
 }
 
-// RecorderMetrics 是该旁路的可观测计数（装配方可随时读取；零值可用）。
+// RecorderMetrics 是该旁路的可观测计数（零值可用）。
+//
+// 字段是裸计数：并发场景下经 `RollupRecorder.Metrics()` 读取（持锁取快照），
+// 不要在结算进行中直接读字段。
 //
 // 为什么要计数器：旁路的失败**不会**冒泡（见 terminal/rollup.go 的约束 1），若不落计数，
 // 「桶一直没长」在生产上无从发现——只会表现为公开页停在旧代。
@@ -158,13 +180,25 @@ func (r *RollupRecorder) count(apply func(*RecorderMetrics)) {
 	if r.metrics == nil {
 		return
 	}
+	r.metricsMu.Lock()
 	apply(r.metrics)
+	r.metricsMu.Unlock()
 }
 
 // Metrics 返回计数快照（无计数面时返回零值）。
+//
+// 与 count() 共用 metricsMu：计数面是普通结构体，读写必须走同一把锁，
+// 否则并发结算下 -race 会报竞争（写 Written/Skipped/Failed 与读交错）。
 func (r *RollupRecorder) Metrics() RecorderMetrics {
 	if r == nil || r.metrics == nil {
 		return RecorderMetrics{}
 	}
-	return *r.metrics
+	r.metricsMu.Lock()
+	defer r.metricsMu.Unlock()
+	return RecorderMetrics{
+		Written:   r.metrics.Written,
+		Skipped:   r.metrics.Skipped,
+		Failed:    r.metrics.Failed,
+		LastError: r.metrics.LastError,
+	}
 }

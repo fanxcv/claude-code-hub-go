@@ -3,6 +3,8 @@ package pubstatus
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,14 +17,19 @@ import (
 //     这里补「读不到分组」与「Redis 写失败」两条本地分支。
 
 // fakeGroupStore 是只实现读路径的 PublicStatusStore 替身。
+//
+// gets 由 mu 保护：并发用例（TestSnapshotGroupSourceConcurrentGroups）会多 goroutine 同时读。
 type fakeGroupStore struct {
+	mu          sync.Mutex
 	internalRaw string
 	gets        int
 }
 
 func (s *fakeGroupStore) Ready(context.Context) bool { return true }
 func (s *fakeGroupStore) Get(_ context.Context, key string) (string, bool) {
+	s.mu.Lock()
 	s.gets++
+	s.mu.Unlock()
 	if key == "public-status:v2:config-version:current" {
 		return "cfg-1", true
 	}
@@ -201,3 +208,88 @@ func TestRecorderSkipsWhenGroupsUnavailable(t *testing.T) {
 
 func floatPtr(value float64) *float64  { return &value }
 func int64PtrValue(value int64) *int64 { return &value }
+
+// discardWriter 吞掉一切写入，供并发用例使用（countingWriter 记录 map，不是并发安全的）。
+type discardWriter struct{}
+
+func (discardWriter) HIncrByFloat(context.Context, string, string, float64) error { return nil }
+func (discardWriter) SetNX(context.Context, string, string) (bool, error)         { return true, nil }
+func (discardWriter) Expire(context.Context, string, int) error                   { return nil }
+
+// TestSnapshotGroupSourceConcurrentGroups 钉住「分组来源并发调用无数据竞争」。
+//
+// 生产形态：本实例是单例（dataplane 装配一次），终态结算路径可并发调用。
+// 加锁前 -race 会在 loaded/expiresAt 的读与 cached/loaded/expiresAt 的写上互报。
+// 时钟每次前进 1 秒，使并发里既有命中缓存也有过期重载（两条分支都要过）。
+func TestSnapshotGroupSourceConcurrentGroups(t *testing.T) {
+	store := &fakeGroupStore{internalRaw: recorderTestInternalSnapshot}
+	base := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
+	var ticks int64
+	source := NewSnapshotGroupSource(store, "", func() time.Time {
+		return base.Add(time.Duration(atomic.AddInt64(&ticks, 1)) * time.Second)
+	}, nil)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 25; j++ {
+				groups, ok := source.Groups(context.Background())
+				if !ok || len(groups) != 1 {
+					t.Errorf("并发读取应稳定得到 1 个分组，实际 ok=%v groups=%d", ok, len(groups))
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestRecorderMetricsConcurrent 钉住「计数面在并发结算下不竞争且不丢计数」。
+//
+// 生产形态：接收器是单例，多个终态结算 goroutine 同时打它；观测方可随时读计数。
+// 加锁前 -race 会报 count() 的写与 Metrics() 的读竞争。
+func TestRecorderMetricsConcurrent(t *testing.T) {
+	store := &fakeGroupStore{internalRaw: recorderTestInternalSnapshot}
+	now := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
+	metrics := &RecorderMetrics{}
+	recorder := NewRollupRecorder(
+		discardWriter{},
+		NewSnapshotGroupSource(store, "", func() time.Time { return now }, nil),
+		"",
+		nil,
+		metrics,
+	)
+
+	const events = 200
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < events/8; j++ {
+				reason := "request_success"
+				groupTag := "default"
+				model := "m-1"
+				recorder.RecordTerminal(context.Background(), RollupEvent{
+					CreatedAt:     now,
+					Model:         &model,
+					ProviderChain: []ProviderChainItem{{Reason: &reason, GroupTag: &groupTag}},
+				})
+			}
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < 100; j++ {
+			_ = recorder.Metrics()
+		}
+	}()
+	wg.Wait()
+
+	if got := recorder.Metrics(); got.Written != events || got.Skipped != 0 || got.Failed != 0 {
+		t.Fatalf("并发结算后应记 written=%d，实际 %+v", events, got)
+	}
+}
