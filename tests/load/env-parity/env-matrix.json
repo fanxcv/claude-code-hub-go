@@ -108,9 +108,7 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": [
-        "src/app/[locale]/dashboard/logs/page.tsx"
-      ],
+      "consumerFiles": ["src/app/[locale]/dashboard/logs/page.tsx"],
       "consumerFileCount": 1
     },
     {
@@ -212,9 +210,7 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": [
-        "src/lib/logger.ts"
-      ],
+      "consumerFiles": ["src/lib/logger.ts"],
       "consumerFileCount": 1
     },
     {
@@ -282,9 +278,7 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": [
-        "src/lib/migrate.ts"
-      ],
+      "consumerFiles": ["src/lib/migrate.ts"],
       "consumerFileCount": 1
     },
     {
@@ -424,9 +418,7 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": [
-        "src/lib/redis/client.ts"
-      ],
+      "consumerFiles": ["src/lib/redis/client.ts"],
       "consumerFileCount": 1
     },
     {
@@ -700,10 +692,7 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "deprecated",
-        "hidden"
-      ],
+      "enumValues": ["deprecated", "hidden"],
       "descriptionComment": "",
       "descriptionSummary": "",
       "consumerFiles": [],
@@ -737,19 +726,10 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "fatal",
-        "error",
-        "warn",
-        "info",
-        "debug",
-        "trace"
-      ],
+      "enumValues": ["fatal", "error", "warn", "info", "debug", "trace"],
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": [
-        "src/lib/logger.ts"
-      ],
+      "consumerFiles": ["src/lib/logger.ts"],
       "consumerFileCount": 1
     },
     {
@@ -831,10 +811,7 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "sync",
-        "async"
-      ],
+      "enumValues": ["sync", "async"],
       "descriptionComment": "message_request 写入模式\n- sync（默认）：同步写入，终态与成本在响应尾链上写完再返回\n- async：异步批量写入（Go 侧有界队列 + 单 writer，见 go/internal/terminal/batch.go；\n  队列满时降级为同步写，不丢数据）",
       "descriptionSummary": "message_request 写入模式",
       "consumerFiles": [],
@@ -851,11 +828,7 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "development",
-        "production",
-        "test"
-      ],
+      "enumValues": ["development", "production", "test"],
       "descriptionComment": "",
       "descriptionSummary": "",
       "consumerFiles": [
@@ -932,9 +905,7 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": [
-        "src/lib/redis/client.ts"
-      ],
+      "consumerFiles": ["src/lib/redis/client.ts"],
       "consumerFileCount": 1
     },
     {
@@ -951,9 +922,7 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": [
-        "src/lib/redis/client.ts"
-      ],
+      "consumerFiles": ["src/lib/redis/client.ts"],
       "consumerFileCount": 1
     },
     {
@@ -970,9 +939,7 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": [
-        "src/lib/redis/client.ts"
-      ],
+      "consumerFiles": ["src/lib/redis/client.ts"],
       "consumerFileCount": 1
     },
     {
@@ -1122,11 +1089,7 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "legacy",
-        "dual",
-        "opaque"
-      ],
+      "enumValues": ["legacy", "dual", "opaque"],
       "descriptionComment": "",
       "descriptionSummary": "",
       "consumerFiles": [],
@@ -1217,11 +1180,7 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "off",
-        "shadow",
-        "enforce"
-      ],
+      "enumValues": ["off", "shadow", "enforce"],
       "descriptionComment": "===== CCHP 网关移植功能开关 =====\n流式内容门控：off=关闭；shadow=旁路分类只记录分歧；enforce=首个有效内容帧前缓冲+failover",
       "descriptionSummary": "===== CCHP 网关移植功能开关 =====",
       "consumerFiles": [],
