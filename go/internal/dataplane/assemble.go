@@ -109,6 +109,9 @@ type StoreOptions struct {
 	// LeaseSettler 是租约结算面（terminal.Options.LeaseSettler）：终态成本落库后扣减
 	// 判定时用过的预算切片。nil 表示未装配（整段跳过，行为与接线前一致）。
 	LeaseSettler terminal.LeaseSettler
+	// Tracer 是终态上报面（terminal.Options.Tracer）：把每次终态事实上报给出站观测面
+	// （生产实现见 internal/tracing）。nil 表示未装配（未配置 Langfuse key 时就是它）。
+	Tracer terminal.Tracer
 	// RouteOptions 覆盖选路器参数（健康、亲和、闸门）；Source 恒由本函数填。
 	RouteOptions route.Options
 	// DialOptions 覆盖拨号参数（超时、上游连接上限）。
@@ -317,7 +320,9 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			NewRows: options.NewRows,
 			// 租约结算：成本落库后把这次请求的成本扣到判定时用过的切片上（见 limit.SettleLeases）。
 			LeaseSettler: options.LeaseSettler,
-			Logger:       logger,
+			// 终态上报：拿到行 id 且赢得终态后交给出站观测面（见 terminal/trace_seam.go）。
+			Tracer: options.Tracer,
+			Logger: logger,
 			// 异步终态写队列（nil 即同步写，逐字保留原路径）。
 			Queue: settlementQueue,
 		})

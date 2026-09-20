@@ -16,6 +16,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/tracing"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/usagefeed"
 )
 
@@ -46,6 +47,36 @@ func intOrZero(value *int) int {
 		return 0
 	}
 	return *value
+}
+
+// langfuseCloseTimeout 是收尾时等待上报队列发出的上界。
+//
+// 取 2 秒：与 design 的关闭语义一致、远小于排空窗口；超时即丢残余（旁路可接受）。
+const langfuseCloseTimeout = 2 * time.Second
+
+// newLangfuseTracer 按 LANGFUSE_* 契约建出站上报器。
+//
+// 单独成函数而不是写在大装配里：这段是「开关」的全部真相（缺 key 即整体关闭），
+// 而它的宿主函数需要真库与真 Redis 才跑得起来——抽出来才能被单测直接覆盖。
+func newLangfuseTracer(env config.EnvConfig, logger *logx.Logger) *tracing.Tracer {
+	traces := tracing.New(tracing.Options{
+		BaseURL:    env.LangfuseBaseURL,
+		PublicKey:  derefString(env.LangfusePublicKey),
+		SecretKey:  derefString(env.LangfuseSecretKey),
+		SampleRate: env.LangfuseSampleRate,
+		Debug:      env.LangfuseDebug,
+		Logger:     logger,
+	})
+	if traces != nil && logger != nil {
+		// 只报事实，不报任何 key 形态（凭据只进 Authorization 头）。
+		logger.Info("langfuse_enabled", map[string]any{
+			"baseUrl":    env.LangfuseBaseURL,
+			"sampleRate": env.LangfuseSampleRate,
+			"debug":      env.LangfuseDebug,
+		})
+	}
+	return traces
+}
 }
 
 // dataPlaneOptions 是数据面装配缝的参数；*rulesSync 提供配置失效通道。
@@ -96,6 +127,10 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 	// 与管理面各建一个 Hub 是正确的——投递只经 Redis，发布与订阅不必共享内存。
 	usageRows := usagefeed.NewHub(usagefeed.Options{Redis: redisClient, Logger: options.Logger})
 
+	// Langfuse 上报（LANGFUSE_*）：出站旁路，与请求路径无关。缺任一 key 时返回 nil，
+	// 装配行拿到的是**真 nil 接口**（见 tracing.AsTracer），行为与未接完全一致。
+	traces := newLangfuseTracer(options.Cfg.Env, options.Logger)
+
 	// 限流与鉴权节流：同一个服务实例兼任两个缝隙（认证节流与请求级限流本就共享一套节流状态）。
 	// 依赖不全时 openRateLimiter 返回 nil，装配层会把它记进 gaps——本轮之前那正是生产上
 	// 「走 Go 的请求不查配额」的可见痕迹，不能静默丢掉。
@@ -117,6 +152,8 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 		LeaseSettler: leaseSettlerFor(rateLimiter),
 		// 新行信号：不装配时照旧写库、只是不发信号（前端仍可用轮询），不静默错数。
 		NewRows: usageRows,
+		// 终态上报：拿到行 id 且赢得终态后交给出站观测面（未配 key 时为空接口）。
+		Tracer: tracing.AsTracer(traces),
 		RouteOptions: route.Options{
 			Affinity: affinity.store,
 			// 日志身份形制（使用记录页的「渠道复用 / 新会话新渠道」）靠它判定。
@@ -175,6 +212,13 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 		affinity.close()
 		// 新行信号的发布面：释放它自己持有的连接，再关命令连接。
 		usageRows.Close()
+		// 上报面：尽力把队列里的残余发完（有界等待，超时即丢——旁路可接受）。
+		// 放在关命令连接之前：它只依赖出站 HTTP，与 Redis/库无关。
+		if traces != nil {
+			closeCtx, cancel := context.WithTimeout(context.Background(), langfuseCloseTimeout)
+			traces.Close(closeCtx)
+			cancel()
+		}
 		if closeErr := closeRedis(redisClient); closeErr != nil {
 			options.Logger.Warn("dataplane_redis_close_failed", map[string]any{"error": closeErr.Error()})
 		}
