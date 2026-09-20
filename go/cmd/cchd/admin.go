@@ -102,8 +102,9 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 	// 供应商限额读数两条需要 Provider 维度的 5h 固定窗口读数：
 	// 复用同一个 *limit.CostWindows（它直接满足 adminapi.ProviderFixed5hWindowReader），
 	// 另建一份会让两侧看到不同的窗口实现。
-	var limitWindows *limit.CostWindows
-	deps.SessionCounts, deps.Fixed5hWindows, limitWindows = openLimitRuntime(options.Cfg, redisClient, logger)
+	limitRuntime := openLimitRuntime(options.Cfg, redisClient, logger)
+	deps.SessionCounts = limitRuntime.sessionCounts()
+	deps.Fixed5hWindows = limitRuntime.fixed5hWindows()
 
 	// IP 归属地查询器（三条 ip-geo 端点）：四条配置项都是 internal/config 已有字段；
 	// 缺 Redis 时缓存层不可用，但查询器仍可直连。
@@ -122,7 +123,8 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 
 	// 自服务面（/api/v1/me/*）要的是 **User 维度**的两个读数（见 admin_me.go 的说明）；
 	// 缺任一侧时 /me/quota 不注册，原样回退 Node。
-	deps.UserSessionCounts, deps.UserFixed5hWindows = openMeRuntime(options.Cfg, redisClient, logger)
+	deps.UserSessionCounts = limitRuntime.userSessionCounts()
+	deps.UserFixed5hWindows = limitRuntime.userFixed5hWindows()
 
 	// 公开站点元数据（/api/public-site-meta）读的是 public-status 的配置投影快照（Redis）。
 	// 拿不到命令连接时它是 nil，那条路由不注册（回退 Node）——与上面两条读档依赖同一条纪律。
@@ -275,7 +277,7 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 	router := adminapi.New(adminapi.Options{Deps: deps, EnableHSTS: options.Cfg.Env.EnableSecureCookies})
 	// 未注册的管理路由必须原样回退 Node：Go 侧没有 501/裸 404，「还没实现」不是错误。
 	router.SetNotFound(options.Fallback)
-	registerAdminRoutes(router, deps, guard, issuer, adminapi.NewRedisLeaderboardCache(redisClient), limitWindows,
+	registerAdminRoutes(router, deps, guard, issuer, adminapi.NewRedisLeaderboardCache(redisClient), limitRuntime.costWindows(),
 		adminapi.PublicStatusReadOptions{Store: pubstatus.NewRedisStatusStore(redisClient, logger)})
 
 	logger.Info("admin_plane_ready", map[string]any{
@@ -435,22 +437,32 @@ func (r keyFixed5hReader) Fixed5hWindowState(ctx context.Context, keyID int64, n
 	return r.windows.Fixed5hWindowState(ctx, limit.EntityKey, keyID, now)
 }
 
-// openLimitRuntime 建管理面读档所需的两个 Redis 运行态读取器（会话计数与 5h 固定窗口）。
+// limitRuntime 是一次装配出的 Redis 运行态（管理面读档与自服务面共用同一份）。
 //
-// 两个都拿不到时返回 nil——注册函数据此不注册那三条读档路由（宁可不答，不可乱答）。
-// 没有任何 Redis 配置时直接返回 nil：此时 Node 侧的这两个读也只会得到 0/不存在的键，
+// 为什么只装配一次：会话计数与成本窗口都建在**同一条脚本调用层**上，而原先管理面与
+// 自服务面各建一份，Lua 注册表与客户端因此各建一次。Embedded 本身是 sync.Once、重复取无代价，
+// 但两份客户端会让「同一份运行态」出现两个实例，排查时先要分辨读的是哪一份。
+type limitRuntime struct {
+	sessionTracker *limit.SessionTracker
+	windows        *limit.CostWindows
+}
+
+// openLimitRuntime 建管理面读档与自服务面共用的 Redis 运行态。
+//
+// 拿不到时返回 nil——注册函数据此不注册那几条依赖它的路由（宁可不答，不可乱答）。
+// 没有任何 Redis 配置时直接返回 nil：此时 Node 侧的这些读也只会得到 0/不存在的键，
 // 但那仍由 Node 作答（它的降级语义与我们无关，不要在这里替它降级）。
 func openLimitRuntime(
 	cfg config.Config,
 	redisClient redis.UniversalClient,
 	logger *logx.Logger,
-) (adminapi.SessionCounter, adminapi.Fixed5hWindowReader, *limit.CostWindows) {
+) *limitRuntime {
 	if redisClient == nil {
 		logger.Info("admin_limit_runtime_skipped", map[string]any{
 			"reason": "redis_unconfigured",
 			"effect": "keys_read_routes_fallback_node",
 		})
-		return nil, nil, nil
+		return nil
 	}
 	registry, err := ratelimit.Embedded()
 	if err != nil {
@@ -458,7 +470,7 @@ func openLimitRuntime(
 			"stage": "registry",
 			"error": err.Error(),
 		})
-		return nil, nil, nil
+		return nil
 	}
 	scriptClient, err := ratelimit.New(redisClient, registry)
 	if err != nil {
@@ -466,16 +478,56 @@ func openLimitRuntime(
 			"stage": "client",
 			"error": err.Error(),
 		})
-		return nil, nil, nil
+		return nil
 	}
 	// SESSION_TTL 的单位与 Node 一致（秒，可小数）；<=0 时由 NewSessionTracker 取 300s 默认值。
 	sessionTTL := time.Duration(cfg.Env.SessionTTL * float64(time.Second))
-	// 窗口对象同时给两处：keys 的 5h 读数（包装成 Key 维度）与 providers 限额读数
-	// （直接用 Provider 维度）。同一实例，避免两份窗口实现。
-	windows := limit.NewCostWindows(scriptClient, logger)
-	return limit.NewSessionTracker(scriptClient, sessionTTL, logger),
-		keyFixed5hReader{windows: windows},
-		windows
+	return &limitRuntime{
+		sessionTracker: limit.NewSessionTracker(scriptClient, sessionTTL, logger),
+		windows:        limit.NewCostWindows(scriptClient, logger),
+	}
+}
+
+// sessionCounts 给管理面读档用的 Key 维度计数；runtime 为 nil 时返回 nil（路由不注册）。
+func (r *limitRuntime) sessionCounts() adminapi.SessionCounter {
+	if r == nil {
+		return nil
+	}
+	return r.sessionTracker
+}
+
+// fixed5hWindows 给管理面读档用的 Key 维度 5h 窗口读数。
+func (r *limitRuntime) fixed5hWindows() adminapi.Fixed5hWindowReader {
+	if r == nil {
+		return nil
+	}
+	return keyFixed5hReader{windows: r.windows}
+}
+
+// userSessionCounts 给自服务面（/api/v1/me/*）用的 User 维度计数。
+//
+// 与 Key 维度不是同一个键：同一会话跨密钥续用时，User 维度 ZSET 去重、各密钥计数各算一次。
+func (r *limitRuntime) userSessionCounts() adminapi.UserSessionCounter {
+	if r == nil {
+		return nil
+	}
+	return meUserSessionCounter{tracker: r.sessionTracker}
+}
+
+// userFixed5hWindows 给自服务面用的 User 维度 5h 窗口读数。
+func (r *limitRuntime) userFixed5hWindows() adminapi.UserFixed5hWindowReader {
+	if r == nil {
+		return nil
+	}
+	return meUserFixed5hReader{windows: r.windows}
+}
+
+// costWindows 给 providers 限额读数用的窗口对象（同一实例，避免两份窗口实现）。
+func (r *limitRuntime) costWindows() *limit.CostWindows {
+	if r == nil {
+		return nil
+	}
+	return r.windows
 }
 
 // openStickySessions 建粘性会话终止面（providers 与 provider-endpoints 写路径的副作用，
