@@ -51,7 +51,7 @@
 | `/v1/responses` | OpenAI Responses（含 WebSocket 变体） |
 | `/v1beta/**` | Gemini 协议 |
 | `/v1/models`、`/v1/_ping` | 模型列表、探活 |
-| `/api/v1/**` | 管理面 REST（当前版本 **179 条路径 / 209 个操作**，可查 `/api/v1/openapi.json`） |
+| `/api/v1/**` | 管理面 REST（OpenAPI 由已注册路由表在运行时生成，可查 `/api/v1/openapi.json`） |
 | `/readyz`、`/api/health` | 就绪探针（逐项报 PG / Redis / 规则快照 / 排空状态）与健康面 |
 | `/debug/metrics`、`/debug/pprof/**` | 运行时指标与剖析（**默认关闭**，开启后只绑回环） |
 | `/**` | Web 管理台（使用内嵌 UI 产物作答） |
@@ -65,10 +65,10 @@
 | 运行时 | Node 22 + Next.js standalone | 单个静态链接二进制（`CGO_ENABLED=0`） |
 | 数据面 | TypeScript（`src/app/v1/_lib/proxy/**`） | Go：守卫链 → 选路 → 拨号 → 流式门控 → 流式泵 → 终态结算 |
 | 协议互转 | TypeScript 转换器 | Go 内置（Anthropic ↔ OpenAI Chat ↔ OpenAI Responses ↔ Gemini） |
-| 管理面 | Next.js route handlers + server actions | Go 原生 REST（179 条路径 / 209 个操作，OpenAPI 由路由注册表生成） |
+| 管理面 | Next.js route handlers + server actions | Go 原生 REST（OpenAPI 由已注册路由表在运行时生成） |
 | 页面服务 | Next SSR + API 路由 | 静态导出 → brotli 压缩 → `go:embed`，由 Go 直接作答 |
 | 数据库迁移 | `drizzle-kit` / `drizzle-orm` 迁移器 | Go 内置迁移器，**逐字节对齐** drizzle 的 journal/hash/statement 语义 |
-| 限流 | TypeScript 常量 + Lua | 18 段 Lua **逐字节一致**，附 golden 重放比对 |
+| 限流与会话 | TypeScript 常量 + Lua | 18 段 Lua **逐字节一致**，附 golden 重放比对 |
 | 镜像 | 333 MB | **45.8 MB** |
 
 ### 2.2 新增能力（上游没有的）
@@ -82,10 +82,12 @@
 - **结算屏障**：进程退出前等待在途请求与待结算落库，避免滚动重启窗口内的账本空洞（上游无此机制）。
 - **未落终态行自愈巡检**：定期扫描长期无终态的行并补终态。
 - **迁移能力内建**：启动按 `AUTO_MIGRATE` 自动应用 drizzle 迁移，不再需要 Node 侧迁移命令。
+- **请求回放**：把客户端可见正文按双层存储（Redis 热层 + PostgreSQL 持久层）留存，重复请求命中即回放，避免重试与多客户端重复计费；正文分片落盘，任何时刻本地不持有完整正文，超限自动降级为不做回放；键形制与上游逐字节一致（`cch:replay:owner|meta|chunks:<replayId>`）。
+- **`/v1/responses` 的 WebSocket 通道**：客户端 WS 文本帧走同一套守卫链与转发主干，上游 SSE 逐事件翻回 WS 帧；归属判定、排空闸门与请求日志对 WS 轮次同样生效。
 
 **性能与资源**
 
-- **单流驻留 < 1 MiB**：8 MiB 响应体在流式转发下不整块驻留（上游同负载约 8.7 MiB/流）。
+- **单流驻留 < 1 MiB**：8 MiB 响应体在流式转发下不整块驻留（上游同负载约 8.57 MiB/流）。
 - **出站压缩**：管理面大 JSON 响应开启 br/gzip 协商。对与生产同形状的载荷（50 行 × 54 字段），仓库内实测 br **269,524 → 11,254 字节（23.95×）**、gzip **17,585 字节（15.33×）**；生产实测 `/api/v1/usage-logs` 约 **22×**。
 - **数据库连接一律关 JIT**：`/dashboard/overview` 由 **100.9–102.5 ms** 降到 **9.1–9.9 ms**（约 11 倍）。根因是规划器把该查询高估 236 倍，代价越过 `jit_above_cost` 触发了 PG 的 JIT 编译。
 - **零分配流式判定**：解析请求体只用顶层扫描判断 `stream`，不建整棵 JSON 树（同一 50 KiB 请求体：分配 564,835 → 39,144 B，分配次数 9,555 → 47）。
@@ -107,7 +109,7 @@
 
 ### 2.3 与上游的一致性，以及已知差异
 
-对齐方式不是靠人工比对，而是靠可复现的对拍：黄金样本（含上游逐字节录制的响应）、Lua golden 重放、协议一致性矩阵、切换矩阵（同一批请求分别由两代后端作答后逐字段比对）。
+对齐方式不是靠人工比对，而是靠可复现的对拍：黄金样本（含上游逐字节录制的响应）、Lua golden 重放、协议一致性矩阵（`tests/load/protocol-matrix/`）、切换对拍（夹具未随本仓入库）。
 
 有意保留的差异（**这些是修上游的缺陷，不是回归**）：
 
@@ -215,9 +217,9 @@ docker build -f go/deploy/Dockerfile -t fanxcv/claude-code-hub-go:local .
 
 | 变量 | 默认 | 说明 |
 | --- | --- | --- |
-| `DSN` | — | PostgreSQL 连接串（**必填**） |
-| `REDIS_URL` | — | Redis 连接串（**必填**，会话/限流/亲和/回放都依赖它） |
-| `ADMIN_TOKEN` | — | 管理台与 Admin API 令牌（**必填**，请勿用默认值） |
+| `DSN` | — | PostgreSQL 连接串（生产必填；缺失则数据面整体缺席） |
+| `REDIS_URL` | — | Redis 连接串（生产必填；缺失时进程仍启动，会话绑定/亲和/回放/限流降级） |
+| `ADMIN_TOKEN` | — | 管理台与 Admin API 令牌（生产必填，请勿用默认值） |
 | `PORT` | `23000` | 监听端口（镜像内 `EXPOSE 23000`，探针自动跟随该值） |
 | `AUTO_MIGRATE` | `true` | 启动时自动应用数据库迁移 |
 | `ENABLE_RATE_LIMIT` | `true` | 是否启用限流 |
@@ -235,8 +237,8 @@ docker build -f go/deploy/Dockerfile -t fanxcv/claude-code-hub-go:local .
 本仓与上游**共用同一套 PostgreSQL schema 与 Redis 键空间**，因此：
 
 - 上游迁移过来的库可以直接用：迁移真源仍是仓库根的 `drizzle/`（含 `meta/_journal.json`），Go 内置迁移器逐字节复刻 drizzle 的 journal 解析、`sha256(sql)` 指纹与 `--> statement-breakpoint` 切分语义，已应用水位与 drizzle 完全一致。
-- 限流相关的 18 段 Lua 脚本与本仓 Go 侧常量逐字节一致，并有 golden 重放用例比对终态与键形制。
-- **回滚**：换回上游镜像即可（数据无需回退）。本仓的 `pre-node-removal` git tag 是 Node 版本退役前的最后一个状态。
+- 限流与会话相关的 18 段 Lua 脚本与本仓 Go 侧常量逐字节一致，并有 golden 重放用例比对终态与键形制。
+- **回滚**：换回上游镜像即可（数据无需回退）。
 
 ## 6. 容量与性能实测
 
@@ -251,7 +253,7 @@ docker build -f go/deploy/Dockerfile -t fanxcv/claude-code-hub-go:local .
 
 本仓生产实例（2 vCPU / 1.9 GB）CPU 实测 2.5%–4.1%。
 
-> 口径：上游一列为重写期间的实测记录（Node 镜像 `cch:0.9.6-local`，Node 22 + Next standalone）；本仓一列可用 `docker images` 与 `tests/load/` 下的并发夹具复核。注意**峰值受冷启基线影响**（上表两个 Node 峰值差 154 MiB，逐流增量却只差 0.05 MiB），故跨机器比较请用「每流驻留增量」。你的并发数、响应体大小与上游延迟不同，结果会有差异，建议按自己的负载实测后预留内存。
+> 口径：上游一列为重写期间的实测记录（Node 镜像 `cch:0.9.6-local`，Node 22 + Next standalone）；本仓一列可用 `docker images` 复核镜像体积，用 `scripts/perf-*.sh` 与 `scripts/capture-profile.mjs` 复核内存/剖析口径。注意**峰值受冷启基线影响**（上表两个 Node 峰值差 154 MiB，逐流增量却只差 0.05 MiB），故跨机器比较请用「每流驻留增量」。你的并发数、响应体大小与上游延迟不同，结果会有差异，建议按自己的负载实测后预留内存。
 
 ## 7. 开发
 
@@ -264,7 +266,7 @@ messages/                 界面文案（zh-CN / en）
 drizzle/                  数据库迁移真源（Go 侧只读并在启动时应用）
 lua/                      限流与亲和用的 Lua 脚本（与 Go 侧常量逐字节一致）
 tests/                    vitest 单测与负载/对拍夹具
-deploy/、dev/             部署模板与本地开发编排
+go/deploy/、dev/           部署模板与本地开发编排
 scripts/build-ui-*.mjs    界面导出与压缩内嵌（构建链的关键两步）
 ```
 
@@ -305,4 +307,4 @@ git log --oneline upstream/main -- src/ messages/ | head
 
 - 本仓以 **MIT** 许可发布，与上游一致；上游版权归 [ding113](https://github.com/ding113) 与贡献者所有。
 - 界面与数据模型源自上游 [claude-code-hub](https://github.com/ding113/claude-code-hub)，感谢原作者的出色工作。
-- 若你在生产使用本仓，建议先跑一遍 `tests/load/` 下的协议一致性与切换夹具，确认与你的上游供应商组合相符。
+- 若你在生产使用本仓，建议先跑一遍 `tests/load/` 下的协议一致性夹具，确认与你的上游供应商组合相符。

@@ -53,6 +53,7 @@ next-env.d.ts
 .claude/
 .codex/
 .serena/
+.pi/
 !src/app/dashboard/logs/
 !src/app/settings/logs/
 .idea/

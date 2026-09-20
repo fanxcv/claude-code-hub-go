@@ -27,6 +27,17 @@ const ROOT = process.cwd();
 /** 允许「文档里提到但干净检出时可能还没有」的构建产物（生成物，不入库）。 */
 const BUILD_OUTPUT_ALLOWLIST = new Set(["out", "go/cchd", "go/internal/uiapp/assets"]);
 
+/**
+ * 文档里的**路径模板**（占位符，不是真实文件），逐条写明出处。
+ *
+ * 为什么不靠 `extractBacktickedPaths` 的通用跳过规则：模板与真实路径形状相同（无空格、无通配、
+ * 无尖括号），通用规则要么漏掉它、要么放宽到会漏掉真路径；逐条登记才能既钉住真路径又不误报。
+ */
+const PATH_TEMPLATE_ALLOWLIST = new Set<string>([
+  // AGENTS.md 的 project-db 注入块：SQL 归档文件的命名模板，`YYYYMMDD` 与 `功能` 都是占位。
+  "docs/sql/YYYYMMDD_功能.sql",
+]);
+
 /** 路径首段必须落在这些目录内，才被视为仓库内路径。 */
 const TOP_LEVEL_DIRS = [
   "go",
@@ -38,6 +49,8 @@ const TOP_LEVEL_DIRS = [
   "messages",
   "data",
   "dev",
+  "docs",
+  "reference",
   "public",
   ".github",
 ];
@@ -157,7 +170,9 @@ describe("全仓文档的引用完整性", () => {
     const missing = allPathCandidates
       .filter(
         ({ candidate }) =>
-          !BUILD_OUTPUT_ALLOWLIST.has(candidate) && !existsSync(path.join(ROOT, candidate))
+          !BUILD_OUTPUT_ALLOWLIST.has(candidate) &&
+          !PATH_TEMPLATE_ALLOWLIST.has(candidate) &&
+          !existsSync(path.join(ROOT, candidate))
       )
       .map(({ file, candidate }) => `${file}: ${candidate}`);
     expect(missing, `文档提到了不存在的路径：\n${missing.join("\n")}`).toEqual([]);
@@ -190,9 +205,23 @@ describe("AGENTS.md 的路径钉子", () => {
   test("提到的每个仓库内路径都真实存在（生成物见白名单）", () => {
     const missing = mentionedPaths.filter(
       (candidate) =>
-        !BUILD_OUTPUT_ALLOWLIST.has(candidate) && !existsSync(path.join(ROOT, candidate))
+        !BUILD_OUTPUT_ALLOWLIST.has(candidate) &&
+        !PATH_TEMPLATE_ALLOWLIST.has(candidate) &&
+        !existsSync(path.join(ROOT, candidate))
     );
     expect(missing, `文档提到了不存在的路径：${missing.join("、")}`).toEqual([]);
+  });
+
+  test("白名单里的模板在文档里确实存在，且不是真实路径（防白名单腐烂成遮羞布）", () => {
+    for (const template of PATH_TEMPLATE_ALLOWLIST) {
+      expect(
+        agentsMarkdown.includes(`\`${template}\``),
+        `模板 ${template} 已不在 AGENTS.md 里；若已不再需要，请从白名单删除`
+      ).toBe(true);
+      expect(existsSync(path.join(ROOT, template)), `${template} 其实是真实文件，不该进模板白名单`).toBe(
+        false
+      );
+    }
   });
 
   test("白名单里的生成物在文档里被描述成构建产物（防把源码混进白名单）", () => {

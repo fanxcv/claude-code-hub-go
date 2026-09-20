@@ -51,7 +51,7 @@ Endpoints:
 | `/v1/responses` | OpenAI Responses (including the WebSocket variant) |
 | `/v1beta/**` | Gemini protocol |
 | `/v1/models`, `/v1/_ping` | Model list, liveness |
-| `/api/v1/**` | Management REST API (this version: **179 paths / 209 operations**, see `/api/v1/openapi.json`) |
+| `/api/v1/**` | Management REST API (OpenAPI is generated at runtime from the registered route table; see `/api/v1/openapi.json`) |
 | `/readyz`, `/api/health` | Readiness (per-dependency: PG / Redis / rule snapshot / draining) and health |
 | `/debug/metrics`, `/debug/pprof/**` | Runtime metrics and profiling (**off by default**, loopback-only when enabled) |
 | `/**` | Web console (served from the embedded UI bundle) |
@@ -65,10 +65,10 @@ Endpoints:
 | Runtime | Node 22 + Next.js standalone | Single statically linked binary (`CGO_ENABLED=0`) |
 | Data plane | TypeScript (`src/app/v1/_lib/proxy/**`) | Go: guard chain → provider selection → dialing → stream gating → streaming pump → terminal settlement |
 | Protocol conversion | TypeScript converters | Built into Go (Anthropic ↔ OpenAI Chat ↔ OpenAI Responses ↔ Gemini) |
-| Management plane | Next.js route handlers + server actions | Native Go REST (179 paths / 209 operations; OpenAPI generated from the route registry) |
+| Management plane | Next.js route handlers + server actions | Native Go REST (OpenAPI generated at runtime from the registered route table) |
 | Page serving | Next SSR + API routes | Static export → brotli → `go:embed`, answered by Go directly |
 | DB migrations | `drizzle-kit` / `drizzle-orm` migrator | Built-in Go migrator, **byte-for-byte aligned** with drizzle's journal / hash / statement semantics |
-| Rate limiting | TypeScript constants + Lua | 18 Lua scripts **byte-identical**, verified by golden replay |
+| Rate limiting and sessions | TypeScript constants + Lua | 18 Lua scripts **byte-identical**, verified by golden replay |
 | Image size | 333 MB | **45.8 MB** |
 
 ### 2.2 Capabilities upstream does not have
@@ -82,10 +82,12 @@ Endpoints:
 - **Settlement barrier**: on shutdown the process waits for in-flight requests and pending settlement writes, so rolling restarts cannot leave holes in the ledger (upstream has no such barrier).
 - **Self-healing patrol** for rows that never reached a terminal state.
 - **Built-in migrations**: drizzle migrations are applied on startup (`AUTO_MIGRATE`), no Node-side migration command required.
+- **Request replay**: the client-visible body is retained in two layers (a Redis hot layer plus a PostgreSQL durable layer); a repeat request hits the stored copy and is replayed, so retries and multiple clients cannot be double-billed. Bodies are stored in chunks — no complete body is ever held locally at any instant, and exceeding the budget degrades to no-replay. Key shapes are byte-identical to upstream (`cch:replay:owner|meta|chunks:<replayId>`).
+- **WebSocket channel for `/v1/responses`**: client WS text frames go through the same guard chain and forwarding trunk, and each upstream SSE event is turned back into one WS frame; attribution, the draining gate and request logging apply to WS turns as well.
 
 **Performance and resource use**
 
-- **< 1 MiB resident per stream**: an 8 MiB response body is streamed through without being held in memory (upstream holds ~8.7 MiB per stream under the same load).
+- **< 1 MiB resident per stream**: an 8 MiB response body is streamed through without being held in memory (upstream holds ~8.57 MiB per stream under the same load).
 - **Outbound compression**: br/gzip negotiation on management-plane JSON. For a payload shaped like the real one (50 rows × 54 fields), the in-repo test measures br **269,524 → 11,254 bytes (23.95×)** and gzip **17,585 bytes (15.33×)**; production `/api/v1/usage-logs` measures about **22×**.
 - **JIT disabled on database connections**: `/dashboard/overview` went from **100.9–102.5 ms** to **9.1–9.9 ms** (~11×). The planner overestimated the query by 236×, pushing its cost past `jit_above_cost` and paying PostgreSQL JIT compilation.
 - **Zero-allocation stream detection**: the request body is scanned at the top level to find `stream` instead of building a full JSON tree (same 50 KiB body: 564,835 → 39,144 B allocated, 9,555 → 47 allocs).
@@ -94,7 +96,7 @@ Endpoints:
 **Observability and operations**
 
 - **`/debug/metrics` + pprof**: Go runtime metrics (GC, heap, goroutines) plus CPU/heap/block/mutex profiles — off by default, loopback-only when enabled.
-- **Single version source of truth**: `/api/version`, `/api/health` and the UI footer always agree.
+- **Single version source of truth**: `/api/version`, `/api/health` and the UI footer always agree (upstream once reported three different versions from those three places).
 - **Layered readiness probe**: `/readyz` names the failing dependency; it returns 503 while draining, and `/v1/_ping` keeps answering.
 - **Rate limiting and auth throttling wired into the data plane**, with a rejection envelope identical to upstream (`code`, `limit_type`, `current`, `limit`, …).
 
@@ -107,7 +109,7 @@ Endpoints:
 
 ### 2.3 Consistency with upstream, and intentional differences
 
-Alignment is not maintained by eyeballing: it rests on reproducible comparisons — golden samples (byte-recorded upstream responses), Lua golden replays, a protocol conformance matrix, and a switch matrix that serves the same requests through both backends and diffs every field.
+Alignment is not maintained by eyeballing: it rests on reproducible comparisons — golden samples (byte-recorded upstream responses), Lua golden replays, a protocol conformance matrix (`tests/load/protocol-matrix/`), and a switch comparison (its fixture is not shipped in this repo).
 
 Intentional differences (**these fix upstream defects; they are not regressions**):
 
@@ -215,9 +217,9 @@ The full list lives in [`.env.example`](./.env.example). The essentials:
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `DSN` | — | PostgreSQL connection string (**required**) |
-| `REDIS_URL` | — | Redis connection string (**required**; sessions, rate limits, affinity and replay all depend on it) |
-| `ADMIN_TOKEN` | — | Console and Admin API token (**required**; never keep the placeholder) |
+| `DSN` | — | PostgreSQL connection string (**required in production**; without it the whole data plane is absent) |
+| `REDIS_URL` | — | Redis connection string (**required in production**; without it the process still starts, with session binding, affinity, replay and rate limiting degraded) |
+| `ADMIN_TOKEN` | — | Console and Admin API token (**required in production**; never keep the placeholder) |
 | `PORT` | `23000` | Listen port (the image `EXPOSE`s it; probes follow this value) |
 | `AUTO_MIGRATE` | `true` | Apply database migrations on startup |
 | `ENABLE_RATE_LIMIT` | `true` | Enable rate limiting |
@@ -235,8 +237,8 @@ The full list lives in [`.env.example`](./.env.example). The essentials:
 This fork shares upstream's **PostgreSQL schema and Redis key space**, therefore:
 
 - A database migrated by upstream works as-is: the migration source of truth is still `drizzle/` (including `meta/_journal.json`), and the built-in Go migrator reimplements drizzle's journal parsing, `sha256(sql)` fingerprinting and `--> statement-breakpoint` splitting byte-for-byte. Applied watermarks match drizzle exactly.
-- The 18 Lua scripts used for rate limiting are byte-identical to the Go-side constants, with golden replays comparing terminal state and key shapes.
-- **Rolling back** means switching back to the upstream image; no data rollback is needed. The `pre-node-removal` git tag marks the last state before the Node backend was retired.
+- The 18 Lua scripts used for rate limiting and sessions are byte-identical to the Go-side constants, with golden replays comparing terminal state and key shapes.
+- **Rolling back** means switching back to the upstream image; no data rollback is needed.
 
 ## 6. Measured capacity and performance
 
@@ -251,7 +253,7 @@ Same machine (2 vCPU / 1.9 GB), same mock upstreams, same workload:
 
 A production instance of this fork (2 vCPU / 1.9 GB) measures 2.5%–4.1% CPU.
 
-> Provenance: the upstream column is a measurement recorded during the rewrite (Node image `cch:0.9.6-local`, Node 22 + Next standalone); the Go column can be reproduced with `docker images` and the concurrency fixtures under `tests/load/`. Note that **peaks depend on the cold-start baseline** (the two Node peaks above differ by 154 MiB while their per-stream deltas differ by only 0.05 MiB), so compare machines by **resident delta per stream**. Your concurrency, payload sizes and upstream latency will differ — size memory from your own measurements.
+> Provenance: the upstream column is a measurement recorded during the rewrite (Node image `cch:0.9.6-local`, Node 22 + Next standalone); the Go column can be reproduced with `docker images` for image size and `scripts/perf-*.sh` plus `scripts/capture-profile.mjs` for memory and profiling. Note that **peaks depend on the cold-start baseline** (the two Node peaks above differ by 154 MiB while their per-stream deltas differ by only 0.05 MiB), so compare machines by **resident delta per stream**. Your concurrency, payload sizes and upstream latency will differ — size memory from your own measurements.
 
 ## 7. Development
 
@@ -264,7 +266,7 @@ messages/                 UI strings (zh-CN / en)
 drizzle/                  migration source of truth (read and applied by Go at startup)
 lua/                      rate-limit and affinity Lua scripts (byte-identical to Go constants)
 tests/                    vitest unit tests plus load and conformance fixtures
-deploy/, dev/             deployment templates and local development compose
+go/deploy/, dev/          deployment templates and local development compose
 scripts/build-ui-*.mjs    UI export and compressed embedding (the two build-chain steps)
 ```
 
@@ -305,4 +307,4 @@ The frontend (`src/**`, `messages/**`) stays structurally close to upstream so i
 
 - Released under **MIT**, same as upstream. Upstream copyright belongs to [ding113](https://github.com/ding113) and its contributors.
 - The UI and data model come from upstream [claude-code-hub](https://github.com/ding113/claude-code-hub) — thanks to its authors for the original work.
-- If you run this in production, consider running the protocol conformance and switch fixtures under `tests/load/` first to confirm they match your provider mix.
+- If you run this in production, consider running the protocol conformance fixtures under `tests/load/` first to confirm they match your provider mix.
