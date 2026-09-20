@@ -5,25 +5,7 @@ const emojiAudit = require("./audit-messages-emoji.js");
 const EMOJI_RE =
   /(\p{Extended_Pictographic}|\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3)/gu;
 
-function loadJson(p) {
-  return JSON.parse(fs.readFileSync(p, "utf8"));
-}
-
-function normalizeLocales(messagesRoot, locales) {
-  if (typeof locales === "string") return normalizeLocales(messagesRoot, [locales]);
-  if (Array.isArray(locales) && locales.length > 0) {
-    return locales
-      .flatMap((s) => String(s).split(","))
-      .map((s) => s.trim())
-      .filter(Boolean);
-  }
-
-  const dirs = fs.readdirSync(messagesRoot, { withFileTypes: true });
-  return dirs
-    .filter((d) => d.isDirectory() && !d.name.startsWith("."))
-    .map((d) => d.name)
-    .sort((a, b) => a.localeCompare(b));
-}
+const { loadJson, normalizeLocales } = emojiAudit;
 
 function toCodepoint(cp) {
   const hex = cp.toString(16).toUpperCase();

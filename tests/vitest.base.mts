@@ -51,15 +51,17 @@ export function parseWorkerLimit(
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function parseBoolean(value: string | undefined, fallback: boolean): boolean {
-  if (!value) return fallback;
-  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
-}
-
-const defaultTestExclude = ["node_modules", ".next", "dist", "build", "coverage", "**/*.d.ts"];
+export const defaultTestExclude = [
+  "node_modules",
+  ".next",
+  "dist",
+  "build",
+  "coverage",
+  "**/*.d.ts",
+];
 
 // ---------------------------------------------------------------------------
-// Factory: scoped coverage config (8 specialized configs)
+// Factory: scoped coverage config
 // ---------------------------------------------------------------------------
 
 interface CoverageConfigOptions {
@@ -121,60 +123,5 @@ export function createCoverageConfig(opts: CoverageConfigOptions) {
     ssr: {
       noExternal: ["@lobehub/icons", "@lobehub/ui", "@lobehub/fluent-emoji"],
     },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Factory: test runner config (e2e / integration)
-// ---------------------------------------------------------------------------
-
-interface TestRunnerConfigOptions {
-  environment: "node" | "happy-dom";
-  testFiles: string[];
-  testTimeout?: number;
-  hookTimeout?: number;
-  maxWorkers?: number | string;
-  maxConcurrency?: number;
-  fileParallelism?: boolean;
-  pool?: "threads" | "forks" | "vmThreads" | "vmForks";
-  extraExclude?: string[];
-  api?: {
-    host?: string;
-    port?: number;
-    strictPort?: boolean;
-  };
-}
-
-export function createTestRunnerConfig(opts: TestRunnerConfigOptions) {
-  const baseExclude = ["node_modules", ".next", "dist", "build", "coverage", "**/*.d.ts"];
-  const maxWorkers =
-    opts.maxWorkers ?? parseWorkerLimit(process.env.VITEST_STATEFUL_MAX_WORKERS, 2);
-
-  return defineConfig({
-    test: {
-      globals: true,
-      environment: opts.environment,
-      setupFiles,
-      ...(opts.api ? { api: opts.api, open: false } : {}),
-      testTimeout: opts.testTimeout ?? 10000,
-      hookTimeout: opts.hookTimeout ?? 10000,
-      teardownTimeout: parsePositiveInt(process.env.VITEST_TEARDOWN_TIMEOUT_MS, 15000),
-      slowTestThreshold: parsePositiveInt(process.env.VITEST_SLOW_TEST_THRESHOLD_MS, 1000),
-      maxConcurrency:
-        opts.maxConcurrency ?? parsePositiveInt(process.env.VITEST_STATEFUL_MAX_CONCURRENCY, 3),
-      pool: opts.pool ?? "threads",
-      maxWorkers,
-      fileParallelism:
-        opts.fileParallelism ?? parseBoolean(process.env.VITEST_FILE_PARALLELISM, true),
-      include: opts.testFiles,
-      exclude: [...baseExclude, ...(opts.extraExclude ?? [])],
-      reporters: ["verbose"],
-      isolate: true,
-      mockReset: true,
-      restoreMocks: true,
-      clearMocks: true,
-      resolveSnapshotPath,
-    },
-    resolve: sharedResolve(),
   });
 }

@@ -90,15 +90,8 @@ jobs:
           bun scripts/build-ui-export.mjs
           bun scripts/build-ui-embed.mjs
 
-      - name: 断言 UI 产物在位（否则镜像会没有界面）
-        run: |
-          test -f go/internal/uiapp/assets/MANIFEST.json || {
-            echo "::error::UI 产物未收编（缺 MANIFEST.json）"; exit 1; }
-          n="$(find go/internal/uiapp/assets -type f | wc -l)"
-          echo "assets 文件数：${n}（压缩态实测约 500）"
-          if [ "$n" -lt 300 ]; then
-            echo "::error::UI 产物文件数过少（${n} < 300），疑似导出失败"; exit 1
-          fi
+      - name: 断言 UI 产物已收编（否则镜像会没有界面）
+        run: bash scripts/assert-uiapp-assets.sh
 
       - uses: docker/setup-qemu-action@v3
 

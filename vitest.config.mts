@@ -1,6 +1,6 @@
 import { availableParallelism } from "node:os";
 import { defineConfig } from "vitest/config";
-import { parsePositiveInt, parseWorkerLimit, sharedResolve } from "./tests/vitest.base.mts";
+import { defaultTestExclude, parsePositiveInt, parseWorkerLimit, sharedResolve } from "./tests/vitest.base.mts";
 
 function defaultMaxWorkers(): number {
   const workerBudget = Math.floor(availableParallelism() * 0.75);
@@ -54,24 +54,11 @@ export default defineConfig({
         "dist/",
         "build/",
         // 单元测试覆盖率仅统计「可纯函数化/可隔离」模块，避免把需要 DB/Redis/Next/Bull 的集成逻辑算进阈值
-        "src/actions/**",
-        "src/repository/**",
-        "src/app/v1/_lib/**",
         "src/lib/provider-testing/**",
-        "src/lib/notification/**",
         "src/lib/redis/**",
         "src/lib/utils/**",
-        "src/lib/rate-limit/**",
         "src/components/quota/**",
         // 依赖外部系统或目前无单测覆盖的重模块（避免拉低全局阈值）
-        "src/lib/session-manager.ts",
-        "src/lib/session-tracker.ts",
-        "src/lib/circuit-breaker.ts",
-        "src/lib/error-override-validator.ts",
-        "src/lib/error-rule-detector.ts",
-        "src/lib/sensitive-word-detector.ts",
-        "src/lib/price-sync.ts",
-        "src/lib/proxy-status-tracker.ts",
         "src/hooks/useCountdown.ts",
       ],
 
@@ -103,14 +90,7 @@ export default defineConfig({
       "tests/security/**/*.{test,spec}.ts",
       "src/**/*.{test,spec}.ts", // 支持源码中的测试
     ],
-    exclude: [
-      "node_modules",
-      ".next",
-      "dist",
-      "build",
-      "coverage",
-      "**/*.d.ts",
-    ],
+    exclude: defaultTestExclude,
 
     // ==================== 监听模式配置 ====================
     // 不在配置文件中强制 watch=false，否则 vitest --ui 可能会在执行完一次后退出，UI 显示 Disconnected
