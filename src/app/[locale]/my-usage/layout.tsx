@@ -44,7 +44,7 @@ export default function MyUsageLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-[var(--cch-viewport-height,100vh)] bg-background">
-      <main className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6">{children}</main>
+      <main className="mx-auto w-full max-w-[100rem] px-4 py-6 sm:px-6">{children}</main>
     </div>
   );
 }

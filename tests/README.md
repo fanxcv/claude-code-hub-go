@@ -21,7 +21,7 @@ bun run test:ci           # CI 用：输出 junit 到 reports/
 
 - 配置：仓库根 `vitest.config.mts`，共享基线在 [vitest.base.mts](vitest.base.mts)。
 - 全局 setup 与替身：[setup.ts](setup.ts) 与同目录的 `*.mock.ts(x)`（Next.js 运行时、framer-motion、fluent-emoji、server-only 等）。
-- 夹具助手在 [helpers/](helpers)，测试专用配置在 [configs/](configs)。
+- 夹具助手在 [helpers/](helpers)。
 - 按被测面分目录（`unit/dashboard`、`unit/i18n`、`unit/lib`…），**测什么就放在对应目录**，别堆在根。
 
 ## Go 单测与集成
@@ -59,7 +59,6 @@ tests/
 ├── unit/         # 前端单测（按被测面分目录，含 docs/ 文档钉子）
 ├── load/         # 负载、对拍与切换验收夹具（各有独立 README）
 ├── helpers/      # 测试助手
-├── configs/      # 测试专用配置
 ├── setup.ts      # 全局 setup
 └── vitest.base.mts
 ```
