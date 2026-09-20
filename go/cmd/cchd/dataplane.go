@@ -77,7 +77,6 @@ func newLangfuseTracer(env config.EnvConfig, logger *logx.Logger) *tracing.Trace
 	}
 	return traces
 }
-}
 
 // dataPlaneOptions 是数据面装配缝的参数；*rulesSync 提供配置失效通道。
 type dataPlaneOptions struct {
