@@ -32,7 +32,7 @@ vi.mock("@/i18n/routing", () => ({
 }));
 
 // 虚拟列表依赖元素测量与 ResizeObserver，happy-dom 下不渲染任何行；钉住只渲染首行。
-vi.mock("@/hooks/use-virtualizer", () => ({
+vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: () => ({
     getVirtualItems: () => [{ index: 0, size: 52, start: 0 }],
     getTotalSize: () => 52,

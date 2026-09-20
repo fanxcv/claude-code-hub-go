@@ -16,9 +16,8 @@ import { usePublicStatusLabels } from "./_lib/public-status-labels";
 /**
  * 公开状态页。改造前由 `loadPublicStatusPageData()`（服务端）读 `/api/public-status`。
  *
- * 静态化后没有服务端取数，改由客户端打同语义的 `/api/v1/public/status`（与
- * `src/lib/api-client/v1/public/hooks.ts` 的 `usePublicStatus` 同一端点；响应体与
- * 旧路径同为 `PublicStatusRouteResponse`，含 `meta.siteTitle`/`meta.timeZone`）。
+ * 静态化后没有服务端取数，改由客户端打同语义的 `/api/v1/public/status`；响应体与
+ * 旧路径同为 `PublicStatusRouteResponse`，含 `meta.siteTitle`/`meta.timeZone`。
  * 路由状态 `rebuilding` 会以 503 返回，此时**不是**取数失败：按契约照常渲染
  * （`rebuildState: rebuilding`），只有网络/其它错误才落到错误态。
  *

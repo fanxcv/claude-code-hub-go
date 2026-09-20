@@ -15,7 +15,7 @@ import type { UsageLogRow } from "@/types/usage-logs";
 
 // Note: The virtualized table relies on element measurements and ResizeObserver; happy-dom may not render rows.
 // Stub useVirtualizer to "render only the first row" to keep UI assertions stable.
-vi.mock("@/hooks/use-virtualizer", () => ({
+vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: () => ({
     getVirtualItems: () => [{ index: 0, size: 52, start: 0 }],
     getTotalSize: () => 52,

@@ -212,11 +212,9 @@ app/api、actions、repository、app/v1 等目录都已不存在。现存 Go 代
 | `data` | 本地 compose 的持久化目录 |
 | `docker-compose.yaml`、`.env.example`、`Makefile`、`package.json` | 部署编排、环境变量真源、快捷命令、前端脚本 |
 
-**一处已知漂移（改契约前先读）**：`src/lib/api-client/v1/openapi-types.gen.ts` 是 Node 时代的
-静态生成物——本仓**既无生成入口**（生成器 `openapi-typescript` 已随 Node 时代残留依赖一并从 `package.json` 移除），
-前端代码里也**没有任何消费方**（管理面的 spec 由 Go 的已注册路由表在运行时生成，见 `go/internal/adminapi`）。
-它因此会滞后于服务端契约（例如 error-rules 的 category 取值域）：**不要据它推断 API 形状**，
-改契约时也不必为了对齐它而改它。
+**管理面契约的唯一真源是 Go 的已注册路由表**（见 `go/internal/adminapi`，spec 在运行时生成）。
+Node 时代那份静态生成物（约 3.9 万行、零消费方）已在 2026-09 的过度设计清理中删除——
+**不要试图恢复它**，也不要据任何静态快照推断 API 形状。
 
 ## 5. 请求管线（`/v1` 数据面）
 

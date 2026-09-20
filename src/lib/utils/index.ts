@@ -5,7 +5,7 @@
 // 样式相关
 export { cn } from "./cn";
 export type { CurrencyCode } from "./currency";
-// 金额工具（`currency` 与 `cost-calculation`）**有意不在此 re-export**：
+// 金额工具（`currency`）**有意不在此 re-export**：
 //
 // `currency.ts` 引 `decimal.js-light`（`Decimal` 是值导出），而本 barrel 被大量
 // 全站 UI 组件引用（多数只为取 `cn` 这类零依赖工具，如 `ui/theme-switcher.tsx`）。

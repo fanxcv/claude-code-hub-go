@@ -1,7 +1,7 @@
 "use client";
 
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useVirtualizer } from "@/hooks/use-virtualizer";
 
 interface UseVirtualizedInfiniteListOptions {
   itemCount: number;

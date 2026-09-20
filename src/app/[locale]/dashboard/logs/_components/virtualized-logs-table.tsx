@@ -36,9 +36,11 @@ import {
   isNonBillingEndpoint,
   shouldHideOutputRate,
 } from "@/lib/utils/performance-formatter";
-import { shouldShowCostBadgeInCell } from "@/lib/utils/provider-chain-display";
-import { getFinalProviderName } from "@/lib/utils/provider-chain-formatter";
-import { isProviderFinalized } from "@/lib/utils/provider-display";
+import {
+  getFinalProviderName,
+  isProviderFinalized,
+  shouldShowCostBadgeInCell,
+} from "@/lib/utils/provider-chain-formatter";
 import { hasPriorityServiceTierSpecialSetting } from "@/lib/utils/special-settings";
 import type { BillingModelSource } from "@/types/system-config";
 import type { UsageLogRow, UsageLogsBatchResult } from "@/types/usage-logs";
