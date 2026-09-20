@@ -144,11 +144,11 @@ func ChainSteps(chain *Chain) []StepKey {
 	return steps
 }
 
-// StepSequence 把链条的步骤顺序渲染成 "auth -> sensitive -> ..." 形式。
+// stepSequence 把链条的步骤顺序渲染成 "auth -> sensitive -> ..." 形式。
 //
 // 存在的理由：顺序是契约（错误优先级与计费时点都由它决定），排障时需要一眼看出实际跑的
 // 是不是以为的那条链。
-func StepSequence(chain *Chain) string {
+func stepSequence(chain *Chain) string {
 	if chain == nil {
 		return ""
 	}

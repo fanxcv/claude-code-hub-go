@@ -312,13 +312,13 @@ func TestExtractBearerKey(t *testing.T) {
 }
 
 // 非守卫流程复用的提取函数只取首个可用凭据。
-func TestExtractAPIKeyFromHeaders(t *testing.T) {
+func TestextractAPIKeyFromHeaders(t *testing.T) {
 	headers := map[string]string{"x-chain": "x"}
-	if got := ExtractAPIKeyFromHeaders(headers); got != "" {
+	if got := extractAPIKeyFromHeaders(headers); got != "" {
 		t.Fatalf("无凭据时应为空串，收到 %q", got)
 	}
 	headers = map[string]string{"authorization": "Bearer sk-a", "x-api-key": "sk-b"}
-	if got := ExtractAPIKeyFromHeaders(headers); got != "sk-a" {
+	if got := extractAPIKeyFromHeaders(headers); got != "sk-a" {
 		t.Fatalf("应取 Bearer 凭据，收到 %q", got)
 	}
 }

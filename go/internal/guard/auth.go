@@ -333,11 +333,11 @@ func normalizeKey(value string) string {
 	return trimmed
 }
 
-// ExtractAPIKeyFromHeaders 从请求头中提取 API Key，供非守卫流程复用。
+// extractAPIKeyFromHeaders 从请求头中提取 API Key，供非守卫流程复用。
 //
 // 支持 Authorization: Bearer、x-api-key 与 x-goog-api-key 三种方式，与
 // src/lib/api/auth-header-extractor.ts 的对外行为一致。
-func ExtractAPIKeyFromHeaders(headers map[string]string) string {
+func extractAPIKeyFromHeaders(headers map[string]string) string {
 	candidates := keyCandidates{
 		Authorization: headers["authorization"],
 		APIKey:        headers["x-api-key"],

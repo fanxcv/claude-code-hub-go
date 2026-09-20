@@ -145,7 +145,6 @@ app/api、actions、repository、app/v1 等目录都已不存在。现存 Go 代
 | `go/cmd/envlist` | 生成 `go/env-parity.txt`（Go 侧受契约覆盖的环境变量清单） |
 | `go/cmd/jobsrun` | 手动驱动后台任务一轮（价格同步、可用性投影回填） |
 | `go/cmd/lossseverity` | 由 `go/internal/convert` 的档位表渲染前端 `src/lib/utils/loss-severity.gen.ts`（生成物入库，供校验与再生成） |
-| `go/cmd/uipoc` | 内嵌 UI 的最小可行性验证，不入生产路径 |
 | `go/internal/adminapi` | 管理面 REST：路由注册表、守卫、审计条目、各资源处理器 |
 | `go/internal/adminauth` | 管理会话令牌的签发与验签（浏览器登录态） |
 | `go/internal/appversion` | 进程版本号取值的唯一实现 |

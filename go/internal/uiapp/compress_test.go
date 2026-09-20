@@ -20,7 +20,7 @@ import (
 //     这条此前修过一次（缺 charset 会让浏览器按 latin-1 解 payload），压缩链路不得把它带回；
 //  3. **协商与头部**：接受 br 时带 `Content-Encoding: br` 与 `Vary: Accept-Encoding`；
 //     不接受时回退明文且**不带** Content-Encoding；明文存储的资源不设 Vary；
-//  4. **元数据缺失即全明文**：未压缩产物（含 cmd/uipoc 与既有测试的 fstest 夹具）行为不变。
+//  4. **元数据缺失即全明文**：未压缩产物（含既有测试的 fstest 夹具）行为不变。
 
 // brotliBytes 造一份 brotli 压缩态，供夹具使用。
 func brotliBytes(t *testing.T, raw string) []byte {

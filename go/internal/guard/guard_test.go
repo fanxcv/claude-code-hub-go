@@ -79,7 +79,7 @@ func TestCountTokensPipelineReusesSafeSession(t *testing.T) {
 
 func TestAllStepKeysUniqueAndCoverPresets(t *testing.T) {
 	seen := map[StepKey]bool{}
-	for _, key := range AllStepKeys() {
+	for _, key := range allStepKeys() {
 		if seen[key] {
 			t.Fatalf("步骤键 %q 重复", key)
 		}
@@ -98,7 +98,7 @@ func TestAllStepKeysUniqueAndCoverPresets(t *testing.T) {
 
 // 键名是跨语言契约：Go 侧一旦改成 camelCase 之外的写法，Node 侧的链条目就无法对齐。
 func TestStepKeySpelling(t *testing.T) {
-	for _, key := range AllStepKeys() {
+	for _, key := range allStepKeys() {
 		text := string(key)
 		if text == "" {
 			t.Fatal("步骤键不得为空")

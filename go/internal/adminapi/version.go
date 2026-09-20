@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/appversion"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/clientver"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 )
 
@@ -449,165 +450,18 @@ func githubToken() string {
 // compareVersions 复刻 Node 的 compareVersions（注意返回值语义：1 表示 latest 更新）。
 //
 // 无法解析的版本一律视为相等（Node 的 fail-open），避免误报「有新版本」。
+//
+// 比较本身走 `internal/clientver`——那是本仓 SemVer 解析与比较的单一实现（版本链、
+// 客户端 GA 比对同用），此处只做返回值方向的适配，不再自带第二份解析器。
 func compareVersions(current, latest string) int {
-	currentParsed, okCurrent := parseSemverLike(current)
-	latestParsed, okLatest := parseSemverLike(latest)
-	if !okCurrent || !okLatest {
-		return 0
-	}
-	count := len(currentParsed.numbers)
-	if len(latestParsed.numbers) > count {
-		count = len(latestParsed.numbers)
-	}
-	for index := 0; index < count; index++ {
-		left := semverNumberAt(currentParsed.numbers, index)
-		right := semverNumberAt(latestParsed.numbers, index)
-		if right > left {
-			return 1
-		}
-		if right < left {
-			return -1
-		}
-	}
-	currentPre, latestPre := currentParsed.prerelease, latestParsed.prerelease
-	switch {
-	case currentPre == nil && latestPre == nil:
-		return 0
-	case currentPre == nil && latestPre != nil:
-		return -1
-	case currentPre != nil && latestPre == nil:
+	switch clientver.CompareVersions(latest, current) {
+	case 1:
 		return 1
-	}
-	count = len(currentPre)
-	if len(latestPre) > count {
-		count = len(latestPre)
-	}
-	for index := 0; index < count; index++ {
-		left := semverIDAt(currentPre, index)
-		right := semverIDAt(latestPre, index)
-		switch {
-		case left == nil && right == nil:
-			return 0
-		case left == nil:
-			return 1
-		case right == nil:
-			return -1
-		case left.numeric && right.numeric:
-			if right.value > left.value {
-				return 1
-			}
-			if right.value < left.value {
-				return -1
-			}
-		case left.numeric && !right.numeric:
-			// 数字标识符优先级低于非数字标识符。
-			return 1
-		case !left.numeric && right.numeric:
-			return -1
-		default:
-			if right.text > left.text {
-				return 1
-			}
-			if right.text < left.text {
-				return -1
-			}
-		}
-	}
-	return 0
-}
-
-// semverParsed 是解析出的版本。
-type semverParsed struct {
-	numbers    []int
-	prerelease []*semverID
-}
-
-// semverID 是预发布标识符（数字或字符串）。
-type semverID struct {
-	numeric bool
-	value   int
-	text    string
-}
-
-func semverNumberAt(numbers []int, index int) int {
-	if index >= len(numbers) {
+	case -1:
+		return -1
+	default:
 		return 0
 	}
-	return numbers[index]
-}
-
-func semverIDAt(ids []*semverID, index int) *semverID {
-	if index >= len(ids) {
-		return nil
-	}
-	return ids[index]
-}
-
-// parseSemverLike 复刻 Node 的 parseSemverLike：容忍 v 前缀、忽略 build 元数据、
-// 核心段取每段的数字前缀；任一段没有数字前缀即解析失败。
-func parseSemverLike(raw string) (semverParsed, bool) {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return semverParsed{}, false
-	}
-	withoutPrefix := trimmed
-	if len(withoutPrefix) > 0 && (withoutPrefix[0] == 'v' || withoutPrefix[0] == 'V') {
-		withoutPrefix = withoutPrefix[1:]
-	}
-	withoutBuild := withoutPrefix
-	if index := strings.IndexByte(withoutBuild, '+'); index >= 0 {
-		withoutBuild = withoutBuild[:index]
-	}
-	if withoutBuild == "" {
-		return semverParsed{}, false
-	}
-	core := withoutBuild
-	prereleaseRaw := ""
-	if index := strings.IndexByte(withoutBuild, '-'); index >= 0 {
-		core = withoutBuild[:index]
-		prereleaseRaw = withoutBuild[index+1:]
-	}
-	if core == "" {
-		return semverParsed{}, false
-	}
-	parts := strings.Split(core, ".")
-	numbers := make([]int, 0, len(parts))
-	for _, part := range parts {
-		digits := leadingDigits(part)
-		if digits == "" {
-			return semverParsed{}, false
-		}
-		value, err := strconv.Atoi(digits)
-		if err != nil {
-			return semverParsed{}, false
-		}
-		numbers = append(numbers, value)
-	}
-	parsed := semverParsed{numbers: numbers}
-	if prereleaseRaw != "" {
-		ids := strings.Split(prereleaseRaw, ".")
-		parsed.prerelease = make([]*semverID, 0, len(ids))
-		for _, id := range ids {
-			if digits := leadingDigits(id); digits != "" && digits == id {
-				value, err := strconv.Atoi(id)
-				if err == nil {
-					parsed.prerelease = append(parsed.prerelease, &semverID{numeric: true, value: value})
-					continue
-				}
-			}
-			parsed.prerelease = append(parsed.prerelease, &semverID{text: id})
-		}
-	}
-	return parsed, true
-}
-
-// leadingDigits 取字符串开头的数字（Node 的 /^\d+/）。
-func leadingDigits(value string) string {
-	index := 0
-	for index < len(value) && value[index] >= '0' && value[index] <= '9' {
-		index++
-	}
-	return value[:index]
 }
 
 // urlQueryEscape 是 Node 的 encodeURIComponent 在路径段上的等价物（分支名可能是 feat/x）。

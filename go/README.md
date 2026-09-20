@@ -42,7 +42,7 @@ go build ./cmd/cchd
 
 | 层 | 包 | 职责 |
 | --- | --- | --- |
-| 入口与装配 | [cmd/cchd](cmd/cchd) | 启动顺序、前门装配、管理面装配、排空关闭；[cmd/envlist](cmd/envlist)、[cmd/jobsrun](cmd/jobsrun)、[cmd/uipoc](cmd/uipoc) 是运维/验证小工具 |
+| 入口与装配 | [cmd/cchd](cmd/cchd) | 启动顺序、前门装配、管理面装配、排空关闭；[cmd/envlist](cmd/envlist)、[cmd/jobsrun](cmd/jobsrun) 是运维小工具 |
 | | [internal/dataplane](internal/dataplane) | 把守卫链、选路、转发、门控、结算串成一条请求链（唯一装配点） |
 | | [internal/pctx](internal/pctx) | 跨步传递的请求上下文：归属一次性决定、正文一次性消费、headers 只读视图 |
 | 入站与配置 | [internal/ingress](internal/ingress) | 入站正文读取、流式解压、进程级内存与在途字节准入 |
