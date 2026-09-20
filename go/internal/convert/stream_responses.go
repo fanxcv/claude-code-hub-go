@@ -66,8 +66,6 @@ type responsesStreamDecoder struct {
 
 	byKey      map[string]*responsesDecodedBlock
 	openBlocks []*responsesDecodedBlock
-
-	ignoredEvents int
 }
 
 func newResponsesStreamDecoder(ctx ConvertCtx) StreamDecoder {
@@ -76,8 +74,6 @@ func newResponsesStreamDecoder(ctx ConvertCtx) StreamDecoder {
 		byKey: map[string]*responsesDecodedBlock{},
 	}
 }
-
-func (d *responsesStreamDecoder) IgnoredEvents() int { return d.ignoredEvents }
 
 func (d *responsesStreamDecoder) ensureStart(out *[]Chunk) {
 	if d.started {
@@ -296,7 +292,6 @@ func (d *responsesStreamDecoder) handleOutputItemAdded(out *[]Chunk, payload *Va
 		d.emitDeltaChunk(out, decoded, text)
 	default:
 		// web_search_call 等：流式下无枢纽表示
-		d.ignoredEvents++
 	}
 }
 
@@ -559,7 +554,6 @@ func (d *responsesStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 	payload := parseFrameJSON(frame)
 	if payload == nil {
 		// 畸形 / 心跳 / 无法解析的帧：忽略，不抛错
-		d.ignoredEvents++
 		return out
 	}
 	eventType, _ := stringField(payload, "type")
@@ -607,7 +601,6 @@ func (d *responsesStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 		d.terminal(&out, response)
 	default:
 		// 未映射事件（error / 各类工具生命周期）：静默忽略
-		d.ignoredEvents++
 	}
 	return out
 }
@@ -688,8 +681,6 @@ type responsesStreamEncoder struct {
 	states      map[int]*responsesEncoderBlockState
 	openOrder   []int
 	outputItems []*Value
-
-	ignoredEvents int
 }
 
 func newResponsesStreamEncoder(ctx ConvertCtx) StreamEncoder {
@@ -699,8 +690,6 @@ func newResponsesStreamEncoder(ctx ConvertCtx) StreamEncoder {
 		states:     map[int]*responsesEncoderBlockState{},
 	}
 }
-
-func (e *responsesStreamEncoder) IgnoredEvents() int { return e.ignoredEvents }
 
 func (e *responsesStreamEncoder) frame(eventType string, payload *Value) []byte {
 	body := NewObject().
@@ -960,7 +949,6 @@ func (e *responsesStreamEncoder) openBlock(out *[][]byte, chunk Chunk) {
 	}
 
 	// 其余块（外线 opaque 等）在本线流式下无表示：整块忽略
-	e.ignoredEvents++
 	state := &responsesEncoderBlockState{
 		blockIndex:  blockIndex,
 		outputIndex: outputIndex,
@@ -1067,7 +1055,6 @@ func (e *responsesStreamEncoder) Push(chunk Chunk) [][]byte {
 		e.finish(&out)
 	default:
 		// 未知 kind：忽略
-		e.ignoredEvents++
 	}
 	return out
 }

@@ -1,10 +1,11 @@
 package convert
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 const chatWire = ProtocolOpenAIChat
-
-func init() { registerCodec(chatWire) }
 
 // chatCarriedMessageKeys 是枢纽已承载的 message 级字段。
 var chatCarriedMessageKeys = knownKeys{
@@ -56,7 +57,7 @@ func decodeChatMessageBlocks(
 	switch {
 	case toolCalls != nil && toolCalls.IsArray():
 		for index, raw := range toolCalls.Items() {
-			blocks = append(blocks, decodeChatToolCall(raw, seed+":"+itoa(index), loss, direction, fromWire))
+			blocks = append(blocks, decodeChatToolCall(raw, seed+":"+strconv.Itoa(index), loss, direction, fromWire))
 		}
 	case toolCalls != nil && !toolCalls.IsNull():
 		loss.Dropped(LossUnknownField, direction, "tool_calls")
@@ -464,21 +465,21 @@ func decodeChatMessages(raw *Value, system *[]Block, items *[]Item, loss *LossCo
 	}
 	for index, message := range raw.Items() {
 		if !isRecord(message) {
-			loss.Dropped(LossUnknownField, direction, "messages["+itoa(index)+"]")
+			loss.Dropped(LossUnknownField, direction, "messages["+strconv.Itoa(index)+"]")
 			continue
 		}
 		role, _ := stringField(message, "role")
 		switch role {
 		case "system":
 			if index != 0 {
-				loss.Rewritten("system.position", direction, "messages["+itoa(index)+"]")
+				loss.Rewritten("system.position", direction, "messages["+strconv.Itoa(index)+"]")
 			}
-			*system = append(*system, decodeChatMessageBlocks(message, "system:"+itoa(index), loss, direction, nil)...)
+			*system = append(*system, decodeChatMessageBlocks(message, "system:"+strconv.Itoa(index), loss, direction, nil)...)
 		case "user", "assistant":
 			*items = append(*items, Item{
 				Kind:   ItemMessage,
 				Role:   role,
-				Blocks: decodeChatMessageBlocks(message, itoa(index), loss, direction, nil),
+				Blocks: decodeChatMessageBlocks(message, strconv.Itoa(index), loss, direction, nil),
 			})
 		case "tool":
 			toolCallID, hasID := stringField(message, "tool_call_id")
@@ -486,15 +487,15 @@ func decodeChatMessages(raw *Value, system *[]Block, items *[]Item, loss *LossCo
 				*items = append(*items, Item{
 					Kind:       ItemToolResult,
 					ToolCallID: toolCallID,
-					Blocks:     decodeChatMessageBlocks(message, itoa(index), loss, direction, nil),
+					Blocks:     decodeChatMessageBlocks(message, strconv.Itoa(index), loss, direction, nil),
 					IsError:    false,
 				})
 				continue
 			}
-			loss.Rewritten(LossUnknownField, direction, "messages["+itoa(index)+"].tool_call_id")
+			loss.Rewritten(LossUnknownField, direction, "messages["+strconv.Itoa(index)+"].tool_call_id")
 			*items = append(*items, boxedChatMessage(message))
 		default:
-			loss.Rewritten(LossUnknownField, direction, "messages["+itoa(index)+"].role")
+			loss.Rewritten(LossUnknownField, direction, "messages["+strconv.Itoa(index)+"].role")
 			*items = append(*items, boxedChatMessage(message))
 		}
 	}
@@ -530,24 +531,7 @@ func chatIsSafeToolID(id string) bool {
 }
 
 func chatResolveEmitToolCallID(original string, seed string, options *chatRenderOptions) string {
-	raw := original
-	if raw != "" {
-		if mapped, ok := options.idMap[raw]; ok {
-			return mapped
-		}
-	}
-	emitted := raw
-	if raw == "" {
-		emitted = MakeToolCallID(seed)
-		options.loss.Rewritten(LossToolCallIDRewritten, options.direction, "synthesized:"+seed)
-	} else if !chatIsSafeToolID(raw) {
-		emitted = NormalizeToolCallID(raw)
-		options.loss.Rewritten(LossToolCallIDRewritten, options.direction, "sanitized")
-	}
-	if raw != "" {
-		options.idMap[raw] = emitted
-	}
-	return emitted
+	return resolveEmitToolCallID(original, seed, options.idMap, chatIsSafeToolID, options.loss, options.direction)
 }
 
 func chatRenderThinking(block Block, role string, reasoning *[]string, options *chatRenderOptions) {
@@ -658,7 +642,7 @@ func chatRenderMessages(role string, blocks []Block, options *chatRenderOptions)
 	}
 
 	for _, block := range blocks {
-		seed := options.seed + ":" + itoa(blockIndex)
+		seed := options.seed + ":" + strconv.Itoa(blockIndex)
 		blockIndex++
 		switch block.Kind {
 		case BlockText:
@@ -851,7 +835,7 @@ func chatEncodeItems(items []Item, idMap map[string]string, loss *LossCollector,
 	for index, item := range foldReasoningIntoFollowingAssistant(mergeRenderableItems(items, false), loss) {
 		options := &chatRenderOptions{
 			direction: direction,
-			seed:      itoa(index),
+			seed:      strconv.Itoa(index),
 			idMap:     idMap,
 			loss:      loss,
 			toWire:    ctx.ToWireToolName,
@@ -941,7 +925,7 @@ func chatEncodeToolChoice(choice *ToolChoice, ctx ConvertCtx) *Value {
 			Set("type", NewString("function")).
 			Set("function", NewObject().Set("name", NewString(name)))
 	}
-	return NewValueString(string(choice.Kind))
+	return NewString(string(choice.Kind))
 }
 
 func chatEncodeTools(tools []Tool, ctx ConvertCtx, loss *LossCollector) []*Value {
@@ -1013,12 +997,7 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	if request.Sampling.MaxTokens != nil {
 		out.Set("max_tokens", NewNumber(jsNumber(*request.Sampling.MaxTokens)))
 	}
-	if request.Sampling.Temperature != nil {
-		out.Set("temperature", NewNumber(jsNumber(*request.Sampling.Temperature)))
-	}
-	if request.Sampling.TopP != nil {
-		out.Set("top_p", NewNumber(jsNumber(*request.Sampling.TopP)))
-	}
+	setTemperatureAndTopP(out, request.Sampling)
 	if len(request.Sampling.Stop) > 0 {
 		values := make([]*Value, 0, len(request.Sampling.Stop))
 		for _, stop := range request.Sampling.Stop {
@@ -1153,33 +1132,7 @@ func encodeChatResponse(response *Response, ctx ConvertCtx) EncodeResult {
 	return EncodeResult{Body: out, Loss: loss.Report()}
 }
 
-// NewValueString 由 Go 字符串构造 JSON 字符串值。
-func NewValueString(value string) *Value { return NewString(value) }
-
 func stringOrEmpty(object *Value, key string) string {
 	text, _ := stringField(object, key)
 	return text
-}
-
-// itoa 是 strconv.Itoa 的别名，避免在多个文件重复导入 strconv。
-func itoa(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	negative := value < 0
-	if negative {
-		value = -value
-	}
-	buf := [20]byte{}
-	pos := len(buf)
-	for value > 0 {
-		pos--
-		buf[pos] = byte('0' + value%10)
-		value /= 10
-	}
-	if negative {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
 }

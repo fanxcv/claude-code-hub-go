@@ -1,9 +1,11 @@
 package convert
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 )
 
 // BlockKind 是枢纽块类型。
@@ -211,7 +213,6 @@ type ConvertCtx struct {
 	TargetProto  WireProtocol
 	Model        string
 	Stream       bool
-	ProviderID   int64
 
 	// ToWireToolName 把客户端原名规范化为上游可接受形态（编码器写名时用）。
 	ToWireToolName func(string) string
@@ -297,7 +298,6 @@ type LossEntry struct {
 	Direction  string
 	Action     LossAction
 	Detail     string
-	HasDetail  bool
 }
 
 // LossReport 是损失集合。
@@ -322,7 +322,6 @@ func (c *LossCollector) add(capability, direction string, action LossAction, det
 		Direction:  direction,
 		Action:     action,
 		Detail:     detail,
-		HasDetail:  true,
 	})
 }
 
@@ -620,42 +619,16 @@ func isSafeToolNameByte(b byte) bool {
 }
 
 // shortHash 是 FNV-1a 32bit 的十六进制表示（8 位，零填充），与 TS 侧逐位一致。
+//
+// 用 utf16.Encode 而非按 rune 迭代：JS 的 charCodeAt 按 UTF-16 码元计数，非 BMP 字符
+// 要拆成代理对，否则哈希与 TS 分叉。
 func shortHash(input string) string {
 	hash := uint32(0x811c9dc5)
-	for _, r := range []uint16(utf16CodeUnits(input)) {
-		hash ^= uint32(r)
+	for _, unit := range utf16.Encode([]rune(input)) {
+		hash ^= uint32(unit)
 		hash *= 0x01000193
 	}
-	return padHex8(hash)
-}
-
-func padHex8(value uint32) string {
-	const digits = "0123456789abcdef"
-	out := make([]byte, 8)
-	for i := 7; i >= 0; i-- {
-		out[i] = digits[value&0xf]
-		value >>= 4
-	}
-	return string(out)
-}
-
-// utf16CodeUnits 按 JS string 的 UTF-16 码元序列取值（charCodeAt 语义）。
-func utf16CodeUnits(input string) []uint16 {
-	units := make([]uint16, 0, len(input))
-	for _, r := range input {
-		if r > 0xffff {
-			high, low := utf16SurrogatePair(r)
-			units = append(units, high, low)
-			continue
-		}
-		units = append(units, uint16(r))
-	}
-	return units
-}
-
-func utf16SurrogatePair(r rune) (uint16, uint16) {
-	value := uint32(r) - 0x10000
-	return uint16(0xd800 + (value >> 10)), uint16(0xdc00 + (value & 0x3ff))
+	return fmt.Sprintf("%08x", hash)
 }
 
 // NormalizeToolName 把任意工具名规范化为官方接口可接受的形态；已合法时原样返回。
@@ -693,25 +666,53 @@ func sanitizeToolToken(value string) string {
 }
 
 // NormalizeToolCallID 把任意 id 规范化为 Anthropic 可接受形态；已合法时原样返回。
-func NormalizeToolCallID(id string) string {
-	if isSafeToolName(id) {
-		return id
+//
+// 与 NormalizeToolName 同一形态规则，故直接委托，避免两份实现漂移。
+func NormalizeToolCallID(id string) string { return NormalizeToolName(id) }
+
+// setTemperatureAndTopP 写出三线共用的采样参数。
+//
+// 三条线的这两个键名与口径完全一致（temperature / top_p），差别只在其余字段
+// （max_tokens 键名、stop 载体、seed/top_k 的支持面），故只抽这一对。
+func setTemperatureAndTopP(out *Value, sampling Sampling) {
+	if sampling.Temperature != nil {
+		out.Set("temperature", NewNumber(jsNumber(*sampling.Temperature)))
 	}
-	sanitized := sanitizeToolToken(id)
-	suffix := "_" + shortHash(id)
-	budget := toolNameMaxLength - len(suffix)
-	prefixLength := budget
-	if prefixLength < 1 {
-		prefixLength = 1
+	if sampling.TopP != nil {
+		out.Set("top_p", NewNumber(jsNumber(*sampling.TopP)))
 	}
-	prefix := sanitized
-	if len(prefix) > prefixLength {
-		prefix = prefix[:prefixLength]
+}
+
+// resolveEmitToolCallID 把工具调用 id 规范化为目标线可接受形态，并把映射记入 idMap。
+//
+// 三条线的规则同形，只在「id 是否安全」的判据上不同：Anthropic 用工具名判据
+// （isSafeToolName），Chat 与 Responses 用 id 判据（chatIsSafeToolID）。故由调用方传入。
+func resolveEmitToolCallID(
+	original string,
+	seed string,
+	idMap map[string]string,
+	safe func(string) bool,
+	loss *LossCollector,
+	direction string,
+) string {
+	raw := original
+	if raw != "" {
+		if mapped, ok := idMap[raw]; ok {
+			return mapped
+		}
 	}
-	if len(prefix) > 0 {
-		return prefix + suffix
+	emitted := raw
+	if raw == "" {
+		emitted = MakeToolCallID(seed)
+		loss.Rewritten(LossToolCallIDRewritten, direction, "synthesized:"+seed)
+	} else if !safe(raw) {
+		emitted = NormalizeToolCallID(raw)
+		loss.Rewritten(LossToolCallIDRewritten, direction, "sanitized")
 	}
-	return "tool" + suffix
+	if raw != "" {
+		idMap[raw] = emitted
+	}
+	return emitted
 }
 
 // MakeToolCallID 为缺失 id 的工具调用合成稳定 id。
@@ -880,42 +881,28 @@ func usageFromAnthropic(raw *Value) *Usage {
 	return usage
 }
 
-// usageFromOpenAIChat 解析 Chat usage，并把 cached 从 prompt 中减去以归一到枢纽口径。
-func usageFromOpenAIChat(raw *Value) *Usage {
-	usage := &Usage{}
-	if raw == nil || !raw.IsObject() {
-		return usage
-	}
-	prompt, hasPrompt := numberOrNil(fieldOrNil(raw, "prompt_tokens"))
-	completion, _ := numberOrNil(fieldOrNil(raw, "completion_tokens"))
-	cached, hasCached := numberOrNil(fieldOrNil(nestedField(raw, "prompt_tokens_details", "cached_tokens")))
-	reasoning, _ := numberOrNil(fieldOrNil(raw, "completion_tokens_details", "reasoning_tokens"))
-	if hasPrompt {
-		value := *prompt
-		if hasCached {
-			value -= *cached
-		}
-		if value < 0 {
-			value = 0
-		}
-		usage.InputTokens = &value
-	}
-	usage.OutputTokens = completion
-	usage.CacheReadTokens = cached
-	usage.ReasoningTokens = reasoning
-	return usage
+// usageSpec 描述一条 usage 线的取键差异；三线共用同一个解析器（见 usageFrom）。
+type usageSpec struct {
+	// inputKey / outputKey 是输入、输出 token 的键。
+	inputKey  string
+	outputKey string
+	// cachedPath / reasoningPath 是缓存与推理 token 的嵌套路径（父键在前）。
+	cachedPath    []string
+	reasoningPath []string
 }
 
-// usageFromResponses 解析 Responses usage，归一方式与 Chat 一致。
-func usageFromResponses(raw *Value) *Usage {
+// usageFrom 按 spec 解析 usage，并把 cached 从 input 中减去以归一到枢纽口径。
+//
+// 为什么减：各线的 input/prompt 都**包含**已缓存部分，不减就与 cache_read 重复计费。
+func usageFrom(raw *Value, spec usageSpec) *Usage {
 	usage := &Usage{}
 	if raw == nil || !raw.IsObject() {
 		return usage
 	}
-	input, hasInput := numberOrNil(fieldOrNil(raw, "input_tokens"))
-	output, _ := numberOrNil(fieldOrNil(raw, "output_tokens"))
-	cached, hasCached := numberOrNil(nestedField(raw, "input_tokens_details", "cached_tokens"))
-	reasoning, _ := numberOrNil(fieldOrNil(raw, "output_tokens_details", "reasoning_tokens"))
+	input, hasInput := numberOrNil(fieldOrNil(raw, spec.inputKey))
+	output, _ := numberOrNil(fieldOrNil(raw, spec.outputKey))
+	cached, hasCached := numberOrNil(fieldOrNil(raw, spec.cachedPath...))
+	reasoning, _ := numberOrNil(fieldOrNil(raw, spec.reasoningPath...))
 	if hasInput {
 		value := *input
 		if hasCached {
@@ -932,6 +919,26 @@ func usageFromResponses(raw *Value) *Usage {
 	return usage
 }
 
+// usageFromOpenAIChat 解析 Chat usage，并把 cached 从 prompt 中减去以归一到枢纽口径。
+func usageFromOpenAIChat(raw *Value) *Usage {
+	return usageFrom(raw, usageSpec{
+		inputKey:      "prompt_tokens",
+		outputKey:     "completion_tokens",
+		cachedPath:    []string{"prompt_tokens_details", "cached_tokens"},
+		reasoningPath: []string{"completion_tokens_details", "reasoning_tokens"},
+	})
+}
+
+// usageFromResponses 解析 Responses usage，归一方式与 Chat 一致。
+func usageFromResponses(raw *Value) *Usage {
+	return usageFrom(raw, usageSpec{
+		inputKey:      "input_tokens",
+		outputKey:     "output_tokens",
+		cachedPath:    []string{"input_tokens_details", "cached_tokens"},
+		reasoningPath: []string{"output_tokens_details", "reasoning_tokens"},
+	})
+}
+
 // usageFromGemini 解析 Gemini 的 usageMetadata。
 //
 // Node 口径（src/app/v1/_lib/proxy/response-handler.ts:6045-6068）：
@@ -942,28 +949,12 @@ func usageFromResponses(raw *Value) *Usage {
 // reasoning（thoughtsTokenCount）与流式观测器同口径（forward/observe.go 的 Gemini 分支）；
 // 落库侧当前只映射 input/output/cache_read，多取一项不会改变计费。
 func usageFromGemini(raw *Value) *Usage {
-	usage := &Usage{}
-	if raw == nil || !raw.IsObject() {
-		return usage
-	}
-	prompt, hasPrompt := numberOrNil(fieldOrNil(raw, "promptTokenCount"))
-	output, _ := numberOrNil(fieldOrNil(raw, "candidatesTokenCount"))
-	cached, hasCached := numberOrNil(fieldOrNil(raw, "cachedContentTokenCount"))
-	reasoning, _ := numberOrNil(fieldOrNil(raw, "thoughtsTokenCount"))
-	if hasPrompt {
-		value := *prompt
-		if hasCached {
-			value -= *cached
-		}
-		if value < 0 {
-			value = 0
-		}
-		usage.InputTokens = &value
-	}
-	usage.OutputTokens = output
-	usage.CacheReadTokens = cached
-	usage.ReasoningTokens = reasoning
-	return usage
+	return usageFrom(raw, usageSpec{
+		inputKey:      "promptTokenCount",
+		outputKey:     "candidatesTokenCount",
+		cachedPath:    []string{"cachedContentTokenCount"},
+		reasoningPath: []string{"thoughtsTokenCount"},
+	})
 }
 
 func usageToAnthropic(usage *Usage) *Value {
@@ -983,37 +974,25 @@ func usageToAnthropic(usage *Usage) *Value {
 	return out
 }
 
-func usageToOpenAIChat(usage *Usage) *Value {
-	out := NewObject()
-	prompt := numberValue(usage.InputTokens) + numberValue(usage.CacheReadTokens)
-	completion := numberValue(usage.OutputTokens)
-	out.Set("prompt_tokens", NewNumber(jsNumber(prompt)))
-	out.Set("completion_tokens", NewNumber(jsNumber(completion)))
-	out.Set("total_tokens", NewNumber(jsNumber(prompt+completion)))
-	if usage.CacheReadTokens != nil {
-		out.Set("prompt_tokens_details", NewObject().
-			Set("cached_tokens", NewNumber(jsNumber(*usage.CacheReadTokens))))
-	}
-	if usage.ReasoningTokens != nil {
-		out.Set("completion_tokens_details", NewObject().
-			Set("reasoning_tokens", NewNumber(jsNumber(*usage.ReasoningTokens))))
-	}
-	return out
-}
+// usageToOpenAIChat 与 usageToResponses 只在键名上不同，故共用 usageTo。
+func usageToOpenAIChat(usage *Usage) *Value { return usageTo(usage, "prompt", "completion") }
 
-func usageToResponses(usage *Usage) *Value {
+func usageToResponses(usage *Usage) *Value { return usageTo(usage, "input", "output") }
+
+// usageTo 按线写出 usage：输入含 cache_read（该线的 input 是含缓存的总额）。
+func usageTo(usage *Usage, inputKey string, outputKey string) *Value {
 	out := NewObject()
 	input := numberValue(usage.InputTokens) + numberValue(usage.CacheReadTokens)
 	output := numberValue(usage.OutputTokens)
-	out.Set("input_tokens", NewNumber(jsNumber(input)))
-	out.Set("output_tokens", NewNumber(jsNumber(output)))
+	out.Set(inputKey+"_tokens", NewNumber(jsNumber(input)))
+	out.Set(outputKey+"_tokens", NewNumber(jsNumber(output)))
 	out.Set("total_tokens", NewNumber(jsNumber(input+output)))
 	if usage.CacheReadTokens != nil {
-		out.Set("input_tokens_details", NewObject().
+		out.Set(inputKey+"_tokens_details", NewObject().
 			Set("cached_tokens", NewNumber(jsNumber(*usage.CacheReadTokens))))
 	}
 	if usage.ReasoningTokens != nil {
-		out.Set("output_tokens_details", NewObject().
+		out.Set(outputKey+"_tokens_details", NewObject().
 			Set("reasoning_tokens", NewNumber(jsNumber(*usage.ReasoningTokens))))
 	}
 	return out

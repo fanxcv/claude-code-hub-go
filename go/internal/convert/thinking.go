@@ -42,13 +42,6 @@ const (
 	thinkingBudgetHighFloor   = 32768
 )
 
-// thinkingBudgetByLevel 是等级→预算的反向表（与上面阈值互为反函数）。
-var thinkingBudgetByLevel = map[string]float64{
-	thinkingLevelLow:    1024,
-	thinkingLevelMedium: thinkingBudgetMediumFloor,
-	thinkingLevelHigh:   thinkingBudgetHighFloor,
-}
-
 // ThinkingLevelFromBudget 把 token 预算反查为等级（阈值下界包含）。
 //
 // 非正数视为无效输入，返回 low（调用方不应在预算 ≤ 0 时来找等级——那是「未给预算」的形态）。
@@ -61,18 +54,6 @@ func ThinkingLevelFromBudget(budget float64) string {
 	default:
 		return thinkingLevelLow
 	}
-}
-
-// ThinkingBudgetFromLevel 把等级映射为 token 预算；未知等级返回 (0, false)。
-//
-// 说明：本函数目前**不参与** Anthropic 侧的写出——Anthropic 原生就有等级载体
-// （`output_config.effort`），为其再合成一个 `thinking.budget_tokens` 会同时写两个载体、
-// 与 Node 分叉且无收益。它存在是为了：
-//  1. 保证映射**双向**且可往返（单测 + 未来若某条线只剩预算载体时可直接用）；
-//  2. 让「等级→预算」有唯一权威表，避免将来各处各写一套阈值。
-func ThinkingBudgetFromLevel(level string) (float64, bool) {
-	budget, ok := thinkingBudgetByLevel[level]
-	return budget, ok
 }
 
 // effectiveThinkingEffort 返回「本次转换该写给目标线的等级」，以及该等级是否由预算换算得出。

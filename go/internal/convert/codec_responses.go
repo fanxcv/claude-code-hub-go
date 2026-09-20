@@ -1,10 +1,11 @@
 package convert
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 const responsesWire = ProtocolOpenAIResponses
-
-func init() { registerCodec(responsesWire) }
 
 var responsesKnownRequestKeys = knownKeys{
 	"model": true, "instructions": true, "input": true, "tools": true, "tool_choice": true,
@@ -590,24 +591,7 @@ type responsesRenderOptions struct {
 }
 
 func responsesResolveEmitID(original string, seed string, options *responsesRenderOptions) string {
-	raw := original
-	if raw != "" {
-		if mapped, ok := options.idMap[raw]; ok {
-			return mapped
-		}
-	}
-	emitted := raw
-	if raw == "" {
-		emitted = MakeToolCallID(seed)
-		options.loss.Rewritten(LossToolCallIDRewritten, options.direction, "synthesized:"+seed)
-	} else if !chatIsSafeToolID(raw) {
-		emitted = NormalizeToolCallID(raw)
-		options.loss.Rewritten(LossToolCallIDRewritten, options.direction, "sanitized")
-	}
-	if raw != "" {
-		options.idMap[raw] = emitted
-	}
-	return emitted
+	return resolveEmitToolCallID(original, seed, options.idMap, chatIsSafeToolID, options.loss, options.direction)
 }
 
 func responsesTextPart(role string, text string) *Value {
@@ -710,7 +694,7 @@ func responsesEncodeInput(items []Item, idMap map[string]string, loss *LossColle
 	for index, item := range mergeRenderableItems(items, false) {
 		options := &responsesRenderOptions{
 			direction: "request",
-			seed:      itoa(index),
+			seed:      strconv.Itoa(index),
 			idMap:     idMap,
 			loss:      loss,
 			toWire:    ctx.ToWireToolName,
@@ -736,7 +720,7 @@ func responsesEncodeInput(items []Item, idMap map[string]string, loss *LossColle
 			}
 			blockIndex := 0
 			for _, block := range item.Blocks {
-				seed := options.seed + ":" + itoa(blockIndex)
+				seed := options.seed + ":" + strconv.Itoa(blockIndex)
 				blockIndex++
 				switch block.Kind {
 				case BlockText:
@@ -865,12 +849,7 @@ func encodeResponsesRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	if request.Sampling.MaxTokens != nil {
 		out.Set("max_output_tokens", NewNumber(jsNumber(*request.Sampling.MaxTokens)))
 	}
-	if request.Sampling.Temperature != nil {
-		out.Set("temperature", NewNumber(jsNumber(*request.Sampling.Temperature)))
-	}
-	if request.Sampling.TopP != nil {
-		out.Set("top_p", NewNumber(jsNumber(*request.Sampling.TopP)))
-	}
+	setTemperatureAndTopP(out, request.Sampling)
 	if request.Sampling.TopK != nil {
 		loss.Dropped(LossTopK, direction, "responses_has_no_top_k")
 	}
@@ -1020,7 +999,7 @@ func encodeResponsesOutput(response *Response, loss *LossCollector, idMap map[st
 	}
 	blockIndex := 0
 	for _, block := range response.Blocks {
-		seed := "0:" + itoa(blockIndex)
+		seed := "0:" + strconv.Itoa(blockIndex)
 		blockIndex++
 		switch block.Kind {
 		case BlockText:

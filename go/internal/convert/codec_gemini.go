@@ -5,8 +5,8 @@ package convert
 // 为什么 gemini 不注册 codec：金标语料 `tests/load/protocol-conformance/corpus/selection.json`
 // 钉死了它的选择语义——gemini 两端组合（gemini 客户端 + gemini 供应商、gemini-cli 两端）
 // 的 `targetProtocol` 恒为 null、兼容性只能是 native / incompatible，**永不 convertible**；
-// 跨组合一律 incompatible。一旦 `registerCodec(ProtocolGemini)`，`CanConvert` /
-// `ResolveProtocolCompat` 就会把「claude 客户端 + gemini 供应商」判成可转，
+// 跨组合一律 incompatible。一旦把 ProtocolGemini 算作「有 codec」，`ResolveProtocolCompat`
+// 就会把「claude 客户端 + gemini 供应商」判成可转，
 // 于是供应商进入候选、再在 `PlanConversion` 处失败——直接违反语料，也违反 Node 的
 // `resolveProtocolCompat`（它同时查客户端线，见 src/app/v1/_lib/protocol-convert/index.ts:134-150）。
 //

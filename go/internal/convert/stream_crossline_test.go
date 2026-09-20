@@ -101,7 +101,7 @@ func crossSceneCtx(upstream WireProtocol, client WireProtocol, placeholder bool)
 }
 
 // runCrossScene 走完整转换路径（上游字节 → 客户端字节），chunkSize<=0 表示整块喂入。
-func runCrossScene(t *testing.T, upstream WireProtocol, client WireProtocol, input string, chunkSize int, placeholder bool) (string, int) {
+func runCrossScene(t *testing.T, upstream WireProtocol, client WireProtocol, input string, chunkSize int, placeholder bool) string {
 	t.Helper()
 	pipe, ok := NewStreamPipe(upstream, client, crossSceneCtx(upstream, client, placeholder))
 	if !ok {
@@ -120,7 +120,7 @@ func runCrossScene(t *testing.T, upstream WireProtocol, client WireProtocol, inp
 		}
 	}
 	out = append(out, pipe.Flush()...)
-	return normalizeSyntheticIDs(string(out)), pipe.IgnoredEvents()
+	return normalizeSyntheticIDs(string(out))
 }
 
 // ---------------------------------------------------------------------------
@@ -713,7 +713,7 @@ func TestCrossLineStreamSceneMatrix(t *testing.T) {
 			name := fmt.Sprintf("%s/%s_to_%s", scene.name, pair.upstream, pair.client)
 			t.Run(name, func(t *testing.T) {
 				input := upstreamSceneStream(pair.upstream, scene)
-				out, _ := runCrossScene(t, pair.upstream, pair.client, input, 0, true)
+				out := runCrossScene(t, pair.upstream, pair.client, input, 0, true)
 				frames := parseOutFrames(t, out)
 
 				assertTerminalEvent(t, pair.client, frames)
@@ -771,8 +771,8 @@ func TestCrossLineStreamSplitFeedingIsStable(t *testing.T) {
 			name := fmt.Sprintf("%s/%s_to_%s", scene.name, pair.upstream, pair.client)
 			t.Run(name, func(t *testing.T) {
 				input := upstreamSceneStream(pair.upstream, scene)
-				whole, _ := runCrossScene(t, pair.upstream, pair.client, input, 0, true)
-				split, _ := runCrossScene(t, pair.upstream, pair.client, input, 1, true)
+				whole := runCrossScene(t, pair.upstream, pair.client, input, 0, true)
+				split := runCrossScene(t, pair.upstream, pair.client, input, 1, true)
 				if whole != split {
 					t.Fatalf("整块与逐字节喂入的输出不一致\n整块：%s\n逐字节：%s", whole, split)
 				}
@@ -791,7 +791,7 @@ func TestCrossLineStreamTerminationWhenUpstreamTruncates(t *testing.T) {
 		name := fmt.Sprintf("%s_to_%s", pair.upstream, pair.client)
 		t.Run(name, func(t *testing.T) {
 			input := truncateUpstreamTerminal(pair.upstream, upstreamSceneStream(pair.upstream, streamScene{name: "truncated", tool: true}))
-			out, _ := runCrossScene(t, pair.upstream, pair.client, input, 0, true)
+			out := runCrossScene(t, pair.upstream, pair.client, input, 0, true)
 			frames := parseOutFrames(t, out)
 			assertTerminalEvent(t, pair.client, frames)
 			for _, entry := range spineOfClientStream(t, pair.client, frames) {
@@ -803,10 +803,10 @@ func TestCrossLineStreamTerminationWhenUpstreamTruncates(t *testing.T) {
 	}
 }
 
-// TestCrossLineStreamLateReasoningAfterTextIsCounted 钉住 chat 上游「文本已开始后又来推理增量」的处理。
+// TestCrossLineStreamLateReasoningAfterText 钉住 chat 上游「文本已开始后又来推理增量」的处理。
 //
 // Chat 线的推理增量语义要求排在文本之前（枢纽顺序契约）；迟到的推理无法安放，解码器只能
-// 丢弃**并计数**（ignoredEvents），不得静默吞掉也不得把流写坏。
+// 丢弃，不得把流写坏、也不得挤掉正文。
 func TestCrossLineStreamLateReasoningAfterTextIsCounted(t *testing.T) {
 	input := sseFrame("", `{"id":"c1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`) +
 		sseFrame("", `{"id":"c1","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"content":"PONG"}}]}`) +
@@ -816,7 +816,7 @@ func TestCrossLineStreamLateReasoningAfterTextIsCounted(t *testing.T) {
 
 	for _, client := range []WireProtocol{ProtocolAnthropicMessages, ProtocolOpenAIResponses} {
 		t.Run(string(client), func(t *testing.T) {
-			out, ignored := runCrossScene(t, ProtocolOpenAIChat, client, input, 0, true)
+			out := runCrossScene(t, ProtocolOpenAIChat, client, input, 0, true)
 			frames := parseOutFrames(t, out)
 			assertTerminalEvent(t, client, frames)
 
@@ -824,9 +824,6 @@ func TestCrossLineStreamLateReasoningAfterTextIsCounted(t *testing.T) {
 			want := []spineEntry{{kind: "text", text: streamSceneText}}
 			if !reflect.DeepEqual(stripSpineIdentity(spine), want) {
 				t.Fatalf("迟到的推理不得变成块（也不得挤掉正文）\n实得：%+v\n期望：%+v", stripSpineIdentity(spine), want)
-			}
-			if ignored == 0 {
-				t.Fatal("迟到的推理被静默丢弃：ignoredEvents 必须 >0，否则不可观测")
 			}
 		})
 	}
@@ -843,7 +840,7 @@ func TestCrossLineStreamSameFrameContentAndToolArgs(t *testing.T) {
 
 	for _, client := range []WireProtocol{ProtocolAnthropicMessages, ProtocolOpenAIResponses} {
 		t.Run(string(client), func(t *testing.T) {
-			out, _ := runCrossScene(t, ProtocolOpenAIChat, client, input, 0, true)
+			out := runCrossScene(t, ProtocolOpenAIChat, client, input, 0, true)
 			frames := parseOutFrames(t, out)
 			assertTerminalEvent(t, client, frames)
 
@@ -925,7 +922,7 @@ func TestCrossLineStreamAnthropicStartUsageIsDroppedOnForeignClients(t *testing.
 
 	// 对照：Anthropic 编码器在 ChunkStart 分支里合并 usage，故从 chat 上游转过去不减损。
 	t.Run("anthropic客户端保留usage", func(t *testing.T) {
-		out, _ := runCrossScene(t, ProtocolOpenAIChat, ProtocolAnthropicMessages, chatSceneStream(scene), 0, true)
+		out := runCrossScene(t, ProtocolOpenAIChat, ProtocolAnthropicMessages, chatSceneStream(scene), 0, true)
 		frames := parseOutFrames(t, out)
 		total, cached, output := assertUsageSane(t, ProtocolAnthropicMessages, frames)
 		if total != streamSceneTotal || cached != streamSceneCached || output != streamSceneOutput {
@@ -936,7 +933,7 @@ func TestCrossLineStreamAnthropicStartUsageIsDroppedOnForeignClients(t *testing.
 	// 缺陷复现：同一条 Anthropic 上游，换成 chat / responses 客户端，输入与缓存读整段归零。
 	for _, client := range []WireProtocol{ProtocolOpenAIChat, ProtocolOpenAIResponses} {
 		t.Run("缺陷复现_"+string(client), func(t *testing.T) {
-			out, _ := runCrossScene(t, ProtocolAnthropicMessages, client, input, 0, true)
+			out := runCrossScene(t, ProtocolAnthropicMessages, client, input, 0, true)
 			frames := parseOutFrames(t, out)
 			total, cached, output := assertUsageSane(t, client, frames)
 			if total != 0 || cached != 0 {

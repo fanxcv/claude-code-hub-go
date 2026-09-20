@@ -191,7 +191,6 @@ type Chunk struct {
 	ReasoningDelta *string
 	StopReason     *StopReason
 	Usage          *Usage
-	SequenceNumber *int
 }
 
 func intPtr(value int) *int          { return &value }
@@ -201,16 +200,12 @@ func stringPtr(value string) *string { return &value }
 type StreamDecoder interface {
 	Push(chunk []byte) []Chunk
 	Flush() []Chunk
-	// IgnoredEvents 是「无法映射而被忽略」的上游事件数（可观测要求）。
-	IgnoredEvents() int
 }
 
 // StreamEncoder 吃枢纽块、吐客户端字节。
 type StreamEncoder interface {
 	Push(chunk Chunk) [][]byte
 	Flush() [][]byte
-	// IgnoredEvents 是枢纽块在本线无表示而被忽略的数。
-	IgnoredEvents() int
 }
 
 type streamFactory struct {
@@ -298,11 +293,6 @@ func (p *StreamPipe) Flush() []byte {
 	}
 	out = append(out, p.encoder.Flush()...)
 	return concatBytes(out)
-}
-
-// IgnoredEvents 是两侧累计的忽略计数，供诊断。
-func (p *StreamPipe) IgnoredEvents() int {
-	return p.decoder.IgnoredEvents() + p.encoder.IgnoredEvents()
 }
 
 func (p *StreamPipe) pipe(text string) []byte {

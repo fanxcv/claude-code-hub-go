@@ -39,22 +39,6 @@ func TestThinkingLevelFromBudgetThresholds(t *testing.T) {
 	}
 }
 
-func TestThinkingBudgetLevelRoundTrip(t *testing.T) {
-	// 反向表与阈值必须互为反函数，否则「等级→预算→等级」会漂移。
-	for _, level := range []string{thinkingLevelLow, thinkingLevelMedium, thinkingLevelHigh} {
-		budget, ok := ThinkingBudgetFromLevel(level)
-		if !ok {
-			t.Fatalf("ThinkingBudgetFromLevel(%q) 未命中", level)
-		}
-		if back := ThinkingLevelFromBudget(budget); back != level {
-			t.Errorf("往返漂移：%q → %v → %q", level, budget, back)
-		}
-	}
-	if _, ok := ThinkingBudgetFromLevel("unknown"); ok {
-		t.Error("未知等级必须返回 ok=false（不得静默落到某一档）")
-	}
-}
-
 func TestEffectiveThinkingEffortPrefersClientValue(t *testing.T) {
 	// 客户端给了等级 → 原值，即便同时有预算（不换算）。
 	budget := float64(32768)

@@ -12,7 +12,8 @@ const (
 	// 金标语料 tests/load/protocol-conformance/corpus/selection.json 铉死：gemini 的
 	// targetProtocol 恒为 null，兼容性只能是 native / incompatible。因此：
 	//   - ProtocolOfProviderType / ProtocolOfClientFormat **不返回它**（它们仍需对齐 Node 的 null）；
-	//   - 它**不注册 codec**（注册会让 CanConvert 把跨线组合误判为可转，违反语料）；
+	//   - 它**不注册 codec**（三线之外的协议线一律 HasCodec=false，故它不会被误判为可转，
+	//     符合语料）；
 	//   - 它仅用于标记「本次正文属于 Gemini 线」，让只读的响应解码（取用量/模型）与
 	//     日志留痕有名字可用，见 codec_gemini.go 的说明。
 	ProtocolGemini WireProtocol = "gemini"
@@ -56,25 +57,16 @@ type ConversionPlan struct {
 	TargetProtocol WireProtocol
 }
 
-// codecRegistry 记录已注册编解码器的协议线。
-// 与 TS 侧 index.ts 的模块级 Map 等价：注册发生在 init()，进程内不变。
-var codecRegistry = map[WireProtocol]bool{}
-
-// registerCodec 注册一条协议线；同一协议重复注册为幂等。
-func registerCodec(protocol WireProtocol) {
-	codecRegistry[protocol] = true
-}
-
 // HasCodec 报告该协议线是否已注册编解码器。
-func HasCodec(protocol WireProtocol) bool { return codecRegistry[protocol] }
-
-// RegisteredProtocols 列出已注册协议线（顺序不稳定，仅用于诊断与测试）。
-func RegisteredProtocols() []WireProtocol {
-	out := make([]WireProtocol, 0, len(codecRegistry))
-	for protocol := range codecRegistry {
-		out = append(out, protocol)
+//
+// 三线 codec 在编译期即定（见 codec_*.go），注册表内容永不变化，故直接按协议线判定。
+func HasCodec(protocol WireProtocol) bool {
+	switch protocol {
+	case ProtocolAnthropicMessages, ProtocolOpenAIChat, ProtocolOpenAIResponses:
+		return true
+	default:
+		return false
 	}
-	return out
 }
 
 // ProtocolOfProviderType 把供应商类型映射到上游协议线。
@@ -143,16 +135,6 @@ func ResolveTargetProtocol(
 		return "", false
 	}
 	return providerProtocol, true
-}
-
-// CanConvert 报告「跨协议且两侧 codec 齐备」。
-func CanConvert(clientFormat ClientFormat, providerType ProviderType) bool {
-	if IsNativePair(clientFormat, providerType) {
-		return false
-	}
-	source, sourceOK := ProtocolOfClientFormat(clientFormat)
-	target, targetOK := ProtocolOfProviderType(providerType)
-	return sourceOK && targetOK && HasCodec(source) && HasCodec(target)
 }
 
 // ResolveProtocolCompat 是选路三态判定，判定顺序固定：

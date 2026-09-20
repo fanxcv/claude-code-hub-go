@@ -204,15 +204,6 @@ func (v *Value) StringField(key string) (string, bool) {
 	return child.String()
 }
 
-// BoolField 取字段的布尔值。
-func (v *Value) BoolField(key string) (bool, bool) {
-	child, ok := v.Get(key)
-	if !ok {
-		return false, false
-	}
-	return child.Bool()
-}
-
 // ArrayField 取字段的数组；缺失或非数组返回 nil。
 func (v *Value) ArrayField(key string) []*Value {
 	child, ok := v.Get(key)
@@ -247,22 +238,6 @@ func (v *Value) Set(key string, value *Value) *Value {
 	return v
 }
 
-// SetIf 仅在条件为真时设置成员。
-func (v *Value) SetIf(condition bool, key string, value *Value) *Value {
-	if condition {
-		return v.Set(key, value)
-	}
-	return v
-}
-
-// SetIfPresent 仅在值非 nil 时设置成员（对应 TS 的可选字段展开）。
-func (v *Value) SetIfPresent(key string, value *Value) *Value {
-	if value != nil {
-		return v.Set(key, value)
-	}
-	return v
-}
-
 // Delete 删除成员；不存在则无操作。
 func (v *Value) Delete(key string) *Value {
 	if v == nil || v.kind != kindObject {
@@ -287,14 +262,6 @@ func (v *Value) Append(items ...*Value) *Value {
 		v.items = append(v.items, orNull(item))
 	}
 	return v
-}
-
-// AppendIfPresent 仅在值非 nil 时追加数组元素。
-func (v *Value) AppendIfPresent(item *Value) *Value {
-	if item == nil {
-		return v
-	}
-	return v.Append(item)
 }
 
 // Clone 深拷贝。

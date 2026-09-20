@@ -97,10 +97,10 @@ func TestDecodeGeminiResponseModel(t *testing.T) {
 }
 
 // TestGeminiIsNotInConversionMatrix 钉住金标语料的选择语义没被「支持 gemini」误伤：
-// 它只有只读解码，**不注册 codec**，故跨线组合恒不可转。
+// 它只有只读解码，**不在三线 codec 之列**，故跨线组合恒不可转。
 func TestGeminiIsNotInConversionMatrix(t *testing.T) {
 	if HasCodec(ProtocolGemini) {
-		t.Fatal("ProtocolGemini 不得注册 codec：那会让 CanConvert 把跨线组合判为可转，违反 selection.json")
+		t.Fatal("ProtocolGemini 不得有 codec：那会让 ResolveProtocolCompat 把跨线组合判为可转，违反 selection.json")
 	}
 	if _, ok := ProtocolOfProviderType(ProviderGemini); ok {
 		t.Fatal("ProtocolOfProviderType(gemini) 必须仍为 false（Node 侧为 null，语料已钉）")

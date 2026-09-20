@@ -1,10 +1,11 @@
 package convert
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 const anthropicWire = ProtocolAnthropicMessages
-
-func init() { registerCodec(anthropicWire) }
 
 var anthropicKnownRequestKeys = knownKeys{
 	"model": true, "messages": true, "system": true, "tools": true, "tool_choice": true,
@@ -147,7 +148,7 @@ func decodeAnthropicMessages(raw *Value, items *[]Item, loss *LossCollector, fro
 	}
 	for index, message := range raw.Items() {
 		if !isRecord(message) {
-			loss.Dropped(LossUnknownField, direction, "messages["+itoa(index)+"]")
+			loss.Dropped(LossUnknownField, direction, "messages["+strconv.Itoa(index)+"]")
 			continue
 		}
 		role, _ := stringField(message, "role")
@@ -424,24 +425,7 @@ type anthropicRenderOptions struct {
 }
 
 func anthropicResolveEmitID(original string, seed string, options *anthropicRenderOptions) string {
-	raw := original
-	if raw != "" {
-		if mapped, ok := options.idMap[raw]; ok {
-			return mapped
-		}
-	}
-	emitted := raw
-	if raw == "" {
-		emitted = MakeToolCallID(seed)
-		options.loss.Rewritten(LossToolCallIDRewritten, options.direction, "synthesized:"+seed)
-	} else if !isSafeToolName(raw) {
-		emitted = NormalizeToolCallID(raw)
-		options.loss.Rewritten(LossToolCallIDRewritten, options.direction, "sanitized")
-	}
-	if raw != "" {
-		options.idMap[raw] = emitted
-	}
-	return emitted
+	return resolveEmitToolCallID(original, seed, options.idMap, isSafeToolName, options.loss, options.direction)
 }
 
 func encodeAnthropicBlock(block Block, seed string, options *anthropicRenderOptions) (*Value, bool) {
@@ -569,7 +553,7 @@ func encodeAnthropicMessage(role string, blocks []Block, options *anthropicRende
 	content := []*Value{}
 	blockIndex := 0
 	for _, block := range blocks {
-		seed := options.seed + ":" + itoa(blockIndex)
+		seed := options.seed + ":" + strconv.Itoa(blockIndex)
 		blockIndex++
 		if encoded, ok := encodeAnthropicBlock(block, seed, options); ok {
 			content = append(content, encoded)
@@ -612,7 +596,7 @@ func encodeAnthropicMessages(items []Item, idMap map[string]string, loss *LossCo
 	for index, item := range mergeRenderableItems(items, true) {
 		options := &anthropicRenderOptions{
 			direction: "request",
-			seed:      itoa(index),
+			seed:      strconv.Itoa(index),
 			idMap:     idMap,
 			loss:      loss,
 			toWire:    ctx.ToWireToolName,
@@ -725,7 +709,7 @@ func encodeAnthropicRequest(request *Request, ctx ConvertCtx) EncodeResult {
 			placeholderThinkingSignature: ctx.shouldPlaceholderThinkingSignature(),
 		}
 		for index, block := range request.System {
-			if encoded, ok := encodeAnthropicBlock(block, "system:"+itoa(index), systemOptions); ok {
+			if encoded, ok := encodeAnthropicBlock(block, "system:"+strconv.Itoa(index), systemOptions); ok {
 				system = append(system, encoded)
 			}
 		}
@@ -757,12 +741,7 @@ func encodeAnthropicRequest(request *Request, ctx ConvertCtx) EncodeResult {
 		loss.Downgraded(LossMaxTokensDefaulted, direction, "anthropic.max_tokens")
 	}
 	out.Set("max_tokens", NewNumber(jsNumber(maxTokens)))
-	if request.Sampling.Temperature != nil {
-		out.Set("temperature", NewNumber(jsNumber(*request.Sampling.Temperature)))
-	}
-	if request.Sampling.TopP != nil {
-		out.Set("top_p", NewNumber(jsNumber(*request.Sampling.TopP)))
-	}
+	setTemperatureAndTopP(out, request.Sampling)
 	if request.Sampling.TopK != nil {
 		out.Set("top_k", NewNumber(jsNumber(*request.Sampling.TopK)))
 	}
@@ -865,7 +844,7 @@ func encodeAnthropicResponse(response *Response, ctx ConvertCtx) EncodeResult {
 		placeholderThinkingSignature: ctx.shouldPlaceholderThinkingSignature(),
 	}
 	for index, block := range response.Blocks {
-		if encoded, ok := encodeAnthropicBlock(block, "0:"+itoa(index), options); ok {
+		if encoded, ok := encodeAnthropicBlock(block, "0:"+strconv.Itoa(index), options); ok {
 			content = append(content, encoded)
 		}
 	}

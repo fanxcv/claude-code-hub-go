@@ -142,9 +142,6 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 
 			got := []string{}
 			for _, entry := range encoded.Loss.Entries {
-				if !entry.HasDetail {
-					continue
-				}
 				got = append(got, entry.Capability+"/"+string(entry.Action)+"/"+entry.Detail)
 			}
 			for _, want := range tc.wantLoss {

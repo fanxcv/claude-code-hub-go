@@ -23,15 +23,12 @@ type anthropicStreamDecoder struct {
 	// indexMap 是「上游 content_block index → 枢纽 blockIndex」。
 	indexMap map[int]int
 
-	ignoredEvents   int
 	malformedFrames int
 }
 
 func newAnthropicStreamDecoder(ctx ConvertCtx) StreamDecoder {
 	return &anthropicStreamDecoder{ctx: ctx, indexMap: map[int]int{}}
 }
-
-func (d *anthropicStreamDecoder) IgnoredEvents() int { return d.ignoredEvents }
 
 func (d *anthropicStreamDecoder) hubIndexFor(wireIndex int) int {
 	if existing, ok := d.indexMap[wireIndex]; ok {
@@ -105,7 +102,6 @@ func (d *anthropicStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 	switch event {
 	case "message_start":
 		if d.started {
-			d.ignoredEvents++
 			return nil
 		}
 		d.started = true
@@ -121,7 +117,6 @@ func (d *anthropicStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 		wireIndex := intOrDefault(payload, "index", 0)
 		block := d.startBlockToHub(payload.ObjectField("content_block"))
 		if block == nil {
-			d.ignoredEvents++
 			return nil
 		}
 		return []Chunk{{Kind: ChunkBlockStart, BlockIndex: intPtr(d.hubIndexFor(wireIndex)), Block: block}}
@@ -130,7 +125,6 @@ func (d *anthropicStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 		wireIndex := intOrDefault(payload, "index", 0)
 		hub, ok := d.mappedIndex(wireIndex)
 		if !ok {
-			d.ignoredEvents++
 			return nil
 		}
 		delta := payload.ObjectField("delta")
@@ -147,17 +141,14 @@ func (d *anthropicStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 			return []Chunk{{Kind: ChunkBlockDelta, BlockIndex: intPtr(hub), ReasoningDelta: stringPtr(thinking)}}
 		case "signature_delta":
 			// 枢纽块无签名增量通道，只能忽略并计数（不伪造）
-			d.ignoredEvents++
 			return nil
 		default:
-			d.ignoredEvents++
 			return nil
 		}
 
 	case "content_block_stop":
 		hub, ok := d.mappedIndex(intOrDefault(payload, "index", 0))
 		if !ok {
-			d.ignoredEvents++
 			return nil
 		}
 		return []Chunk{{Kind: ChunkBlockStop, BlockIndex: intPtr(hub)}}
@@ -175,7 +166,6 @@ func (d *anthropicStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 
 	case "message_stop":
 		if d.ended {
-			d.ignoredEvents++
 			return nil
 		}
 		d.ended = true
@@ -183,7 +173,6 @@ func (d *anthropicStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 
 	default:
 		// ping / error / 未知事件：忽略但计数
-		d.ignoredEvents++
 		return nil
 	}
 }
@@ -226,7 +215,6 @@ type anthropicStreamEncoder struct {
 	// openBlock 是当前未关闭的块（枢纽下标 ↔ 本线下标）。
 	openBlock *anthropicOpenBlock
 
-	ignoredChunks    int
 	autoClosedBlocks int
 }
 
@@ -241,8 +229,6 @@ type anthropicOpenBlock struct {
 func newAnthropicStreamEncoder(ctx ConvertCtx) StreamEncoder {
 	return &anthropicStreamEncoder{ctx: ctx, stopReason: StopEndTurn}
 }
-
-func (e *anthropicStreamEncoder) IgnoredEvents() int { return e.ignoredChunks }
 
 func (e *anthropicStreamEncoder) emit(event string, payload *Value) []byte {
 	return []byte(SerializeSSEFrame(SSEFrame{
@@ -374,7 +360,6 @@ func (e *anthropicStreamEncoder) Push(chunk Chunk) [][]byte {
 	case ChunkBlockStart:
 		skeleton := e.skeletonFor(chunk.Block)
 		if skeleton == nil {
-			e.ignoredChunks++
 			return out
 		}
 		out = append(out, e.ensureStart()...)
@@ -403,7 +388,6 @@ func (e *anthropicStreamEncoder) Push(chunk Chunk) [][]byte {
 	case ChunkBlockDelta:
 		if chunk.BlockIndex == nil || e.openBlock == nil || e.openBlock.hub != *chunk.BlockIndex {
 			// 未先收到该块的 block_start：无 id/name 可用，不得凭空补块起始事件
-			e.ignoredChunks++
 			return out
 		}
 		index := e.openBlock.wire
@@ -431,7 +415,6 @@ func (e *anthropicStreamEncoder) Push(chunk Chunk) [][]byte {
 
 	case ChunkBlockStop:
 		if chunk.BlockIndex == nil || e.openBlock == nil || e.openBlock.hub != *chunk.BlockIndex {
-			e.ignoredChunks++
 			return out
 		}
 		out = append(out, e.closeOpenBlock(false)...)
@@ -458,7 +441,6 @@ func (e *anthropicStreamEncoder) Push(chunk Chunk) [][]byte {
 		return out
 
 	default:
-		e.ignoredChunks++
 		return out
 	}
 }

@@ -2,7 +2,6 @@ package convert
 
 import (
 	"strconv"
-	"strings"
 )
 
 // openai-chat · 流式编解码
@@ -36,8 +35,6 @@ type chatStreamDecoder struct {
 
 	usage      *Usage
 	stopReason *StopReason
-
-	ignoredEvents int
 }
 
 type chatOpenBlock struct {
@@ -48,8 +45,6 @@ type chatOpenBlock struct {
 func newChatStreamDecoder(ctx ConvertCtx) StreamDecoder {
 	return &chatStreamDecoder{ctx: ctx, lastToolIndex: -1, toolBlocks: map[int]int{}}
 }
-
-func (d *chatStreamDecoder) IgnoredEvents() int { return d.ignoredEvents }
 
 func (d *chatStreamDecoder) Push(chunk []byte) []Chunk {
 	if d.finished {
@@ -70,9 +65,6 @@ func (d *chatStreamDecoder) Flush() []Chunk {
 		return nil
 	}
 	d.finished = true
-	if len(strings.TrimSpace(d.buffer)) > 0 {
-		d.ignoredEvents++
-	}
 	var out []Chunk
 	d.ensureStart(&out)
 	d.closeBlock(&out)
@@ -94,7 +86,6 @@ func (d *chatStreamDecoder) consumeFrame(frame SSEFrame, out *[]Chunk) {
 	}
 	payload := parseFrameJSON(frame)
 	if payload == nil {
-		d.ignoredEvents++
 		return
 	}
 	d.ensureStart(out)
@@ -106,17 +97,11 @@ func (d *chatStreamDecoder) consumeFrame(frame SSEFrame, out *[]Chunk) {
 				d.consumeChoice(choice, out)
 				continue
 			}
-			d.ignoredEvents++
 		}
-	} else if hasChoices && !choices.IsNull() {
-		d.ignoredEvents++
 	}
 
 	if usage, ok := payload.Get("usage"); ok && !usage.IsNull() {
 		d.usage = mergeUsage(d.usage, usageFromOpenAIChat(usage))
-	}
-	if err, ok := payload.Get("error"); ok && !err.IsNull() {
-		d.ignoredEvents++
 	}
 }
 
@@ -176,11 +161,9 @@ func (d *chatStreamDecoder) emitContent(content *Value, out *[]Chunk) {
 					continue
 				}
 			}
-			d.ignoredEvents++
 		}
 		return
 	}
-	d.ignoredEvents++
 }
 
 func (d *chatStreamDecoder) emitText(text string, out *[]Chunk) {
@@ -209,7 +192,6 @@ func (d *chatStreamDecoder) emitText(text string, out *[]Chunk) {
 func (d *chatStreamDecoder) emitReasoning(text string, out *[]Chunk) {
 	if d.textStarted {
 		// 文本块已开，推理只能排在其后 → 客户端侧会顺序错乱，放弃该增量并计数
-		d.ignoredEvents++
 		return
 	}
 	if d.openBlock == nil || d.openBlock.kind != chatBlockThinking {
@@ -246,13 +228,11 @@ func (d *chatStreamDecoder) collectToolCalls(delta *Value) []chatToolCallEntry {
 		return nil
 	}
 	if !raw.IsArray() {
-		d.ignoredEvents++
 		return nil
 	}
 	entries := make([]chatToolCallEntry, 0, len(raw.Items()))
 	for _, item := range raw.Items() {
 		if item == nil || !item.IsObject() {
-			d.ignoredEvents++
 			continue
 		}
 		entries = append(entries, chatToolCallEntry{raw: item, index: d.toolCallIndexOf(item)})
@@ -349,8 +329,6 @@ type chatStreamEncoder struct {
 	toolIndexes map[int]int
 
 	usage *Usage
-
-	ignoredEvents int
 }
 
 func newChatStreamEncoder(ctx ConvertCtx) StreamEncoder {
@@ -361,13 +339,8 @@ func newChatStreamEncoder(ctx ConvertCtx) StreamEncoder {
 	}
 }
 
-func (e *chatStreamEncoder) IgnoredEvents() int { return e.ignoredEvents }
-
 func (e *chatStreamEncoder) Push(chunk Chunk) [][]byte {
 	if e.doneSent {
-		if chunk.Kind != ChunkEnd {
-			e.ignoredEvents++
-		}
 		return nil
 	}
 	var out [][]byte
@@ -408,7 +381,6 @@ func (e *chatStreamEncoder) Push(chunk Chunk) [][]byte {
 				index, ok = e.toolIndexes[*chunk.BlockIndex]
 			}
 			if !ok {
-				e.ignoredEvents++
 				return out
 			}
 			out = append(out, e.frame(NewObject().Set("tool_calls", NewArray(NewObject().
@@ -416,7 +388,6 @@ func (e *chatStreamEncoder) Push(chunk Chunk) [][]byte {
 				Set("function", NewObject().Set("arguments", NewString(*chunk.ArgsDelta)))))))
 		default:
 			// 空增量：本线无可产出的帧
-			e.ignoredEvents++
 		}
 
 	case ChunkBlockStop:
@@ -438,7 +409,6 @@ func (e *chatStreamEncoder) Push(chunk Chunk) [][]byte {
 		e.doneSent = true
 
 	default:
-		e.ignoredEvents++
 	}
 	return out
 }
