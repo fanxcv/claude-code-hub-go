@@ -26,6 +26,9 @@ type Options struct {
 	// LeaseSettler 是「把本次请求的成本结算到预算租约上」的旁路接收面（见 lease_settle.go 的文件头）。
 	// nil 表示未装配：租约结算整段跳过，结算路径行为与接线前一致。
 	LeaseSettler LeaseSettler
+	// Tracer 是「把本次终态上报到外部观测面」的旁路接收面（见 trace_seam.go 的文件头）。
+	// nil 表示未装配（未配置 Langfuse key 时就是这个形态）：上报整段跳过。
+	Tracer Tracer
 	// Logger 供旁路记 warn（旁路失败不得冒泡成结算错误，故只能记日志）。
 	// nil 时静默。
 	Logger Logger
@@ -57,7 +60,9 @@ type Settler struct {
 	newRows NewRowsNotifier
 	// leaseSettler 是租约结算的旁路接收面；nil 即未装配。
 	leaseSettler LeaseSettler
-	logger       Logger
+	// tracer 是终态上报的旁路接收面；nil 即未装配。
+	tracer Tracer
+	logger Logger
 	// queue 是终态写入的异步队列；nil（默认）即同步写。
 	queue *WriteQueue
 }
@@ -79,6 +84,7 @@ func New(writer Writer, options Options) *Settler {
 		rollup:       options.Rollup,
 		newRows:      options.NewRows,
 		leaseSettler: options.LeaseSettler,
+		tracer:       options.Tracer,
 		logger:       options.Logger,
 		queue:        options.Queue,
 	}
@@ -257,8 +263,12 @@ func (s *Settler) SettleContext(
 ) (Result, error) {
 	// winner 写回只在终态提交之后发。异步写模式下提交结论只有 flush 之后才有，故把它作为
 	// 提交后动作交给队列；同步模式则由下面那句 affinityWriteback 在写入返回后发（接线前同形）。
+	//
+	// 终态上报（tracing seam）同理：异步模式的结论也只有 flush 之后才有，故与 winner 一起挂在
+	// 提交后动作上；同步模式由下面那一行直接发。两条路径互斥，不会重复上报。
 	winner := func(result Result) {
 		s.affinityWinner(ctx, pc, settlement.Affinity, result.Committed)
+		s.traceTerminal(pc, settlement, result)
 	}
 	result, err := s.settleContext(ctx, pc, settlement, create, winner)
 	if result.Queued {
@@ -270,6 +280,7 @@ func (s *Settler) SettleContext(
 	// 未入队（同步模式或队列满降级）：与接线前逐字一致——墓碑先、winner 后，且都在
 	// 写入返回之后。三种「没写成」的退出也走这里，结论同样是 Committed=false。
 	s.affinityWriteback(ctx, pc, settlement.Affinity, result.Committed)
+	s.traceTerminal(pc, settlement, result) // tracing seam
 	return result, err
 }
 
