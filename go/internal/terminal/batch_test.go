@@ -510,3 +510,68 @@ func TestAsyncQueueSkipsAffinityWinnerWhenNotCommitted(t *testing.T) {
 		t.Fatalf("未赢得终态时不得写回 winner（粘性会指向本次没服务成功的供应商）：%v", got)
 	}
 }
+
+// 迟到查询：条目写完就从 inflight 注销，此后查询仍必须拿到失败结论——否则「写入失败」会被
+// 误报成「不在队列（= 已落库）」，退出序列据此认为排空完成，那些终态就随关池消失。
+func TestAwaitSettlementReportsFailureAfterEntryRetired(t *testing.T) {
+	writeErr := errors.New("writer lane down")
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{err: writeErr}}}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 1, FlushInterval: time.Hour,
+	})
+
+	if _, err := settler.Settle(context.Background(), 41, okSettlement(nil)); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	// Flush 等到 pending 归零：此时该条已写完并注销，之后的查询就是「迟到查询」。
+	if err := queue.Flush(context.Background()); !errors.Is(err, ErrQueueWriteFailed) {
+		t.Fatalf("有写入失败时 Flush 应报 ErrQueueWriteFailed，收到 %v", err)
+	}
+	queue.mu.Lock()
+	_, stillInflight := queue.inflight[41]
+	queue.mu.Unlock()
+	if stillInflight {
+		t.Fatal("前提不成立：条目仍在 inflight，本用例验不到注销后的查询")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := queue.AwaitSettlement(ctx, 41); !errors.Is(err, writeErr) {
+		t.Fatalf("注销后的查询必须报出原失败，收到 %v", err)
+	}
+}
+
+// 墓碑表严格有界：超出上界按入表顺序淘汰，淘汰后回到「不在队列」语义（这是有界的代价，
+// 不是遗漏）。无界累积会把「罕见失败」变成内存增长。
+func TestAwaitSettlementTombstonesAreBounded(t *testing.T) {
+	writeErr := errors.New("writer lane down")
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{err: writeErr}}}
+	total := finishedTombstoneLimit + 64
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: total + 8, BatchSize: 1, FlushInterval: time.Hour,
+	})
+
+	for id := int64(1); id <= int64(total); id++ {
+		if _, err := settler.Settle(context.Background(), id, okSettlement(nil)); err != nil {
+			t.Fatalf("入队 %d 失败: %v", id, err)
+		}
+	}
+	if err := queue.Flush(context.Background()); !errors.Is(err, ErrQueueWriteFailed) {
+		t.Fatalf("Flush 应报 ErrQueueWriteFailed，收到 %v", err)
+	}
+	queue.mu.Lock()
+	size := len(queue.finished)
+	queue.mu.Unlock()
+	if size > finishedTombstoneLimit {
+		t.Fatalf("墓碑表必须严格有界：%d > %d", size, finishedTombstoneLimit)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := queue.AwaitSettlement(ctx, 1); err != nil {
+		t.Fatalf("最早那条已被淘汰，应回到「不在队列」语义（nil），收到 %v", err)
+	}
+	if err := queue.AwaitSettlement(ctx, int64(total)); !errors.Is(err, writeErr) {
+		t.Fatalf("窗口内最近那条的失败必须报出，收到 %v", err)
+	}
+}

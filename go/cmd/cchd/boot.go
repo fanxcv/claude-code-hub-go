@@ -647,7 +647,7 @@ func drainAndShutdown(
 	// 异步终态写：等结算归零只能保证「队列里的都写完了」，而 flush 是幂等的，故再显式冲一次
 	// （排空窗口里最后入队的那些正是它盖住的），随后停队列——此后的写入退回同步，不再有后台协程
 	// 在关池之后动手。窗口与排空同宽。
-	flushSettlements(queue, logger, drainTimeout)
+	flushErr := flushSettlements(queue, logger, drainTimeout)
 	// 关 listener 并等 handler 结束：排空只等前门的在途计数，连接层仍需显式收口。
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
 	shutdownErr := httpServer.Shutdown(shutdownCtx)
@@ -657,13 +657,20 @@ func drainAndShutdown(
 		_ = httpServer.Close()
 	}
 
+	// 终态未落库有两类互不包含的原因，各自都要能凭 errors.Is 认出来：
+	//
+	//   - settleErr：流 tracker 未归零（可能是排空窗口超时）；
+	//   - flushErr：异步队列里有写入失败（terminal.ErrQueueWriteFailed）。
+	//
+	// 两类都不得被吞：任一非 nil 都意味着关池之后仍有终态没落库，进程不能以成功退出，
+	// 否则这类缺口在日志之外完全不可见（那几条只能等 patrol 按年龄兜底，成本无从补回）。
 	switch {
 	case drainErr != nil && !errors.Is(drainErr, egress.ErrDrainTimeout):
-		return drainErr
+		return errors.Join(drainErr, settleErr, flushErr)
 	case drainErr != nil:
-		return fmt.Errorf("排空超时：仍有在途请求未结束（%w）", drainErr)
+		return errors.Join(fmt.Errorf("排空超时：仍有在途请求未结束（%w）", drainErr), settleErr, flushErr)
 	default:
-		return settleErr
+		return errors.Join(settleErr, flushErr)
 	}
 }
 
@@ -693,22 +700,27 @@ func waitSettlements(waiter settlementWaiter, logger *logx.Logger, window time.D
 
 // flushSettlements 把异步终态写队列冲干净并停掉；未装配（同步写模式）时是 no-op。
 //
-// 冲失败只记 error，不改退出码：真正的判据是 settle_incomplete（终态没落库），
-// 而队列冲不干净时它必然已经报过；失败的那几条由 patrol 按既有语义兑底。
-func flushSettlements(queue settlementFlusher, logger *logx.Logger, window time.Duration) {
+// 冲失败**返回错误**（含 terminal.ErrQueueWriteFailed 与前两者之一并合的超时），由
+// drainAndShutdown 并进退出结论：队列里有写入失败就是「终态没落库」的一种，只记日志
+// 会让进程带着未落库的终态以成功退出。失败的那几条最终由 patrol 按既有语义兑底。
+func flushSettlements(queue settlementFlusher, logger *logx.Logger, window time.Duration) error {
 	if queue == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), window)
 	defer cancel()
+	var flushErr error
 	if err := queue.FlushSettlements(ctx); err != nil {
+		flushErr = err
 		logger.Error("settle_flush_incomplete", map[string]any{
 			"drainWindow": window.Milliseconds(),
 			"error":       err.Error(),
 		})
 	}
 	// 停队列在关池之前：停掉之后不再有后台协程写库（此后的入队一律退回同步写）。
+	// 停与冲分开：即使冲失败也要停，否则退出后仍有 worker 在写库。
 	queue.StopSettlements()
+	return flushErr
 }
 
 // readyProber 组合依赖探测与规则就绪，并在规则门无域可管时如实说明。

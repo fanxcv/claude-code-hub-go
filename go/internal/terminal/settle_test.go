@@ -386,3 +386,36 @@ func TestDefaultBackoffGrowsLinearly(t *testing.T) {
 		t.Fatalf("DefaultBackoff(2) = %v, want 150ms", got)
 	}
 }
+
+// 同一请求只应有一行：pc 已有行标识时 SettleBlocked 必须复用该行，而不是再建一行——
+// 否则「先拦截类结算、后转发路径结算」的组合会在同一条请求上写出两行、两条账本行与两次上报。
+func TestSettleBlockedReusesExistingRowFromContext(t *testing.T) {
+	writer := &fakeWriter{
+		createRow:        store.MessageRequest{ID: 99},
+		unfinalizedQueue: []unfinalizedResult{{committed: true}, {committed: false}},
+	}
+	tracer := &recordingTracer{}
+	options := noBackoff()
+	options.Tracer = tracer
+	settler := New(writer, options)
+	pc := traceTestContext(t, 42)
+	create := store.CreateMessageRequestData{UserID: 1, Key: "k", Model: strPtr("gpt-5.6")}
+
+	if _, err := settler.SettleBlocked(context.Background(), pc, create, okSettlement(nil)); err != nil {
+		t.Fatalf("拦截类结算失败: %v", err)
+	}
+	// 再走一次转发路径的入账（同一 pc、同一行）：该行已终态，第二次是幂等结论。
+	if _, err := settler.SettleContext(context.Background(), pc, okSettlement(nil), &create); !errors.Is(err, ErrNotSettled) {
+		t.Fatalf("同一行二次结算应是幂等结论，收到 %v", err)
+	}
+
+	if writer.createCall != 0 {
+		t.Fatalf("pc 已有行标识时不得再建行，实际建了 %d 行", writer.createCall)
+	}
+	if got := writer.unfinalizedIDs; len(got) != 2 || got[0] != 42 || got[1] != 42 {
+		t.Fatalf("两次都必须结算 pc 里的那一行，实际写的行 = %v", got)
+	}
+	if records := tracer.recorded(); len(records) != 1 {
+		t.Fatalf("同一行只应上报一条，实际 %d 条", len(records))
+	}
+}

@@ -240,8 +240,12 @@ func (s *Settler) settleNowInner(
 //
 // 升级路径：store 的插入面补上终态列后，本函数应改成单条 INSERT。
 // pc 用于终态上报（方法/路径/用户/起始时刻）与亲和写回；调用方拿不到请求上下文时可传 nil，
-// 此时结算本身照常，只是不上报。行 id 用的是**建行结果**，不是 pc 里的 id——拦截类请求
-// 在拦截点才建行，pc 里根本没有 id。
+// 此时结算本身照常，只是不上报。
+//
+// 行 id 的选取：拦截类的正常形态是 pc 里**没有** id（拦截点在 messageContext 之前，行只能在
+// 这里建），故按建行载荷开行、用建行结果作为行 id；但 pc 已有 id 时必须**复用那一行**——
+// 否则「先 SettleBlocked 建行、后 SettleContext 复用 pc 行」的组合会在同一条请求上写出两行，
+// 并随之产生两条终态上报与两条账本行。本函数因此与 SettleContext 同一判据：有 id 就用它。
 func (s *Settler) SettleBlocked(
 	ctx context.Context,
 	pc *pctx.Context,
@@ -262,6 +266,13 @@ func (s *Settler) settleBlocked(
 ) (Result, error) {
 	if settlement.StatusCode <= 0 {
 		return Result{}, incomplete("拦截类终态必须带状态码")
+	}
+	// 已有行标识（守卫链已开行，或调用方先走了一次建行）就复用它，不再建第二行：
+	// 同一条请求只应有一行，重复建行会多出一条账本行与一次终态上报。
+	if pc != nil {
+		if id, ok := pc.MessageRequestID(); ok {
+			return s.settle(ctx, pc, id, settlement, afterCommit)
+		}
 	}
 	row, err := s.writer.CreateMessageRequest(ctx, create)
 	if err != nil {

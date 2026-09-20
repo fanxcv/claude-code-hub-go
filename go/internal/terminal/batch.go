@@ -45,6 +45,17 @@ const (
 // pending 归零，退出序列被拖住）。
 const asyncWriteTimeout = 30 * time.Second
 
+// finishedTombstoneLimit 是「已完成条目」墓碑表的上界。
+//
+// 为什么需要墓碑：worker 写完一条就把它从 inflight 里注销，而等待方（流终态屏障、退出序列）
+// 可能在注销**之后**才来查——不记结论就会把「写入失败」误报成「不在队列」，而后者按语义
+// 意味着「已落库」。窗口有界：只记失败（成功不入表，因为「已落库」与「不在队列」对等待方
+// 是同一个 nil 结论），超出上界按入表顺序淘汰，淘汰后退回「不在队列」语义。
+//
+// 取 512 的依据：等待方在条目完成后的极短窗口内查询，而失败是罕见事件，正常运行时表几乎为空；
+// 上界存在的唯一目的是让内存**严格有界**。
+const finishedTombstoneLimit = 512
+
 // AsyncOptions 是异步队列的构造参数；零值取出厂默认。
 type AsyncOptions struct {
 	// MaxPending 是队列容量上限（条）。<=0 取 DefaultAsyncMaxPending。
@@ -138,6 +149,11 @@ type WriteQueue struct {
 	pending  int64
 	idle     chan struct{} // pending 归零时关闭；0→1 转换时重建
 	inflight map[int64]*asyncEntry
+	// finished 是已完成条目的**短期墓碑**：键是有行 id 的条目，值是该条的写入失败。
+	// 只记失败：成功对等待方就是 nil，而 nil 也是「不在队列」的结论，无需入表。
+	finished map[int64]error
+	// finishedOrder 是墓碑的入表顺序（FIFO 淘汰用），与 finished 同锁维护。
+	finishedOrder []int64
 
 	enqueued      atomic.Int64
 	rows          atomic.Int64
@@ -179,6 +195,7 @@ func NewWriteQueue(options AsyncOptions) *WriteQueue {
 		stop:          make(chan struct{}),
 		done:          make(chan struct{}),
 		inflight:      map[int64]*asyncEntry{},
+		finished:      map[int64]error{},
 	}
 	queue.idle = make(chan struct{})
 	close(queue.idle) // 初始即空闲
@@ -236,15 +253,20 @@ func (q *WriteQueue) enqueue(
 //
 // 退出序列与流终态屏障都靠它：异步模式下「已入队」不等于「已落库」，而关连接池会把尚未
 // 发出的终态 UPDATE 一并带走。
+//
+// 迟到的查询（条目已写完并从 inflight 注销）必须仍能拿到失败结论：结论在 finished 墓碑里
+// 保留一个**有界**窗口（见 finishedTombstoneLimit）。窗口之外回到「不在队列」语义——这是
+// 有界的代价，不是遗漏；窗口取得足够大，正常时序下等待方不会落在它之外。
 func (q *WriteQueue) AwaitSettlement(ctx context.Context, id int64) error {
 	if q == nil {
 		return nil
 	}
 	q.mu.Lock()
 	entry, ok := q.inflight[id]
+	failure := q.finished[id]
 	q.mu.Unlock()
 	if !ok {
-		return nil
+		return failure
 	}
 	select {
 	case <-entry.done:
@@ -459,17 +481,35 @@ func (q *WriteQueue) addPendingLocked(entry *asyncEntry) {
 	}
 }
 
-// finishEntry 放行等待者并注销登记。
+// finishEntry 放行等待者并注销登记；失败结论转入墓碑，供迟到查询取回。
 func (q *WriteQueue) finishEntry(entry *asyncEntry) {
 	close(entry.done)
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if entry.id > 0 && q.inflight[entry.id] == entry {
 		delete(q.inflight, entry.id)
+		if entry.failure != nil {
+			q.rememberFailureLocked(entry.id, entry.failure)
+		}
 	}
 	q.pending--
 	if q.pending == 0 {
 		close(q.idle)
+	}
+}
+
+// rememberFailureLocked 把一条失败结论记入墓碑，并按上界 FIFO 淘汰；**前提是调用方已持 q.mu**。
+//
+// 同 id 重复入表时只刷新值、不重复占位（否则淘汰顺序会与实际入表顺序脱节）。
+func (q *WriteQueue) rememberFailureLocked(id int64, failure error) {
+	if _, exists := q.finished[id]; !exists {
+		q.finishedOrder = append(q.finishedOrder, id)
+	}
+	q.finished[id] = failure
+	for len(q.finishedOrder) > finishedTombstoneLimit {
+		oldest := q.finishedOrder[0]
+		q.finishedOrder = q.finishedOrder[1:]
+		delete(q.finished, oldest)
 	}
 }
 

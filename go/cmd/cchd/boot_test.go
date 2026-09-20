@@ -28,6 +28,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/egress"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/httpapi"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/terminal"
 )
 
 // stubDeps 用桩替代真实 PG/Redis：就绪只看规则快照，便于验证冷启动到就绪的跃迁。
@@ -347,6 +348,74 @@ func TestDrainAndShutdownCompletesCleanly(t *testing.T) {
 		t.Fatalf("在途请求能自行结束时排空应干净返回: %v", err)
 	}
 	<-requestDone
+}
+
+// fakeQueueFlusher 让退出序列的队列面可注入：冲的失败与停的调用都要能被看见。
+type fakeQueueFlusher struct {
+	flushErr  error
+	stopCalls int
+}
+
+func (f *fakeQueueFlusher) FlushSettlements(context.Context) error { return f.flushErr }
+func (f *fakeQueueFlusher) StopSettlements()                       { f.stopCalls++ }
+
+// fakeSettlementWaiter 让「流终态尚未落库」可注入。
+type fakeSettlementWaiter struct {
+	pending int64
+	drained bool
+}
+
+func (f *fakeSettlementWaiter) PendingSettlements() int64            { return f.pending }
+func (f *fakeSettlementWaiter) WaitSettlements(context.Context) bool { return f.drained }
+
+// testShutdownServer 造一个能干净关停的服务器与前门（无用例请求，排空立即完成）。
+func testShutdownServer(t *testing.T) (*http.Server, *egress.FrontDoor) {
+	t.Helper()
+	frontDoor := egress.New(logx.New(nil))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("监听失败: %v", err)
+	}
+	server := &http.Server{Handler: frontDoor.Middleware(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+	}))}
+	go func() { _ = server.Serve(listener) }()
+	return server, frontDoor
+}
+
+// 异步队列的写入失败必须并进退出结论：只记日志会让进程带着未落库的终态以成功退出。
+func TestDrainAndShutdownSurfacesQueueFlushFailure(t *testing.T) {
+	server, frontDoor := testShutdownServer(t)
+	queue := &fakeQueueFlusher{flushErr: fmt.Errorf("%w: 2 条终态未落库", terminal.ErrQueueWriteFailed)}
+
+	err := drainAndShutdown(server, frontDoor, nil, queue, logx.New(nil), time.Second, time.Second)
+	if err == nil {
+		t.Fatal("队列冲不干净时退出序列必须报错")
+	}
+	if !errors.Is(err, terminal.ErrQueueWriteFailed) {
+		t.Fatalf("退出错误必须能凭 errors.Is 认出队列写入失败，收到 %v", err)
+	}
+	if queue.stopCalls != 1 {
+		t.Fatalf("冲失败时仍必须停队列（否则退出后仍有 worker 在写库），Stop 调用 = %d", queue.stopCalls)
+	}
+}
+
+// 两类「终态未落库」同时出现时都必须可辨：流 tracker 未归零与队列写入失败互不包含。
+func TestDrainAndShutdownSurfacesBothSettleAndFlushFailure(t *testing.T) {
+	server, frontDoor := testShutdownServer(t)
+	waiter := &fakeSettlementWaiter{pending: 3}
+	queue := &fakeQueueFlusher{flushErr: fmt.Errorf("%w: 1 条终态未落库", terminal.ErrQueueWriteFailed)}
+
+	err := drainAndShutdown(server, frontDoor, waiter, queue, logx.New(nil), time.Second, time.Second)
+	if err == nil {
+		t.Fatal("两类终态未落库同时出现时必须报错")
+	}
+	if !errors.Is(err, errSettleIncomplete) {
+		t.Fatalf("退出错误必须保留流 tracker 未归零的结论，收到 %v", err)
+	}
+	if !errors.Is(err, terminal.ErrQueueWriteFailed) {
+		t.Fatalf("退出错误必须同时保留队列写入失败的结论，收到 %v", err)
+	}
 }
 
 func TestRulesSyncKeepsReadinessClosedOnLoadFailure(t *testing.T) {
