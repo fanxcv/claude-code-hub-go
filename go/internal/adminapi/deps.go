@@ -346,10 +346,3 @@ type InvalidParam struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
-
-// RegisterFunc 是资源模块的注册签名。
-//
-// 约定：每个资源模块（keys/users/usage-logs/model-prices/error-rules/request-filters/
-// sensitive-words）在**自己的文件**里提供一个 `func RegisterXxx(router *Router, deps Deps)`，
-// 只调用 router.Add，不改本包共享文件。
-type RegisterFunc func(router *Router, deps Deps)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -225,4 +226,90 @@ func goldenRow(t *testing.T, name string) map[string]json.RawMessage {
 		t.Fatalf("黄金样本 %s 没有 row 字段", name)
 	}
 	return envelope.Row
+}
+
+// setColumnsPattern 匹配 store 生成的 SET 赋值里的列名（`"列名" = $n`）。
+var setColumnsPattern = regexp.MustCompile(`"([a-z0-9_]+)" = \$`)
+
+// setColumnsOf 解析语句里被赋值的列名，按出现顺序返回。列集断言因此取自语句本身，
+// 而不是另一份手抄清单——手抄清单不会随实现漂移，也就不可能发现漂移。
+func setColumnsOf(query string) []string {
+	matches := setColumnsPattern.FindAllStringSubmatch(query, -1)
+	columns := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if match[1] == "updated_at" {
+			continue
+		}
+		columns = append(columns, match[1])
+	}
+	return columns
+}
+
+// SettleTimeColumns 返回终态 patch 能写入的列集。它由一条「所有字段都置位」的样本
+// 经 store.BuildDetailsPatchQuery 生成后解析得到，用于列集覆盖断言。
+func SettleTimeColumns() []string {
+	patch, err := maxSettlement().toPatch()
+	if err != nil {
+		// 样本是包内常量，编译不出来说明样本本身写错了，属于编程错误。
+		panic("terminal: 列集审计样本不合法: " + err.Error())
+	}
+	query, _ := store.BuildDetailsPatchQuery(1, patch)
+	return setColumnsOf(query)
+}
+
+// MonitoredColumnsInLatePatch 返回迟到补写（终态提交之后的 patch）里出现的
+// **触发器监视列**。不变量 I4 要求它恒为空：终态后重写监视列会重建账本行，
+// 并破坏 outbox 的可见性语义（routing_trace 这类非监视列才可以补写）。
+func MonitoredColumnsInLatePatch(patch store.DetailsPatch) []string {
+	query, _ := store.BuildDetailsPatchQuery(1, patch)
+	monitored := map[string]struct{}{}
+	for _, column := range ledgerMonitoredColumns {
+		monitored[column] = struct{}{}
+	}
+	for _, column := range outboxMonitoredColumns {
+		monitored[column] = struct{}{}
+	}
+	var hits []string
+	for _, column := range setColumnsOf(query) {
+		if _, isMonitored := monitored[column]; isMonitored {
+			hits = append(hits, column)
+		}
+	}
+	return hits
+}
+
+// maxSettlement 是「所有字段都置位」的结算样本，只服务于列集审计。
+func maxSettlement() Settlement {
+	number := 1
+	text := "x"
+	flag := true
+	providerID := int64(1)
+	tokenCount := int64(1)
+	return Settlement{
+		StatusCode:  200,
+		DurationMS:  &number,
+		TTFTMS:      &number,
+		FirstByteMS: &number,
+		Usage: Usage{
+			InputTokens:                &tokenCount,
+			OutputTokens:               &tokenCount,
+			CacheCreationInputTokens:   &tokenCount,
+			CacheCreation5mInputTokens: &tokenCount,
+			CacheCreation1hInputTokens: &tokenCount,
+			CacheReadInputTokens:       &tokenCount,
+			CacheTTL:                   "5m",
+		},
+		ProviderChain:       []byte(`[]`),
+		RoutingTrace:        []byte(`{}`),
+		ErrorMessage:        &text,
+		ErrorStack:          &text,
+		ErrorCause:          &text,
+		Model:               &text,
+		ActualResponseModel: &text,
+		ProviderID:          &providerID,
+		BlockedBy:           &text,
+		BlockedReason:       &text,
+		Context1mApplied:    &flag,
+		SwapCacheTTLApplied: &flag,
+	}
 }

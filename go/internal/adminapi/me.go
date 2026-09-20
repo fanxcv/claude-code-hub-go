@@ -239,7 +239,7 @@ func (api *meAPI) handleMeMetadata(writer http.ResponseWriter, request *http.Req
 		body.UserName = virtualAdminUserName
 		body.KeyIsEnabled = true
 		body.UserIsEnabled = true
-		writeMeJSON(writer, http.StatusOK, body)
+		writeShellJSON(writer, http.StatusOK, body)
 		return
 	}
 
@@ -262,7 +262,7 @@ func (api *meAPI) handleMeMetadata(writer http.ResponseWriter, request *http.Req
 		body.UserName = subject.principal.Username
 		body.UserIsEnabled = true
 	}
-	writeMeJSON(writer, http.StatusOK, body)
+	writeShellJSON(writer, http.StatusOK, body)
 }
 
 // meTodayModelBody 逐字对应 MyTodayStats.modelBreakdown 的单项（my-usage.ts:214-221）。
@@ -309,7 +309,7 @@ func (api *meAPI) handleMeToday(writer http.ResponseWriter, request *http.Reques
 	}
 	if subject.isVirtual() {
 		// 虚拟会话的成本读数为 0（差异登记见文件头）。
-		writeMeJSON(writer, http.StatusOK, body)
+		writeShellJSON(writer, http.StatusOK, body)
 		return
 	}
 
@@ -350,7 +350,7 @@ func (api *meAPI) handleMeToday(writer http.ResponseWriter, request *http.Reques
 			OutputTokens: row.OutputTokens,
 		})
 	}
-	writeMeJSON(writer, http.StatusOK, body)
+	writeShellJSON(writer, http.StatusOK, body)
 }
 
 // meQuotaBody 逐字对应 Node 的 MyUsageQuota（my-usage.ts:172-207），键序一致。
@@ -410,7 +410,7 @@ func (api *meAPI) handleMeQuota(writer http.ResponseWriter, request *http.Reques
 	// 于是这两项是**数字 0**而不是 null；其余限额（limit5hUsd / limitConcurrentSessions 等）
 	// 合成主体里没有对应字段，`?? null` 落回 null。成本全 0（getKeyStringByIdCached(-1) 为空）。
 	if subject.isVirtual() {
-		writeMeJSON(writer, http.StatusOK, meQuotaBody{
+		writeShellJSON(writer, http.StatusOK, meQuotaBody{
 			KeyLimitConcurrentSessions: 0,
 			UserRPMLimit:               0,
 			UserLimitDailyUSD:          0,
@@ -437,7 +437,7 @@ func (api *meAPI) handleMeQuota(writer http.ResponseWriter, request *http.Reques
 		api.writeMeFailure(writer, request, failure)
 		return
 	}
-	writeMeJSON(writer, http.StatusOK, body)
+	writeShellJSON(writer, http.StatusOK, body)
 }
 
 // loadMeQuota 是 quota 的计算主体（Node 的 :360-537 那段）。
@@ -657,11 +657,6 @@ func meSystemLocation(ctx context.Context, pools *store.Pools) (*time.Location, 
 		return nil, err
 	}
 	return config.ResolveLocationFromEnv(raw), nil
-}
-
-// writeMeJSON 作答一份 JSON 正文（Content-Type 与 Node 的 jsonResponse 逐字一致）。
-func writeMeJSON(writer http.ResponseWriter, status int, body any) {
-	writeShellJSON(writer, status, body)
 }
 
 // parseCostText 把 numeric 文本转成展示用浮点。

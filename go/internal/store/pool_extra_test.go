@@ -43,7 +43,7 @@ func TestQueryRowReturnsErrorRowWhenRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("Scan 必须返回准入错误")
 	}
-	if !IsAdmissionError(err) {
+	if !isAdmission(err) {
 		t.Fatalf("错误类型 = %T, want *AdmissionError", err)
 	}
 }
@@ -51,13 +51,13 @@ func TestQueryRowReturnsErrorRowWhenRejected(t *testing.T) {
 // 准入失败时 Query 与 Exec 都必须立刻失败，且不触碰底层池。
 func TestQueryAndExecRejectedWhenAtLimit(t *testing.T) {
 	pool := &Pool{lane: config.LaneData, maxOutstanding: 0}
-	if _, err := pool.Query(context.Background(), "SELECT 1"); !IsAdmissionError(err) {
+	if _, err := pool.Query(context.Background(), "SELECT 1"); !isAdmission(err) {
 		t.Fatalf("Query 应当返回准入错误，实际 %v", err)
 	}
-	if _, err := pool.Exec(context.Background(), "SELECT 1"); !IsAdmissionError(err) {
+	if _, err := pool.Exec(context.Background(), "SELECT 1"); !isAdmission(err) {
 		t.Fatalf("Exec 应当返回准入错误，实际 %v", err)
 	}
-	if _, err := pool.Begin(context.Background()); !IsAdmissionError(err) {
+	if _, err := pool.Begin(context.Background()); !isAdmission(err) {
 		t.Fatalf("Begin 应当返回准入错误，实际 %v", err)
 	}
 }

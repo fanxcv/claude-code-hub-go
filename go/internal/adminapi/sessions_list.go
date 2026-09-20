@@ -144,13 +144,13 @@ func (api *sessionAPI) handleListSessions(writer http.ResponseWriter, request *h
 	}
 	if len(sessionIDs) == 0 {
 		if query.State == "all" {
-			writeSessionsJSON(writer, http.StatusOK, allSessionsBody{
+			adminWriteJSON(writer, http.StatusOK, allSessionsBody{
 				Active:   []activeSessionBody{},
 				Inactive: []activeSessionBody{},
 			})
 			return
 		}
-		writeSessionsJSON(writer, http.StatusOK, sessionsListBody{Items: []activeSessionBody{}})
+		adminWriteJSON(writer, http.StatusOK, sessionsListBody{Items: []activeSessionBody{}})
 		return
 	}
 
@@ -187,7 +187,7 @@ func (api *sessionAPI) handleListSessions(writer http.ResponseWriter, request *h
 	}
 
 	if query.State != "all" {
-		writeSessionsJSON(writer, http.StatusOK, sessionsListBody{Items: rows})
+		adminWriteJSON(writer, http.StatusOK, sessionsListBody{Items: rows})
 		return
 	}
 
@@ -209,7 +209,7 @@ func (api *sessionAPI) handleListSessions(writer http.ResponseWriter, request *h
 	paginatedActive := sliceSessions(active, activeOffset, query.PageSize)
 	paginatedInactive := sliceSessions(inactive, inactiveOffset, query.PageSize)
 
-	writeSessionsJSON(writer, http.StatusOK, allSessionsBody{
+	adminWriteJSON(writer, http.StatusOK, allSessionsBody{
 		Active:          paginatedActive,
 		Inactive:        paginatedInactive,
 		TotalActive:     len(active),

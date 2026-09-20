@@ -1,19 +1,11 @@
 package limit
 
 import (
-	"strconv"
 	"time"
 )
 
 // nowMillis 是当前毫秒时间戳。
 func nowMillis() int64 { return time.Now().UnixMilli() }
-
-// nowMillisDefault 保留旧名以贴合「缺省时间戳」的读法。
-func nowMillisDefault() int64 { return nowMillis() }
-
-func parseFloatOrZeroErr(raw string) (float64, error) {
-	return strconv.ParseFloat(raw, 64)
-}
 
 // isoMillis 复刻 JS 的 Date#toISOString（毫秒精度、UTC、固定 24 字符）。
 func isoMillis(value time.Time) string {

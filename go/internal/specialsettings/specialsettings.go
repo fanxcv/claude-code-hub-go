@@ -343,15 +343,6 @@ func ProbeEntry(
 	return entry
 }
 
-// ProbeEntries 产出探针条目的 JSON 数组（单条形态的历史入口，保留供既有调用方与测试使用）。
-func ProbeEntries(
-	requested EffortRequest,
-	forwarded EffortForwarded,
-	converted bool,
-) []byte {
-	return AppendEntries(ProbeEntry(requested, forwarded, converted))
-}
-
 // ConversionEntry 产出协议转换审计条目；plan 为 nil（本次未施加转换）时返回 nil。
 //
 // 值**只能**来自计划里的协议对（即真实用于构造上游端点的那个计划），不从别处推导。

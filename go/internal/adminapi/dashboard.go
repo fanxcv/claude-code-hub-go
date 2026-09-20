@@ -168,7 +168,7 @@ func (api *dashboardAPI) handleOverview(writer http.ResponseWriter, request *htt
 		api.writeDashboardFailure(writer, request, "overview", err)
 		return
 	}
-	writeDashboardJSON(writer, http.StatusOK, overview)
+	adminWriteJSON(writer, http.StatusOK, overview)
 }
 
 // overviewBody 算出概览作答（overview 与 realtime 的 metrics 共用同一份）。
@@ -252,7 +252,7 @@ func (api *dashboardAPI) handleConcurrentSessions(
 		api.writeDashboardFailure(writer, request, "concurrent-sessions", err)
 		return
 	}
-	writeDashboardJSON(writer, http.StatusOK, struct {
+	adminWriteJSON(writer, http.StatusOK, struct {
 		Count int `json:"count"`
 	}{Count: count})
 }
@@ -294,7 +294,7 @@ func (api *dashboardAPI) handleProviderSlots(writer http.ResponseWriter, request
 		api.writeDashboardFailure(writer, request, "provider-slots", err)
 		return
 	}
-	writeDashboardJSON(writer, http.StatusOK, struct {
+	adminWriteJSON(writer, http.StatusOK, struct {
 		Items []dashboardProviderSlotBody `json:"items"`
 	}{Items: items})
 }
@@ -452,7 +452,7 @@ func (api *dashboardAPI) handleClientVersions(writer http.ResponseWriter, reques
 			Users:      users,
 		})
 	}
-	writeDashboardJSON(writer, http.StatusOK, struct {
+	adminWriteJSON(writer, http.StatusOK, struct {
 		Items []dashboardClientVersionBody `json:"items"`
 	}{Items: items})
 }
@@ -549,7 +549,7 @@ func (api *dashboardAPI) handleRateLimitStats(writer http.ResponseWriter, reques
 		}
 		if !found {
 			// 密钥不存在时 Node 直接作答空统计（不是 404）。
-			writeDashboardJSON(writer, http.StatusOK, emptyRateLimitStats())
+			adminWriteJSON(writer, http.StatusOK, emptyRateLimitStats())
 			return
 		}
 		query.KeyString = &keyString
@@ -616,7 +616,7 @@ func (api *dashboardAPI) handleRateLimitStats(writer http.ResponseWriter, reques
 	if usageCount > 0 {
 		body.AvgCurrentUsage = roundHalfUp2(totalCurrentUsage / float64(usageCount))
 	}
-	writeDashboardJSON(writer, http.StatusOK, body)
+	adminWriteJSON(writer, http.StatusOK, body)
 }
 
 // rateLimitProviderKey 复刻 JS 里 `obj[row.provider_id]` 的键：null 会变成字符串 "null"。
@@ -830,7 +830,7 @@ func (api *dashboardAPI) handleStatistics(writer http.ResponseWriter, request *h
 		return
 	}
 
-	writeDashboardJSON(writer, http.StatusOK, dashboardStatisticsBody{
+	adminWriteJSON(writer, http.StatusOK, dashboardStatisticsBody{
 		ChartData:  dashboardStatisticsChartData(points, prefix),
 		Users:      dashboardStatisticsEntities(entities, mode),
 		TimeRange:  string(timeRange),
@@ -995,16 +995,4 @@ func parseDashboardStatisticsRange(
 		Path: []any{"timeRange"}, Code: "invalid_enum_value", Message: "Invalid enum value",
 	}})
 	return "", false
-}
-
-// writeDashboardJSON 作答 JSON 正文（不转义 HTML，与 JS 的 JSON.stringify 同判）。
-func writeDashboardJSON(writer http.ResponseWriter, status int, body any) {
-	encoded, err := marshalNoEscape(body)
-	if err != nil {
-		writer.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(status)
-	_, _ = writer.Write(encoded)
 }

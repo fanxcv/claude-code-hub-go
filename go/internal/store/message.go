@@ -666,23 +666,34 @@ func (p *Pools) UpdateWinnerCost(
 		return err
 	}
 
-	const maxAttempts = 3
-	lastErr := error(nil)
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		query := `UPDATE message_request SET
+	query := `UPDATE message_request SET
 			cost_usd = $1::numeric + COALESCE((
 				SELECT SUM((entry->>'costUsd')::numeric)
 				FROM jsonb_array_elements(COALESCE(hedge_losers, '[]'::jsonb)) AS entry
 			), 0),
 			"updated_at" = now()`
-		args := []any{formatted}
-		if costBreakdown != nil {
-			query += fmt.Sprintf(", cost_breakdown = $%d::jsonb", len(args)+1)
-			args = append(args, costBreakdown)
-		}
-		args = append(args, id)
-		query += fmt.Sprintf(" WHERE id = $%d", len(args))
+	args := []any{formatted}
+	if costBreakdown != nil {
+		query += fmt.Sprintf(", cost_breakdown = $%d::jsonb", len(args)+1)
+		args = append(args, costBreakdown)
+	}
+	args = append(args, id)
+	query += fmt.Sprintf(" WHERE id = $%d", len(args))
 
+	if err := execWithRetry(ctx, pool, query, args...); err != nil {
+		return fmt.Errorf("store: 更新 winner 成本失败: %w", err)
+	}
+	return nil
+}
+
+// execWithRetry 以 3 次尝试与 50ms × 次数 的退避执行一条写语句。
+//
+// 与 terminal/settle.go 的重试语义一致：瞬时冲突重试，其余错误同样重试到上限
+// （调用方拿到的仍是原始错误，不吞错）。
+func execWithRetry(ctx context.Context, pool *Pool, query string, args ...any) error {
+	const maxAttempts = 3
+	lastErr := error(nil)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if _, err := pool.Exec(ctx, query, args...); err != nil {
 			lastErr = err
 			if attempt < maxAttempts-1 {
@@ -692,7 +703,7 @@ func (p *Pools) UpdateWinnerCost(
 		}
 		return nil
 	}
-	return fmt.Errorf("store: 更新 winner 成本失败: %w", lastErr)
+	return lastErr
 }
 
 // HedgeLoserEntry 复刻 src/types/cost-breakdown.ts 的 HedgeLoserBilling。
@@ -739,26 +750,17 @@ func (p *Pools) AddHedgeLoserCost(
 		return err
 	}
 
-	const maxAttempts = 3
-	lastErr := error(nil)
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		_, err := pool.Exec(ctx, `UPDATE message_request SET
+	if err := execWithRetry(ctx, pool, `UPDATE message_request SET
 			cost_usd = COALESCE(cost_usd, 0) + $1::numeric,
 			hedge_losers = COALESCE(hedge_losers, '[]'::jsonb) || $2::jsonb,
 			"updated_at" = now()
 			WHERE id = $3
 			  AND NOT (COALESCE(hedge_losers, '[]'::jsonb) @> $4::jsonb)`,
-			formatted, loserJSON, id, guardJSON,
-		)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if attempt < maxAttempts-1 {
-			time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
-		}
+		formatted, loserJSON, id, guardJSON,
+	); err != nil {
+		return fmt.Errorf("store: 累加 hedge 输家成本失败: %w", err)
 	}
-	return fmt.Errorf("store: 累加 hedge 输家成本失败: %w", lastErr)
+	return nil
 }
 
 // MarshalHedgeLoserEntry 生成写入 hedge_losers 的单个元素 JSON，键名与 TS 的

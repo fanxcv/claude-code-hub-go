@@ -208,36 +208,36 @@ func TestAssembleChatPipelineStepOrder(t *testing.T) {
 	}
 	want := "auth -> sensitive -> client -> model -> version -> probe -> session -> warmup -> " +
 		"requestFilter -> replayAttach -> rateLimit -> provider -> providerRequestFilter -> messageContext"
-	if got := StepSequence(chat); got != want {
+	if got := stepSequence(chat); got != want {
 		t.Fatalf("对话链步骤顺序不符:\n got %s\nwant %s", got, want)
 	}
-	t.Logf("CHAT_PIPELINE: %s", StepSequence(chat))
+	t.Logf("CHAT_PIPELINE: %s", stepSequence(chat))
 
 	raw, err := Assemble(deps, Policy{Preset: PresetRawPassthrough})
 	if err != nil {
 		t.Fatalf("原始透传链装配失败: %v", err)
 	}
-	if got := StepSequence(raw); got != "auth -> client -> model -> version -> probe -> provider" {
+	if got := stepSequence(raw); got != "auth -> client -> model -> version -> probe -> provider" {
 		t.Fatalf("原始透传链步骤顺序不符: %s", got)
 	}
-	t.Logf("RAW_PASSTHROUGH_PIPELINE: %s", StepSequence(raw))
+	t.Logf("RAW_PASSTHROUGH_PIPELINE: %s", stepSequence(raw))
 
 	rawSafe, err := Assemble(deps, Policy{Preset: PresetRawPassthrough, RawCrossProviderFallback: true})
 	if err != nil {
 		t.Fatalf("安全会话链装配失败: %v", err)
 	}
-	if got := StepSequence(rawSafe); got != "auth -> client -> model -> version -> probe -> session -> provider -> messageContext" {
+	if got := stepSequence(rawSafe); got != "auth -> client -> model -> version -> probe -> session -> provider -> messageContext" {
 		t.Fatalf("安全会话链步骤顺序不符: %s", got)
 	}
-	t.Logf("RAW_SAFE_SESSION_PIPELINE: %s", StepSequence(rawSafe))
+	t.Logf("RAW_SAFE_SESSION_PIPELINE: %s", stepSequence(rawSafe))
 
 	countTokens, err := Assemble(deps, Policy{Preset: PresetChat, RequestType: RequestTypeCountTokens})
 	if err != nil {
 		t.Fatalf("count_tokens 链装配失败: %v", err)
 	}
-	t.Logf("COUNT_TOKENS_PIPELINE: %s", StepSequence(countTokens))
-	if StepSequence(countTokens) != StepSequence(rawSafe) {
-		t.Fatalf("count_tokens 应复用安全会话链: %s", StepSequence(countTokens))
+	t.Logf("COUNT_TOKENS_PIPELINE: %s", stepSequence(countTokens))
+	if stepSequence(countTokens) != stepSequence(rawSafe) {
+		t.Fatalf("count_tokens 应复用安全会话链: %s", stepSequence(countTokens))
 	}
 }
 
@@ -511,7 +511,7 @@ func runChainWithRequest(t *testing.T, adapters *Adapters, request *pctx.Context
 	if err != nil {
 		t.Fatalf("装配失败: %v", err)
 	}
-	t.Logf("链条: %s", StepSequence(chain))
+	t.Logf("链条: %s", stepSequence(chain))
 	return chain.Run(request)
 }
 

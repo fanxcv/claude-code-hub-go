@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
@@ -1308,17 +1309,8 @@ func providerSortedKeys[T any](values map[string]T) []string {
 	for key := range values {
 		keys = append(keys, key)
 	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j-1] > keys[j]; j-- {
-			keys[j-1], keys[j] = keys[j], keys[j-1]
-		}
-	}
+	slices.Sort(keys)
 	return keys
-}
-
-// providerSortFieldNames 把字段名排序（解码顺序稳定 → 校验错误的顺序稳定）。
-func providerSortFieldNames[T any](fields map[string]T) []string {
-	return providerSortedKeys(fields)
 }
 
 // providerPrincipalFrom 取请求上下文里的身份（审计用；缺失时给零值 Principal，

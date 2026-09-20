@@ -92,8 +92,8 @@ var RawSafeSessionPipeline = Pipeline{
 // CountTokensPipeline 对应 COUNT_TOKENS_PIPELINE，TS 侧直接复用安全会话链。
 var CountTokensPipeline = RawSafeSessionPipeline
 
-// AllStepKeys 按 TS 侧联合类型的书写顺序列出全部步骤键。
-func AllStepKeys() []StepKey {
+// allStepKeys 按 TS 侧联合类型的书写顺序列出全部步骤键。
+func allStepKeys() []StepKey {
 	return []StepKey{
 		StepAuth,
 		StepClient,

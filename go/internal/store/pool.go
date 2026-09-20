@@ -536,9 +536,3 @@ func (t *admittedTx) Rollback(ctx context.Context) error {
 type errorRow struct{ err error }
 
 func (r *errorRow) Scan(...any) error { return r.err }
-
-// IsAdmissionError 便于调用方在不 import errors 的情况下判别准入拒绝。
-func IsAdmissionError(err error) bool {
-	var admission *AdmissionError
-	return errors.As(err, &admission)
-}

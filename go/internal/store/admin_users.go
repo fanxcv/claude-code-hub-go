@@ -725,10 +725,10 @@ func (p *Pools) ListAdminUsers(ctx context.Context, filters AdminUserListFilters
 					))
 				}
 			} else {
-				offset = maxInt(parseCursorOffset(filters.Cursor), 0)
+				offset = max(parseCursorOffset(filters.Cursor), 0)
 			}
 		} else {
-			offset = maxInt(parseCursorOffset(filters.Cursor), 0)
+			offset = max(parseCursorOffset(filters.Cursor), 0)
 		}
 	}
 
@@ -823,13 +823,6 @@ func parseCursorOffset(raw string) int {
 		return 0
 	}
 	return parsed
-}
-
-func maxInt(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
 }
 
 // AdminUserKey 是 findKeyListBatch 的键视图（列别名与 src/repository/key.ts:99 一致）。

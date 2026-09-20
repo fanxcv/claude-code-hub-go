@@ -291,7 +291,7 @@ func TestRegisterAdminRoutesWiresEveryRegistrar(t *testing.T) {
 	}
 
 	router := adminapi.New(adminapi.Options{Deps: deps})
-	registerAdminRoutes(router, deps, guard, issuer, nil, nil, nil, adminapi.PublicStatusReadOptions{
+	registerAdminRoutes(router, deps, guard, issuer, nil, nil, adminapi.PublicStatusReadOptions{
 		Store: registerTestPublicStatusStore{},
 	})
 
@@ -340,7 +340,7 @@ func TestRegisterAdminRoutesRefusesWithoutGuard(t *testing.T) {
 	router := adminapi.New(adminapi.Options{Deps: deps})
 	// issuer 传 nil：根级认证面自己的注册函数对 nil issuer 直接返回，正是这条 fail-closed 的同类语义
 	// （认证面没装起来时宁可不答，让 Node 去答）。
-	registerAdminRoutes(router, deps, nil, nil, nil, nil, nil, adminapi.PublicStatusReadOptions{})
+	registerAdminRoutes(router, deps, nil, nil, nil, nil, adminapi.PublicStatusReadOptions{})
 	if count := router.RouteCount(); count != 0 {
 		t.Fatalf("守卫未装配时不得注册任何路由，收到 %d 条", count)
 	}

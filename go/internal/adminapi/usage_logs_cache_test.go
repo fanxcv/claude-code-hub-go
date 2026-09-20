@@ -51,7 +51,7 @@ func TestStatsCacheIsolatesFilterFingerprints(t *testing.T) {
 		{"换端点", store.UsageLogFilters{UserID: &userA, Endpoint: "/v1/messages"}, false},
 		{"换模型不匹配开关", store.UsageLogFilters{UserID: &userA, ActualResponseModelMismatch: true}, false},
 		{"换最小重试数", store.UsageLogFilters{UserID: &userA, MinRetryCount: 1}, false},
-		{"换状态码", store.UsageLogFilters{UserID: &userA, StatusCode: ptrInt(429)}, false},
+		{"换状态码", store.UsageLogFilters{UserID: &userA, StatusCode: intPtr(429)}, false},
 		{"换 ledgerOnly 口径", store.UsageLogFilters{UserID: &userA}, true},
 	}
 	for _, tc := range cases {

@@ -169,7 +169,7 @@ func TTLForPeriod(period Period, now time.Time, resetTime string, loc *time.Loca
 		return int64(5 * 3600)
 	case PeriodDaily:
 		next := NextDailyReset(now, resetTime, loc)
-		return maxInt64(minDailyTTL, ceilSeconds(next.Sub(now)))
+		return max(minDailyTTL, ceilSeconds(next.Sub(now)))
 	case PeriodWeekly:
 		return ceilSeconds(NextWeekStart(now, loc).Sub(now))
 	case PeriodMonthly:

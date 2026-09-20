@@ -95,8 +95,15 @@ func isAllDigits(raw string) bool {
 	return len(leadingDigits(raw)) == len(raw)
 }
 
-// compareVersions 复刻 version.ts 的 compareVersions，但返回常规语义：
+// CompareVersions 复刻 version.ts 的 compareVersions，但返回常规语义：
 // 1 = a 更新，0 = 相等或不可解析，-1 = a 更旧。
+//
+// 导出是为了让管理面的 /api/version 复用同一份解析器（那里需要 Node 的反向语义，
+// 由调用方适配）；本包内仍以小写别名使用。
+func CompareVersions(a string, b string) int {
+	return compareVersions(a, b)
+}
+
 func compareVersions(a string, b string) int {
 	left, okLeft := parseVersionLike(a)
 	right, okRight := parseVersionLike(b)

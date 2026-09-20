@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -239,7 +240,7 @@ func (p *Pools) AggregateAdminSessionStats(
 			userInfo[row.SessionID] = row
 			continue
 		}
-		if !containsString(existing.RequestedSessionIDs, row.RequestedSessionID) {
+		if !slices.Contains(existing.RequestedSessionIDs, row.RequestedSessionID) {
 			existing.RequestedSessionIDs = append(existing.RequestedSessionIDs, row.RequestedSessionID)
 			userInfo[row.SessionID] = existing
 		}

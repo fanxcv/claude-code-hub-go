@@ -43,7 +43,7 @@ func TestAdmissionRejectsAtLimit(t *testing.T) {
 	if admission.SafeMessage() != "Database pool admission exceeded (pool=data, maxOutstanding=2)" {
 		t.Fatalf("对外文案与 TS 不一致: %q", admission.SafeMessage())
 	}
-	if !IsAdmissionError(err) {
+	if !isAdmission(err) {
 		t.Fatal("IsAdmissionError 应当判别为真")
 	}
 
@@ -173,4 +173,10 @@ func TestClosedPoolsRejectUse(t *testing.T) {
 	if err := pools.Close(); err != nil {
 		t.Fatalf("重复 Close 应当返回同一结果: %v", err)
 	}
+}
+
+// isAdmission 是测试内的准入错误判别：生产侧只留 errors.As（导出包装无人调用，已删）。
+func isAdmission(err error) bool {
+	var admission *AdmissionError
+	return errors.As(err, &admission)
 }

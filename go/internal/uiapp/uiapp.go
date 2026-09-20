@@ -1,7 +1,7 @@
 // Package uiapp 把 Next 静态导出产物 embed 进二进制并直接作答页面请求。
 //
 // 它是 `CCH_EGRESS_PAGES=embed` 的终态实现：Node 下线后页面面由本包服务，不再有反代回退。
-// 四条规则照 §4.3，并在 cmd/uipoc 上实测过：
+// 四条规则照 §4.3，实现前在最小验证程序上实测过：
 //  1. 命中 embed 内的静态文件即直发（`_next/static/**` 带内容哈希 → immutable，
 //     其余 → no-cache + ETag 协商缓存）；
 //  2. **形如静态资源的路径未命中即 404**（末段带扩展名，或落在 `_next/` 下）——这些路径

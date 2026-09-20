@@ -73,7 +73,7 @@ func (t *SessionTracker) CheckAndTrackKeyUserSession(ctx context.Context, keyID,
 
 	values, err := t.eval(ctx, "CHECK_AND_TRACK_KEY_USER_SESSION",
 		[]string{ActiveSessionsGlobalKey(), KeyActiveSessionsKey(keyID), UserActiveSessionsKey(userID)},
-		[]any{sessionID, keyLimit, userLimit, nowMillisDefault(), t.ttl.Milliseconds()},
+		[]any{sessionID, keyLimit, userLimit, nowMillis(), t.ttl.Milliseconds()},
 	)
 	if err != nil {
 		t.log.Error("limit.sessions.check_failed", map[string]any{"error": err.Error(), "keyId": keyID, "userId": userID})
@@ -232,7 +232,7 @@ func (t *SessionTracker) CheckAndTrackProviderSession(ctx context.Context, provi
 
 	values, err := t.eval(ctx, "CHECK_AND_TRACK_SESSION",
 		[]string{ProviderActiveSessionsKey(providerID), ProviderSessionRefsKey(providerID)},
-		[]any{sessionID, limit, nowMillisDefault(), t.ttl.Milliseconds()},
+		[]any{sessionID, limit, nowMillis(), t.ttl.Milliseconds()},
 	)
 	if err != nil {
 		t.log.Error("limit.sessions.provider_check_failed", map[string]any{"error": err.Error(), "providerId": providerID})
@@ -362,13 +362,13 @@ func toInt64(raw any) (int64, error) {
 	case float64:
 		return int64(typed), nil
 	case string:
-		parsed, err := parseFloatOrZeroErr(typed)
+		parsed, err := strconv.ParseFloat(typed, 64)
 		if err != nil {
 			return 0, err
 		}
 		return int64(parsed), nil
 	case []byte:
-		parsed, err := parseFloatOrZeroErr(string(typed))
+		parsed, err := strconv.ParseFloat(string(typed), 64)
 		if err != nil {
 			return 0, err
 		}

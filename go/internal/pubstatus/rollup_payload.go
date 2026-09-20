@@ -6,8 +6,6 @@ import (
 	"math"
 	"strconv"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 // 本文件是投影写侧的第二段：**从 rollup 桶构建公开 payload**。
@@ -95,22 +93,6 @@ func BuildRollupBucketStartsOnly(now time.Time, rangeHours int, intervalMinutes 
 type RollupBucketReader interface {
 	// HGetAll 返回一个桶的全部字段；键不存在时返回空表（与 go-redis 同义）。
 	HGetAll(ctx context.Context, key string) (map[string]string, error)
-}
-
-// NewRedisRollupBucketReader 把 go-redis 客户端包成 RollupBucketReader。
-func NewRedisRollupBucketReader(client redis.UniversalClient) RollupBucketReader {
-	if client == nil {
-		return nil
-	}
-	return redisRollupBucketReader{client: client}
-}
-
-type redisRollupBucketReader struct {
-	client redis.UniversalClient
-}
-
-func (r redisRollupBucketReader) HGetAll(ctx context.Context, key string) (map[string]string, error) {
-	return r.client.HGetAll(ctx, key).Result()
 }
 
 // ReadRollupBuckets 复刻 readPublicStatusRollupBuckets（rollup-store.ts:489-543）。

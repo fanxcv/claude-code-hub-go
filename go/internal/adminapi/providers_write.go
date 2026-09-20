@@ -166,7 +166,7 @@ func handleCreateProvider(deps Deps) http.HandlerFunc {
 		}
 		object := adminNewObject(fields, providerCreateFieldNames...)
 
-		names := providerSortFieldNames(fields)
+		names := providerSortedKeys(fields)
 		payload, issues := providerDecodeWriteFields(object, names, providerCreateWriteSpecs())
 		if len(issues) > 0 {
 			adminWriteValidationFailure(writer, request, issues)
@@ -257,7 +257,7 @@ func handleUpdateProvider(deps Deps) http.HandlerFunc {
 		}
 
 		object := adminNewObject(fields, providerUpdateFieldNames...)
-		names := providerSortFieldNames(fields)
+		names := providerSortedKeys(fields)
 		payload, issues := providerDecodeWriteFields(object, names, providerUpdateWriteSpecs())
 		if len(issues) > 0 {
 			adminWriteValidationFailure(writer, request, issues)

@@ -1090,7 +1090,7 @@ func decodeSystemSettingsUpdate(
 		if !ok {
 			continue
 		}
-		parsed, err := settingsBoolValue(value, false)
+		parsed, err := settingsBoolValue(value)
 		if err != nil {
 			fail(name, "invalid_type", "Expected boolean, received "+err.Error())
 			continue
@@ -1115,7 +1115,7 @@ func decodeSystemSettingsUpdate(
 			*target.present = true
 			continue
 		}
-		parsed, err := settingsBoolValue(value, false)
+		parsed, err := settingsBoolValue(value)
 		if err != nil {
 			fail(name, "invalid_type", "Expected boolean, received "+err.Error())
 			continue
@@ -1244,9 +1244,7 @@ func decodeSystemSettingsUpdate(
 		"quotaLeasePercentWeekly":  &decoded.quotaLeasePercentWeekly,
 		"quotaLeasePercentMonthly": &decoded.quotaLeasePercentMonthly,
 	} {
-		if !decodeSettingsFloat(raw, name, false, target, 0, 1, &problems) {
-			continue
-		}
+		decodeSettingsFloat(raw, name, false, target, 0, 1, &problems)
 	}
 	if value, ok := raw["quotaLeaseCapUsd"]; ok {
 		if isJSONNull(value) {
@@ -1452,7 +1450,7 @@ func settingsFloatValue(value json.RawMessage, coerce bool) (float64, error) {
 	return number, nil
 }
 
-func settingsBoolValue(value json.RawMessage, _ bool) (bool, error) {
+func settingsBoolValue(value json.RawMessage) (bool, error) {
 	if isJSONNull(value) {
 		return false, errors.New("null")
 	}

@@ -27,9 +27,12 @@ import (
 // 并留下可检索的日志（否则「少了三条路由」在生产上无从发现）。
 func TestOpenLimitRuntimeWithoutRedisStaysUnwired(t *testing.T) {
 	var logs strings.Builder
-	counts, windows, costWindows := openLimitRuntime(config.Config{}, nil, logx.New(&logs))
-	if counts != nil || windows != nil || costWindows != nil {
-		t.Fatalf("没有 Redis 连接时不得装配运行态读取器：counts=%v windows=%v costWindows=%v", counts, windows, costWindows)
+	runtime := openLimitRuntime(config.Config{}, nil, logx.New(&logs))
+	if runtime != nil {
+		t.Fatalf("没有 Redis 连接时不得装配运行态：%v", runtime)
+	}
+	if runtime.sessionCounts() != nil || runtime.fixed5hWindows() != nil || runtime.costWindows() != nil {
+		t.Fatal("nil 运行态的三个访问器都必须返回 nil（路由据此不注册）")
 	}
 	if !strings.Contains(logs.String(), "admin_limit_runtime_skipped") {
 		t.Fatalf("必须留下 admin_limit_runtime_skipped 日志：%s", logs.String())
@@ -51,9 +54,16 @@ func TestIntegrationOpenLimitRuntimeWiresKeysReadRoutes(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = closeRedis(client) })
 
-	counts, windows, costWindows := openLimitRuntime(cfg, client, logx.New(io.Discard))
+	runtime := openLimitRuntime(cfg, client, logx.New(io.Discard))
+	if runtime == nil {
+		t.Fatal("配了 Redis 就必须装配运行态（否则读档与供应商限额端点永远回退 Node）")
+	}
+	counts, windows, costWindows := runtime.sessionCounts(), runtime.fixed5hWindows(), runtime.costWindows()
 	if counts == nil || windows == nil || costWindows == nil {
-		t.Fatal("配了 Redis 就必须装配三个运行态读取器（否则读档与供应商限额端点永远回退 Node）")
+		t.Fatal("三个读取器都必须被建出")
+	}
+	if runtime.userSessionCounts() == nil || runtime.userFixed5hWindows() == nil {
+		t.Fatal("自服务面的 User 维度两个读取器也必须来自同一份运行态")
 	}
 
 	// 读取器必须真的能打在真 Redis 上（而不是只被判了非 nil）。

@@ -129,7 +129,7 @@ func (api *sessionAPI) handleSessionResponse(writer http.ResponseWriter, request
 		return
 	}
 
-	writeSessionsJSON(writer, http.StatusOK, map[string]any{"response": body})
+	adminWriteJSON(writer, http.StatusOK, map[string]any{"response": body})
 }
 
 // writeSessionResponseMissing 作答「响应体不存在」这一态。
