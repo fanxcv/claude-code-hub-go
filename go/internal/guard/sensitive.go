@@ -90,7 +90,7 @@ func (d Deps) sensitiveStep() Step {
 					Reason:       reason,
 					ErrorMessage: "请求包含敏感词：\"" + match.Word + "\"",
 				}
-				if err := d.BlockedLog.RecordBlocked(d.runContext(ctx), record); err != nil {
+				if err := d.BlockedLog.RecordBlocked(d.runContext(ctx), ctx, record); err != nil {
 					d.logger().Error("guard.sensitive.log_failed", map[string]any{"error": err.Error()})
 				}
 			}

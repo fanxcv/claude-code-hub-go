@@ -168,7 +168,7 @@ type fakeBlockedLog struct {
 	records []BlockedRecord
 }
 
-func (l *fakeBlockedLog) RecordBlocked(_ context.Context, record BlockedRecord) error {
+func (l *fakeBlockedLog) RecordBlocked(_ context.Context, _ *pctx.Context, record BlockedRecord) error {
 	l.records = append(l.records, record)
 	return nil
 }
@@ -226,7 +226,7 @@ type fakeWarmupLog struct {
 	records []WarmupRecord
 }
 
-func (l *fakeWarmupLog) RecordWarmup(_ context.Context, record WarmupRecord) error {
+func (l *fakeWarmupLog) RecordWarmup(_ context.Context, _ *pctx.Context, record WarmupRecord) error {
 	l.records = append(l.records, record)
 	return nil
 }

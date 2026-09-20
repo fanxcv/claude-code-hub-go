@@ -264,7 +264,7 @@ func TestSettleBlockedCreatesThenSettles(t *testing.T) {
 		Cost:          &Cost{Total: "0"},
 	}
 
-	result, err := New(writer, noBackoff()).SettleBlocked(context.Background(), store.CreateMessageRequestData{
+	result, err := New(writer, noBackoff()).SettleBlocked(context.Background(), nil, store.CreateMessageRequestData{
 		ProviderID: 0,
 		UserID:     1,
 		Key:        "k",
@@ -292,6 +292,7 @@ func TestSettleBlockedSurfacesCreateFailure(t *testing.T) {
 	writer := &fakeWriter{createErr: errors.New("insert failed")}
 	_, err := New(writer, noBackoff()).SettleBlocked(
 		context.Background(),
+		nil,
 		store.CreateMessageRequestData{Key: "k"},
 		Settlement{StatusCode: 400, BlockedBy: strPtr("warmup")},
 	)
@@ -307,7 +308,7 @@ func TestSettleBlockedSurfacesCreateFailure(t *testing.T) {
 func TestSettleBlockedRequiresStatusCodeBeforeCreate(t *testing.T) {
 	writer := &fakeWriter{}
 	_, err := New(writer, noBackoff()).SettleBlocked(
-		context.Background(), store.CreateMessageRequestData{Key: "k"}, Settlement{})
+		context.Background(), nil, store.CreateMessageRequestData{Key: "k"}, Settlement{})
 	if err == nil {
 		t.Fatal("缺状态码必须被拒")
 	}

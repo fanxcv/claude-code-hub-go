@@ -191,7 +191,7 @@ func (d Deps) warmupStep() Step {
 				MessagesCount: messagesCount(body),
 				DurationMS:    durationMillis(ctx),
 			}
-			if err := d.WarmupLog.RecordWarmup(d.runContext(ctx), record); err != nil {
+			if err := d.WarmupLog.RecordWarmup(d.runContext(ctx), ctx, record); err != nil {
 				// Node 侧写日志失败不影响响应。
 				d.logger().Error("guard.warmup.log_failed", map[string]any{"error": err.Error()})
 			}

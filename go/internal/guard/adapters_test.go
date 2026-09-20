@@ -293,7 +293,7 @@ func TestWarmupRecorderWritesFinalizedRow(t *testing.T) {
 	ctx := context.Background()
 	apiKey, userID := seedIdentity(t, pools, ctx, nil, "default")
 
-	if err := adapters.Warmup.RecordWarmup(ctx, WarmupRecord{
+	if err := adapters.Warmup.RecordWarmup(ctx, nil, WarmupRecord{
 		KeyID:         1,
 		UserID:        userID,
 		APIKey:        apiKey,
@@ -329,7 +329,7 @@ func TestWarmupRecorderWritesFinalizedRow(t *testing.T) {
 
 	// 拦截记录器的载荷也要能落库（敏感词以外的拦截点会走同一条路）。
 	reason := json.RawMessage(`{"word":"x","matchType":"contains"}`)
-	if err := adapters.Blocked.RecordBlocked(ctx, BlockedRecord{
+	if err := adapters.Blocked.RecordBlocked(ctx, nil, BlockedRecord{
 		UserID:       userID,
 		APIKey:       apiKey,
 		Model:        "claude-sonnet-4-5",

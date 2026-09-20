@@ -3,7 +3,9 @@ package terminal
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -133,8 +135,8 @@ func TestAsyncQueueFlushesWhenBatchFills(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if !queue.AwaitSettlement(ctx, 3) {
-		t.Fatalf("攒够一批后应立刻落库，stats=%+v", queue.Stats())
+	if err := queue.AwaitSettlement(ctx, 3); err != nil {
+		t.Fatalf("攒够一批后应立刻落库，收到 %v，stats=%+v", err, queue.Stats())
 	}
 	if got := writer.unfinalizedIDs; len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
 		t.Fatalf("批内必须按入队顺序逐条写，收到 %v", got)
@@ -161,14 +163,16 @@ func TestAsyncQueueFlushesOnIntervalAndUnblocksAwait(t *testing.T) {
 	// 先把等待面钉在「还没落库」上：用极短窗口问一次，此时批还没到时间。
 	shortCtx, cancelShort := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancelShort()
-	if queue.AwaitSettlement(shortCtx, 7) {
+	if err := queue.AwaitSettlement(shortCtx, 7); err == nil {
 		t.Fatalf("定时未到、批未满时不应已落库（否则这条用例失去意义）")
+	} else if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("未落库时的等待应是超时结论，收到 %v", err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if !queue.AwaitSettlement(ctx, 7) {
-		t.Fatalf("flush 间隔到点后必须落库，stats=%+v", queue.Stats())
+	if err := queue.AwaitSettlement(ctx, 7); err != nil {
+		t.Fatalf("flush 间隔到点后必须落库，收到 %v，stats=%+v", err, queue.Stats())
 	}
 	if writer.unfinalizedCalls != 1 {
 		t.Fatalf("应恰好写一次终态，实际 %d 次", writer.unfinalizedCalls)
@@ -241,15 +245,130 @@ func TestAsyncQueueCountsCostGap(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if !queue.AwaitSettlement(ctx, 11) {
-		t.Fatalf("落库等待超时，stats=%+v", queue.Stats())
+	// 成本没落库就不是「已落库」：等待面必须把失败报出来，而不是报成功。
+	if err := queue.AwaitSettlement(ctx, 11); !errors.Is(err, ErrCostWriteFailed) {
+		t.Fatalf("成本写失败必须由等待面暴露（ErrCostWriteFailed），收到 %v", err)
 	}
 	stats := queue.Stats()
 	if stats.CostGap != 1 || stats.Failed != 1 {
 		t.Fatalf("「终态已提交、成本未落库」必须计入 cost_gap：%+v", stats)
 	}
+	if stats.Rows != 0 {
+		t.Fatalf("写入失败的条目不得计入 Rows（否则落库量虚高）：%+v", stats)
+	}
+	// 排空但其中有失败：Flush 不得报「干净」。
+	if err := queue.Flush(context.Background()); !errors.Is(err, ErrQueueWriteFailed) {
+		t.Fatalf("队列清空但有写入失败时 Flush 应报 ErrQueueWriteFailed，收到 %v", err)
+	}
+	// 失败计数是「自上回 Flush 以来」的：再冲一次不应重复报同一条。
+	if err := queue.Flush(context.Background()); err != nil {
+		t.Fatalf("失败已被上回 Flush 报过，再冲一次应是干净的，收到 %v", err)
+	}
 	if !logger.hasWarn("terminal_async_flush_failed") {
 		t.Fatalf("写入失败必须留 warn")
+	}
+}
+
+// Stop 与 enqueue 并发时不得留下「既不在队列里、也永不被写」的条目。
+//
+// 窗口是真实的：停止判定与投递分开做时，Stop 可能恰好插在中间——worker 退出，而这条已登记
+// pending 的条目永远等不到消费者（pending 不归零 ⇒ AwaitSettlement 一直等到超时，随后关
+// 连接池就永久丢掉这条终态）。修法是把四步放同一把锁内（见 enqueue 的注释）。
+//
+// 断言的是不变式而不是时序：入队成功几条，worker 就得写完几条；Stop 返回后 pending 必须归零。
+func TestStopRacesEnqueueLeavesNoOrphan(t *testing.T) {
+	const rounds = 300
+	for round := 0; round < rounds; round++ {
+		// 容量 1 + 批 1：入队与 flush 都最频，窗口最窄也最容易被撞上。
+		queue := NewWriteQueue(AsyncOptions{MaxPending: 1, BatchSize: 1, FlushInterval: time.Hour, Logger: nil})
+		var accepted, writtenByWorker atomic.Int64
+		stop := make(chan struct{})
+		start := make(chan struct{})
+		var workers sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				<-start
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					ok := queue.enqueue(context.Background(), 0, func(context.Context) (Result, error) {
+						writtenByWorker.Add(1)
+						return Result{Committed: true}, nil
+					}, nil)
+					if ok {
+						accepted.Add(1)
+					}
+					// !ok 即降级：调用方自己同步写（不丢，故不计入孤儿）。
+				}
+			}()
+		}
+		close(start)
+		runtime.Gosched()
+		queue.Stop()
+		close(stop)
+		workers.Wait()
+
+		if pending := queue.Pending(); pending != 0 {
+			t.Fatalf("第 %d 轮：Stop 之后仍有 %d 条卡在「已登记但无消费者」：%+v", round, pending, queue.Stats())
+		}
+		if got, want := writtenByWorker.Load(), accepted.Load(); got != want {
+			t.Fatalf("第 %d 轮：入队成功 %d 条，worker 实写 %d 条（有孤儿）", round, want, got)
+		}
+	}
+}
+
+// 终态写失败必须由等待面报出，且 Flush 不得报「干净」：这两条是退出序列判「能否关依赖」的依据。
+func TestAsyncQueueSurfacesTerminalWriteFailure(t *testing.T) {
+	writeErr := errors.New("writer lane down")
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{err: writeErr}}}
+	logger := &debugRecordingLogger{}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 1, FlushInterval: time.Hour, Logger: logger,
+	})
+
+	if _, err := settler.Settle(context.Background(), 41, okSettlement(nil)); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := queue.AwaitSettlement(ctx, 41); !errors.Is(err, writeErr) {
+		t.Fatalf("写失败必须由等待面报出原错误，收到 %v", err)
+	}
+	if err := queue.Flush(context.Background()); !errors.Is(err, ErrQueueWriteFailed) {
+		t.Fatalf("有写入失败时 Flush 应报 ErrQueueWriteFailed，收到 %v", err)
+	}
+	stats := queue.Stats()
+	if stats.Failed != 1 || stats.Rows != 0 || stats.Pending != 0 {
+		t.Fatalf("计数不符（失败不得计入 Rows）：%+v", stats)
+	}
+}
+
+// 幂等去重（未赢得该行）既不是失败也不计入 Rows：两种口径搞混会让故障期的数虚高或虚低。
+func TestAsyncQueueCountsIdempotentSeparately(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: false}}}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 1, FlushInterval: time.Hour,
+	})
+
+	if _, err := settler.Settle(context.Background(), 42, okSettlement(nil)); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := queue.AwaitSettlement(ctx, 42); err != nil {
+		t.Fatalf("未赢得该行是幂等结论，不是失败，等待面应报 nil，收到 %v", err)
+	}
+	if err := queue.Flush(context.Background()); err != nil {
+		t.Fatalf("幂等去重不得让 Flush 报错，收到 %v", err)
+	}
+	stats := queue.Stats()
+	if stats.NotSettled != 1 || stats.Failed != 0 || stats.Rows != 0 {
+		t.Fatalf("幂等去重应单独计数：%+v", stats)
 	}
 }
 

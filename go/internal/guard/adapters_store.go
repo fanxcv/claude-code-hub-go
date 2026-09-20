@@ -558,7 +558,9 @@ func newBlockedRecorder(settler *terminal.Settler, logger *logx.Logger) *Blocked
 }
 
 // RecordBlocked 复刻 logBlockedRequest：provider_id = 0（未选供应商）、成本记 0、状态码即拦截码。
-func (r *BlockedRecorder) RecordBlocked(ctx context.Context, record BlockedRecord) error {
+//
+// pc 用于终态上报：拦截行已在库里（行 id 由建行结果给出），故它同样该进观测面。
+func (r *BlockedRecorder) RecordBlocked(ctx context.Context, pc *pctx.Context, record BlockedRecord) error {
 	if r == nil || r.settler == nil {
 		return errors.New("guard: 终态结算器未接线，拦截日志未落库")
 	}
@@ -597,7 +599,7 @@ func (r *BlockedRecorder) RecordBlocked(ctx context.Context, record BlockedRecor
 	if create.Model != nil {
 		settlement.Model = create.Model
 	}
-	if _, err := r.settler.SettleBlocked(ctx, create, settlement); err != nil {
+	if _, err := r.settler.SettleBlocked(ctx, pc, create, settlement); err != nil {
 		return fmt.Errorf("guard: 拦截日志落库失败: %w", err)
 	}
 	r.rows.add()
@@ -625,7 +627,7 @@ func newWarmupRecorder(settler *terminal.Settler, logger *logx.Logger) *WarmupRe
 
 // RecordWarmup 复刻 warmup-guard 的落库：状态码 200、成本 NULL（显式不写，避免前端显示 $0）、
 // blocked_by = warmup。
-func (r *WarmupRecorder) RecordWarmup(ctx context.Context, record WarmupRecord) error {
+func (r *WarmupRecorder) RecordWarmup(ctx context.Context, pc *pctx.Context, record WarmupRecord) error {
 	if r == nil || r.settler == nil {
 		return errors.New("guard: 终态结算器未接线，warmup 日志未落库")
 	}
@@ -677,7 +679,7 @@ func (r *WarmupRecorder) RecordWarmup(ctx context.Context, record WarmupRecord) 
 	if create.Model != nil {
 		settlement.Model = create.Model
 	}
-	if _, err := r.settler.SettleBlocked(ctx, create, settlement); err != nil {
+	if _, err := r.settler.SettleBlocked(ctx, pc, create, settlement); err != nil {
 		return fmt.Errorf("guard: warmup 日志落库失败: %w", err)
 	}
 	r.rows.add()

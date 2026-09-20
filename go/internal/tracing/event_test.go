@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,5 +232,49 @@ func TestEventIDsAreDeterministic(t *testing.T) {
 	}
 	if generationEventID(7) == traceEventID(7) {
 		t.Fatalf("不同种类的事件 id 不得相同（否则会被去重掉一条）")
+	}
+}
+
+// jsonb 原文必须有长度上界：这两列是原样透传的，异常长时不得把每条 trace 撑大。
+func TestRawJSONBoundsOversizedAndMalformed(t *testing.T) {
+	// 合法但超长：不得解成结构（那会把整段塞进上报体），要有界退化成字符串。
+	var builder bytes.Buffer
+	builder.WriteString("[")
+	for i := 0; i < 4000; i++ {
+		builder.WriteString(`{"provider":"p","reason":"x"},`)
+	}
+	builder.WriteString("{}")
+	long := builder.String()
+	if len(long) <= maxTraceRawJSONBytes {
+		t.Fatalf("前置不成立：样本仅 %d 字节", len(long))
+	}
+	got := rawJSON([]byte(long))
+	text, ok := got.(string)
+	if !ok {
+		t.Fatalf("超长原文应有界退化，得到 %T", got)
+	}
+	if len(text) > maxTraceRawJSONBytes+len("(truncated)") {
+		t.Fatalf("超长原文未截断：%d 字节", len(text))
+	}
+	if !strings.HasSuffix(text, "(truncated)") {
+		t.Fatalf("截断应显式标注: %q", text[len(text)-16:])
+	}
+
+	// 非法 JSON 同样有界（旧行为是原样返回整段）。
+	bad := strings.Repeat("not-json ", 3000)
+	badGot, ok := rawJSON([]byte(bad)).(string)
+	if !ok {
+		t.Fatalf("非法 JSON 应退化成字符串")
+	}
+	if len(badGot) > maxTraceRawJSONBytes+len("(truncated)") {
+		t.Fatalf("非法 JSON 未截断：%d 字节", len(badGot))
+	}
+
+	// 上限内的合法 JSON 仍要解成结构（形状是观测面要的东西）。
+	if _, ok := rawJSON([]byte(`[{"provider":"p"}]`)).([]any); !ok {
+		t.Fatalf("上限内的合法 JSON 应解成结构")
+	}
+	if rawJSON([]byte("   ")) != nil {
+		t.Fatalf("空白原文应为 nil（不上报该项）")
 	}
 }

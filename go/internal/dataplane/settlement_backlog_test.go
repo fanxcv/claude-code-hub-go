@@ -8,7 +8,7 @@ import (
 // backlogStub 同时实现终态等待面与积压面（生产实现是 terminal.WriteQueue）。
 type backlogStub struct{ pending int64 }
 
-func (s *backlogStub) AwaitSettlement(context.Context, int64) bool { return true }
+func (s *backlogStub) AwaitSettlement(context.Context, int64) error { return nil }
 
 func (s *backlogStub) PendingSettlements() int64 { return s.pending }
 

@@ -272,8 +272,10 @@ type Options struct {
 
 // SettlementBarrier 是异步终态写队列的等待面（由 terminal.WriteQueue 实现）。
 type SettlementBarrier interface {
-	// AwaitSettlement 等 id 这一行的终态落库；该行不在队列里时立即返回 true。
-	AwaitSettlement(ctx context.Context, id int64) bool
+	// AwaitSettlement 等 id 这一行的终态**真正落库**。三种结论：
+	// nil（已落库或本就不在队列里）、写入失败的错误（该行未落库，不得当排空完成）、
+	// ctx 的错误（等待超时，是否落库未知）。
+	AwaitSettlement(ctx context.Context, id int64) error
 }
 
 // SettlementFlusher 是异步终态写队列的冲刷面：退出序列在关连接池之前先冲干净再停。

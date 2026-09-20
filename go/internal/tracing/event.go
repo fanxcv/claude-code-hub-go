@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/terminal"
 )
@@ -235,16 +236,39 @@ func costValue(costUSD string) (float64, bool) {
 
 // rawJSON 把 jsonb 原文嵌成 JSON 值而不是字符串（字符串会让下游只能看、不能查）。
 // 非 JSON 或空值退回 nil（调用方据此不写键）。
+// maxTraceRawJSONBytes 是 jsonb 原文（provider_chain / routing_trace）的上报长度上限。
+//
+// 这两列是**原样透传**的：正常是几 KB 的数组，但异常长时不该把每条 trace 撑大——观测面要的
+// 是形状线索，不是全文。超过上限时退化成截断后的字符串（仍含形状开头 + 显式标注）。
+const maxTraceRawJSONBytes = 8192
+
+// rawJSON 把 jsonb 原文折成上报元数据。
+//
+// 三种形态：空/空白 → nil（不上报该项）；合法且在上限内 → 解成结构（保留数组形状）；
+// 超长或非法 → **有界**字符串（超长截断并标注）。
 func rawJSON(raw []byte) any {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return nil
+	}
+	if len(trimmed) > maxTraceRawJSONBytes {
+		return truncatedJSONText(trimmed)
 	}
 	var decoded any
 	if err := json.Unmarshal(trimmed, &decoded); err != nil {
 		return string(trimmed)
 	}
 	return decoded
+}
+
+// truncatedJSONText 把超长原文截成有界字符串，并回退到最后一个完整 UTF-8 起始字节
+// （直接切字节会把多字节字符切成半个，落进 JSON 后是非法字符串）。
+func truncatedJSONText(raw []byte) string {
+	cut := maxTraceRawJSONBytes
+	for cut > 0 && !utf8.RuneStart(raw[cut]) {
+		cut--
+	}
+	return string(raw[:cut]) + "(truncated)"
 }
 
 // isoTime 是 Langfuse 的时间形状（ISO8601 / RFC3339，纳秒精度、UTC）。

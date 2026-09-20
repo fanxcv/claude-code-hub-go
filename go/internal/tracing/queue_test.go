@@ -2,6 +2,8 @@ package tracing
 
 import (
 	"context"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 )
@@ -132,5 +134,54 @@ func TestBatchSizeTriggersSend(t *testing.T) {
 	collector.waitForRequests(t, 1)
 	if collector.count() != 1 {
 		t.Fatalf("达到批大小应立刻发出一次，得到 %d 次", collector.count())
+	}
+}
+
+// Close 与并发的 RecordTerminal 必须互斥：关闭返回后不得有记录落进「已无消费者的队列」。
+//
+// 判据取「入队数 == 发出数」：只要有一条记录是在后台 goroutine 退出之后才入队的，它就永远
+// 不会被发出（旁路不 panic，只静默丢），这个等式就会破。批大小取得比总条数大，保证收尾的
+// 一次 drain 能装下全部残余，从而「发不出去」只能由竞态造成。
+func TestCloseIsSerializedWithRecord(t *testing.T) {
+	const (
+		rounds  = 50
+		workers = 8
+		perW    = 50
+	)
+	for round := 0; round < rounds; round++ {
+		collector := newCollector(t, 207)
+		tracer := newTestTracer(t, collector, Options{
+			SampleRate:    1,
+			QueueSize:     4096,
+			BatchSize:     4096,
+			FlushInterval: time.Hour,
+		})
+		var group sync.WaitGroup
+		start := make(chan struct{})
+		// 先播一条种子记录：保证每轮都有入队发生，不让调度波动把用例变成空跑。
+		tracer.RecordTerminal(testRecord(0))
+		for i := 0; i < workers; i++ {
+			group.Add(1)
+			go func(worker int) {
+				defer group.Done()
+				<-start
+				for j := 0; j < perW; j++ {
+					tracer.RecordTerminal(testRecord(int64(worker*1000 + j)))
+				}
+			}(i)
+		}
+		close(start)
+		runtime.Gosched()
+		tracer.Close(context.Background())
+		group.Wait()
+
+		counters := tracer.Counters()
+		if counters.Enqueued < 1 {
+			t.Fatalf("第 %d 轮：连种子记录都没入队，用例失去意义", round)
+		}
+		if counters.Sent != counters.Enqueued || counters.Failed != 0 {
+			t.Fatalf("第 %d 轮：入队 %d、发出 %d、失败 %d（关闭竞态丢了记录）",
+				round, counters.Enqueued, counters.Sent, counters.Failed)
+		}
 	}
 }

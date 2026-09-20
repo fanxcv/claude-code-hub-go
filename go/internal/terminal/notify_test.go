@@ -89,6 +89,7 @@ func TestSettleBlockedNotifies(t *testing.T) {
 
 	if _, err := settler.SettleBlocked(
 		context.Background(),
+		nil,
 		store.CreateMessageRequestData{},
 		Settlement{StatusCode: 403},
 	); err != nil {

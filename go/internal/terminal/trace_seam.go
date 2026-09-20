@@ -13,7 +13,8 @@ import (
 //  1. **失败不得影响结算**：上报接口**没有返回值**，实现必须自带降级；调用方在旁路前后
 //     不改变控制流。
 //  2. **时机：终态提交之后、且只在赢得终态时**。用 `Result.Committed` 当闸门同时解决重复上报：
-//     重复结算会拿到 `Committed=false`。
+//     重复结算会拿到 `Committed=false`。上报点裹在 settleNow 里，同步与异步（队列 worker）
+//     两条路径同一处收口。
 //  3. **不做重试**。上报是观测事实，丢了只丢一条 trace，不值得为它引入重试队列与背压。
 //
 // 上报**不含正文**：TraceRecord 结构上就没有 prompt / completion 字段，这是 PII 面最小化的
@@ -24,6 +25,12 @@ import (
 // 上游回显可能很长（甚至整段 HTML 错误页），而错误文本是唯一可能带内容的字段，故截断。
 // 取 512 字节：够看清是哪类错误，不足以装下整段回显。
 const maxTraceErrorBytes = 512
+
+// maxTraceBlockedByBytes 是 blocked_by 的上报长度上限。
+//
+// 它是契约枚举值（sensitive_word、warmup 这类），正常只有十几个字节；上限存在只是
+// 为了不让一个异常长的取值把整条 trace 撑大——声明了截断就得真的截断。
+const maxTraceBlockedByBytes = 64
 
 // TraceRecord 是一次终态的可上报事实快照。
 //
@@ -71,14 +78,14 @@ type Tracer interface {
 // traceTerminal 把一次已提交的终态折算成上报事实。
 //
 // 闸门与 affinityWriteback 一致：只在赢得终态之后发（未赢得终态说明这一行不由本请求负责，
-// 重复结算也不该重复上报）。**无行标识时不发**——那只会产生一条没有主键的 trace，
-// 在收集器上无法与任何一条请求对上（拦截类终态的建行发生在结算内部，pc 里还没有 id）。
-func (s *Settler) traceTerminal(pc *pctx.Context, settlement Settlement, result Result) {
-	if s == nil || s.tracer == nil || !result.Committed || pc == nil {
-		return
-	}
-	id, ok := pc.MessageRequestID()
-	if !ok || id <= 0 {
+// 重复结算也不该重复上报）。行 id 由调用方给出而不是从 pc 反查：**拦截类终态的行 id
+// 由建行结果给出**（pc 里根本没有），而它们同样是已落库、该被观测到的请求。
+//
+// pc 为 nil 或 id 非法时不发：上报需要方法/路径/用户这类请求属性，缺了就发不出一条
+// 对得上任何请求的 trace。成本只在**真的写进库**（result.CostWritten）时才报：
+// 成本写失败却报出金额，会让观测面与账务面不符。
+func (s *Settler) traceTerminal(pc *pctx.Context, id int64, settlement Settlement, result Result) {
+	if s == nil || s.tracer == nil || !result.Committed || pc == nil || id <= 0 {
 		return
 	}
 
@@ -98,7 +105,7 @@ func (s *Settler) traceTerminal(pc *pctx.Context, settlement Settlement, result 
 	if settlement.Model != nil {
 		record.Model = *settlement.Model
 	}
-	if settlement.Cost != nil {
+	if settlement.Cost != nil && result.CostWritten {
 		record.HasCost = true
 		record.CostUSD = settlement.Cost.Total
 	}
@@ -106,7 +113,7 @@ func (s *Settler) traceTerminal(pc *pctx.Context, settlement Settlement, result 
 		record.ErrorMessage = truncateText(*settlement.ErrorMessage, maxTraceErrorBytes)
 	}
 	if settlement.BlockedBy != nil {
-		record.BlockedBy = *settlement.BlockedBy
+		record.BlockedBy = truncateText(*settlement.BlockedBy, maxTraceBlockedByBytes)
 	}
 	s.tracer.RecordTerminal(record)
 }

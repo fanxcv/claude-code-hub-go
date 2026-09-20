@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -62,7 +63,8 @@ type QueueStats struct {
 	Pending int64
 	// Enqueued 是累计入队条数。
 	Enqueued int64
-	// Rows 是累计落库条数（= 已 flush 的条数）。
+	// Rows 是累计**成功落库**的条数。写入失败与幂等去重（NotSettled）不计入它——
+	// 把失败的也算进去会让这个数在故障时比实际落库量虚高。
 	Rows int64
 	// Batches 是累计批数。
 	Batches int64
@@ -70,10 +72,19 @@ type QueueStats struct {
 	Degraded int64
 	// Failed 是写入报错的条数（含 CostGap 那一类）。
 	Failed int64
+	// NotSettled 是「未赢得该行」的幂等结论条数（重复投递、patrol 先补了终态）：
+	// 既不是失败，也不是本队列写下的行。
+	NotSettled int64
 	// CostGap 是「终态已提交、成本未落库」的次数：这些行的 cost_usd 为 NULL，
 	// 收入会少计。设计稿要求把它显式暴露出来，不掩盖。
 	CostGap int64
 }
+
+// ErrQueueWriteFailed 表示队列里有**终态未落库**的条目（写入报错）。
+//
+// 退出序列靠它判定「能否安全关依赖」：终态没进库而关掉连接池，那些行会永久留在未终态
+// （只能由 patrol 按年龄兜底，且成本无从补回）。
+var ErrQueueWriteFailed = errors.New("terminal: 异步终态写队列中有写入失败")
 
 // DebugLogger 是可选的调试级日志面：每次 flush 都要留一条（行数、耗时、积压），而 flush
 // 默认每 200ms 一次——用 warn 级会淹没日志。terminal.Logger 仍只要求 Warn，故这里用可选断言
@@ -100,6 +111,11 @@ type asyncEntry struct {
 	ctx context.Context
 	// done 在本条落库（或失败）后关闭，供 AwaitSettlement 等待。
 	done chan struct{}
+	// failure 是本条写入的**真实失败**（幂等结论 ErrNotSettled 不算失败）；nil 即成功。
+	//
+	// 只由 worker 在 process 里写、只由 AwaitSettlement 在 done 关闭后读，
+	// 可见性由 channel close 保证，故不需额外同步。
+	failure error
 }
 
 // WriteQueue 是单 writer 的终态写入队列。并发安全。
@@ -121,15 +137,19 @@ type WriteQueue struct {
 	stopped  bool
 	pending  int64
 	idle     chan struct{} // pending 归零时关闭；0→1 转换时重建
-	inflight map[int64]chan struct{}
+	inflight map[int64]*asyncEntry
 
 	enqueued      atomic.Int64
 	rows          atomic.Int64
 	batches       atomic.Int64
 	degraded      atomic.Int64
 	failed        atomic.Int64
+	notSettled    atomic.Int64
 	costGap       atomic.Int64
 	degradeLogged atomic.Bool
+	// pendingFailures 是「自上次 Flush 以来写入失败的条数」：Flush 读走并清零，
+	// 故退出序列那一次 Flush 必然看到这之前发生的全部失败。
+	pendingFailures atomic.Int64
 }
 
 // NewWriteQueue 构造并启动异步终态写队列。
@@ -158,7 +178,7 @@ func NewWriteQueue(options AsyncOptions) *WriteQueue {
 		nudge:         make(chan struct{}, 1),
 		stop:          make(chan struct{}),
 		done:          make(chan struct{}),
-		inflight:      map[int64]chan struct{}{},
+		inflight:      map[int64]*asyncEntry{},
 	}
 	queue.idle = make(chan struct{})
 	close(queue.idle) // 初始即空闲
@@ -167,6 +187,11 @@ func NewWriteQueue(options AsyncOptions) *WriteQueue {
 }
 
 // enqueue 尝试入队。返回 false 表示队列已满或已关停——调用方**必须**退回同步写（绝不丢弃）。
+//
+// 「停止判定 + 容量判定 + 登记 pending + 投递」在同一把锁内完成，与 Stop 互斥。分开做会留下
+// 一个真实的窗口：检查过 stopped 之后、投递之前 Stop 跑完（worker 退出），这条既不在队列里
+// 也永不被写——pending 永不归零，AwaitSettlement 会一直等到超时，随后关连接池就丢了这条终态。
+// 锁内发送不会阻塞：容量刚刚判过，且 worker 只读通道、不抢这把锁。
 func (q *WriteQueue) enqueue(
 	ctx context.Context,
 	id int64,
@@ -176,13 +201,6 @@ func (q *WriteQueue) enqueue(
 	if q == nil {
 		return false
 	}
-	q.mu.Lock()
-	if q.stopped {
-		q.mu.Unlock()
-		return false
-	}
-	q.mu.Unlock()
-
 	entry := &asyncEntry{
 		id:          id,
 		write:       write,
@@ -190,41 +208,49 @@ func (q *WriteQueue) enqueue(
 		ctx:         context.WithoutCancel(ctx),
 		done:        make(chan struct{}),
 	}
-	// 先登记再入队：worker 可能立刻把它消费掉，反过来会漏减计数。
-	q.addPending(entry)
-	select {
-	case q.entries <- entry:
-		q.enqueued.Add(1)
-		return true
-	default:
-		// 满队列：撤销登记，交回调用方同步写。计数并留一次痕（不是每条都记：持续过载时
-		// 逐条 warn 只会淹没日志，而计数与 Debug 级的 flush 行仍如实带出 degraded）。
-		q.finishEntry(entry)
+	q.mu.Lock()
+	if q.stopped {
+		q.mu.Unlock()
+		return false
+	}
+	if len(q.entries) >= q.capacity {
+		q.mu.Unlock()
+		// 满队列：交回调用方同步写。计数并留一次痕（不是每条都记：持续过载时逐条 warn 只会
+		// 淹没日志，而计数与 Debug 级的 flush 行仍如实带出 degraded）。
 		q.degraded.Add(1)
 		q.logDegrade()
 		return false
 	}
+	q.addPendingLocked(entry)
+	q.entries <- entry
+	q.mu.Unlock()
+	q.enqueued.Add(1)
+	return true
 }
 
-// AwaitSettlement 等某一行真正落库；该行不在队列里（已落库或从未入队）时立即返回 true。
+// AwaitSettlement 等某一行真正落库。三种结论：
+//
+//   - nil：已落库，或本就不在队列里（已落库 / 从未入队——同步写模式即此形态）；
+//   - 写入失败的错误：该行**没有**落库，调用方不得当成排空完成；
+//   - ctx 的错误：等待超时，是否落库未知。
 //
 // 退出序列与流终态屏障都靠它：异步模式下「已入队」不等于「已落库」，而关连接池会把尚未
 // 发出的终态 UPDATE 一并带走。
-func (q *WriteQueue) AwaitSettlement(ctx context.Context, id int64) bool {
+func (q *WriteQueue) AwaitSettlement(ctx context.Context, id int64) error {
 	if q == nil {
-		return true
+		return nil
 	}
 	q.mu.Lock()
-	done, ok := q.inflight[id]
+	entry, ok := q.inflight[id]
 	q.mu.Unlock()
 	if !ok {
-		return true
+		return nil
 	}
 	select {
-	case <-done:
-		return true
+	case <-entry.done:
+		return entry.failure
 	case <-ctx.Done():
-		return false
+		return ctx.Err()
 	}
 }
 
@@ -246,6 +272,10 @@ func (q *WriteQueue) PendingSettlements() int64 { return q.Pending() }
 
 // Flush 请求立刻写入并等到队列清空；ctx 先结束返回其错误（未完成数由 Pending 如实反映）。
 //
+// 排空但**其中有写入失败**时返回 ErrQueueWriteFailed（带失败计数）：清空的是队列，不是
+// 「所有终态都已落库」这个事实。失败计数是「自上次 Flush 以来」的（读走即清零），
+// 故退出序列那次 Flush 必然看到它之前发生的全部失败。
+//
 // 循环而不是等一次：排空窗口里仍在收尾的请求会继续入队，只等一次会漏掉它们。
 func (q *WriteQueue) Flush(ctx context.Context) error {
 	if q == nil {
@@ -257,6 +287,10 @@ func (q *WriteQueue) Flush(ctx context.Context) error {
 		idle := q.idle
 		q.mu.Unlock()
 		if pending == 0 {
+			// 失败在 process 里先于 finishEntry 记账，故 pending 归零时它已可见。
+			if failed := q.pendingFailures.Swap(0); failed > 0 {
+				return fmt.Errorf("%w: %d 条终态未落库", ErrQueueWriteFailed, failed)
+			}
 			return nil
 		}
 		select {
@@ -275,6 +309,8 @@ func (q *WriteQueue) Flush(ctx context.Context) error {
 //
 // 调用方应先 Flush：Stop 的收尾只覆盖恰好还在批里或通道里的那些。它等待 worker 收尾，
 // 而每条写入都有 asyncWriteTimeout 上界，故等待是有界的。
+//
+// 与 enqueue 互斥（同一把锁）：不会出现「入队已登记、worker 却已退出」的窗口。
 func (q *WriteQueue) Stop() {
 	if q == nil {
 		return
@@ -294,13 +330,14 @@ func (q *WriteQueue) Stats() QueueStats {
 		return QueueStats{}
 	}
 	return QueueStats{
-		Pending:  q.Pending(),
-		Enqueued: q.enqueued.Load(),
-		Rows:     q.rows.Load(),
-		Batches:  q.batches.Load(),
-		Degraded: q.degraded.Load(),
-		Failed:   q.failed.Load(),
-		CostGap:  q.costGap.Load(),
+		Pending:    q.Pending(),
+		Enqueued:   q.enqueued.Load(),
+		Rows:       q.rows.Load(),
+		Batches:    q.batches.Load(),
+		Degraded:   q.degraded.Load(),
+		Failed:     q.failed.Load(),
+		NotSettled: q.notSettled.Load(),
+		CostGap:    q.costGap.Load(),
 	}
 }
 
@@ -363,7 +400,6 @@ func (q *WriteQueue) flush(batch []*asyncEntry) {
 		q.process(entry)
 	}
 	q.batches.Add(1)
-	q.rows.Add(int64(len(batch)))
 	if logger, ok := q.logger.(DebugLogger); ok {
 		stats := q.Stats()
 		logger.Debug("terminal_async_flush", map[string]any{
@@ -372,19 +408,30 @@ func (q *WriteQueue) flush(batch []*asyncEntry) {
 			"duration_ms": time.Since(started).Milliseconds(),
 			"pending":     stats.Pending,
 			"degraded":    stats.Degraded,
+			"failed":      stats.Failed,
 		})
 	}
 }
 
 // process 写入一条。顺序不可换：先终态、后成本、再副作用——与同步路径同一套闸门。
+//
+// 三种结论分别计数：真落库（Rows）、幂等去重（NotSettled）、写入失败（Failed +
+// pendingFailures，后者供 Flush 与退出序列判「能否关依赖」）。
 func (q *WriteQueue) process(entry *asyncEntry) {
 	ctx, cancel := context.WithTimeout(entry.ctx, asyncWriteTimeout)
 	result, err := entry.write(ctx)
 	cancel()
-	// ErrNotSettled 是幂等结论而不是写入失败：重复投递、patrol 先补终态都会走到这里，
-	// 计成 failed 会把「正常去重」报成故障。
-	if err != nil && !errors.Is(err, ErrNotSettled) {
+	switch {
+	case err == nil:
+		q.rows.Add(1)
+	case errors.Is(err, ErrNotSettled):
+		// 幂等结论而不是写入失败：重复投递、patrol 先补终态都会走到这里，
+		// 计成 failed 会把「正常去重」报成故障，计成 rows 又会虚报落库量。
+		q.notSettled.Add(1)
+	default:
+		entry.failure = err
 		q.failed.Add(1)
+		q.pendingFailures.Add(1)
 		costGap := errors.Is(err, ErrCostWriteFailed)
 		if costGap {
 			q.costGap.Add(1)
@@ -401,16 +448,14 @@ func (q *WriteQueue) process(entry *asyncEntry) {
 	q.finishEntry(entry)
 }
 
-// addPending 登记一条待落库记录（含等待通道）。
-func (q *WriteQueue) addPending(entry *asyncEntry) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
+// addPendingLocked 登记一条待落库记录；**前提是调用方已持 q.mu**。
+func (q *WriteQueue) addPendingLocked(entry *asyncEntry) {
 	if q.pending == 0 {
 		q.idle = make(chan struct{})
 	}
 	q.pending++
 	if entry.id > 0 {
-		q.inflight[entry.id] = entry.done
+		q.inflight[entry.id] = entry
 	}
 }
 
@@ -419,7 +464,7 @@ func (q *WriteQueue) finishEntry(entry *asyncEntry) {
 	close(entry.done)
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if entry.id > 0 && q.inflight[entry.id] == entry.done {
+	if entry.id > 0 && q.inflight[entry.id] == entry {
 		delete(q.inflight, entry.id)
 	}
 	q.pending--

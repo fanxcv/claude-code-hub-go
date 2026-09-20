@@ -397,7 +397,7 @@ func TestIntegrationSettleBlocked(t *testing.T) {
 	model := "gpt-5.6"
 
 	settler := New(StoreWriter{Pools: pools}, Options{Backoff: func(int) time.Duration { return 0 }})
-	result, err := settler.SettleBlocked(ctx, store.CreateMessageRequestData{
+	result, err := settler.SettleBlocked(ctx, nil, store.CreateMessageRequestData{
 		ProviderID: 0, // 与 TS 一致：被拦截的请求没有供应商
 		UserID:     1,
 		Key:        key,

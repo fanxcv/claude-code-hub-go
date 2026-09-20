@@ -105,10 +105,15 @@ type Tracer struct {
 	sent     atomic.Uint64
 	failed   atomic.Uint64
 
-	closed   atomic.Bool
+	closed   bool
 	stop     chan struct{}
 	done     chan struct{}
 	stopOnce sync.Once
+	// sendMu 让「检查关闭位 → 入队」与 Close 互斥。
+	//
+	// 只用原子关闭位是不够的：一个并发调用方可能在 Close 置位前已读过旧值，等它真正发送时
+	// 后台 goroutine 已退出——这条记录落进一个再也没有消费者的队列里（旁路不 panic，但会静默丢）。
+	sendMu sync.RWMutex
 }
 
 // New 构造上报器。PUBLIC_KEY 或 SECRET_KEY 任一为空（或只有空白）即**整体关闭**：返回 nil。
@@ -216,13 +221,16 @@ func (t *Tracer) Counters() Counters {
 //   - 调用方给的 ctx 只限制**等待**，超时就返回（残余丢失，属旁路可接受损失）。
 //
 // 不关闭 channel 是刻意的：并发调用方与关闭方之间「检查关闭位 → 发送」之间存在竞态，
-// 关 channel 会有向已关闭 channel 发送的 panic 面；关位 + 不关 channel 没有这个面。
+// 关 channel 会有向已关闭 channel 发送的 panic 面；改以互斥锁隔离（见 Tracer.sendMu）——
+// 置位时已确保没有调用方停在「已判定、未发送」的中间态，故不会有记录落进无消费者的队列。
 func (t *Tracer) Close(ctx context.Context) {
 	if t == nil {
 		return
 	}
-	t.closed.Store(true)
+	t.sendMu.Lock()
+	t.closed = true
 	t.stopOnce.Do(func() { close(t.stop) })
+	t.sendMu.Unlock()
 	if ctx == nil {
 		<-t.done
 		return

@@ -272,8 +272,11 @@ func TestIntegrationPatrolRepairsAsyncCrashWindowRow(t *testing.T) {
 		t.Fatalf("迟到 flush 不得给已终态的行补成本：cost_usd = %v", costAfter)
 	}
 	stats := queue.Stats()
-	if stats.Rows != 1 {
-		t.Fatalf("迟到 flush 应确实执行了一次写入（否则这条断言失去意义）：%+v", stats)
+	// 这一条走的是「未赢得该行」的幂等结论（patrol 先补了终态），不是写入失败、
+	// 也不是本队列写下的行：三种计数分开看才能既证明「确实执行了一次写入」，
+	// 又不把幂等去重报成落库量。
+	if stats.NotSettled != 1 || stats.Failed != 0 || stats.Rows != 0 {
+		t.Fatalf("迟到 flush 应确认「未赢得该行」（NotSettled=1），且不得计成失败或落库：%+v", stats)
 	}
 }
 

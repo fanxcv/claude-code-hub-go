@@ -205,11 +205,14 @@ func (h *Handler) awaitSettlementFlush(request *http.Request, id int64, ok bool)
 	// 请求上下文此时可能已被客户端断开：这一笔写入仍需完成，故脱开取消但保留取值。
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), settleBarrierTimeout)
 	defer cancel()
-	if !h.options.SettlementBarrier.AwaitSettlement(ctx, id) {
-		// 不是失败：终态仍在队列里，退出序列会在关依赖前再等一次。
-		h.logger.Warn("dataplane.settle_flush_timeout", map[string]any{
+	if err := h.options.SettlementBarrier.AwaitSettlement(ctx, id); err != nil {
+		// 两种情形分开报：超时说明终态仍在队列里，退出序列会再等一次；写入失败说明这一笔
+		// **没有**落库，它只能由 patrol 按年龄兜底（成本无从补回）。
+		h.logger.Warn("dataplane.settle_flush_incomplete", map[string]any{
 			"messageRequestId": id,
 			"timeout":          settleBarrierTimeout.Milliseconds(),
+			"timedOut":         errors.Is(err, context.DeadlineExceeded),
+			"error":            err.Error(),
 		})
 	}
 }

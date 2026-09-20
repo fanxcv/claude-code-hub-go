@@ -18,12 +18,19 @@ import (
 //   - **绝不阻塞**：入队是非阻塞发送，队列满即丢（丢的是可再得的事实，卡住的是响应收尾）。
 //   - **绝不 panic**：不关 channel（见 Close），故没有向已关闭 channel 发送的面。
 //   - **绝不返回错误**：签名上就没有；失败只计数与记日志。
+//   - **与 Close 互斥**：从读关闭位到入队之间持有读锁，Close 拿写锁，故不可能出现
+//     「判定时未关闭、发送时后台已退出」——那会让记录落进一个再无消费者的队列。
 func (t *Tracer) RecordTerminal(record terminal.TraceRecord) {
-	if t == nil || t.closed.Load() {
+	if t == nil {
 		return
 	}
 	if !t.keepSample() {
 		t.sampled.Add(1)
+		return
+	}
+	t.sendMu.RLock()
+	defer t.sendMu.RUnlock()
+	if t.closed {
 		return
 	}
 	select {

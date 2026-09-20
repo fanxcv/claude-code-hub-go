@@ -169,7 +169,8 @@ type SensitiveWordSource interface {
 //
 // Node 侧是异步、失败不影响拦截；nil 表示不记录。
 type BlockedRequestLogger interface {
-	RecordBlocked(ctx context.Context, record BlockedRecord) error
+	// pc 是请求上下文，用于终态上报与亲和写回（可为 nil）；ctx 是派生的运行上下文。
+	RecordBlocked(ctx context.Context, pc *pctx.Context, record BlockedRecord) error
 }
 
 // BlockedRecord 是一条被拦截请求的日志载荷。
@@ -304,7 +305,8 @@ type SessionResult struct {
 
 // WarmupLogWriter 记录被抢答的 warmup 请求（provider_id = 0，不计费）。
 type WarmupLogWriter interface {
-	RecordWarmup(ctx context.Context, record WarmupRecord) error
+	// pc 是请求上下文，用于终态上报与亲和写回（可为 nil）；ctx 是派生的运行上下文。
+	RecordWarmup(ctx context.Context, pc *pctx.Context, record WarmupRecord) error
 }
 
 // WarmupSessionArtifactWriter 把本地抢答的 warmup 响应写进会话详情（Redis）。
