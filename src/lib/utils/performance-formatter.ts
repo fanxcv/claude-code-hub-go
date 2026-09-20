@@ -26,6 +26,28 @@ export function isNonBillingEndpoint(endpoint: string | null | undefined): boole
 }
 
 /**
+ * 格式化会话耗时（分档更细，与 formatDuration 的区别是这里到分钟级）。
+ *
+ * session-list-item 与 active-sessions-table 原先各抄了一份逐字相同的实现，收拢到此。
+ * - < 1s：毫秒
+ * - < 60s：秒（一位小数）
+ * - 其余：`Nm Ns`
+ */
+export function formatSessionDuration(durationMs: number | undefined): string {
+  if (!durationMs) return "-";
+
+  if (durationMs < 1000) {
+    return `${durationMs}ms`;
+  }
+  if (durationMs < 60000) {
+    return `${(Number(durationMs) / 1000).toFixed(1)}s`;
+  }
+  const minutes = Math.floor(durationMs / 60000);
+  const seconds = Math.floor((durationMs % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+/**
  * 格式化请求耗时
  * - 1000ms 以上显示为秒（如 "1.23s"）
  * - 1000ms 以下显示为毫秒（如 "850ms"）

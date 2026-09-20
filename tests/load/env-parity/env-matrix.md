@@ -11,9 +11,9 @@
 | 变量 | 类型 | 默认值 | 约束 | 主要消费方 |
 | --- | --- | --- | --- | --- |
 | `ENABLE_PROVIDER_CACHE` | string | `"true"` | — | （无静态引用） |
-| `REDIS_COMMAND_TIMEOUT_MS` | number（optionalNumber） | `10_000` | >= 100；<= 120000 | `src/lib/redis/client.ts` |
-| `REDIS_TLS_REJECT_UNAUTHORIZED` | string | `"true"` | — | `src/lib/redis/client.ts` |
-| `REDIS_URL` | string（optional） | — | — | `src/lib/redis/client.ts` |
+| `REDIS_COMMAND_TIMEOUT_MS` | number（optionalNumber） | `10_000` | >= 100；<= 120000 | （无静态引用） |
+| `REDIS_TLS_REJECT_UNAUTHORIZED` | string | `"true"` | — | （无静态引用） |
+| `REDIS_URL` | string（optional） | — | — | （无静态引用） |
 
 ## Replay（4）
 
@@ -40,9 +40,9 @@
 | `AUTO_MIGRATE` | string | `"true"` | — | （无静态引用） |
 | `DASHBOARD_LOGS_POLL_INTERVAL_MS` | number | `5000` | >= 250；<= 60000 | `src/app/[locale]/dashboard/logs/page.tsx` |
 | `DEBUG_MODE` | string | `"false"` | — | `src/lib/logger.ts` |
-| `ENABLE_CACHE_EFFECTIVENESS` | string | `"true"` | — | `src/lib/api-client/v1/openapi-types.gen.ts` |
+| `ENABLE_CACHE_EFFECTIVENESS` | string | `"true"` | — | `src/lib/api/v1/schemas/system-config.ts` |
 | `ENABLE_PREFIX_AFFINITY` | string | `"false"` | — | （无静态引用） |
-| `ENABLE_REQUEST_REPLAY` | string | `"true"` | — | `src/lib/api-client/v1/openapi-types.gen.ts` |
+| `ENABLE_REQUEST_REPLAY` | string | `"true"` | — | `src/app/[locale]/settings/config/page.tsx` |
 | `ENABLE_SECURE_COOKIES` | string | `"true"` | — | （无静态引用） |
 | `IP_GEO_API_TOKEN` | string（optional） | — | — | （无静态引用） |
 | `IP_GEO_API_URL` | string | `"https://ip-api.claude-code-hub.app"` | — | （无静态引用） |
@@ -82,7 +82,7 @@
 | `DB_POOL_IDLE_TIMEOUT` | number（optionalNumber） | — | >= 0；<= 3600 | （无静态引用） |
 | `DB_POOL_MAX` | number（optionalNumber） | — | >= 1；<= 200 | （无静态引用） |
 | `DB_STATEMENT_TIMEOUT_MS` | number（optionalNumber） | `90_000` | >= 1000；<= 119000 | （无静态引用） |
-| `DSN` | string（optionalPreprocessed） | — | — | `src/lib/migrate.ts` |
+| `DSN` | string（optionalPreprocessed） | — | — | （无静态引用） |
 
 ## 流式与门禁（7）
 
@@ -126,7 +126,7 @@
 | 变量 | 类型 | 默认值 | 约束 | 主要消费方 |
 | --- | --- | --- | --- | --- |
 | `AUTH_SESSION_TTL_SECONDS` | number | `604_800` | >= 60；<= 31536000 | （无静态引用） |
-| `ENABLE_RATE_LIMIT` | string | `"true"` | — | `src/lib/redis/client.ts` |
+| `ENABLE_RATE_LIMIT` | string | `"true"` | — | （无静态引用） |
 | `REPLAY_MAX_CONCURRENT_SPOOLS` | number | `64` | >= 1；<= 1024 | （无静态引用） |
 | `SESSION_REQUEST_ARTIFACT_MAX_BYTES` | number | `5 * 1024 * 1024` | >= 65536；<= 67108864 | （无静态引用） |
 | `SESSION_RESPONSE_BODY_DEDUP_ENABLED` | string | `"false"` | — | （无静态引用） |

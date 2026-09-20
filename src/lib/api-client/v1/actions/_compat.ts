@@ -71,6 +71,24 @@ export function legacyCursorQueryEntries(value: unknown): [string, string | numb
     : [];
 }
 
+/**
+ * 把查询参数对象规整为「可直接交给 searchParams」的扁平记录。
+ *
+ * 这是 `usage-logs` 与 `my-usage` 两条线共用的同一实现（原先各自抄了一份逐字相同的
+ * 副本）：`cursor` 走 legacy 的 `cursorCreatedAt`/`cursorId` 双键形态，`Date` 转 ISO，
+ * 其余只保留标量；非标量一律丢弃。
+ */
+export function toScalarQuery(params?: object): Record<string, string | number> {
+  return Object.fromEntries(
+    Object.entries(params ?? {}).flatMap(([key, value]) => {
+      if (key === "cursor") return legacyCursorQueryEntries(value);
+      if (value instanceof Date) return [[key, value.toISOString()]];
+      if (["string", "number", "boolean"].includes(typeof value)) return [[key, value]];
+      return [];
+    })
+  );
+}
+
 export function apiGet<T = any>(
   path: string,
   options?: Parameters<typeof apiClient.get>[1]

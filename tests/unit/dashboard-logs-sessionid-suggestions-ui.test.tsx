@@ -7,8 +7,6 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-vi.mock("server-only", () => ({}));
-
 import { UsageLogsFilters } from "@/app/[locale]/dashboard/logs/_components/usage-logs-filters";
 
 vi.mock("next-intl", () => ({

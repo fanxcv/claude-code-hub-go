@@ -4,16 +4,19 @@
  * 在所有测试运行前执行的全局配置
  */
 
-import { config } from "dotenv";
 import { afterAll, beforeAll, vi } from "vitest";
 
 // ==================== 加载环境变量 ====================
 
-// 优先加载 .env.test（如果存在）
-config({ path: ".env.test", quiet: true });
-
-// 降级加载 .env
-config({ path: ".env", quiet: true });
+// 用 Node 内建 `process.loadEnvFile`（22+）替代 dotenv：语义一致（不覆盖已存在的
+// 进程变量、缺文件时忽略），少一个依赖。逐个 try 是因为它对缺文件抛 ENOENT。
+for (const envFile of [".env.test", ".env"]) {
+  try {
+    process.loadEnvFile(envFile);
+  } catch {
+    // 文件不存在属正常：CI 不创建 .env，本地也常常没有
+  }
+}
 
 // ==================== 全局前置钩子 ====================
 
@@ -55,102 +58,12 @@ beforeAll(async () => {
 
   // 2026-09 node 退役：这里原先调 `@/repository/error-rules` 的 syncDefaultErrorRules 播种默认
   // 错误规则。该实现随 `src/repository/**` 删除，播种职责归 Go 侧（迁移/启动期），测试前置不再做。
-
-  // ==================== 并行 Worker 清理协调 ====================
-  // setupFiles 会在每个 worker 中执行；如果每个 worker 都在 afterAll 清理数据库，会出现“互相清理”的竞态。
-  // 这里用 Redis 计数器实现：只有最后一个结束的 worker 才执行 cleanup。
-  try {
-    const shouldCleanup = Boolean(dsn) && process.env.AUTO_CLEANUP_TEST_DATA !== "false";
-    if (!shouldCleanup) return;
-
-    const dbNameForKey = dbName || "unknown";
-    const counterKey = `cch:vitest:cleanup_workers:${dbNameForKey}`;
-    // 直接指到 redis/client：`@/lib/redis` 汇合点的 re-export 面已随 Node 数据面退役收窄，
-    // 而本 harness 只需要一个 Redis 客户端做 worker 计数。
-    const { getRedisClient } = await import("@/lib/redis/client");
-    const redis = getRedisClient();
-    if (!redis) return;
-
-    // 等待连接就绪（enableOfflineQueue=false，未 ready 时发命令会直接报错）
-    if (redis.status !== "ready") {
-      await new Promise<void>((resolve) => {
-        const timeout = setTimeout(resolve, 2000);
-        redis.once("ready", () => {
-          clearTimeout(timeout);
-          resolve();
-        });
-      });
-    }
-
-    if (redis.status !== "ready") {
-      console.warn("Redis 未就绪，跳过并行清理协调（不影响测试结果）");
-      return;
-    }
-
-    const current = await redis.incr(counterKey);
-    if (current === 1) {
-      // 防止异常退出导致计数器常驻
-      await redis.expire(counterKey, 60 * 15);
-    }
-    process.env.__VITEST_CLEANUP_COUNTER_KEY__ = counterKey;
-  } catch (error) {
-    console.warn("并行清理协调初始化失败（不影响测试结果）:", error);
-  }
 });
 
 // ==================== 全局清理钩子 ====================
 
-afterAll(async () => {
-  console.log("\nVitest 测试环境清理...\n");
-
-  // 清理测试期间创建的用户（仅清理最近 10 分钟内的）
-  const dsn = process.env.DSN || "";
-  if (dsn && process.env.AUTO_CLEANUP_TEST_DATA !== "false") {
-    try {
-      // 仅最后一个 worker 执行清理，避免并发互相删除
-      const counterKey = process.env.__VITEST_CLEANUP_COUNTER_KEY__;
-      const { getRedisClient } = await import("@/lib/redis/client");
-      const redis = counterKey ? getRedisClient() : null;
-
-      if (counterKey && redis) {
-        if (redis.status !== "ready") {
-          await new Promise<void>((resolve) => {
-            const timeout = setTimeout(resolve, 2000);
-            redis.once("ready", () => {
-              clearTimeout(timeout);
-              resolve();
-            });
-          });
-        }
-
-        if (redis.status === "ready") {
-          const remaining = await redis.decr(counterKey);
-          if (remaining <= 0) {
-            const { cleanupRecentTestData } = await import("./cleanup-utils");
-            const result = await cleanupRecentTestData();
-            if (result.deletedUsers > 0) {
-              console.log(`自动清理：删除 ${result.deletedUsers} 个测试用户\n`);
-            }
-            await redis.del(counterKey);
-          } else {
-            // 非最后一个 worker：跳过清理
-          }
-        } else {
-          console.warn("Redis 未就绪，跳过自动清理（不影响测试结果）");
-        }
-      } else {
-        // 无 Redis 协调：为了避免竞态，默认跳过清理
-        console.warn("未启用清理协调，跳过自动清理（不影响测试结果）");
-      }
-    } catch (error) {
-      console.warn(
-        "自动清理失败（不影响测试结果）:",
-        error instanceof Error ? error.message : error
-      );
-    }
-  }
-
-  console.log("Vitest 测试环境清理完成\n");
+afterAll(() => {
+  console.log("\nVitest 测试环境清理完成\n");
 });
 
 // ==================== 全局 Mock 配置（可选）====================

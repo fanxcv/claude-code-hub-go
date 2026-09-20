@@ -1,4 +1,5 @@
 import type { ProviderChainItem } from "@/types/message";
+import type { RoutingTraceV1 } from "@/types/routing-trace";
 
 /**
  * Format probability value for display.
@@ -1067,4 +1068,60 @@ export function formatProviderTimeline(
   }
 
   return { timeline, totalDuration };
+}
+
+/**
+ * Determine whether the cost multiplier badge should render in the TABLE CELL
+ * (outside the popover trigger) rather than inside the popover.
+ *
+ * Rules:
+ * - Must have a cost badge (multiplier != 1)
+ * - Discovery requests keep the final winner's badge visible even when
+ *   other candidates were tried
+ * - Legacy retries still keep the badge inside the popover
+ * - Must NOT be a hedge race (hedge shows badge inside popover)
+ */
+export function shouldShowCostBadgeInCell(
+  providerChain: ProviderChainItem[] | null | undefined,
+  costMultiplier: number | null | undefined,
+  routingTrace?: RoutingTraceV1 | null
+): boolean {
+  if (costMultiplier == null || costMultiplier === 1) return false;
+  if (!Number.isFinite(costMultiplier)) return false;
+  const chain = providerChain ?? [];
+  if (isHedgeRace(chain)) return false;
+  if (routingTrace?.mode === "discovery") {
+    return chain.some(
+      (item) =>
+        (item.reason === "request_success" ||
+          item.reason === "retry_success" ||
+          item.reason === "hedge_winner") &&
+        item.statusCode != null
+    );
+  }
+  if (chain.length === 0) return true;
+  if (getRetryCount(chain) > 0) return false;
+  return true;
+}
+
+/**
+ * Determine whether a request entry has been finalized.
+ *
+ * A request is considered finalized when:
+ * - It was blocked by a guard (blockedBy is set), OR
+ * - It has a non-empty providerChain (written at finalization time), OR
+ * - It has a statusCode (set when the response completes)
+ *
+ * Before finalization, provider info is unreliable because the upstream
+ * may change due to fallback, hedge, timeout, or fake-200 detection.
+ */
+export function isProviderFinalized(entry: {
+  providerChain?: unknown[] | null;
+  statusCode?: number | null;
+  blockedBy?: string | null;
+}): boolean {
+  if (entry.blockedBy) return true;
+  if (Array.isArray(entry.providerChain) && entry.providerChain.length > 0) return true;
+  if (entry.statusCode != null) return true;
+  return false;
 }

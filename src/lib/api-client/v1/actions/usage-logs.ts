@@ -6,10 +6,10 @@ import type {
 import {
   apiGet,
   apiPost,
-  legacyCursorQueryEntries,
   normalizeLegacyCursor,
   searchParams,
   toActionResult,
+  toScalarQuery,
   unwrapItems,
 } from "./_compat";
 
@@ -17,19 +17,19 @@ export type { UsageLogsExportStatus } from "@/types/usage-logs";
 
 export function getUsageLogs(params?: object) {
   return toActionResult(
-    apiGet(`/api/v1/usage-logs${searchParams(toQuery(params))}`).then(toLegacyUsageLogsPage)
+    apiGet(`/api/v1/usage-logs${searchParams(toScalarQuery(params))}`).then(toLegacyUsageLogsPage)
   );
 }
 
 export function getUsageLogsBatch(params?: object) {
   return toActionResult(
-    apiGet(`/api/v1/usage-logs${searchParams(toQuery(params))}`).then(toLegacyUsageLogsPage)
+    apiGet(`/api/v1/usage-logs${searchParams(toScalarQuery(params))}`).then(toLegacyUsageLogsPage)
   );
 }
 
 export function getUsageLogsStats(params?: object) {
   return toActionResult(
-    apiGet<UsageLogSummary>(`/api/v1/usage-logs/stats${searchParams(toQuery(params))}`)
+    apiGet<UsageLogSummary>(`/api/v1/usage-logs/stats${searchParams(toScalarQuery(params))}`)
   );
 }
 
@@ -58,7 +58,7 @@ export function getEndpointList() {
 export function getUsageLogSessionIdSuggestions(params: object) {
   return toActionResult(
     apiGet<{ items?: string[] }>(
-      `/api/v1/usage-logs/session-id-suggestions${searchParams(toQuery(params))}`
+      `/api/v1/usage-logs/session-id-suggestions${searchParams(toScalarQuery(params))}`
     ).then(unwrapItems)
   );
 }
@@ -96,17 +96,6 @@ export function downloadUsageLogsExport(jobId: string) {
     }).then(async (response) => {
       if (!response.ok) throw new Error(response.statusText || "Export download failed");
       return { blob: await response.blob() };
-    })
-  );
-}
-
-function toQuery(params?: object) {
-  return Object.fromEntries(
-    Object.entries(params ?? {}).flatMap(([key, value]) => {
-      if (key === "cursor") return legacyCursorQueryEntries(value);
-      if (value instanceof Date) return [[key, value.toISOString()]];
-      if (["string", "number", "boolean"].includes(typeof value)) return [[key, value]];
-      return [];
     })
   );
 }

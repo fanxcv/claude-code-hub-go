@@ -64,21 +64,6 @@ export function toDecimal(value: DecimalInput): Decimal | null {
   }
 }
 
-export function toCostDecimal(value: DecimalInput): Decimal | null {
-  const decimal = toDecimal(value);
-  return decimal ? decimal.toDecimalPlaces(COST_SCALE) : null;
-}
-
-export function formatCostForStorage(value: DecimalInput): string | null {
-  const decimal = toCostDecimal(value);
-  return decimal ? decimal.toFixed(COST_SCALE) : null;
-}
-
-export function costToNumber(value: DecimalInput, fractionDigits = 6): number {
-  const decimal = toDecimal(value) ?? new Decimal(0);
-  return Number(decimal.toDecimalPlaces(fractionDigits).toString());
-}
-
 export function sumCosts(values: DecimalInput[]): Decimal {
   return values.reduce<Decimal>((acc, current) => {
     const decimal = toDecimal(current);

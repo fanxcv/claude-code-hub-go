@@ -1,4 +1,4 @@
-import { z } from "@hono/zod-openapi";
+import { z } from "zod";
 import { IsoDateTimeStringSchema } from "./_common";
 
 export const WebhookProviderTypeSchema = z
@@ -24,12 +24,12 @@ export const WebhookTargetSchema = z.object({
   webhookUrl: z.string().nullable().describe("Webhook URL. Null for Telegram targets."),
   telegramBotToken: z
     .null()
-    .openapi({ readOnly: true })
+    .meta({ readOnly: true })
     .describe("Telegram bot token is write-only and redacted in responses."),
   telegramChatId: z.string().nullable().describe("Telegram chat id."),
   dingtalkSecret: z
     .null()
-    .openapi({ readOnly: true })
+    .meta({ readOnly: true })
     .describe("DingTalk secret is write-only and redacted in responses."),
   customTemplate: z.record(z.string(), z.unknown()).nullable().describe("Custom webhook template."),
   customHeaders: z.record(z.string(), z.string()).nullable().describe("Custom webhook headers."),
@@ -58,14 +58,14 @@ export const WebhookTargetCreateSchema = z
       .trim()
       .optional()
       .nullable()
-      .openapi({ description: "Write-only Telegram bot token.", writeOnly: true }),
+      .meta({ description: "Write-only Telegram bot token.", writeOnly: true }),
     telegramChatId: z.string().trim().optional().nullable().describe("Telegram chat id."),
     dingtalkSecret: z
       .string()
       .trim()
       .optional()
       .nullable()
-      .openapi({ description: "Write-only DingTalk signing secret.", writeOnly: true }),
+      .meta({ description: "Write-only DingTalk signing secret.", writeOnly: true }),
     customTemplate: z
       .union([z.string().trim(), z.record(z.string(), z.unknown())])
       .optional()

@@ -1,13 +1,13 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Loader2, RefreshCw, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { useVirtualizer } from "@/hooks/use-virtualizer";
 import { renewUser } from "@/lib/api-client/v1/actions/users";
 import { cn } from "@/lib/utils";
 import type { User, UserDisplay } from "@/types/user";

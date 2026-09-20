@@ -45,7 +45,7 @@ vi.mock("@tanstack/react-query", () => ({
   },
 }));
 
-vi.mock("@/hooks/use-virtualizer", () => ({
+vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: () => ({
     getTotalSize: () => mockLogs.length * 52,
     getVirtualItems: () => [
@@ -67,13 +67,21 @@ vi.mock("@/hooks/use-virtualizer", () => ({
   }),
 }));
 
-vi.mock("@/lib/utils/provider-chain-formatter", () => ({
-  formatProviderSummary: () => "provider summary",
-  getFinalProviderName: () => "mock-provider",
-  getRetryCount: () => 0,
-  isHedgeRace: () => false,
-  isActualRequest: () => true,
-}));
+let mockIsProviderFinalized = true;
+// 只替换需要被测试控制的那几个；shouldShowCostBadgeInCell 等纯函数保持真实现
+// （它已并入本模块，用真实现才与生产一致）。
+vi.mock("@/lib/utils/provider-chain-formatter", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/utils/provider-chain-formatter")>();
+  return {
+    ...actual,
+    formatProviderSummary: () => "provider summary",
+    getFinalProviderName: () => "mock-provider",
+    getRetryCount: () => 0,
+    isHedgeRace: () => false,
+    isActualRequest: () => true,
+    isProviderFinalized: () => mockIsProviderFinalized,
+  };
+});
 
 vi.mock("@/actions/usage-logs", () => ({
   getUsageLogsBatch: vi.fn(),
@@ -129,11 +137,6 @@ vi.mock("./error-details-dialog", () => ({
       />
     );
   },
-}));
-
-let mockIsProviderFinalized = true;
-vi.mock("@/lib/utils/provider-display", () => ({
-  isProviderFinalized: () => mockIsProviderFinalized,
 }));
 
 import { VirtualizedLogsTable } from "./virtualized-logs-table";

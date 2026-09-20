@@ -1,4 +1,4 @@
-import { z } from "@hono/zod-openapi";
+import { z } from "zod";
 
 export const SessionIdParamSchema = z.object({
   sessionId: z.string().min(1).describe("Session id."),

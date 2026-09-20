@@ -5,8 +5,8 @@
  */
 
 import type { Locale } from "date-fns";
-import { format, formatDistance, formatRelative } from "date-fns";
-import { enUS, ja, ru, zhCN, zhTW } from "date-fns/locale";
+import { format, formatDistance } from "date-fns";
+import { enUS, zhCN } from "date-fns/locale";
 import { formatInTimeZone } from "date-fns-tz";
 
 /**
@@ -14,10 +14,7 @@ import { formatInTimeZone } from "date-fns-tz";
  */
 const LOCALE_MAP: Record<string, Locale> = {
   "zh-CN": zhCN,
-  "zh-TW": zhTW,
   en: enUS,
-  ru: ru,
-  ja: ja,
 };
 
 /**
@@ -89,36 +86,10 @@ export function formatDateDistance(
 }
 
 /**
- * Format date relative to now with locale support
- * @param date - Date to format
- * @param baseDate - Base date (defaults to now)
- * @param locale - next-intl locale code
- * @returns Formatted relative string (e.g., "yesterday at 3:00 PM", "昨天下午3:00")
- */
-export function formatDateRelative(
-  date: Date | number | string,
-  baseDate: Date | number = new Date(),
-  locale: string = "zh-CN"
-): string {
-  const dateObj = typeof date === "string" ? new Date(date) : date;
-  const baseDateObj = typeof baseDate === "string" ? new Date(baseDate) : baseDate;
-  const dateFnsLocale = getDateFnsLocale(locale);
-
-  return formatRelative(dateObj, baseDateObj, { locale: dateFnsLocale });
-}
-
-/**
  * Common date format patterns for different locales
  */
-export const DATE_FORMATS = {
+const DATE_FORMATS = {
   "zh-CN": {
-    short: "yyyy-MM-dd",
-    medium: "yyyy年MM月dd日",
-    long: "yyyy年MM月dd日 HH:mm:ss",
-    time: "HH:mm:ss",
-    monthDay: "MM月dd日",
-  },
-  "zh-TW": {
     short: "yyyy-MM-dd",
     medium: "yyyy年MM月dd日",
     long: "yyyy年MM月dd日 HH:mm:ss",
@@ -131,20 +102,6 @@ export const DATE_FORMATS = {
     long: "MMMM dd, yyyy HH:mm:ss",
     time: "HH:mm:ss",
     monthDay: "MMM dd",
-  },
-  ru: {
-    short: "dd.MM.yyyy",
-    medium: "dd MMM yyyy",
-    long: "dd MMMM yyyy HH:mm:ss",
-    time: "HH:mm:ss",
-    monthDay: "dd MMM",
-  },
-  ja: {
-    short: "yyyy/MM/dd",
-    medium: "yyyy年MM月dd日",
-    long: "yyyy年MM月dd日 HH:mm:ss",
-    time: "HH:mm:ss",
-    monthDay: "MM月dd日",
   },
 } as const;
 

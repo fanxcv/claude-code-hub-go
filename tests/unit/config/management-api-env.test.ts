@@ -1,4 +1,3 @@
-import { z as openApiZ } from "@hono/zod-openapi";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 async function loadEnv() {
@@ -28,8 +27,7 @@ describe("management API env flags", () => {
     expect(env.CSRF_SECRET).toBeUndefined();
   });
 
-  test("keeps optional env fields unset after OpenAPI zod registration", async () => {
-    expect(typeof openApiZ.string().openapi).toBe("function");
+  test("keeps optional env fields unset", async () => {
     for (const key of [
       "DSN",
       "DB_POOL_MAX",

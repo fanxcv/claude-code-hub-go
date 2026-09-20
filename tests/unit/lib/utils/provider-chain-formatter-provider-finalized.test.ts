@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isProviderFinalized } from "@/lib/utils/provider-display";
+import { isProviderFinalized } from "@/lib/utils/provider-chain-formatter";
 
 describe("isProviderFinalized", () => {
   it.each([

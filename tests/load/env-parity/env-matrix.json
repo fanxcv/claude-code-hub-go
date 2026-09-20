@@ -278,8 +278,8 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": ["src/lib/migrate.ts"],
-      "consumerFileCount": 1
+      "consumerFiles": [],
+      "consumerFileCount": 0
     },
     {
       "name": "ENABLE_API_KEY_ADMIN_ACCESS",
@@ -312,12 +312,8 @@
       "enumValues": null,
       "descriptionComment": "缓存效果计费模拟：理论 vs 实际缓存命中率聚合指标（仅展示，不影响路由，默认开启）",
       "descriptionSummary": "缓存效果计费模拟：理论 vs 实际缓存命中率聚合指标（仅展示，不影响路由，默认开启）",
-      "consumerFiles": [
-        "src/lib/api-client/v1/openapi-types.gen.ts",
-        "src/lib/api/v1/schemas/system-config.ts",
-        "src/types/system-config.ts"
-      ],
-      "consumerFileCount": 3
+      "consumerFiles": ["src/lib/api/v1/schemas/system-config.ts", "src/types/system-config.ts"],
+      "consumerFileCount": 2
     },
     {
       "name": "ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS",
@@ -418,8 +414,8 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": ["src/lib/redis/client.ts"],
-      "consumerFileCount": 1
+      "consumerFiles": [],
+      "consumerFileCount": 0
     },
     {
       "name": "ENABLE_REQUEST_REPLAY",
@@ -436,12 +432,11 @@
       "descriptionComment": "请求分离 + Replay：客户端断开后上游继续引流缓存，相同请求体重发续传",
       "descriptionSummary": "请求分离 + Replay：客户端断开后上游继续引流缓存，相同请求体重发续传",
       "consumerFiles": [
-        "src/lib/api-client/v1/openapi-types.gen.ts",
         "src/app/[locale]/settings/config/page.tsx",
         "src/lib/api/v1/schemas/system-config.ts",
         "src/types/system-config.ts"
       ],
-      "consumerFileCount": 4
+      "consumerFileCount": 3
     },
     {
       "name": "ENABLE_SECURE_COOKIES",
@@ -838,7 +833,7 @@
         "src/lib/utils/zod-i18n.ts",
         "src/app/[locale]/dashboard/_components/user/hooks/use-model-suggestions.ts"
       ],
-      "consumerFileCount": 8
+      "consumerFileCount": 7
     },
     {
       "name": "PORT",
@@ -905,8 +900,8 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": ["src/lib/redis/client.ts"],
-      "consumerFileCount": 1
+      "consumerFiles": [],
+      "consumerFileCount": 0
     },
     {
       "name": "REDIS_TLS_REJECT_UNAUTHORIZED",
@@ -922,8 +917,8 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": ["src/lib/redis/client.ts"],
-      "consumerFileCount": 1
+      "consumerFiles": [],
+      "consumerFileCount": 0
     },
     {
       "name": "REDIS_URL",
@@ -939,8 +934,8 @@
       "enumValues": null,
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": ["src/lib/redis/client.ts"],
-      "consumerFileCount": 1
+      "consumerFiles": [],
+      "consumerFileCount": 0
     },
     {
       "name": "REPLAY_LIVE_DEDUP_ENABLED",

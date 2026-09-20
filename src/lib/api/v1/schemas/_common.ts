@@ -1,4 +1,4 @@
-import { z } from "@hono/zod-openapi";
+import { z } from "zod";
 import { PUBLIC_PROVIDER_TYPE_VALUES } from "@/lib/api/v1/_shared/constants";
 
 export const ApiVersionSchema = z.literal("1.0.0").describe("Management API version.");
