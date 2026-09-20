@@ -292,6 +292,17 @@ func (q *WriteQueue) Pending() int64 {
 // 入队后没有跟踪器，不并进来的话退出日志会报 0，而队列里其实还躺着没写的终态。
 func (q *WriteQueue) PendingSettlements() int64 { return q.Pending() }
 
+// FlushSettlements / StopSettlements 是数据面退出接缝（dataplane.SettlementFlusher）要求的
+// 方法名。生产装配把本类型**裸装**进 dataplane.SettlementBarrier，而退出序列按这两个名字
+// 做类型断言——名字对不上时断言恒失败，关池前的冲队列会静默变成 no-op。
+//
+// 2026-09-20 生产事故正是如此：当时队列只有 Flush/Stop，`SettlementFlusher` 断言恒假，
+// 退出时那批已入队的终态再没被写出去，账本行永久留在 status_code IS NULL，而进程
+// 依然以成功退出（连 warn 都没有）。这两个方法与 Flush/Stop 是同一份实现，不允许各写一份。
+// 接缝由编译期断言钉住：见 dataplane/settlement_seam_conformance_test.go。
+func (q *WriteQueue) FlushSettlements(ctx context.Context) error { return q.Flush(ctx) }
+func (q *WriteQueue) StopSettlements()                           { q.Stop() }
+
 // Flush 请求立刻写入并等到队列清空；ctx 先结束返回其错误（未完成数由 Pending 如实反映）。
 //
 // 排空但**其中有写入失败**时返回 ErrQueueWriteFailed（带失败计数）：清空的是队列，不是
