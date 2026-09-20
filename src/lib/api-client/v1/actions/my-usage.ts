@@ -8,10 +8,10 @@ import type {
 import type { UsageLogsBatchResult } from "@/types/usage-logs";
 import {
   apiGet,
-  legacyCursorQueryEntries,
   normalizeLegacyCursor,
   searchParams,
   toActionResult,
+  toScalarQuery,
   unwrapItems,
 } from "./_compat";
 
@@ -38,19 +38,23 @@ export function getMyTodayStats() {
 
 export function getMyUsageLogs(params?: object) {
   return toActionResult(
-    apiGet(`/api/v1/me/usage-logs${searchParams(toQuery(params))}`).then(toLegacyMyUsageLogsPage)
+    apiGet(`/api/v1/me/usage-logs${searchParams(toScalarQuery(params))}`).then(
+      toLegacyMyUsageLogsPage
+    )
   );
 }
 
 export function getMyUsageLogsBatch(params?: object) {
   return toActionResult(
-    apiGet(`/api/v1/me/usage-logs${searchParams(toQuery(params))}`).then(toLegacyMyUsageLogsPage)
+    apiGet(`/api/v1/me/usage-logs${searchParams(toScalarQuery(params))}`).then(
+      toLegacyMyUsageLogsPage
+    )
   );
 }
 
 export function getMyUsageLogsBatchFull(params?: object) {
   return toActionResult(
-    apiGet<UsageLogsBatchResult>(`/api/v1/me/usage-logs/full${searchParams(toQuery(params))}`)
+    apiGet<UsageLogsBatchResult>(`/api/v1/me/usage-logs/full${searchParams(toScalarQuery(params))}`)
   );
 }
 
@@ -89,17 +93,6 @@ export function getMyStatsSummary(
         endDate: resolvedEndDate,
       })}`
     )
-  );
-}
-
-function toQuery(params?: object) {
-  return Object.fromEntries(
-    Object.entries(params ?? {}).flatMap(([key, value]) => {
-      if (key === "cursor") return legacyCursorQueryEntries(value);
-      if (value instanceof Date) return [[key, value.toISOString()]];
-      if (["string", "number", "boolean"].includes(typeof value)) return [[key, value]];
-      return [];
-    })
   );
 }
 
