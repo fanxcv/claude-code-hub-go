@@ -39,6 +39,15 @@ var errDataPlaneSkeleton = errors.New("cchd: 未配置 DSN，数据面不装配"
 // 尚未发出的终态 UPDATE 会随进程消失，对应的账本行永久留在未终态。
 var errSettleIncomplete = errors.New("cchd: 排空后仍有终态未落库")
 
+// intOrZero 取可选数字型环境变量的值；未设置时返回 0——由装配侧取工厂默认，
+// 而不是在这里替 env 契约定默认值（两边各写一份默认就会分叉）。
+func intOrZero(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
 // dataPlaneOptions 是数据面装配缝的参数；*rulesSync 提供配置失效通道。
 type dataPlaneOptions struct {
 	Cfg    config.Config
@@ -119,6 +128,12 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 		},
 		// 端点级与厂级熔断复用这个开关（Node 也在同一开关上短路，见 health 包注释）。
 		EndpointCircuitBreakerEnabled: options.Cfg.Env.EnableEndpointCircuitBreaker,
+		// 终态写入模式（MESSAGE_REQUEST_WRITE_MODE，默认 sync）与异步队列的三个上限。
+		// sync 不建队列（逐字保留原路径）；async 才建，未设置的上限取出厂默认。
+		MessageRequestWriteMode:            store.MessageWriteMode(options.Cfg.Env.MessageRequestWriteMode),
+		MessageRequestAsyncMaxPending:      intOrZero(options.Cfg.Env.MessageRequestAsyncMaxPending),
+		MessageRequestAsyncBatchSize:       intOrZero(options.Cfg.Env.MessageRequestAsyncBatchSize),
+		MessageRequestAsyncFlushIntervalMS: intOrZero(options.Cfg.Env.MessageRequestAsyncFlushIntervalMS),
 		// 占位思考签名（CCH_THINKING_SIGNATURE_PLACEHOLDER，Go 专有，默认开）：思考来自
 		// chat/responses 线上游时，给无签名的思考块补占位签名，Anthropic 客户端才会显示。
 		PlaceholderThinkingSignature: options.Cfg.PlaceholderThinkingSignature,

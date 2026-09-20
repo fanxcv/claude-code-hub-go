@@ -63,7 +63,14 @@ func (h *Handler) pumpStream(
 	}
 	// 不登记、不等，进程一旦在扇出完成前退出（滚动重启正是断线风暴的窗口），
 	// 未发出的终态 UPDATE 就随进程消失，账本行永久留在 status_code IS NULL。
-	pending := h.settlements.begin(func() { stream.Completion() })
+	//
+	// 异步终态写模式下 stream.Completion() 只等到「已入队」，故再等一次该行的 flush：退出序列
+	// 要的是「已落库」，而不是「已交给队列」（barrier 为 nil 时这次等待不存在）。
+	rowID, hasRowID := settlementRowID(state)
+	pending := h.settlements.begin(func() {
+		stream.Completion()
+		h.awaitSettlementFlush(request, rowID, hasRowID)
+	})
 	defer func() {
 		if err := stream.Close(); err != nil {
 			h.logger.Debug("dataplane.stream_close_failed", map[string]any{"error": err.Error()})
@@ -177,6 +184,33 @@ func (h *Handler) pumpStream(
 			stream.ClientCancel(request.Context().Err())
 			return
 		}
+	}
+}
+
+// settlementRowID 给出本次请求的日志行标识（异步终态写的等待键）。
+//
+// 没有行（守卫链未开行）或没有请求状态时返回 false：那种情况下等待面上没有可等的东西。
+func settlementRowID(state *RequestState) (int64, bool) {
+	if state == nil || state.PC == nil {
+		return 0, false
+	}
+	return state.PC.MessageRequestID()
+}
+
+// awaitSettlementFlush 等这一行的终态真正落库（仅异步终态写模式：barrier 为 nil 时是 no-op）。
+func (h *Handler) awaitSettlementFlush(request *http.Request, id int64, ok bool) {
+	if !ok || h.options.SettlementBarrier == nil {
+		return
+	}
+	// 请求上下文此时可能已被客户端断开：这一笔写入仍需完成，故脱开取消但保留取值。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(request.Context()), settleBarrierTimeout)
+	defer cancel()
+	if !h.options.SettlementBarrier.AwaitSettlement(ctx, id) {
+		// 不是失败：终态仍在队列里，退出序列会在关依赖前再等一次。
+		h.logger.Warn("dataplane.settle_flush_timeout", map[string]any{
+			"messageRequestId": id,
+			"timeout":          settleBarrierTimeout.Milliseconds(),
+		})
 	}
 }
 

@@ -290,7 +290,7 @@ func TestDrainAndShutdownReportsDrainTimeout(t *testing.T) {
 
 	drained := make(chan error, 1)
 	go func() {
-		drained <- drainAndShutdown(server, frontDoor, nil, logx.New(nil), 100*time.Millisecond, 100*time.Millisecond)
+		drained <- drainAndShutdown(server, frontDoor, nil, nil, logx.New(nil), 100*time.Millisecond, 100*time.Millisecond)
 	}()
 
 	waitFor(t, "排空窗口拒绝新请求", func() bool {
@@ -343,7 +343,7 @@ func TestDrainAndShutdownCompletesCleanly(t *testing.T) {
 
 	waitFor(t, "在途请求被前门计入", func() bool { return frontDoor.InFlight() == 1 })
 
-	if err := drainAndShutdown(server, frontDoor, nil, logx.New(nil), 2*time.Second, time.Second); err != nil {
+	if err := drainAndShutdown(server, frontDoor, nil, nil, logx.New(nil), 2*time.Second, time.Second); err != nil {
 		t.Fatalf("在途请求能自行结束时排空应干净返回: %v", err)
 	}
 	<-requestDone

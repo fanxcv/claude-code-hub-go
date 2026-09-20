@@ -277,6 +277,8 @@ func runWith(rootCtx context.Context, options startup) error {
 	// 结算等待面：由数据面自行提供（未装配数据面时为 nil）。
 	// 退出序列必须等它归零之后才能关依赖——关连接池会把尚未发出的终态 UPDATE 一并带走。
 	var settlements settlementWaiter
+	// 异步终态写队列的冲刷面（同步写模式下数据面不提供）：退出序列要在关池之前先把队列写干净。
+	var settlementQueue settlementFlusher
 	if options.OpenDataPlane != nil {
 		handler, closeFn, dataPlaneErr := options.OpenDataPlane(rootCtx, dataPlaneOptions{
 			Cfg:            cfg,
@@ -298,6 +300,9 @@ func runWith(rootCtx context.Context, options startup) error {
 			dataPlane = handler
 			if waiter, ok := handler.(settlementWaiter); ok {
 				settlements = waiter
+			}
+			if flusher, ok := handler.(settlementFlusher); ok {
+				settlementQueue = flusher
 			}
 			if closeFn != nil {
 				closeDataPlane = closeFn
@@ -550,7 +555,7 @@ func runWith(rootCtx context.Context, options startup) error {
 		}
 	}
 
-	drainErr := drainAndShutdown(httpServer, frontDoor, settlements, logger, options.DrainTimeout, options.ShutdownTimeout)
+	drainErr := drainAndShutdown(httpServer, frontDoor, settlements, settlementQueue, logger, options.DrainTimeout, options.ShutdownTimeout)
 	// 剖析面先关：它可能在跑一个长 profile 请求，先关才轮得到「停写 → 关依赖」这套顺序。
 	closeDebugPlane(debugPlane, logger)
 	// 后台任务必须先于连接池收口：任务在用池，先关池会让在途写入直接报错。
@@ -603,6 +608,16 @@ func pendingSettlements(waiter settlementWaiter) int64 {
 	return waiter.PendingSettlements()
 }
 
+// settlementFlusher 是数据面在**异步终态写模式**下提供的队列冲刷面。
+//
+// 同步写（默认）时数据面不提供它（断言失败即为 nil，整段跳过）。
+// 异步时必须先冲再停，顺序在关连接池之前、jobRuntime/ops 停止之前：队列 worker 仍在写库，
+// 先关池会让这些写直接报错，而它们是已经交付给客户端的请求的终态。
+type settlementFlusher interface {
+	FlushSettlements(ctx context.Context) error
+	StopSettlements()
+}
+
 // drainAndShutdown 停止接纳新请求、排空在途、等终态落库、关闭服务器。
 //
 // 排空未完成会返回错误（退出码非零）而不是静默成功：在途请求被强退是审计事件，
@@ -612,6 +627,7 @@ func drainAndShutdown(
 	httpServer *http.Server,
 	frontDoor *egress.FrontDoor,
 	settlements settlementWaiter,
+	queue settlementFlusher,
 	logger *logx.Logger,
 	drainTimeout time.Duration,
 	shutdownTimeout time.Duration,
@@ -628,6 +644,10 @@ func drainAndShutdown(
 		})
 	}
 	settleErr := waitSettlements(settlements, logger, drainTimeout)
+	// 异步终态写：等结算归零只能保证「队列里的都写完了」，而 flush 是幂等的，故再显式冲一次
+	// （排空窗口里最后入队的那些正是它盖住的），随后停队列——此后的写入退回同步，不再有后台协程
+	// 在关池之后动手。窗口与排空同宽。
+	flushSettlements(queue, logger, drainTimeout)
 	// 关 listener 并等 handler 结束：排空只等前门的在途计数，连接层仍需显式收口。
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
 	shutdownErr := httpServer.Shutdown(shutdownCtx)
@@ -669,6 +689,26 @@ func waitSettlements(waiter settlementWaiter, logger *logx.Logger, window time.D
 		"drainWindow":        window.Milliseconds(),
 	})
 	return fmt.Errorf("%w: 仍有 %d 条流终态未落库", errSettleIncomplete, pending)
+}
+
+// flushSettlements 把异步终态写队列冲干净并停掉；未装配（同步写模式）时是 no-op。
+//
+// 冲失败只记 error，不改退出码：真正的判据是 settle_incomplete（终态没落库），
+// 而队列冲不干净时它必然已经报过；失败的那几条由 patrol 按既有语义兑底。
+func flushSettlements(queue settlementFlusher, logger *logx.Logger, window time.Duration) {
+	if queue == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), window)
+	defer cancel()
+	if err := queue.FlushSettlements(ctx); err != nil {
+		logger.Error("settle_flush_incomplete", map[string]any{
+			"drainWindow": window.Milliseconds(),
+			"error":       err.Error(),
+		})
+	}
+	// 停队列在关池之前：停掉之后不再有后台协程写库（此后的入队一律退回同步写）。
+	queue.StopSettlements()
 }
 
 // readyProber 组合依赖探测与规则就绪，并在规则门无域可管时如实说明。

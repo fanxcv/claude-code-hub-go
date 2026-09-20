@@ -26,13 +26,18 @@ import (
 //   - 等不到就必须报错退出（退出码非零）并如实带出未完成数，而不是静默成功；
 //   - shutdown_started / shutdown_complete 必须带上待落库数（这个缺口在 info 级日志里原本不可见）。
 
-// settlementStub 是实现了数据面结算等待面的假处理器。
+// settlementStub 是实现了数据面结算等待面与异步队列冲刷面的假处理器。
 type settlementStub struct {
 	pending atomic.Int64
 	// wait 决定 WaitSettlements 的行为：nil 表示立即归零。
 	wait func(ctx context.Context) bool
 	// onWait 在 WaitSettlements 被调用时记录顺序，用于断言「等结算先于关依赖」。
 	onWait func()
+	// onFlush / onStop 在冲刷面被调用时记录顺序，用于断言「冲队列先于关依赖」。
+	onFlush func()
+	onStop  func()
+	flushed atomic.Int64
+	stopped atomic.Int64
 }
 
 func (s *settlementStub) ServeHTTP(http.ResponseWriter, *http.Request) {}
@@ -47,6 +52,23 @@ func (s *settlementStub) WaitSettlements(ctx context.Context) bool {
 		return true
 	}
 	return s.wait(ctx)
+}
+
+// FlushSettlements / StopSettlements 是异步终态写队列的冲刷面（同步写模式下数据面不提供，
+// 这里一律提供，以断言退出序列在关依赖之前确实冲过队列）。
+func (s *settlementStub) FlushSettlements(context.Context) error {
+	s.flushed.Add(1)
+	if s.onFlush != nil {
+		s.onFlush()
+	}
+	return nil
+}
+
+func (s *settlementStub) StopSettlements() {
+	s.stopped.Add(1)
+	if s.onStop != nil {
+		s.onStop()
+	}
 }
 
 // logEventLines 把关心的原始日志行原样打出来：这两行是验收证据（go test -v 即可看到）。
@@ -84,6 +106,8 @@ func runBootWithSettlements(t *testing.T, stub *settlementStub) bootOutcome {
 	signals := make(chan os.Signal, 1)
 	port := strconv.Itoa(freePort(t))
 	stub.onWait = func() { record("settle_wait") }
+	stub.onFlush = func() { record("settle_flush") }
+	stub.onStop = func() { record("settle_stop") }
 
 	options := startup{
 		Logger: logx.New(&logs),
@@ -185,8 +209,12 @@ func TestShutdownWaitsForSettlementsBeforeClosingDataPlane(t *testing.T) {
 		t.Fatalf("shutdown_complete 必须报出 0（缺口靠这个数才能被发现）：%s", outcome.logs)
 	}
 	waitIndex := indexOfStep(outcome.order, "settle_wait")
+	flushIndex := indexOfStep(outcome.order, "settle_flush")
 	closeIndex := indexOfStep(outcome.order, "dataplane_close")
-	if waitIndex < 0 || closeIndex < 0 || waitIndex > closeIndex {
-		t.Fatalf("等结算必须先于数据面收口，收到顺序 %v", outcome.order)
+	if waitIndex < 0 || flushIndex < 0 || closeIndex < 0 || waitIndex > flushIndex || flushIndex > closeIndex {
+		t.Fatalf("顺序必须是「等结算 → 冲队列 → 数据面收口」，收到 %v", outcome.order)
+	}
+	if stub.stopped.Load() == 0 {
+		t.Fatalf("退出序列必须停掉异步终态写队列（否则后台协程会在关池之后动手）：%v", outcome.order)
 	}
 }

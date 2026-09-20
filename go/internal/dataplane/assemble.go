@@ -47,6 +47,32 @@ func shouldRecordEndpointFailure(failure *forward.Failure) bool {
 // 它同时决定端点级熔断是否记账：超时算端点问题，普通 5xx 不算。
 const timeoutStatusCode = 524
 
+// openSettlementQueue 按写入模式建异步终态写队列。
+//
+// sync（默认）与任何未知取值都不建实例（返回 nil）：一个拼错的变量不应该让写入改道。
+func openSettlementQueue(options StoreOptions, logger *logx.Logger) *terminal.WriteQueue {
+	if options.MessageRequestWriteMode != store.MessageWriteAsync {
+		return nil
+	}
+	return terminal.NewWriteQueue(terminal.AsyncOptions{
+		MaxPending:    options.MessageRequestAsyncMaxPending,
+		BatchSize:     options.MessageRequestAsyncBatchSize,
+		FlushInterval: time.Duration(options.MessageRequestAsyncFlushIntervalMS) * time.Millisecond,
+		Logger:        logger,
+	})
+}
+
+// settlementBarrier 把队列适配成数据面的终态等待面。
+//
+// 必须返回**接口**而不是裸指针：把 nil 的 *WriteQueue 装进接口会得到一个非 nil 接口，
+// 后续的 nil 判空会全部失效。
+func settlementBarrier(queue *terminal.WriteQueue) SettlementBarrier {
+	if queue == nil {
+		return nil
+	}
+	return queue
+}
+
 // 本文件是生产装配：把真实包接成 dataplane.Options。cmd/cchd 只调用 NewStoreBacked，
 // 不关心内部接了哪些包——装配细节集中在这里，接线缺口也集中在这里（见 Assembly 字段说明）。
 
@@ -107,6 +133,13 @@ type StoreOptions struct {
 	// EndpointCircuitBreakerEnabled 取自 ENABLE_ENDPOINT_CIRCUIT_BREAKER：关闭时端点级与
 	// 厂级熔断一律不写（Node 在同一开关上短路，见 endpoint-circuit-breaker.ts:334）。
 	EndpointCircuitBreakerEnabled bool
+	// MessageRequestWriteMode 取自 MESSAGE_REQUEST_WRITE_MODE（store.MessageWriteMode）：
+	// 空值或 sync（默认）逐字保留同步路径；只有显式 async 才建异步终态写队列。
+	MessageRequestWriteMode store.MessageWriteMode
+	// MessageRequestAsync* 是异步模式的三个上限；零值取出厂默认（与 env 契约区间一致）。
+	MessageRequestAsyncMaxPending      int
+	MessageRequestAsyncBatchSize       int
+	MessageRequestAsyncFlushIntervalMS int
 	// PlaceholderThinkingSignature 取自 CCH_THINKING_SIGNATURE_PLACEHOLDER（Go 专有，默认开）：
 	// 给来自非 Anthropic 上游、没有签名的思考块补占位签名，见 convert/thinking_placeholder.go。
 	PlaceholderThinkingSignature bool
@@ -191,6 +224,13 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		options.Now = time.Now
 	}
 
+	// 终态写入模式（MESSAGE_REQUEST_WRITE_MODE）：sync（默认）逐字保留原路径；async 走有界
+	// 队列 + 单 writer 批量 flush（见 terminal/batch.go 的文件头）。
+	//
+	// 队列**只有一个实例**，两个结算器（拦截路径与主路径）共用：writer 分道固定 1 条连接，
+	// 两个队列只会互相排队；每条仍走自己那份接线（队列只管「何时写」，不管「怎么写」）。
+	settlementQueue := openSettlementQueue(options, logger)
+
 	// 拦截类终态（敏感词、预热等）的结算器。刻意与下面的主结算器**分成两个实例**：
 	// 主结算器带 public-status 投影旁路（rollup），而拦截路径历来不带（guard 侧自建时
 	// 就是空 Options）。这里给拦截路径加上「有新行」通知，但不给它加 rollup——
@@ -200,6 +240,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		interceptSettler = terminal.New(terminal.StoreWriter{Pools: options.Pools}, terminal.Options{
 			NewRows: options.NewRows,
 			Logger:  logger,
+			Queue:   settlementQueue,
 		})
 	}
 
@@ -277,6 +318,8 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			// 租约结算：成本落库后把这次请求的成本扣到判定时用过的切片上（见 limit.SettleLeases）。
 			LeaseSettler: options.LeaseSettler,
 			Logger:       logger,
+			// 异步终态写队列（nil 即同步写，逐字保留原路径）。
+			Queue: settlementQueue,
 		})
 	}
 
@@ -447,6 +490,8 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		// 聚合式模型列表（`/v1/models` 一族）需读全量供应商/分组/系统时区，只存在于存储层；
 		// 不装配时这五条不注册并回退 Node（见 Options.ModelCatalog 的注释）。
 		ModelCatalog: StoreModelCatalog{Pools: options.Pools},
+		// 异步终态写的等待面（nil 即同步写）：退出序列靠它判断能否安全关连接池。
+		SettlementBarrier: settlementBarrier(settlementQueue),
 		// 响应修复器的审计落库：终态之后的补写，只需分道（见 store.AppendSpecialSettings）。
 		ResponseFix: ResponseFixWiring{
 			AppendSpecialSettings: options.Pools.AppendSpecialSettings,

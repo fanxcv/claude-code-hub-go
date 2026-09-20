@@ -261,6 +261,27 @@ type Options struct {
 	//
 	// 零值即关（与 env「未设置即开」不同）：默认值由 config 层给出，装配侧只搬运。
 	PlaceholderThinkingSignature bool
+	// SettlementBarrier 是「这次请求的终态是否已真正落库」的等待面。
+	//
+	// nil（默认）表示终态写是同步的：Settle 返回即已落库，等待面上没有额外的事要做，
+	// 行为与接线前逐字一致。非 nil 表示 MESSAGE_REQUEST_WRITE_MODE=async：Settle 只入队，
+	// 而「已交付客户端但终态未落库」的计数必须等到队列 flush 完成才能归零——
+	// 退出序列正是靠它判断能否安全关连接池。
+	SettlementBarrier SettlementBarrier
+}
+
+// SettlementBarrier 是异步终态写队列的等待面（由 terminal.WriteQueue 实现）。
+type SettlementBarrier interface {
+	// AwaitSettlement 等 id 这一行的终态落库；该行不在队列里时立即返回 true。
+	AwaitSettlement(ctx context.Context, id int64) bool
+}
+
+// SettlementFlusher 是异步终态写队列的冲刷面：退出序列在关连接池之前先冲干净再停。
+type SettlementFlusher interface {
+	// FlushSettlements 立刻写入已入队但尚未落库的记录，并等到队列清空。
+	FlushSettlements(ctx context.Context) error
+	// StopSettlements 停队列（此后的入队一律退回同步写）。
+	StopSettlements()
 }
 
 // Handler 是 `/v1` 数据面处理器。并发安全：所有可变状态都是每请求本地的。
@@ -301,6 +322,27 @@ func (h *Handler) PendingSettlements() int64 { return h.settlements.pending() }
 
 // WaitSettlements 等到没有待落库终态；ctx 先结束返回 false（此时不得当作排空完成）。
 func (h *Handler) WaitSettlements(ctx context.Context) bool { return h.settlements.waitEmpty(ctx) }
+
+// FlushSettlements 把异步终态写队列里已入队但尚未落库的记录立刻写掉并等到队列清空。
+//
+// 同步模式（未装配 barrier）与队列不支持冲刷面时是 no-op：那时没有队列可冲。
+func (h *Handler) FlushSettlements(ctx context.Context) error {
+	flusher, ok := h.options.SettlementBarrier.(SettlementFlusher)
+	if !ok {
+		return nil
+	}
+	return flusher.FlushSettlements(ctx)
+}
+
+// StopSettlements 停异步终态写队列。它排在关连接池之前（见 cmd/cchd 的退出序列）：
+// 队列的 worker 仍在写库，先关池会让这些写直接报错。
+func (h *Handler) StopSettlements() {
+	flusher, ok := h.options.SettlementBarrier.(SettlementFlusher)
+	if !ok {
+		return
+	}
+	flusher.StopSettlements()
+}
 
 // ServeHTTP 承载一条数据面请求。
 //
