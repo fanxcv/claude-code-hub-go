@@ -115,7 +115,7 @@ var envSpecs = []envSpec{
 	{name: "MESSAGE_REQUEST_ASYNC_BATCH_SIZE", field: "MessageRequestAsyncBatchSize", kind: kindOptionalNumber, isInt: true, hasMin: true, min: 1, hasMax: true, max: 2000},
 	{name: "MESSAGE_REQUEST_ASYNC_FLUSH_INTERVAL_MS", field: "MessageRequestAsyncFlushIntervalMS", kind: kindOptionalNumber, isInt: true, hasMin: true, min: 10, hasMax: true, max: 60000},
 	{name: "MESSAGE_REQUEST_ASYNC_MAX_PENDING", field: "MessageRequestAsyncMaxPending", kind: kindOptionalNumber, isInt: true, hasMin: true, min: 100, hasMax: true, max: 200000},
-	{name: "MESSAGE_REQUEST_WRITE_MODE", field: "MessageRequestWriteMode", kind: kindEnum, def: "async", enum: []string{"sync", "async"}},
+	{name: "MESSAGE_REQUEST_WRITE_MODE", field: "MessageRequestWriteMode", kind: kindEnum, def: "sync", enum: []string{"sync", "async"}},
 	{name: "NODE_ENV", field: "NodeEnv", kind: kindEnum, def: "development", enum: []string{"development", "production", "test"}},
 	{name: "PORT", field: "Port", kind: kindNumber, def: "23000"},
 	{name: "PREFIX_AFFINITY_TTL_SECONDS", field: "PrefixAffinityTTLSeconds", kind: kindNumber, def: "3600", isInt: true, hasMin: true, min: 60, hasMax: true, max: 86400},

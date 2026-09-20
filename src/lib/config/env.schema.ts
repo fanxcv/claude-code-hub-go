@@ -75,9 +75,10 @@ export const EnvSchema = z.object({
       .max(60000, "DB_LOCK_TIMEOUT_MS 不能大于 60000")
   ).default(5_000),
   // message_request 写入模式
-  // - sync：同步写入（兼容旧行为，但高并发下会增加请求尾部阻塞）
-  // - async：异步批量写入（默认，降低 DB 写放大与连接占用）
-  MESSAGE_REQUEST_WRITE_MODE: z.enum(["sync", "async"]).default("async"),
+  // - sync（默认）：同步写入，终态与成本在响应尾链上写完再返回
+  // - async：异步批量写入（Go 侧有界队列 + 单 writer，见 go/internal/terminal/batch.go；
+  //   队列满时降级为同步写，不丢数据）
+  MESSAGE_REQUEST_WRITE_MODE: z.enum(["sync", "async"]).default("sync"),
   // 异步批量写入参数
   MESSAGE_REQUEST_ASYNC_FLUSH_INTERVAL_MS: optionalNumber(
     z

@@ -3,7 +3,7 @@
 由 `scripts/export-env-matrix.ts` 从 `src/lib/config/env.schema.ts` 生成，请勿手工编辑。
 
 - 变量总数：**70**
-- 源文件 SHA256：`f254742e56f0cf542b2ee14df6ec7cf09b9c42687374b1a0493c8f3ae99e1136`
+- 源文件 SHA256：`7703d103dc77064d26d4f40b73057cfd8d827b40550d2d3e417edd2a8791579a`
 - 重生成：`bun scripts/export-env-matrix.ts`
 
 ## Redis 与缓存（4）
@@ -103,7 +103,7 @@
 | `MESSAGE_REQUEST_ASYNC_BATCH_SIZE` | number（optionalNumber） | — | >= 1；<= 2000 | （无静态引用） |
 | `MESSAGE_REQUEST_ASYNC_FLUSH_INTERVAL_MS` | number（optionalNumber） | — | >= 10；<= 60000 | （无静态引用） |
 | `MESSAGE_REQUEST_ASYNC_MAX_PENDING` | number（optionalNumber） | — | >= 100；<= 200000 | （无静态引用） |
-| `MESSAGE_REQUEST_WRITE_MODE` | enum | `"async"` | ∈ {sync, async} | （无静态引用） |
+| `MESSAGE_REQUEST_WRITE_MODE` | enum | `"sync"` | ∈ {sync, async} | （无静态引用） |
 
 ## 熔断与健康（2）
 
