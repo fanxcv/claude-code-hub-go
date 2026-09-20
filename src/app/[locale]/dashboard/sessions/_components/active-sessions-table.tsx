@@ -36,6 +36,7 @@ import { getSessionDisplayStatus, SESSION_DISPLAY_STATUS } from "@/lib/session-s
 import { cn } from "@/lib/utils";
 import type { CurrencyCode } from "@/lib/utils/currency";
 import { formatCurrency } from "@/lib/utils/currency";
+import { formatSessionDuration } from "@/lib/utils/performance-formatter";
 import type { ActiveSessionInfo } from "@/types/session";
 
 interface ActiveSessionsTableProps {
@@ -44,20 +45,6 @@ interface ActiveSessionsTableProps {
   inactive?: boolean; // 标记是否为非活跃 session
   currencyCode?: CurrencyCode;
   onSessionTerminated?: () => void; // 终止后的回调
-}
-
-function formatDuration(durationMs: number | undefined): string {
-  if (!durationMs) return "-";
-
-  if (durationMs < 1000) {
-    return `${durationMs}ms`;
-  } else if (durationMs < 60000) {
-    return `${(Number(durationMs) / 1000).toFixed(1)}s`;
-  } else {
-    const minutes = Math.floor(durationMs / 60000);
-    const seconds = Math.floor((durationMs % 60000) / 1000);
-    return `${minutes}m ${seconds}s`;
-  }
 }
 
 function SessionStatusCell({
@@ -415,7 +402,7 @@ export function ActiveSessionsTable({
                     {session.costUsd ? formatCurrency(session.costUsd, currencyCode, 6) : "-"}
                   </TableCell>
                   <TableCell className="text-right font-mono text-xs">
-                    {formatDuration(session.durationMs)}
+                    {formatSessionDuration(session.durationMs)}
                   </TableCell>
                   <TableCell className="text-center">
                     <div className="flex items-center gap-2 justify-center">

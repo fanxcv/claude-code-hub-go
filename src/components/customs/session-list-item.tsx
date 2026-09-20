@@ -5,24 +5,8 @@ import { Link } from "@/i18n/routing";
 import { cn, formatTokenAmount } from "@/lib/utils";
 import type { CurrencyCode } from "@/lib/utils/currency";
 import { formatCurrency } from "@/lib/utils/currency";
+import { formatSessionDuration } from "@/lib/utils/performance-formatter";
 import type { ActiveSessionInfo } from "@/types/session";
-
-/**
- * 格式化持续时长
- */
-function formatDuration(durationMs: number | undefined): string {
-  if (!durationMs) return "-";
-
-  if (durationMs < 1000) {
-    return `${durationMs}ms`;
-  } else if (durationMs < 60000) {
-    return `${(Number(durationMs) / 1000).toFixed(1)}s`;
-  } else {
-    const minutes = Math.floor(durationMs / 60000);
-    const seconds = Math.floor((durationMs % 60000) / 1000);
-    return `${minutes}m ${seconds}s`;
-  }
-}
 
 /**
  * 获取状态图标和颜色
@@ -105,7 +89,7 @@ export function SessionListItem({
         <div className="flex items-center gap-1 ml-auto flex-shrink-0">
           <Clock className="h-3 w-3 text-muted-foreground" />
           <span className="text-xs font-mono text-muted-foreground">
-            {formatDuration(session.durationMs)}
+            {formatSessionDuration(session.durationMs)}
           </span>
         </div>
 
