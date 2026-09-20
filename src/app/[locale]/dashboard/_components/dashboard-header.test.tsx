@@ -72,7 +72,8 @@ describe("buildDashboardNavItems", () => {
   });
 });
 
-describe("头部入口移除（回归钉子）", () => {
+describe("头部入口钉子", () => {
+  // 这两条曾在 1.6.0 快照里钉「不存在」，2026-09 按要求恢复该功能后改为正向钉。
   it("头部导航项不含「文档」入口（任何会话形态）", () => {
     const sessions: (UiSessionSnapshot | null)[] = [
       null,
@@ -86,7 +87,7 @@ describe("头部入口移除（回归钉子）", () => {
     }
   });
 
-  it("DashboardHeader 不再渲染新版本检查（组件已随入口删除）", () => {
+  it("DashboardHeader 挂载新版本检查入口，且在语言切换之后", () => {
     const header = readProjectFile(
       "src",
       "app",
@@ -96,12 +97,14 @@ describe("头部入口移除（回归钉子）", () => {
       "dashboard-header.tsx"
     );
 
-    expect(header).not.toContain("VersionUpdateNotifier");
-    expect(header).not.toContain("version-update-notifier");
+    expect(header).toContain("VersionUpdateNotifier");
+    expect(header.indexOf("<VersionUpdateNotifier />")).toBeGreaterThan(
+      header.indexOf("<LanguageSwitcher")
+    );
   });
 
-  it("新版本检查组件本体已删除（不留零引用死码）", () => {
-    const removed = path.join(
+  it("新版本检查组件存在（提示能力不丢）", () => {
+    const component = path.join(
       process.cwd(),
       "src",
       "components",
@@ -109,6 +112,6 @@ describe("头部入口移除（回归钉子）", () => {
       "version-update-notifier.tsx"
     );
 
-    expect(fs.existsSync(removed)).toBe(false);
+    expect(fs.existsSync(component)).toBe(true);
   });
 });

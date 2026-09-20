@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
+import { VersionUpdateNotifier } from "@/components/customs/version-update-notifier";
 import { Button } from "@/components/ui/button";
 import { LanguageSwitcher } from "@/components/ui/language-switcher";
 import { ThemeSwitcher } from "@/components/ui/theme-switcher";
@@ -39,6 +40,7 @@ export function DashboardHeader({ session }: DashboardHeaderProps) {
         <div className="flex items-center gap-3">
           <ThemeSwitcher />
           <LanguageSwitcher size="sm" />
+          <VersionUpdateNotifier />
           {session ? (
             <UserMenu user={{ id: session.user.id, name: session.user.name ?? "" }} />
           ) : (

@@ -218,9 +218,10 @@ describe("AGENTS.md 的路径钉子", () => {
         agentsMarkdown.includes(`\`${template}\``),
         `模板 ${template} 已不在 AGENTS.md 里；若已不再需要，请从白名单删除`
       ).toBe(true);
-      expect(existsSync(path.join(ROOT, template)), `${template} 其实是真实文件，不该进模板白名单`).toBe(
-        false
-      );
+      expect(
+        existsSync(path.join(ROOT, template)),
+        `${template} 其实是真实文件，不该进模板白名单`
+      ).toBe(false);
     }
   });
 
