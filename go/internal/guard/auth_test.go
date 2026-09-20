@@ -312,7 +312,7 @@ func TestExtractBearerKey(t *testing.T) {
 }
 
 // 非守卫流程复用的提取函数只取首个可用凭据。
-func TestextractAPIKeyFromHeaders(t *testing.T) {
+func TestExtractAPIKeyFromHeaders(t *testing.T) {
 	headers := map[string]string{"x-chain": "x"}
 	if got := extractAPIKeyFromHeaders(headers); got != "" {
 		t.Fatalf("无凭据时应为空串，收到 %q", got)
