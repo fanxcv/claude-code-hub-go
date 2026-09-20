@@ -65,16 +65,7 @@ jobs:
           bun scripts/build-ui-embed.mjs
 
       - name: 断言 UI 产物已收编
-        # 为什么断言：`go:embed all:assets` 只要求目录存在（`.gitkeep` 即可匹配），
-        # 缺产物时**编译照样成功**，但二进制会是个没有界面的壳。所以这里必须拦。
-        run: |
-          test -f go/internal/uiapp/assets/MANIFEST.json || {
-            echo "::error::UI 产物未收编（缺 MANIFEST.json）"; exit 1; }
-          n="$(find go/internal/uiapp/assets -type f | wc -l)"
-          echo "assets 文件数：${n}（压缩态实测约 500）"
-          if [ "$n" -lt 300 ]; then
-            echo "::error::UI 产物文件数过少（${n} < 300），疑似导出失败"; exit 1
-          fi
+        run: bash scripts/assert-uiapp-assets.sh
 
       - uses: actions/upload-artifact@v4
         with:
@@ -113,11 +104,8 @@ jobs:
           name: uiapp-assets
           path: go/internal/uiapp/assets
 
-      - name: 断言 UI 产物在位
-        run: |
-          test -f go/internal/uiapp/assets/MANIFEST.json || {
-            echo "::error::UI 产物缺失，二进制将没有界面"; exit 1; }
-          echo "assets 文件数：$(find go/internal/uiapp/assets -type f | wc -l)"
+      - name: 断言 UI 产物已收编
+        run: bash scripts/assert-uiapp-assets.sh
 
       - name: 编译（CGO_ENABLED=0，纯静态）
         working-directory: go

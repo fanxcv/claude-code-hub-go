@@ -3,9 +3,6 @@
  * UI 静态导出管线（配合 next.config.ts 的 CCH_UI_EXPORT=1 开关）。
  *
  * 为什么需要临时移出文件：
- *  - src/app/{api,v1,v1beta} 是 Go 的运行时路由（Node 退役后 Go 侧接管），
- *    产物里一旦有它们、next build 会把 force-dynamic/route.ts 一起编译，导出直接失败。
- *  - src/proxy.ts 是 next-intl 中间件，静态导出不存在中间件，必须移除。
  *  - 尚未去 SSR 的段目录（服务端绑定：getSession/@/repository/@/actions/headers）
  *    无法静态导出，先移出；对应的深层链接由 Go 壳回退兜底（见 go-ui-embed-plan §1/#6、#3）。
  *  - 三条动态段路径构建期无法枚举，同样移出，由 Go 壳回退深链。
@@ -13,13 +10,6 @@
  * 移出的文件全部暂存到 .sisyphus/.export-stash-<pid>/，构建结束在 finally 中还原，
  * 不破坏工作树；产物收进 go/internal/uiapp/assets/（.gitignore 忽略，仅留 .gitkeep），
  * 由 go-embed-shell 波次的 `//go:embed all:assets` 收编。
- *
- * 与 standalone 管线共用 .next/ 的隔离（两者必须能共存）：
- * next build 起始会清空 distDir（Next build/index.js 的 cleanDistDir 步骤，只保留 cache/dev/lock/trace 四项），
- * 所以导出构建会把 standalone 管线刚生成的 .next/standalone 一并删掉。故本脚本构建前把
- * .next/standalone 整体 rename 到 .sisyphus/.standalone-stash，finally 里再 rename 回来。
- * 为什么不用独立 distDir：output=="export" 时 Next 会把 config.distDir 强制改回 '.next'
- * （next/dist/export/utils.js 的 hasCustomExportOutput），内部产物照样写进 .next，隔离不掉。
  *
  * 用法（仓库根目录）：
  *   bun scripts/build-ui-export.mjs               # 导出 + 收编到 go/internal/uiapp/assets
@@ -74,9 +64,6 @@ if (!fs.existsSync(path.join(ROOT, "next.config.ts"))) {
 
 const STASH_ROOT = path.join(ROOT, ".sisyphus");
 const STASH = path.join(STASH_ROOT, `.export-stash-${process.pid}`);
-// standalone 产物的暂存点（见文件头的隔离说明）：与逐文件暂存树分开，避免被 restoreAll 误当普通文件搬回。
-const STANDALONE_DIR = path.join(ROOT, ".next", "standalone");
-const STANDALONE_STASH = path.join(STASH_ROOT, ".standalone-stash");
 const OUT_DIR = path.join(ROOT, "out");
 const ASSETS_DIR = path.join(ROOT, "go", "internal", "uiapp", "assets");
 const LOCALE_DIR = "src/app/[locale]";
@@ -95,17 +82,9 @@ const versionSource = nextVersionEnv ? "APP_VERSION" : appVersion ? "package.jso
 // 静态导出（trailingSlash: true）下每个路由目录里的壳名；与 Go 壳的 rootShell 同值。
 const rootShellName = "index.html";
 
-// 恒定排除：Go 运行时路由（只移路由文件，`_lib` 等共享模块必须在位——客户端会引用）。
-const ROUTE_DIRS = ["src/app/api", "src/app/v1", "src/app/v1beta"];
-// 静态导出没有 Node 进程，故一律移出：
-//  - instrumentation.ts：启动钩子（迁移/Redis 订阅/崩溃处理器），并会把 drizzle/replay 等服务端链拉进构建；
-//  - 下列三个只被「已移出的路由或根布局」引用的服务端模块（留着重则引用已移出的路由，tsc 报 TS2307）：
-//    health/checker ← api/health*、api/actions；public-api-loader ← layout-metadata；layout-metadata ← 根布局（已被导出壳替换）。
+// 恒定排除：只列**当前仍存在**的路径。静态导出没有 Node 进程，故一律移出：
+//  - layout-metadata：只被根布局引用（根布局已被导出壳替换）。
 const FIXED_EXCLUDES = [
-  "src/proxy.ts",
-  "src/instrumentation.ts",
-  "src/lib/health/checker.ts",
-  "src/lib/public-status/public-api-loader.ts",
   "src/lib/public-status/layout-metadata.ts",
 ];
 
@@ -144,10 +123,7 @@ const SERVER_IMPORT_SPECS = [
   "ioredis",
   "postgres",
   "drizzle-orm",
-  "bull",
-  "bullmq",
 ];
-const SERVER_ROOT_DIRS = ["src/repository/", "src/drizzle/", "src/actions/", "src/app/api/", "src/app/v1/", "src/app/v1beta/"];
 /** 构建期必需的服务端代码：`src/i18n/**` 是 next-intl 的构建期配置（导出壳调用 getMessages 时用到），不能移出。 */
 const BUILD_TIME_KEEP_DIRS = ["src/i18n/"];
 
@@ -188,7 +164,6 @@ function computeServerOnlyModules() {
     const abs = path.join(ROOT, f);
     const head = fs.readFileSync(abs, "utf8").split("\n").slice(0, 3).join("\n");
     if (/^\s*["']use server["'];?/m.test(head)) server.add(f);
-    if (SERVER_ROOT_DIRS.some((d) => f.startsWith(d))) server.add(f);
     if (imports.get(f).specs.some((s) => SERVER_IMPORT_SPECS.includes(s))) server.add(f);
   }
   for (let round = 0; ; round++) {
@@ -419,24 +394,8 @@ function countFiles(dir) {
 }
 
 const moved = [];
-// standalone 是否已暂存（finally 要读，故不能在 try 里声明）。
-let standaloneStashed = false;
-const routeFiles = [];
 try {
-  // 0) 先护住 standalone 产物：导出构建的 cleanDistDir 会清空 .next（含 .next/standalone）。
-  //    为什么不用独立 distDir：output=="export" 时 Next 会把 config.distDir 强制改回 '.next'。
-  if (fs.existsSync(STANDALONE_DIR)) {
-    fs.mkdirSync(STASH_ROOT, { recursive: true });
-    fs.rmSync(STANDALONE_STASH, { recursive: true, force: true });
-    fs.renameSync(STANDALONE_DIR, STANDALONE_STASH);
-    standaloneStashed = true;
-    console.log("[build-ui-export] 已暂存 .next/standalone（导出构建清空 .next 前先挪出）");
-  }
-
-  // 1) 恒定排除：运行时路由目录与中间件
-  for (const dir of ROUTE_DIRS) {
-    if (stash(dir)) routeFiles.push(dir);
-  }
+  // 1) 恒定排除：只列仍存在的路径
   for (const rel of FIXED_EXCLUDES) {
     if (stash(rel)) moved.push(rel);
   }
@@ -470,7 +429,6 @@ try {
   fs.writeFileSync(path.join(ROOT, ROOT_PAGE), EXPORT_ROOT_PAGE);
   moved.push(`${ROOT_PAGE}（导出壳临时替换，构建后还原）`);
   console.log(`[build-ui-export] 服务端模块闭包 ${serverOnlyBefore.size} 个文件`);
-  console.log(`[build-ui-export] 已移出 ${routeFiles.length} 个运行时路由目录`);
 
   // 2) 扫描 [locale] 下服务端绑定的 page/layout → 移出该文件（深链由 Go 壳回退；
   //    同段 `_components` 常被其他页引用，故只移单个 page/layout 文件）。
@@ -602,13 +560,6 @@ try {
     fs.rmSync(path.join(ROOT, "src/app/page.tsx"), { force: true });
   }
   restoreAll();
-  // 7) 还原 standalone（导出构建清空 .next 前挪出的那棵子树）
-  if (standaloneStashed && fs.existsSync(STANDALONE_STASH)) {
-    fs.mkdirSync(path.dirname(STANDALONE_DIR), { recursive: true });
-    fs.rmSync(STANDALONE_DIR, { recursive: true, force: true });
-    fs.renameSync(STANDALONE_STASH, STANDALONE_DIR);
-    console.log("[build-ui-export] 已还原 .next/standalone");
-  }
   console.log(
     `[build-ui-export] 完成：${moved.length} 项已还原；检查 git status 确认工作树干净（out/ 未清理）。`,
   );

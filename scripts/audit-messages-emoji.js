@@ -201,7 +201,9 @@ module.exports = {
   findMessagesEmoji,
   flattenLeafStrings,
   listJsonFiles,
+  loadJson,
   maskEmoji,
+  normalizeLocales,
   run,
 };
 

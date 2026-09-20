@@ -10,7 +10,7 @@
 # - 在项目根目录可直接运行 `make <target>`（根 Makefile 会转发到此处）
 # - 可通过环境变量覆盖端口/账号等（见 help）
 
-.PHONY: help dev db app build build-nocache app-rebuild app-nocache prune-images rm-app-image compose clean migrate db-shell redis-shell logs logs-app logs-db logs-redis reset status stop
+.PHONY: help dev db app build build-nocache app-rebuild app-nocache prune-images rm-app-image compose clean db-shell redis-shell logs logs-app logs-db logs-redis reset status stop
 
 PROJECT_NAME ?= cch-dev
 COMPOSE_FILE ?= docker-compose.yaml
@@ -103,9 +103,6 @@ prune-images:
 
 rm-app-image:
 	@docker image rm -f "claude-code-hub-local:$(APP_VERSION)" 2>/dev/null || true
-
-migrate: db
-	@DSN="$(LOCAL_DSN)" bun run db:migrate
 
 db-shell: db
 	@$(COMPOSE) exec postgres psql -U "$(DB_USER)" -d "$(DB_NAME)"
