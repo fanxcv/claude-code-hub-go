@@ -284,6 +284,14 @@ type SettlementFlusher interface {
 	StopSettlements()
 }
 
+// SettlementBacklog 是异步终态写队列的积压视图（可选）。
+//
+// 退出序列把它并入待落库数：流路径的积压已由结算跟踪器盖住，而非流路径（拦截类终态等）
+// 入队后没有跟踪器，不并进来的话日志会报 0，而队列里其实还躺着没写的终态。
+type SettlementBacklog interface {
+	PendingSettlements() int64
+}
+
 // Handler 是 `/v1` 数据面处理器。并发安全：所有可变状态都是每请求本地的。
 type Handler struct {
 	options     Options
@@ -315,10 +323,17 @@ func New(options Options) (*Handler, error) {
 	return &Handler{options: options, logger: logger, settlements: newSettlementTracker()}, nil
 }
 
-// PendingSettlements 返回「已交付客户端但终态尚未落库」的流数。
+// PendingSettlements 返回「已交付客户端但终态尚未落库」的流数，并**并入异步终态写队列
+// 的积压**（未装配队列即同步写，与接线前逐字一致）。
 //
 // 退出序列据此如实上报：这个数不为 0 时关依赖（尤其是关连接池）会永久丢掉这些终态。
-func (h *Handler) PendingSettlements() int64 { return h.settlements.pending() }
+func (h *Handler) PendingSettlements() int64 {
+	pending := h.settlements.pending()
+	if backlog, ok := h.options.SettlementBarrier.(SettlementBacklog); ok {
+		pending += backlog.PendingSettlements()
+	}
+	return pending
+}
 
 // WaitSettlements 等到没有待落库终态；ctx 先结束返回 false（此时不得当作排空完成）。
 func (h *Handler) WaitSettlements(ctx context.Context) bool { return h.settlements.waitEmpty(ctx) }

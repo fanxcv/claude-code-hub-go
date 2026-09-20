@@ -238,6 +238,12 @@ func (q *WriteQueue) Pending() int64 {
 	return q.pending
 }
 
+// PendingSettlements 是 Pending 的别名，供退出序列把队列积压并入「待落库数」。
+//
+// 流路径的积压已经由结算跟踪器盖住（它的屏障等到 flush），但**非流路径**（拦截类终态等）
+// 入队后没有跟踪器，不并进来的话退出日志会报 0，而队列里其实还躺着没写的终态。
+func (q *WriteQueue) PendingSettlements() int64 { return q.Pending() }
+
 // Flush 请求立刻写入并等到队列清空；ctx 先结束返回其错误（未完成数由 Pending 如实反映）。
 //
 // 循环而不是等一次：排空窗口里仍在收尾的请求会继续入队，只等一次会漏掉它们。
