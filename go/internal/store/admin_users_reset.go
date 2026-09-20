@@ -88,6 +88,14 @@ func (p *Pools) DrainAdminUserMessageRequests(
 //
 // 与 message_request 的差别：usage_ledger.created_at 是非空列（未加 Nullable），故谓词里没有
 // 空值分支——多写一个 `IS NULL` 只会让计划器少用一个可用的索引条件。
+//
+// 谓词里**刻意不写** `blocked_by IS NULL`：重置的语义是抹掉该用户的全部用量行，被拦截行
+// （blocked_by 非空）同样要删。残留检查 HasAdminUserRemainingRows 用的也是同一条无 blocked_by 的
+// 谓词——只删可计费行的话，残留检查会永远为真，重置只能以 ROWS_LOCKED 收尾。代价是计划器用不了
+// usage_ledger 上那些带 `blocked_by IS NULL` 的部分索引（查询谓词推不出索引谓词），只能走非部分的
+// idx_usage_ledger_user_id_reset——那个索引正是为这条路径建的（0118）。2026-09 实测（2.05M 行、
+// 单个 20 万行用户、batch 1000）：分批删完 201 轮约 1.6s；另加一条非部分 (user_id, created_at)
+// 只快 30%，不值得在写密集表上为罕见的管理操作多挂一条索引。
 func (p *Pools) DrainAdminUserUsageLedger(
 	ctx context.Context,
 	userID int64,
