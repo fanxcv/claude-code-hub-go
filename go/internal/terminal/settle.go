@@ -29,6 +29,12 @@ type Options struct {
 	// Logger 供旁路记 warn（旁路失败不得冒泡成结算错误，故只能记日志）。
 	// nil 时静默。
 	Logger Logger
+	// Queue 是终态写入的异步队列（见 batch.go 的文件头）。
+	//
+	// nil（默认）表示同步写：终态与成本在 Settle 内写完再返回，与接线前逐字一致。
+	// 非 nil 表示 MESSAGE_REQUEST_WRITE_MODE=async：Settle 只同步校验入参并入队，
+	// 写入与副作用交给队列 worker；队列满或已停时自动退回同步写（不丢）。
+	Queue *WriteQueue
 }
 
 // DefaultMaxAttempts 与 store.UpdateWinnerCost 的重试次数一致。
@@ -52,6 +58,8 @@ type Settler struct {
 	// leaseSettler 是租约结算的旁路接收面；nil 即未装配。
 	leaseSettler LeaseSettler
 	logger       Logger
+	// queue 是终态写入的异步队列；nil（默认）即同步写。
+	queue *WriteQueue
 }
 
 // New 构造结算器。
@@ -72,6 +80,7 @@ func New(writer Writer, options Options) *Settler {
 		newRows:      options.NewRows,
 		leaseSettler: options.LeaseSettler,
 		logger:       options.Logger,
+		queue:        options.Queue,
 	}
 }
 
@@ -80,6 +89,10 @@ type Result struct {
 	// Committed 为真表示本次调用赢得了该行的终态（终态提交屏障）。
 	// 只有它为真，调用方才允许发放后续对外可见副作用。
 	Committed bool
+	// Queued 为真表示本次终态已入队（异步写模式），提交结论要等队列 flush 之后才有：
+	// 此时 Committed 恒为 false，**不代表**没赢下终态；提交后动作已一并交给队列 worker，
+	// 调用方不得据 Queued 的结果自己再发一次。
+	Queued bool
 	// Attempts 是终态写实际尝试的次数（>=1）。
 	Attempts int
 	// CostWritten 为真表示成本已入库。
@@ -97,19 +110,54 @@ var ErrNoRow = errors.New("terminal: 本次请求没有请求日志行")
 // 不得静默吞掉。
 var ErrCostWriteFailed = errors.New("terminal: 终态已提交但成本写入失败")
 
-// Settle 执行一次终态结算。顺序与理由：
+// Settle 执行一次终态结算（无提交后动作）。见 settle 的说明。
+func (s *Settler) Settle(ctx context.Context, id int64, settlement Settlement) (Result, error) {
+	return s.settle(ctx, id, settlement, nil)
+}
+
+// settle 是结算的唯一入口：先同步校验入参（非法输入必须立刻报错，不能拖到 flush 才发现），
+// 再按是否装配队列分两路——
+//
+//   - 异步（Settler 带 queue）：入队即返回 Result{Queued:true}，写入与提交后动作由队列 worker
+//     在 flush 时执行（见 batch.go）；队列满或已停时**退回同步写**，绝不丢。
+//   - 同步（默认）：与接线前逐字相同的路径。
+//
+// afterCommit 只在异步模式下由队列 worker 在写入完成后调用（提交结论那时才有）；
+// 同步（与降级同步写）路径**不调它**，由调用方在返回后自己发放——与接线前逐字一致。
+func (s *Settler) settle(
+	ctx context.Context,
+	id int64,
+	settlement Settlement,
+	afterCommit func(Result),
+) (Result, error) {
+	patch, err := settlement.toPatch()
+	if err != nil {
+		return Result{}, err
+	}
+	if s.queue != nil {
+		write := func(writeCtx context.Context) (Result, error) {
+			return s.settleNow(writeCtx, id, settlement, patch)
+		}
+		if s.queue.enqueue(ctx, id, write, afterCommit) {
+			return Result{Queued: true}, nil
+		}
+	}
+	return s.settleNow(ctx, id, settlement, patch)
+}
+
+// settleNow 是同步写入主体。顺序与理由：
 //
 //  1. 先写终态（带 `status_code IS NULL` 谓词），只有赢家才写成本——避免给一个
 //     自己没赢下的行写成本。TS 侧文本顺序是「先成本后终态」，但账本行由触发器在每次
 //     监视列写入后按**行的当前状态**重建，两种顺序的最终账本行相同；先终态在竞争下更安全。
 //  2. 成本走 UpdateWinnerCost：它按 hedge 安全语义写（winner 成本 + 既有 hedge 输家之和），
 //     本波 hedge_losers 恒为空，等价于覆盖写。
-func (s *Settler) Settle(ctx context.Context, id int64, settlement Settlement) (Result, error) {
-	patch, err := settlement.toPatch()
-	if err != nil {
-		return Result{}, err
-	}
-
+func (s *Settler) settleNow(
+	ctx context.Context,
+	id int64,
+	settlement Settlement,
+	patch store.DetailsPatch,
+) (Result, error) {
 	committed, attempts, err := s.retry(ctx, s.maxAttempts, func() (bool, error) {
 		return s.writer.UpdateDetailsIfUnfinalized(ctx, id, patch)
 	})
@@ -168,6 +216,17 @@ func (s *Settler) SettleBlocked(
 	create store.CreateMessageRequestData,
 	settlement Settlement,
 ) (Result, error) {
+	return s.settleBlocked(ctx, create, settlement, nil)
+}
+
+// settleBlocked 是 SettleBlocked 的带提交后动作版本：建行与入参校验始终是**同步**的
+// （开行标识是后续一切写入的前提，异步化它就等于丢掉这个 id）。
+func (s *Settler) settleBlocked(
+	ctx context.Context,
+	create store.CreateMessageRequestData,
+	settlement Settlement,
+	afterCommit func(Result),
+) (Result, error) {
 	if settlement.StatusCode <= 0 {
 		return Result{}, incomplete("拦截类终态必须带状态码")
 	}
@@ -175,7 +234,7 @@ func (s *Settler) SettleBlocked(
 	if err != nil {
 		return Result{}, fmt.Errorf("terminal: 建开行失败: %w", err)
 	}
-	return s.Settle(ctx, row.ID, settlement)
+	return s.settle(ctx, row.ID, settlement, afterCommit)
 }
 
 // SettleContext 按上下文里的行标识结算，是转发路径的入账入口。
@@ -196,27 +255,41 @@ func (s *Settler) SettleContext(
 	settlement Settlement,
 	create *store.CreateMessageRequestData,
 ) (Result, error) {
-	result, err := s.settleContext(ctx, pc, settlement, create)
+	// winner 写回只在终态提交之后发。异步写模式下提交结论只有 flush 之后才有，故把它作为
+	// 提交后动作交给队列；同步模式则由下面那句 affinityWriteback 在写入返回后发（接线前同形）。
+	winner := func(result Result) {
+		s.affinityWinner(ctx, pc, settlement.Affinity, result.Committed)
+	}
+	result, err := s.settleContext(ctx, pc, settlement, create, winner)
+	if result.Queued {
+		// 已入队：墓碑**不随异步写入推迟**（它与是否赢得终态无关，Node 在失败判定处立即
+		// fire-and-forget）；winner 由队列在 flush 之后发。
+		s.affinityTombstone(ctx, pc, settlement.Affinity)
+		return result, err
+	}
+	// 未入队（同步模式或队列满降级）：与接线前逐字一致——墓碑先、winner 后，且都在
+	// 写入返回之后。三种「没写成」的退出也走这里，结论同样是 Committed=false。
 	s.affinityWriteback(ctx, pc, settlement.Affinity, result.Committed)
 	return result, err
 }
 
-// settleContext 是 SettleContext 的入账主体（写终态、写成本）。
+// settleContext 是 SettleContext 的入账主体（写终态、写成本、发放提交后动作）。
 func (s *Settler) settleContext(
 	ctx context.Context,
 	pc *pctx.Context,
 	settlement Settlement,
 	create *store.CreateMessageRequestData,
+	afterCommit func(Result),
 ) (Result, error) {
 	if pc != nil {
 		if id, ok := pc.MessageRequestID(); ok {
-			return s.Settle(ctx, id, settlement)
+			return s.settle(ctx, id, settlement, afterCommit)
 		}
 	}
 	if create == nil {
 		return Result{}, ErrNoRow
 	}
-	return s.SettleBlocked(ctx, *create, settlement)
+	return s.settleBlocked(ctx, *create, settlement, afterCommit)
 }
 
 // affinityWriteback 是亲和终态写回的**唯一**位置（终态提交后的副作用，而非散落的调用点）。
@@ -228,26 +301,55 @@ func (s *Settler) settleContext(
 //     它在 message_request 终态与计费落库之后才执行（response-handler.ts:5414-5420）；
 //     未提交就写回会把粘性指向一个本次并未真正服务成功的供应商。
 //
-// 写回失败不改终态，也不上报：Node 侧同样是 fire-and-forget（recorder 内部只记日志）。
+// 写回失败不改终态，也不上报：Node  侧同样是 fire-and-forget（recorder 内部只记日志）。
+//
+// 拆成两半是为了异步写模式：墓碑与 winner 的时机不同（见 SettleContext）。
 func (s *Settler) affinityWriteback(
 	ctx context.Context,
 	pc *pctx.Context,
 	directive AffinityDirective,
 	committed bool,
 ) {
-	if pc == nil || (directive.WinnerProviderID <= 0 && directive.TombstoneProviderID <= 0) {
+	s.affinityTombstone(ctx, pc, directive)
+	s.affinityWinner(ctx, pc, directive, committed)
+}
+
+// affinityTombstone 发放失败墓碑：它**不依赖**本次是否赢得终态。
+func (s *Settler) affinityTombstone(ctx context.Context, pc *pctx.Context, directive AffinityDirective) {
+	writeback, ok := s.affinityWritebackTarget(pc, directive)
+	if !ok || directive.TombstoneProviderID <= 0 {
 		return
+	}
+	writeback.TombstoneOnFailure(ctx, directive.TombstoneProviderID)
+}
+
+// affinityWinner 发放成功写回：只在终态提交之后发。
+func (s *Settler) affinityWinner(
+	ctx context.Context,
+	pc *pctx.Context,
+	directive AffinityDirective,
+	committed bool,
+) {
+	writeback, ok := s.affinityWritebackTarget(pc, directive)
+	if !ok || directive.WinnerProviderID <= 0 || !committed {
+		return
+	}
+	writeback.RecordWinner(ctx, directive.WinnerProviderID)
+}
+
+// affinityWritebackTarget 取出本次请求的亲和写回能力；未装配或与本次指令无关时返回 false。
+func (s *Settler) affinityWritebackTarget(
+	pc *pctx.Context,
+	directive AffinityDirective,
+) (pctx.AffinityWriteback, bool) {
+	if pc == nil || (directive.WinnerProviderID <= 0 && directive.TombstoneProviderID <= 0) {
+		return nil, false
 	}
 	writeback, ok := pc.AffinityWriteback()
 	if !ok || writeback == nil {
-		return
+		return nil, false
 	}
-	if directive.TombstoneProviderID > 0 {
-		writeback.TombstoneOnFailure(ctx, directive.TombstoneProviderID)
-	}
-	if directive.WinnerProviderID > 0 && committed {
-		writeback.RecordWinner(ctx, directive.WinnerProviderID)
-	}
+	return writeback, true
 }
 
 // retry 按注入的退避重试 operation。返回最后一次的提交结果与尝试次数。

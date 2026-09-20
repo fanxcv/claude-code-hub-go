@@ -20,10 +20,13 @@
 //
 // I5 等待可注入：重试与退避由 Options 注入，测试用毫秒级，绝不等待真实长超时。
 //
+// I6 异步写不改变终态语义：MESSAGE_REQUEST_WRITE_MODE=async 时终态与成本由 batch.go 的
+// 单 writer 队列写入，但**提交后的副作用仍在写入返回 committed 之后才发**（与同步同闸门）；
+// 队列有界，满时降级为同步写而不是丢弃。默认 sync 时队列根本不存在，路径与接线前一致。
+//
 // 有意未搬运（不在本波范围，留待后续波次）：
 //   - long-context 分层价格、priority service tier、图片 token 计费；
-//   - durable writer 的异步批量语义（MESSAGE_REQUEST_WRITE_MODE=async 的有界 pending、
-//     按 id 合并 patch、flush 间隔、shutdown 顺序）；
+//   - 按 id 合并 patch（同一行的多次写入分属不同阶段且列不重叠，合并收益低、风险高）；
 //   - hedge 输家成本的迟到累加（本波的成本写入已按 hedge 安全语义走 WinnerCost，
 //     输家入口留待 W3）。
 package terminal

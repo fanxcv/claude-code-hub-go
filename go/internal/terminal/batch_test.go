@@ -1,0 +1,393 @@
+package terminal
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
+)
+
+// 本文件钉住异步终态写队列（batch.go）的语义：攒批与定时触发、满队列降级同步写、
+// 提交后动作的时机、Stop 的收尾，以及**「不带队列即同步写」这条零回归路径**。
+//
+// 判据优先级：库里落没落、什么顺序落 —— 用假 writer 记录调用序列来断言。
+
+// blockingWriter 让指定 id 的终态写停住，用来制造确定的「队列积压」与「满队列」状态。
+type blockingWriter struct {
+	*fakeWriter
+	blockID   int64
+	entered   chan struct{}
+	release   chan struct{}
+	enterOnce sync.Once
+}
+
+func newBlockingWriter(blockID int64) *blockingWriter {
+	return &blockingWriter{
+		fakeWriter: &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: true}}},
+		blockID:    blockID,
+		entered:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+}
+
+func (w *blockingWriter) UpdateDetailsIfUnfinalized(
+	ctx context.Context,
+	id int64,
+	patch store.DetailsPatch,
+) (bool, error) {
+	if id == w.blockID {
+		w.enterOnce.Do(func() { close(w.entered) })
+		<-w.release
+	}
+	return w.fakeWriter.UpdateDetailsIfUnfinalized(ctx, id, patch)
+}
+
+// debugRecordingLogger 除 warn 外还收集 debug 事件（队列的 flush 行只走 debug 级）。
+type debugRecordingLogger struct {
+	mu     sync.Mutex
+	warns  []string
+	debugs []string
+}
+
+func (l *debugRecordingLogger) Warn(event string, _ map[string]any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns = append(l.warns, event)
+}
+
+func (l *debugRecordingLogger) Debug(event string, _ map[string]any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.debugs = append(l.debugs, event)
+}
+
+func (l *debugRecordingLogger) hasDebug(want string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return containsEvent(l.debugs, want)
+}
+
+func (l *debugRecordingLogger) hasWarn(want string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return containsEvent(l.warns, want)
+}
+
+func containsEvent(events []string, want string) bool {
+	for _, event := range events {
+		if event == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *debugRecordingLogger) warnCount(want string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	count := 0
+	for _, event := range l.warns {
+		if event == want {
+			count++
+		}
+	}
+	return count
+}
+
+// newAsyncFixture 造一个异步队列 + 结算器；队列由 t.Cleanup 停掉，用例不必自己收尾。
+func newAsyncFixture(t *testing.T, writer Writer, options AsyncOptions) (*WriteQueue, *Settler) {
+	t.Helper()
+	queue := NewWriteQueue(options)
+	t.Cleanup(queue.Stop)
+	settler := New(writer, Options{
+		MaxAttempts: 1,
+		Backoff:     func(int) time.Duration { return 0 },
+		Queue:       queue,
+		Logger:      options.Logger,
+	})
+	return queue, settler
+}
+
+// 攒够 batchSize 就落库：三条一次 flush，且严格按入队顺序写。
+func TestAsyncQueueFlushesWhenBatchFills(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{
+		{committed: true}, {committed: true}, {committed: true},
+	}}
+	logger := &debugRecordingLogger{}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 3, FlushInterval: time.Hour, Logger: logger,
+	})
+
+	for id := int64(1); id <= 3; id++ {
+		result, err := settler.Settle(context.Background(), id, okSettlement(nil))
+		if err != nil {
+			t.Fatalf("第 %d 条入队失败: %v", id, err)
+		}
+		if !result.Queued {
+			t.Fatalf("异步模式下 Settle 应先入队（Queued=true），第 %d 条收到 %+v", id, result)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !queue.AwaitSettlement(ctx, 3) {
+		t.Fatalf("攒够一批后应立刻落库，stats=%+v", queue.Stats())
+	}
+	if got := writer.unfinalizedIDs; len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
+		t.Fatalf("批内必须按入队顺序逐条写，收到 %v", got)
+	}
+	stats := queue.Stats()
+	if stats.Rows != 3 || stats.Batches != 1 || stats.Pending != 0 {
+		t.Fatalf("落库计数不符：%+v", stats)
+	}
+	if !logger.hasDebug("terminal_async_flush") {
+		t.Fatalf("每次 flush 必须留一条 debug 行（含行数/耗时/积压）")
+	}
+}
+
+// 不满一批时由 flush 间隔触发；等待面在此期间返回 false，落库后才放行。
+func TestAsyncQueueFlushesOnIntervalAndUnblocksAwait(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: true}}}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 100, FlushInterval: 20 * time.Millisecond,
+	})
+
+	if _, err := settler.Settle(context.Background(), 7, okSettlement(nil)); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	// 先把等待面钉在「还没落库」上：用极短窗口问一次，此时批还没到时间。
+	shortCtx, cancelShort := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancelShort()
+	if queue.AwaitSettlement(shortCtx, 7) {
+		t.Fatalf("定时未到、批未满时不应已落库（否则这条用例失去意义）")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !queue.AwaitSettlement(ctx, 7) {
+		t.Fatalf("flush 间隔到点后必须落库，stats=%+v", queue.Stats())
+	}
+	if writer.unfinalizedCalls != 1 {
+		t.Fatalf("应恰好写一次终态，实际 %d 次", writer.unfinalizedCalls)
+	}
+}
+
+// 队列满必须降级为同步写（不丢数据、不阻塞），并计数 + 留痕；Flush 等不到清空时如实超时。
+func TestAsyncQueueFullFallsBackToSyncWrite(t *testing.T) {
+	writer := newBlockingWriter(1)
+	logger := &debugRecordingLogger{}
+	// 容量 1 且 BatchSize=1：worker 被 id=1 的写卡住（它已从通道取走），id=2 占住通道，
+	// id=3 必然撞满。
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 1, BatchSize: 1, FlushInterval: time.Hour, Logger: logger,
+	})
+	t.Cleanup(func() { close(writer.release) })
+
+	if result, err := settler.Settle(context.Background(), 1, okSettlement(nil)); err != nil || !result.Queued {
+		t.Fatalf("第一条应入队: result=%+v err=%v", result, err)
+	}
+	select {
+	case <-writer.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker 未在限期内开始写第一条")
+	}
+	if result, err := settler.Settle(context.Background(), 2, okSettlement(nil)); err != nil || !result.Queued {
+		t.Fatalf("第二条应占住通道（容量 1）: result=%+v err=%v", result, err)
+	}
+
+	result, err := settler.Settle(context.Background(), 3, okSettlement(nil))
+	if err != nil {
+		t.Fatalf("满队列时必须降级同步写而不是报错: %v", err)
+	}
+	if result.Queued {
+		t.Fatalf("满队列时不得谎报「已入队」：%+v", result)
+	}
+	if !result.Committed {
+		t.Fatalf("降级同步写必须真的写库并赢得终态：%+v", result)
+	}
+	stats := queue.Stats()
+	if stats.Degraded != 1 {
+		t.Fatalf("降级次数应为 1：%+v", stats)
+	}
+	if logger.warnCount("terminal_async_queue_full") != 1 {
+		t.Fatalf("满队列必须留痕（且只记一次，避免过载时刷屏）：%v", logger.warns)
+	}
+
+	// 队列未清空时 Flush 必须如实超时，而不是假装干净。
+	flushCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := queue.Flush(flushCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("队列未清空时 Flush 应返回超时错误，收到 %v", err)
+	}
+}
+
+// 终态提交但成本写失败：必须计数成 cost_gap 并留 warn，而不是静默。
+func TestAsyncQueueCountsCostGap(t *testing.T) {
+	writer := &fakeWriter{
+		unfinalizedQueue: []unfinalizedResult{{committed: true}},
+		costQueue:        []error{errors.New("writer lane down")},
+	}
+	logger := &debugRecordingLogger{}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 1, FlushInterval: time.Hour, Logger: logger,
+	})
+
+	cost := &Cost{Total: "0.000024", Breakdown: []byte(`{"total":"0.000024"}`)}
+	if _, err := settler.Settle(context.Background(), 11, okSettlement(cost)); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if !queue.AwaitSettlement(ctx, 11) {
+		t.Fatalf("落库等待超时，stats=%+v", queue.Stats())
+	}
+	stats := queue.Stats()
+	if stats.CostGap != 1 || stats.Failed != 1 {
+		t.Fatalf("「终态已提交、成本未落库」必须计入 cost_gap：%+v", stats)
+	}
+	if !logger.hasWarn("terminal_async_flush_failed") {
+		t.Fatalf("写入失败必须留 warn")
+	}
+}
+
+// Stop 是「不再收新的」，不是「丢掉已有的」：已入队的记录必须落库后才返回。
+func TestAsyncQueueStopDrainsQueuedEntries(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: true}}}
+	queue := NewWriteQueue(AsyncOptions{MaxPending: 8, BatchSize: 100, FlushInterval: time.Hour})
+	settler := New(writer, Options{
+		MaxAttempts: 1,
+		Backoff:     func(int) time.Duration { return 0 },
+		Queue:       queue,
+	})
+
+	if _, err := settler.Settle(context.Background(), 9, okSettlement(nil)); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	// 批未满、时间未到：此时它一定还躺在队列里。
+	if writer.unfinalizedCalls != 0 {
+		t.Fatalf("未触发 flush 时不应已写库，实际写了 %d 次", writer.unfinalizedCalls)
+	}
+	queue.Stop()
+	if writer.unfinalizedCalls != 1 {
+		t.Fatalf("Stop 必须把已入队的记录写完，实际写了 %d 次", writer.unfinalizedCalls)
+	}
+	if queue.Pending() != 0 {
+		t.Fatalf("Stop 之后不应再有积压：%d", queue.Pending())
+	}
+	// 停后再入队：一律降级同步写（不丢），不得阻塞。
+	result, err := settler.Settle(context.Background(), 10, okSettlement(nil))
+	if err != nil || result.Queued || !result.Committed {
+		t.Fatalf("队列已停时必须降级同步写：result=%+v err=%v", result, err)
+	}
+}
+
+// 零回归钉子：不带队列时结算仍是同步写——Settle 返回即已落库。
+func TestSettleWithoutQueueStaysSynchronous(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: true}}}
+	settler := New(writer, Options{MaxAttempts: 1, Backoff: func(int) time.Duration { return 0 }})
+
+	result, err := settler.Settle(context.Background(), 21, okSettlement(nil))
+	if err != nil {
+		t.Fatalf("同步结算失败: %v", err)
+	}
+	if result.Queued {
+		t.Fatalf("未装配队列时不得报「已入队」：%+v", result)
+	}
+	if !result.Committed || writer.unfinalizedCalls != 1 {
+		t.Fatalf("同步模式下 Settle 返回时终态必须已落库：result=%+v calls=%d", result, writer.unfinalizedCalls)
+	}
+}
+
+// asyncAffinityRecorder 记录亲和写回顺序（本包内的最小替身，不碰 Redis）。
+type asyncAffinityRecorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (r *asyncAffinityRecorder) RecordWinner(_ context.Context, _ int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, "affinity_put")
+	return true
+}
+
+func (r *asyncAffinityRecorder) TombstoneOnFailure(_ context.Context, _ int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, "affinity_tombstone")
+	return true
+}
+
+func (r *asyncAffinityRecorder) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.events...)
+}
+
+// 亲和写回在异步模式下的时机：墓碑**不推迟**（与是否赢得终态无关），winner 必须等到 flush 之后。
+func TestAsyncQueueDefersAffinityWinnerButNotTombstone(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: true}}}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 8, FlushInterval: time.Hour,
+	})
+	pc := newTestContext(t)
+	if err := pc.SetMessageRequestID(77); err != nil {
+		t.Fatalf("写行标识失败: %v", err)
+	}
+	recorder := &asyncAffinityRecorder{}
+	pc.SetAffinityWriteback(recorder)
+
+	settlement := okSettlement(nil)
+	settlement.Affinity = AffinityDirective{WinnerProviderID: 5, TombstoneProviderID: 6}
+	result, err := settler.SettleContext(context.Background(), pc, settlement, nil)
+	if err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	if !result.Queued {
+		t.Fatalf("异步模式下终态应先入队：%+v", result)
+	}
+	if got := recorder.snapshot(); len(got) != 1 || got[0] != "affinity_tombstone" {
+		t.Fatalf("墓碑应在入队后立即发出、winner 必须等提交，收到 %v", got)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := queue.Flush(ctx); err != nil {
+		t.Fatalf("冲队列失败: %v", err)
+	}
+	got := recorder.snapshot()
+	if len(got) != 2 || got[1] != "affinity_put" {
+		t.Fatalf("winner 必须在终态落库之后发出，收到 %v", got)
+	}
+}
+
+// 未赢得终态时（重复投递、patrol 先补）异步路径不得发 winner 写回。
+func TestAsyncQueueSkipsAffinityWinnerWhenNotCommitted(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: false}}}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 1, FlushInterval: time.Hour,
+	})
+	pc := newTestContext(t)
+	if err := pc.SetMessageRequestID(88); err != nil {
+		t.Fatalf("写行标识失败: %v", err)
+	}
+	recorder := &asyncAffinityRecorder{}
+	pc.SetAffinityWriteback(recorder)
+
+	settlement := okSettlement(nil)
+	settlement.Affinity = AffinityDirective{WinnerProviderID: 5}
+	if _, err := settler.SettleContext(context.Background(), pc, settlement, nil); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := queue.Flush(ctx); err != nil {
+		t.Fatalf("冲队列失败: %v", err)
+	}
+	if got := recorder.snapshot(); len(got) != 0 {
+		t.Fatalf("未赢得终态时不得写回 winner（粘性会指向本次没服务成功的供应商）：%v", got)
+	}
+}
