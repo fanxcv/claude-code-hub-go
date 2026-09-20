@@ -1,3 +1,5 @@
+import { Bot } from "lucide-react";
+import type { ComponentType } from "react";
 import {
   Azure,
   Baichuan,
@@ -31,9 +33,7 @@ import {
   Wenxin,
   Yi,
   Zhipu,
-} from "@lobehub/icons";
-import { Bot } from "lucide-react";
-import type { ComponentType } from "react";
+} from "@/lib/lobehub-icons/public-status";
 import {
   type PublicStatusVendorIconKey,
   resolvePublicStatusVendorIconKey,

@@ -79,7 +79,7 @@ import {
   Yandex,
   Yi,
   Zhipu,
-} from "@lobehub/icons";
+} from "@/lib/lobehub-icons/vendor";
 import { resolveByDashPrefix } from "@/lib/model-vendor/dash-prefix-lookup";
 import { iconFileForVendor, type VendorIconFileEntry } from "@/lib/model-vendor/vendor-icon-files";
 import {

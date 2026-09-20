@@ -1,4 +1,4 @@
-import { Anthropic, Claude, Gemini, OpenAI } from "@lobehub/icons";
+import { Anthropic, Claude, Gemini, OpenAI } from "@/lib/lobehub-icons/provider-types";
 import type { ProviderType } from "@/types/provider";
 
 // Anthropic Avatar 橙色包装组件（与 Claude Code 颜色一致）
