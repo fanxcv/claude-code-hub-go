@@ -114,10 +114,9 @@ type Context struct {
 	// Gemini 的 `?alt=sse` 就是上游「回 SSE 还是 JSON 数组」的开关，丢了它请求不会报错，
 	// 只会静默拿到另一种响应形状。
 	query string
-	// live / original 存的是「原子发布的映射指针」：写入侧先拷贝再替换，读取侧
+	// live 存的是「原子发布的映射指针」：写入侧先拷贝再替换，读取侧
 	// （HeaderView）因此可以无锁读任何已发布的映射，见 mutateHeaders。
 	live         atomic.Pointer[http.Header]
-	original     atomic.Pointer[http.Header]
 	body         io.ReadCloser
 	bodyTaken    bool
 	clientIP     string
@@ -183,7 +182,6 @@ func New(init Init) (*Context, error) {
 	}
 
 	live := cloneHeader(init.Headers)
-	original := cloneHeader(live)
 
 	ctx := &Context{
 		startedAt:    now(),
@@ -198,7 +196,6 @@ func New(init Init) (*Context, error) {
 		now:          now,
 	}
 	ctx.live.Store(&live)
-	ctx.original.Store(&original)
 	return ctx, nil
 }
 
@@ -230,11 +227,6 @@ func (c *Context) Query() string { return c.query }
 // 视图反映之后发生的写入；需要把某一刻的值冻结下来时用 HeaderView.Clone。
 func (c *Context) Headers() HeaderView { return HeaderView{slot: &c.live} }
 
-// OriginalHeaders 返回入口原始 headers 的只读视图，用于改动检测与审计。
-//
-// 入口值在构造期发布一次，之后再不改写，因此该视图内容恒定。
-func (c *Context) OriginalHeaders() HeaderView { return HeaderView{slot: &c.original} }
-
 // mutateHeaders 以 copy-on-write 方式改 headers 并原子发布新版本。
 //
 // 为什么拷贝而不原地改：读取侧（HeaderView）无锁，必须保证任何已发布的映射在被读到
@@ -257,39 +249,11 @@ func (c *Context) SetHeader(key, value string) {
 	c.mutateHeaders(func(headers http.Header) { headers.Set(key, value) })
 }
 
-// AddHeader 追加一个 header 值，保留已有值。
-func (c *Context) AddHeader(key, value string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.mutateHeaders(func(headers http.Header) { headers.Add(key, value) })
-}
-
 // DeleteHeader 删除一个 header。
 func (c *Context) DeleteHeader(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.mutateHeaders(func(headers http.Header) { headers.Del(key) })
-}
-
-// IsHeaderModified 报告某个 header 相对入口原始值是否已改动。
-//
-// 值被改写、被删除、或从不存在变为存在，三者都算改动。
-func (c *Context) IsHeaderModified(key string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return !equalValues(c.original.Load().Values(key), c.live.Load().Values(key))
-}
-
-func equalValues(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // HasBody 报告本次请求是否带正文，以及正文是否尚未被消费。

@@ -616,29 +616,13 @@ func (r *hedgeRace) runGate(
 	outcome *AttemptOutcome,
 	family gate.Family,
 ) (*streamAttempt, error) {
-	eventCap := r.options.PrebufferEventCap
-	if eventCap <= 0 {
-		eventCap = DefaultPrebufferEventCap
-	}
-	byteCap := r.options.PrebufferByteCap
-	if byteCap <= 0 {
-		byteCap = DefaultPrebufferByteCap
-	}
 	startedAt := r.options.now()
 	// 与 stream.go 同口径：first_byte_ms 取**上游**首个非空 chunk 的到达时刻，
 	// 而不是前缀交给我们（提交）的时刻。
 	var upstreamFirstByteAt time.Time
-	result, err := gate.Run(ctx, response.Body, gate.Options{
-		Family:              family,
-		ProviderID:          int(outcome.ProviderID),
-		ProviderName:        outcome.ProviderName,
-		PrebufferEventCap:   eventCap,
-		PrebufferByteCap:    byteCap,
-		IdleTimeout:         r.options.idleTimeout(outcome.ProviderID),
-		CaptureCommitMarker: r.options.CaptureCommitMarker,
-		OnFirstByte:         func() { upstreamFirstByteAt = r.options.now() },
-		Budget:              r.options.Budget,
-	})
+	result, err := gate.Run(ctx, response.Body, r.options.gateOptions(family, outcome, func() {
+		upstreamFirstByteAt = r.options.now()
+	}))
 	if err != nil {
 		return nil, err
 	}

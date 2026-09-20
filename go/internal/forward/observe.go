@@ -248,7 +248,7 @@ func echoFamilyOf(format convert.ClientFormat) gate.Family {
 // TestObserverResidencyStaysBoundedForLargeStream 守着；抬高它会让该值进入
 // `RetainedBytes` 并随窗口一起超限。超长行的补救走窗口回退（见 recoverFromWindows）。
 func parserBoundOf(opts ObservationOptions) int {
-	return maxInt(opts.HeadBytes, 64<<10)
+	return max(opts.HeadBytes, 64<<10)
 }
 
 // Push 吃入一个上游 chunk：更新计数、窗口与帧级事实。
@@ -707,13 +707,6 @@ func truncateText(value string, limit int) string {
 		return value
 	}
 	return value[:limit]
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // recoverFromWindows 在分帧器丢帧后，用已保留的头尾窗口补回 model 与 usage。

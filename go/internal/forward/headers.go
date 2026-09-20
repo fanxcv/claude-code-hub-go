@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 
@@ -202,7 +203,7 @@ func applyProviderCustomHeaders(overrides map[string]string, custom map[string]s
 		if ProtectedAuthHeaderNames[lower] {
 			continue
 		}
-		if lower == "host" || contains(outboundTransportHeaderBlacklist, lower) || contains(ReservedInternalHeaderNames, lower) {
+		if lower == "host" || slices.Contains(outboundTransportHeaderBlacklist, lower) || slices.Contains(ReservedInternalHeaderNames, lower) {
 			continue
 		}
 		overrides[name] = value
@@ -219,7 +220,7 @@ type headerProcessorConfig struct {
 func processHeaders(client http.Header, cfg headerProcessorConfig) http.Header {
 	blacklist := make(map[string]bool, len(defaultHeaderBlacklist)+len(cfg.blacklist))
 	for _, name := range defaultHeaderBlacklist {
-		if cfg.preserveClientIPHeaders && contains(clientIPHeaderNames, name) {
+		if cfg.preserveClientIPHeaders && slices.Contains(clientIPHeaderNames, name) {
 			continue
 		}
 		blacklist[name] = true
@@ -343,13 +344,4 @@ func safeHost(rawURL string) string {
 		return host
 	}
 	return "unknown"
-}
-
-func contains(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
-		}
-	}
-	return false
 }

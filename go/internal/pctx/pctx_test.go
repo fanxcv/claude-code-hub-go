@@ -283,7 +283,6 @@ func TestConcurrentAccessIsRaceFreeAndSingleWinner(t *testing.T) {
 			defer wg.Done()
 			ctx.SetHeader("X-Worker", "1")
 			_ = ctx.Headers().Values("X-Worker")
-			_ = ctx.IsHeaderModified("X-Worker")
 			ctx.SetAuth(AuthState{KeyID: int64(index)})
 			ctx.SetProvider(ProviderSelection{ProviderID: int64(index)})
 			ctx.SetClientIP("127.0.0.1")

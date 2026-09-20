@@ -19,7 +19,7 @@ import (
 // Context.mutateHeaders），已发布的映射永不再被改写。
 //
 // 它刻意不提供任何写入方法：下游拿到视图就无法改上下文里的 headers，改动一律经
-// Context.SetHeader / AddHeader / DeleteHeader，改动记录因此不会漏。
+// Context.SetHeader / DeleteHeader，改动记录因此不会漏。
 // 取切片的方法（Values）返回副本，避免下游改到内部切片。
 type HeaderView struct {
 	slot *atomic.Pointer[http.Header]
@@ -71,18 +71,6 @@ func (v HeaderView) Keys() []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// Each 按排序后的键顺序遍历；fn 返回 false 时提前结束。
-//
-// 传入的键与值都是副本，fn 内改写它们不影响上下文。遍历以实时视图为准：每次取键与
-// 取值都是一次独立读取，期间发生的写入会在其后生效（例如某键被删除后取到空值）。
-func (v HeaderView) Each(fn func(key string, values []string) bool) {
-	for _, key := range v.Keys() {
-		if !fn(key, v.Values(key)) {
-			return
-		}
-	}
 }
 
 // Clone 返回可自由改写的副本。

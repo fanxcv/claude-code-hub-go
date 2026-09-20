@@ -102,12 +102,6 @@ type StreamOptions struct {
 	TailBytes int
 	// PendingChunkDeadline 是下游不取走已缓冲数据块的时限；0 取默认 60s，负值关闭。
 	PendingChunkDeadline time.Duration
-	// DrainBudget 是断线计量引流预算；nil 表示断线不做引流（直接取消上游）。
-	DrainBudget *DetachedStreamBudget
-	// DrainTimeout 是单次引流的绝对上限；0 取 DefaultDetachedStreamDrainTimeout。
-	DrainTimeout time.Duration
-	// DrainReservationBytes 是单次引流预留的字节数；0 取 DefaultDetachedStreamFixedOverhead 一档。
-	DrainReservationBytes int64
 	// Settle 是结算接缝；nil 时只做 pctx 的一次性断言。
 	Settle StreamSettler
 	// ChunkBytes 是单次上游读缓冲区大小；0 取默认。
@@ -130,20 +124,6 @@ func (o StreamOptions) idleTimeout(providerID int64) time.Duration {
 		return 0
 	}
 	return o.IdleTimeoutFor(providerID)
-}
-
-func (o StreamOptions) drainTimeout() time.Duration {
-	if o.DrainTimeout > 0 {
-		return o.DrainTimeout
-	}
-	return DefaultDetachedStreamDrainTimeout
-}
-
-func (o StreamOptions) drainReservation() int64 {
-	if o.DrainReservationBytes > 0 {
-		return o.DrainReservationBytes
-	}
-	return DetachedStreamFixedOverheadBytes
 }
 
 // 门控默认上限，对齐 STREAM_GATE_PREBUFFER_* 的默认量级。
@@ -314,31 +294,14 @@ func (d Deps) gateStreamAttempt(
 	options StreamOptions,
 	family gate.Family,
 ) (*attemptResponse, *Failure) {
-	eventCap := options.PrebufferEventCap
-	if eventCap <= 0 {
-		eventCap = DefaultPrebufferEventCap
-	}
-	byteCap := options.PrebufferByteCap
-	if byteCap <= 0 {
-		byteCap = DefaultPrebufferByteCap
-	}
-
 	startedAt := options.now()
 	// 门控的 OnFirstByte 在**上游**首个非空 chunk 到达时回调（语义与 Node 的
 	// gateFirstByteAt/attempt.firstByteAt 同源）；前缀是提交后才交给我们，
 	// 那时打戳会把 first_byte_ms 记成提交时刻。
 	var upstreamFirstByteAt time.Time
-	result, err := gate.Run(ctx, response.Body, gate.Options{
-		Family:              family,
-		ProviderID:          int(outcome.ProviderID),
-		ProviderName:        outcome.ProviderName,
-		PrebufferEventCap:   eventCap,
-		PrebufferByteCap:    byteCap,
-		IdleTimeout:         options.idleTimeout(outcome.ProviderID),
-		CaptureCommitMarker: options.CaptureCommitMarker,
-		OnFirstByte:         func() { upstreamFirstByteAt = options.now() },
-		Budget:              options.Budget,
-	})
+	result, err := gate.Run(ctx, response.Body, options.gateOptions(family, outcome, func() {
+		upstreamFirstByteAt = options.now()
+	}))
 	if err != nil {
 		// 门控失败时上游正文所有权仍在我们手里：关闭它，客户端一个字节都还没收到。
 		_ = response.Body.Close()
@@ -366,6 +329,35 @@ func (d Deps) gateStreamAttempt(
 			Family:              family,
 		},
 	}, nil
+}
+
+// gateOptions 组装门控参数；串行与竞速两条路径共用，避免 11 个字段两处各写一遍。
+//
+// onFirstByte 由调用方提供：两条路径都要在闭包里捕获各自的变量。
+func (o StreamOptions) gateOptions(
+	family gate.Family,
+	outcome *AttemptOutcome,
+	onFirstByte func(),
+) gate.Options {
+	eventCap := o.PrebufferEventCap
+	if eventCap <= 0 {
+		eventCap = DefaultPrebufferEventCap
+	}
+	byteCap := o.PrebufferByteCap
+	if byteCap <= 0 {
+		byteCap = DefaultPrebufferByteCap
+	}
+	return gate.Options{
+		Family:              family,
+		ProviderID:          int(outcome.ProviderID),
+		ProviderName:        outcome.ProviderName,
+		PrebufferEventCap:   eventCap,
+		PrebufferByteCap:    byteCap,
+		IdleTimeout:         o.idleTimeout(outcome.ProviderID),
+		CaptureCommitMarker: o.CaptureCommitMarker,
+		OnFirstByte:         onFirstByte,
+		Budget:              o.Budget,
+	}
 }
 
 // gateFailure 把门控失败映射成尝试失败。
@@ -543,9 +535,7 @@ type Stream struct {
 	closed      bool
 	lease       *gate.Lease
 
-	drainLease *DetachedStreamLease
-	drainTimer *time.Timer
-	idleTimer  *time.Timer
+	idleTimer *time.Timer
 
 	settleOnce sync.Once
 	outcome    StreamOutcome
@@ -700,7 +690,7 @@ func (s *Stream) Completion() StreamOutcome {
 	return s.outcome
 }
 
-// ClientCancel 处理客户端断开：按预算决定「继续引流拿终态 usage」还是「立刻取消上游」。
+// ClientCancel 处理客户端断开：立刻取消上游，不给断线风暴留驻留。
 func (s *Stream) ClientCancel(reason error) {
 	if reason == nil {
 		reason = errStreamClientClosed
@@ -710,32 +700,10 @@ func (s *Stream) ClientCancel(reason error) {
 		s.mu.Unlock()
 		return
 	}
-	enabled := s.options.DrainBudget != nil && !s.pump.WasClientAborted()
-	s.mu.Unlock()
-
-	if !enabled {
-		// 没有预算：直接取消上游，不给断线风暴留任何驻留。
-		s.pump.ClientCancel(reason)
-		s.pump.CancelSource(reason)
-		return
-	}
-
-	// 预算存在：先尝试取租约，取不到就退回「立刻取消」。绝不排队等待配额。
-	lease, refusal := s.options.DrainBudget.TryAcquire(DetachedKindMetering, s.options.drainReservation())
-	if lease == nil {
-		s.pump.ClientCancel(reason)
-		s.pump.CancelSource(fmt.Errorf("%w: %s", errStreamDrainRefused, refusal))
-		return
-	}
-	s.mu.Lock()
-	s.drainLease = lease
 	s.mu.Unlock()
 
 	s.pump.ClientCancel(reason)
-	s.drainTimer = time.AfterFunc(s.options.drainTimeout(), func() {
-		// 引流超时：放弃计量，直接取消上游（终态仍是客户端中断）。
-		s.pump.CancelSource(fmt.Errorf("%w: %s", errStreamDrainTimeout, s.options.drainTimeout()))
-	})
+	s.pump.CancelSource(reason)
 }
 
 // Close 结束本次流：调用方不再消费。幂等。
@@ -806,15 +774,8 @@ func (s *Stream) awaitTerminal(ctx context.Context) {
 		s.idleTimer.Stop()
 		s.idleTimer = nil
 	}
-	if s.drainTimer != nil {
-		s.drainTimer.Stop()
-		s.drainTimer = nil
-	}
-	drainLease := s.drainLease
-	s.drainLease = nil
 	s.releaseLeaseLocked()
 	s.mu.Unlock()
-	drainLease.Release()
 
 	observation := s.observer.Snapshot()
 	observation.Kind = terminalKindFor(completion, observation)
@@ -898,10 +859,6 @@ var (
 	errStreamClientClosed = errors.New("forward: 调用方已停止消费响应流")
 	// errStreamIdleTimeout 是上游静默超时的归因（对应 Node 的 streaming_idle_timeout）。
 	errStreamIdleTimeout = errors.New("forward: 上游流式响应静默超时")
-	// errStreamDrainRefused 表示引流预算不足，已放弃断线计量。
-	errStreamDrainRefused = errors.New("forward: 断线计量引流预算不足")
-	// errStreamDrainTimeout 表示引流超过时长上限。
-	errStreamDrainTimeout = errors.New("forward: 断线计量引流超时")
 	// errStreamDrainComplete 表示引流已拿到终态事实，提前结束。
 	errStreamDrainComplete = errors.New("forward: 断线计量引流已完成")
 )

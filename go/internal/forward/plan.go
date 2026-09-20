@@ -551,7 +551,6 @@ func convertBody(
 		TargetProto:               plan.TargetProtocol,
 		Model:                     client.Model,
 		Stream:                    ClientStreamRequestedFromValue(client.Path, client.Query, value),
-		ProviderID:                -1,
 		ToWireToolName:            convert.NormalizeToolName,
 		GatewayInjectedBodyFields: client.GatewayInjectedBodyFields,
 	}
