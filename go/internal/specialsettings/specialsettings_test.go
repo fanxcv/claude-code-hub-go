@@ -79,15 +79,15 @@ func TestRequestEntriesEdgeCases(t *testing.T) {
 	}
 }
 
-// TestProbeEntriesRecordsDroppedExplicitly 钉住探针的三态：保留 / 转换丢弃 / 原生直通读空。
+// TestProbeEntryRecordsDroppedExplicitly 钉住探针的三态：保留 / 转换丢弃 / 原生直通读空。
 //
 // 「转换丢弃必须显式记账」是用户口径：列里不能只留一个空值让人猜是「没转换」还是「转换丢了」。
-func TestProbeEntriesRecordsDroppedExplicitly(t *testing.T) {
+func TestProbeEntryRecordsDroppedExplicitly(t *testing.T) {
 	requested := EffortRequest{Effort: "high", Field: "output_config.effort", Protocol: convert.ProtocolAnthropicMessages, Present: true}
 
 	t.Run("转换保留", func(t *testing.T) {
 		forwarded := EffortForwarded{Effort: "high", Field: "reasoning_effort", Protocol: convert.ProtocolOpenAIChat, Present: true}
-		entry := singleEntry(t, ProbeEntries(requested, forwarded, true))
+		entry := singleEntry(t, AppendEntries(ProbeEntry(requested, forwarded, true)))
 		if entry["dropped"] != false {
 			t.Fatalf("保留时 dropped 应为 false：%v", entry)
 		}
@@ -100,7 +100,7 @@ func TestProbeEntriesRecordsDroppedExplicitly(t *testing.T) {
 	})
 
 	t.Run("转换丢弃", func(t *testing.T) {
-		entry := singleEntry(t, ProbeEntries(requested, EffortForwarded{}, true))
+		entry := singleEntry(t, AppendEntries(ProbeEntry(requested, EffortForwarded{}, true)))
 		if entry["dropped"] != true {
 			t.Fatalf("转换生效且产物缺该字段时应显式记 dropped=true：%v", entry)
 		}
@@ -110,14 +110,14 @@ func TestProbeEntriesRecordsDroppedExplicitly(t *testing.T) {
 	})
 
 	t.Run("原生直通读不到不算丢弃", func(t *testing.T) {
-		entry := singleEntry(t, ProbeEntries(requested, EffortForwarded{}, false))
+		entry := singleEntry(t, AppendEntries(ProbeEntry(requested, EffortForwarded{}, false)))
 		if entry["dropped"] != false {
 			t.Fatalf("未发生转换时读不到只能说明路径取错，不得断言丢弃：%v", entry)
 		}
 	})
 
 	t.Run("两侧都没有则不写条目", func(t *testing.T) {
-		if raw := ProbeEntries(EffortRequest{}, EffortForwarded{}, true); raw != nil {
+		if raw := AppendEntries(ProbeEntry(EffortRequest{}, EffortForwarded{}, true)); raw != nil {
 			t.Fatalf("无值可记时应返回 nil，实际 %s", string(raw))
 		}
 	})

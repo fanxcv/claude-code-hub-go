@@ -272,17 +272,17 @@ func TestResolveCurrentVersionFollowsAppVersion(t *testing.T) {
 }
 
 // 管理面两条端点的版本号必须与 `internal/appversion` 完全同源（/api/version 用展示形态、
-// /api/health 用去前缀的形态）。两处曾各自读 VERSION 文件/自带常量，于是同一镜像里报出
-// 两个不同的版本号——本用例把「同一个实现」钉死。
+// /api/version 的版本号必须与 `internal/appversion` 完全同源（展示形态带 v 前缀）。两处曾各自读
+// VERSION 文件/自带常量，于是同一镜像里报出两个不同的版本号——本用例把「同一个实现」钉死。
+//
+// 健康端点那半（去前缀形态）已随 adminapi 侧被遮蔽的 /api/health* 实现一并删除；那条不变量
+// 现在钉在真正作答的 httpapi 侧（internal/httpapi/health_api_test.go 的
+// TestHealthVersionSharesOneSource）。
 func TestAdminPlaneVersionsShareOneSource(t *testing.T) {
 	t.Setenv("APP_VERSION", "9.9.9")
 
 	display, wantDisplay := resolveCurrentVersion(os.Getenv), appversion.Resolve(os.Getenv)
 	if display != wantDisplay || display != "v9.9.9" {
 		t.Errorf("/api/version 的当前版本应为 %q（v9.9.9），实际 %q", wantDisplay, display)
-	}
-	bare, wantBare := healthAppVersion(), appversion.ResolveBare(os.Getenv)
-	if bare != wantBare || bare != "9.9.9" {
-		t.Errorf("/api/health 的版本应为 %q（9.9.9），实际 %q", wantBare, bare)
 	}
 }

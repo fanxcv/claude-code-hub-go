@@ -15,15 +15,14 @@ import (
 //  2. 版本守卫：加载期间发生的失效不得让旧结果重新写回缓存。
 //  3. 失败降级：加载失败时优先复用旧值；没有旧值时才交给 fallback。
 type ValueCache[T any] struct {
-	mu         sync.Mutex
-	ttl        time.Duration
-	value      *T
-	expiresAt  time.Time
-	hasExpiry  bool
-	version    uint64
-	inFlight   *valueFlight[T]
-	clearOnBad bool
-	now        func() time.Time
+	mu        sync.Mutex
+	ttl       time.Duration
+	value     *T
+	expiresAt time.Time
+	hasExpiry bool
+	version   uint64
+	inFlight  *valueFlight[T]
+	now       func() time.Time
 }
 
 type valueFlight[T any] struct {
@@ -35,24 +34,10 @@ type valueFlight[T any] struct {
 // ValueCacheOption 调整 ValueCache 行为。
 type ValueCacheOption[T any] func(*ValueCache[T])
 
-// WithValueCacheClock 注入时钟（测试用）。
-func WithValueCacheClock[T any](now func() time.Time) ValueCacheOption[T] {
-	return func(cache *ValueCache[T]) { cache.now = now }
-}
-
 // WithValueCacheNoExpiry 让缓存永不按时间过期（对应事件驱动重载的域，如敏感词、
 // 请求过滤器、错误规则：它们只靠失效消息重载，没有 TTL）。
 func WithValueCacheNoExpiry[T any]() ValueCacheOption[T] {
 	return func(cache *ValueCache[T]) { cache.hasExpiry = false }
-}
-
-// WithValueCacheDropInFlightOnInvalidate 在失效时同时丢弃在途加载。
-//
-// 对应 provider-endpoint-cache.ts 的 `state.inFlight.clear()`：失效后新请求另起一次
-// 查询拿到失效后的数据，而不是继续等一个失效前发起的旧快照。默认（settings 语义）
-// 保留在途加载，等待者仍会拿到该次结果，只是不再写回缓存。
-func WithValueCacheDropInFlightOnInvalidate[T any]() ValueCacheOption[T] {
-	return func(cache *ValueCache[T]) { cache.clearOnBad = true }
 }
 
 // NewValueCache 建一个空缓存。
@@ -152,9 +137,6 @@ func (c *ValueCache[T]) Invalidate() {
 	c.value = nil
 	c.expiresAt = time.Time{}
 	c.version++
-	if c.clearOnBad {
-		c.inFlight = nil
-	}
 }
 
 // Version 返回当前版本号（供测试与观测使用）。

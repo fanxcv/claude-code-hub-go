@@ -129,6 +129,21 @@ func (g *AuthGuard) IssueCSRF(authToken string, userID int64) string {
 	return fmt.Sprintf("%d.%s", bucket, signCSRF(secret, csrfPayload(authToken, userID, bucket)))
 }
 
+// writeRawJSON 写一份裸 JSON 正文（Node 的 `NextResponse.json({error})` 形状）。
+//
+// 与 writeShellJSON 的分工：那个用于管理面信封内的端点，这个用于根级裸 body（Node 侧不在
+// `/api/v1` 应用壳下的路由），头与写盘方式都照 Node 的 NextResponse.json 对齐。
+func writeRawJSON(writer http.ResponseWriter, status int, body any) {
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		http.Error(writer, "", http.StatusInternalServerError)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.WriteHeader(status)
+	_, _ = writer.Write(encoded)
+}
+
 // writeShellJSON 作答一份 JSON 正文。
 //
 // Content-Type 逐字取 Node 的 jsonResponse（response-helpers.ts:4-9 的 "application/json"，

@@ -143,7 +143,7 @@ func (api *dashboardAPI) handleProxyStatus(writer http.ResponseWriter, request *
 		})
 	}
 
-	writeDashboardJSON(writer, http.StatusOK, struct {
+	adminWriteJSON(writer, http.StatusOK, struct {
 		Users []dashboardProxyStatusUserBody `json:"users"`
 	}{Users: items})
 }
@@ -322,7 +322,7 @@ func (api *dashboardAPI) handleRealtime(writer http.ResponseWriter, request *htt
 		slots = nil
 	}
 
-	writeDashboardJSON(writer, http.StatusOK, dashboardRealtimeBody{
+	adminWriteJSON(writer, http.StatusOK, dashboardRealtimeBody{
 		Metrics:           metrics,
 		ActivityStream:    activityStream,
 		UserRankings:      dashboardRealtimeUserRankings(userRankings, 5),

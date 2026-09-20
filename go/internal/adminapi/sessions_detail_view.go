@@ -263,7 +263,7 @@ func (api *sessionAPI) handleSessionDetail(
 		audit:              audit,
 		currentSequence:    sequence,
 	})
-	writeSessionsJSON(writer, http.StatusOK, body)
+	adminWriteJSON(writer, http.StatusOK, body)
 }
 
 // loadCanonicalSessionStats 复刻 loadCanonicalSessionStats：单 identity 的账本聚合。

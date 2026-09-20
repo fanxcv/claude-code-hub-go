@@ -312,7 +312,7 @@ func (api *sessionAPI) handleSessionOriginChain(
 		return
 	}
 	if chain == nil {
-		writeSessionsJSON(writer, http.StatusOK, nil)
+		adminWriteJSON(writer, http.StatusOK, nil)
 		return
 	}
 	writer.Header().Set("Content-Type", "application/json")
@@ -497,7 +497,7 @@ func (api *sessionAPI) handleSessionMessagesExist(
 
 	if !found {
 		// Node：会话不存在不是错误，而是「没有详情按钮」。
-		writeSessionsJSON(writer, http.StatusOK, sessionExistsBody{Exists: false})
+		adminWriteJSON(writer, http.StatusOK, sessionExistsBody{Exists: false})
 		return
 	}
 	if !principal.IsAdmin && owner.UserID != principal.UserID {
@@ -519,7 +519,7 @@ func (api *sessionAPI) handleSessionMessagesExist(
 	if !api.artifacts.IsSessionRequestOwnedByKey(
 		ctx, locator.SourceSessionID, int(locator.RequestSequence), locator.KeyID,
 	) {
-		writeSessionsJSON(writer, http.StatusOK, sessionExistsBody{Exists: false})
+		adminWriteJSON(writer, http.StatusOK, sessionExistsBody{Exists: false})
 		return
 	}
 
@@ -527,10 +527,10 @@ func (api *sessionAPI) handleSessionMessagesExist(
 	if hasRequestID || query.HasRequestSequence {
 		_, exists, _ := api.artifacts.SessionMessages(
 			ctx, locator.SourceSessionID, int(locator.RequestSequence))
-		writeSessionsJSON(writer, http.StatusOK, sessionExistsBody{Exists: exists})
+		adminWriteJSON(writer, http.StatusOK, sessionExistsBody{Exists: exists})
 		return
 	}
-	writeSessionsJSON(writer, http.StatusOK,
+	adminWriteJSON(writer, http.StatusOK,
 		sessionExistsBody{Exists: api.artifacts.HasAnySessionMessages(ctx, locator.SourceSessionID)})
 }
 
@@ -546,7 +546,7 @@ func (api *sessionAPI) writeSessionExistsFallback(
 		"path":      request.URL.Path,
 		"error":     err.Error(),
 	})
-	writeSessionsJSON(writer, http.StatusOK, sessionExistsBody{Exists: false})
+	adminWriteJSON(writer, http.StatusOK, sessionExistsBody{Exists: false})
 }
 
 // sessionExistsBody 是 SessionBooleanResponseSchema（{"exists": bool}）。

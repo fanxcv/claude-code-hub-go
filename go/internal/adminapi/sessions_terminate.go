@@ -239,7 +239,7 @@ func (api *sessionAPI) handleBatchTerminateSessions(
 	// new Set(sessionIds)：去重且保持首次出现顺序。
 	uniqueSessionIDs := appendUniqueStrings(body.SessionIDs, nil)
 	if len(uniqueSessionIDs) == 0 {
-		writeSessionsJSON(writer, http.StatusOK, sessionBatchTerminateResult{
+		adminWriteJSON(writer, http.StatusOK, sessionBatchTerminateResult{
 			UnauthorizedSessionIDs: []string{},
 			MissingSessionIDs:      []string{},
 		})
@@ -267,7 +267,7 @@ func (api *sessionAPI) handleBatchTerminateSessions(
 	}
 	if len(claim.AllowedSessionIDs) == 0 {
 		result.FailedCount = result.UnauthorizedCount + result.MissingCount
-		writeSessionsJSON(writer, http.StatusOK, result)
+		adminWriteJSON(writer, http.StatusOK, result)
 		return
 	}
 
@@ -305,7 +305,7 @@ func (api *sessionAPI) handleBatchTerminateSessions(
 	result.ProcessedCount = processedCount
 	result.AllowedFailedCount = allowedFailedCount
 	result.FailedCount = allowedFailedCount + result.UnauthorizedCount + result.MissingCount
-	writeSessionsJSON(writer, http.StatusOK, result)
+	adminWriteJSON(writer, http.StatusOK, result)
 }
 
 // sessionBatchClaim 是 summarizeTerminateSessionsBatch 的结果。

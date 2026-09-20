@@ -301,23 +301,11 @@ func (api *sessionAPI) handleSessionRequests(
 		rows = append(rows, body)
 	}
 
-	writeSessionsJSON(writer, http.StatusOK, sessionRequestsBody{
+	adminWriteJSON(writer, http.StatusOK, sessionRequestsBody{
 		Requests: rows,
 		Total:    page.Total,
 		HasMore:  int64(offset+len(rows)) < page.Total,
 	})
-}
-
-// writeSessionsJSON 作答 JSON 正文（不转义 HTML，与 JS 的 JSON.stringify 同判）。
-func writeSessionsJSON(writer http.ResponseWriter, status int, body any) {
-	encoded, err := marshalNoEscape(body)
-	if err != nil {
-		writer.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(status)
-	_, _ = writer.Write(encoded)
 }
 
 // writeSessionFailure 作答 400 OPERATION_FAILED（复刻 dashboard 资源同一条兜底）。

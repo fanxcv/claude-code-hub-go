@@ -275,14 +275,7 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 	router := adminapi.New(adminapi.Options{Deps: deps, EnableHSTS: options.Cfg.Env.EnableSecureCookies})
 	// 未注册的管理路由必须原样回退 Node：Go 侧没有 501/裸 404，「还没实现」不是错误。
 	router.SetNotFound(options.Fallback)
-	// 健康探针：Node 的 /api/health* 要如实报告 PG/Redis/数据面三项（见 internal/adminapi/health_probe.go）。
-	// 在这里建而不是进 Deps：管理面 Deps 里没有 Redis 入口，而探针正是那个必须看 Redis 的东西。
-	healthProbe := adminapi.NewHealthProbe(adminapi.HealthProbeOptions{
-		Pools:  options.Pools,
-		Redis:  redisClient,
-		Logger: logger,
-	})
-	registerAdminRoutes(router, deps, guard, issuer, adminapi.NewRedisLeaderboardCache(redisClient), healthProbe, limitWindows,
+	registerAdminRoutes(router, deps, guard, issuer, adminapi.NewRedisLeaderboardCache(redisClient), limitWindows,
 		adminapi.PublicStatusReadOptions{Store: pubstatus.NewRedisStatusStore(redisClient, logger)})
 
 	logger.Info("admin_plane_ready", map[string]any{
@@ -338,16 +331,12 @@ func registerAdminRoutes(
 	issuer adminapi.CSRFIssuer,
 	authIssuer *adminapi.AuthIssuer,
 	leaderboardCache adminapi.LeaderboardCacheStore,
-	healthProbe adminapi.HealthProbe,
 	limitWindows *limit.CostWindows,
 	publicStatusRead adminapi.PublicStatusReadOptions,
 ) {
 	adminapi.RegisterShellRoutes(router, deps, issuer)
 	// 根级认证面（/api/auth/*）：不在管理面挂载点下，但共用同一张路由表与同一条回退（见其文件头）。
 	adminapi.RegisterAuthRoutes(router, deps, authIssuer)
-	// 三条健康端点（/api/health、/api/health/ready、/api/health/live）：公开、不带管理面信封，
-	// 是外部监控与容器编排的入口，故与 shell/auth 同批最先接（见 internal/adminapi/health_routes.go）。
-	adminapi.RegisterHealthRoutes(router, deps, healthProbe)
 	adminapi.RegisterKeysRoutes(router, deps)
 	adminapi.RegisterUsersRoutes(router, deps)
 	// 配额页的「累计成本」批量读数（Node 靠 SSR 绕过，从无 REST 端点；见 ui-parity-quotas-cost.md）。
@@ -410,12 +399,9 @@ func registerAdminRoutes(
 	// public-status 读侧两条（`/api/v1/public/status` 与根级 `/api/public-status`）：
 	// 共用同一内核，只是外壳（信封/错误形状/503+no-store）不同；缺 Redis 时整组不注册。
 	adminapi.RegisterPublicStatusReadRoutes(router, deps, publicStatusRead)
-	// 杂项七条（ip-geo 三条经 deps.IPGeo、proxy-status、公开状态写侧、根级 system-settings、
-	// 会话响应体）：各自缺依赖时不注册（回退 Node）。
+	// 杂项（ip-geo 三条经 deps.IPGeo、公开状态写侧、会话响应体）：各自缺依赖时不注册（回退 Node）。
 	adminapi.RegisterIPGeoRoutes(router, deps)
-	adminapi.RegisterProxyStatusRoute(router, deps)
 	adminapi.RegisterPublicStatusSettingsRoute(router, deps)
-	adminapi.RegisterRootSystemSettingsRoute(router, deps)
 	adminapi.RegisterSessionResponseRoute(router, deps)
 	// 根级可用性读端点（/api/availability/current 与 endpoints 两族，以及按时间桶聚合的
 	// /api/availability）：页面自己 fetch 的私有面，作答不带管理面信封（见其文件头）。

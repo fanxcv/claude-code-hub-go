@@ -9,8 +9,6 @@ package egress
 type Family string
 
 const (
-	// FamilyAny 匹配任意方言。
-	FamilyAny Family = "any"
 	// FamilyAnthropicMessages 是 Anthropic Messages 方言。
 	FamilyAnthropicMessages Family = "anthropic-messages"
 	// FamilyOpenAIChat 是 OpenAI Chat Completions 方言。

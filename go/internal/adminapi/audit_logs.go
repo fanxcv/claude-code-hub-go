@@ -157,7 +157,7 @@ func (api *auditLogAPI) handleList(writer http.ResponseWriter, request *http.Req
 		encoded := encodeAuditLogCursor(*nextCursor)
 		payload.PageInfo.NextCursor = &encoded
 	}
-	writeAuditLogJSON(writer, http.StatusOK, payload)
+	adminWriteJSON(writer, http.StatusOK, payload)
 }
 
 // handleDetail 复刻 getAuditLog（audit-logs/handlers.ts:59-80）。
@@ -188,7 +188,7 @@ func (api *auditLogAPI) handleDetail(writer http.ResponseWriter, request *http.R
 		api.writeAuditLogFailure(writer, request, loadErr)
 		return
 	}
-	writeAuditLogJSON(writer, http.StatusOK, row)
+	adminWriteJSON(writer, http.StatusOK, row)
 }
 
 // parseAuditLogListQuery 复刻 AuditLogListQuerySchema 的解析与游标校验。
@@ -344,19 +344,4 @@ func (api *auditLogAPI) writeAuditLogFailure(
 	})
 	api.problems.WriteProblem(writer, request, http.StatusBadRequest,
 		"OPERATION_FAILED", "")
-}
-
-// writeAuditLogJSON 作答 JSON 正文。
-//
-// 用 SetEscapeHTML(false)：JS 的 JSON.stringify 不转义 < > &，而 Go 的 json.Marshal 会——
-// 审计行里有 target_name / user_agent 这类外部输入，转义与否在原始字节上可对拍出差异。
-func writeAuditLogJSON(writer http.ResponseWriter, status int, body any) {
-	encoded, err := marshalNoEscape(body)
-	if err != nil {
-		writer.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	writer.Header().Set("Content-Type", "application/json")
-	writer.WriteHeader(status)
-	_, _ = writer.Write(encoded)
 }

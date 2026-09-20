@@ -152,15 +152,6 @@ func sanitizeLegacyPublicModels(publicModels any, fallbacks ...any) []PublicStat
 	return nil
 }
 
-// GetPublicStatusModelKeys 复刻 config.ts:143-145。
-func GetPublicStatusModelKeys(publicModels []PublicStatusModelConfig) []string {
-	keys := make([]string, 0, len(publicModels))
-	for _, model := range publicModels {
-		keys = append(keys, model.ModelKey)
-	}
-	return keys
-}
-
 // createStablePublicGroupSlugSuffix 复刻 config.ts:147-156 的 FNV-1a（按**码点**迭代）。
 func createStablePublicGroupSlugSuffix(input string) string {
 	hash := uint32(0x811c9dc5)
