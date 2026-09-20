@@ -8,6 +8,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import * as icons from "@/lib/lobehub-icons/provider-types";
+import { getVendorIconComponent } from "@/lib/model-vendor-icons";
 import { PROVIDER_TYPE_CONFIG } from "@/lib/provider-type-utils";
 import { getPublicStatusVendorIconComponent } from "@/lib/public-status/vendor-icon";
 
@@ -84,6 +85,15 @@ describe("图标引入面", () => {
     for (const [type, config] of Object.entries(PROVIDER_TYPE_CONFIG)) {
       const markup = renderIcon(config.icon);
       expect(markup, `provider type ${type} 应渲染出 svg`).toContain("<svg");
+    }
+  });
+
+  it("模型厂商图标注册表仍可渲染出 svg", () => {
+    // 抽三个不同图标面的厂商（Color / Mono / BrandColor 三类变体各一）
+    for (const slug of ["anthropic", "openai", "ai21"]) {
+      const Icon = getVendorIconComponent(slug);
+      expect(Icon, `vendor ${slug} 应有图标组件`).toBeTruthy();
+      expect(renderIcon(Icon), `vendor ${slug} 应渲染出 svg`).toContain("<svg");
     }
   });
 

@@ -62,6 +62,10 @@ export function QuotaToolbar({
     if (!autoRefresh) return;
 
     const timer = setInterval(() => {
+      // 标签页不可见时不刷新：无人看的结果白白占用一次服务端渲染与查询
+      // （可见时的下一个 tick 会照常刷新，语义不变）。
+      if (document.visibilityState === "hidden") return;
+
       startTransition(() => {
         router.refresh();
       });
