@@ -12,7 +12,6 @@ const root = path.resolve(__dirname, "..");
 export function sharedResolve(opts?: { includeMessages?: boolean }) {
   const alias: Record<string, string> = {
     "@": path.resolve(root, "src"),
-    "server-only": path.resolve(root, "tests/server-only.mock.ts"),
     "@lobehub/fluent-emoji/es/FluentEmoji": path.resolve(
       root,
       "node_modules/@lobehub/fluent-emoji/es/FluentEmoji/index.js"

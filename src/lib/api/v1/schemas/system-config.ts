@@ -1,4 +1,4 @@
-import { z } from "@hono/zod-openapi";
+import { z } from "zod";
 import { CURRENCY_CONFIG } from "@/lib/utils/currency";
 import {
   DISCOVERY_FIELD_LIMITS,

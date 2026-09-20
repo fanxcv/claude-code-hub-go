@@ -1,4 +1,4 @@
-import { z } from "@hono/zod-openapi";
+import { z } from "zod";
 
 export const DashboardTimeRangeSchema = z
   .enum(["today", "7days", "30days", "thisMonth"])

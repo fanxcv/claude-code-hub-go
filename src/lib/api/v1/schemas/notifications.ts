@@ -1,4 +1,4 @@
-import { z } from "@hono/zod-openapi";
+import { z } from "zod";
 import { IsoDateTimeStringSchema } from "./_common";
 import { WebhookTargetSchema } from "./webhook-targets";
 

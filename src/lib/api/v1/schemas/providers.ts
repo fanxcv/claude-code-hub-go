@@ -1,4 +1,4 @@
-import { z } from "@hono/zod-openapi";
+import { z } from "zod";
 import { HIDDEN_PROVIDER_TYPES as HIDDEN_PROVIDER_TYPE_VALUES } from "@/lib/api/v1/_shared/constants";
 import {
   CODEX_IMAGE_GENERATION_PREFERENCE_VALUES,

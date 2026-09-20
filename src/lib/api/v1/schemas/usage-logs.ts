@@ -1,4 +1,4 @@
-import { z } from "@hono/zod-openapi";
+import { z } from "zod";
 
 const NumberQuerySchema = z.coerce.number().optional();
 const BooleanQuerySchema = z

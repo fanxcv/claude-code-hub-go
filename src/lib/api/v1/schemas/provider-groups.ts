@@ -1,4 +1,4 @@
-import { z } from "@hono/zod-openapi";
+import { z } from "zod";
 import { IsoDateTimeStringSchema } from "./_common";
 
 export const ProviderGroupSchema = z.object({
