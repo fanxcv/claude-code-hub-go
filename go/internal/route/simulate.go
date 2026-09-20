@@ -3,7 +3,7 @@ package route
 import (
 	"context"
 	"encoding/json"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -375,15 +375,11 @@ func buildSimulatePriorityTiers(
 		return make([]SimulatePriorityTier, 0)
 	}
 	priorities := make([]int, 0, len(providers))
-	seen := make(map[int]bool)
 	for _, p := range providers {
-		priority := resolveEffectivePriority(p.Provider, groupFilter)
-		if !seen[priority] {
-			seen[priority] = true
-			priorities = append(priorities, priority)
-		}
+		priorities = append(priorities, resolveEffectivePriority(p.Provider, groupFilter))
 	}
-	sort.Ints(priorities)
+	slices.Sort(priorities)
+	priorities = slices.Compact(priorities)
 	selected := priorities[0]
 
 	tiers := make([]SimulatePriorityTier, 0, len(priorities))

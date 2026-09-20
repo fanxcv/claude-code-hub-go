@@ -2,6 +2,7 @@ package gate
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -377,16 +378,6 @@ func classifyFrameInner(family Family, signal streamSignal, event string, data s
 	return classifyStructuredInner(family, signal, event, parsed)
 }
 
-// ClassifyStructured 对已完成 JSON 解析的帧分类，供同一读取路径复用解析结果，
-// 避免热路径重复 json.Unmarshal。
-func ClassifyStructured(family Family, event string, parsed any) Verdict {
-	signal, ok := streamSignals[family]
-	if !ok {
-		return VerdictNeutral
-	}
-	return classifyStructuredInner(family, signal, event, parsed)
-}
-
 func classifyStructuredInner(family Family, signal streamSignal, event string, parsed any) Verdict {
 	outer := classifyParsedFrame(family, signal, event, parsed)
 	if outer != VerdictNeutral || family != FamilyGemini {
@@ -439,7 +430,7 @@ func classifyParsedFrame(family Family, signal streamSignal, event string, parse
 			return VerdictTerminal
 		}
 	}
-	if effective != "" && contains(signal.terminalEvents, effective) {
+	if effective != "" && slices.Contains(signal.terminalEvents, effective) {
 		return VerdictTerminal
 	}
 	return VerdictNeutral
@@ -513,7 +504,7 @@ func ClassifyStructuredTerminalKind(family Family, event string, parsed any) Ter
 	if !ok {
 		return TerminalNone
 	}
-	if effective != "" && contains(signal.terminalEvents, effective) {
+	if effective != "" && slices.Contains(signal.terminalEvents, effective) {
 		return TerminalComplete
 	}
 	for _, rule := range signal.terminalRules {
@@ -617,19 +608,10 @@ func isObjectLike(value any) bool {
 	}
 }
 
-func contains(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
-			return true
-		}
-	}
-	return false
-}
-
 // frameRuleMatches 是单条帧规则的 AND 语义；空规则永不命中
 // （防目录笔误把所有帧判成内容/错误）。
 func frameRuleMatches(rule frameRule, eventType string, parsed any) bool {
-	if len(rule.eventTypes) > 0 && !contains(rule.eventTypes, eventType) {
+	if len(rule.eventTypes) > 0 && !slices.Contains(rule.eventTypes, eventType) {
 		return false
 	}
 	if len(rule.anyPaths) > 0 {
@@ -667,15 +649,15 @@ func valueMatchHits(match valueMatch, parsed any) bool {
 	for _, candidate := range candidates {
 		switch value := candidate.(type) {
 		case string:
-			if contains(match.values, value) {
+			if slices.Contains(match.values, value) {
 				return true
 			}
 		case float64:
-			if contains(match.values, strconv.FormatFloat(value, 'g', -1, 64)) {
+			if slices.Contains(match.values, strconv.FormatFloat(value, 'g', -1, 64)) {
 				return true
 			}
 		case bool:
-			if contains(match.values, strconv.FormatBool(value)) {
+			if slices.Contains(match.values, strconv.FormatBool(value)) {
 				return true
 			}
 		}
@@ -729,7 +711,7 @@ func resolveSegments(node any, segments []string, index int) any {
 }
 
 func hasHashSegment(segments []string) bool {
-	return contains(segments, "#")
+	return slices.Contains(segments, "#")
 }
 
 // IsNonEmptyValue 是 gjson 语义的「非空」判定：

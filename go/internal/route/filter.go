@@ -2,6 +2,7 @@ package route
 
 import (
 	"context"
+	"slices"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
 )
@@ -362,10 +363,6 @@ func sortedIDs(set map[int64]bool) []int64 {
 	for id := range set {
 		out = append(out, id)
 	}
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j-1] > out[j]; j-- {
-			out[j-1], out[j] = out[j], out[j-1]
-		}
-	}
+	slices.Sort(out)
 	return out
 }

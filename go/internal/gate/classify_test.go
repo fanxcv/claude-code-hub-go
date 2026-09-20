@@ -312,16 +312,11 @@ func TestClassifyPerFamily(t *testing.T) {
 
 func TestClassifyStructuredMatchesText(t *testing.T) {
 	raw := `{"type":"response.output_text.delta","delta":"hi"}`
-	parsed := mustParseJSON(t, raw)
 	fromText := Classify(FamilyOpenAIResponses, "response.output_text.delta", raw)
-	fromStructured := ClassifyStructured(FamilyOpenAIResponses, "response.output_text.delta", parsed)
-	if fromText != fromStructured {
-		t.Fatalf("结构化分类应与文本分类一致: %s vs %s", fromText, fromStructured)
-	}
 	if fromText != VerdictContent {
 		t.Fatalf("期望 content，得到 %s", fromText)
 	}
-	if got := ClassifyStructured(Family("unknown"), "", parsed); got != VerdictNeutral {
+	if got := Classify(Family("unknown"), "", raw); got != VerdictNeutral {
 		t.Fatalf("未知家族应中性，得到 %s", got)
 	}
 }

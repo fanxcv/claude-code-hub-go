@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -416,18 +417,12 @@ func selectTopPriority(providers []Provider, userGroup string) []Provider {
 
 // priorityLevels 复刻 Node 的 priorityLevels：去重后升序。
 func priorityLevels(providers []Provider, userGroup string) []int {
-	seen := map[int]bool{}
 	out := make([]int, 0, len(providers))
 	for _, p := range providers {
-		value := resolveEffectivePriority(p, userGroup)
-		if seen[value] {
-			continue
-		}
-		seen[value] = true
-		out = append(out, value)
+		out = append(out, resolveEffectivePriority(p, userGroup))
 	}
-	sort.Ints(out)
-	return out
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // selectOptimal 复刻 selectOptimal：先按成本倍率升序稳定排序，再按权重加权随机。

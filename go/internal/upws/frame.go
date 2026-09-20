@@ -4,18 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"github.com/coder/websocket"
 )
-
-// ErrBinaryFrame 表示上游回传了 binary 帧。Responses WS 的事件面只走文本帧
-// （openai/codex 的读循环按文本帧解析，binary 帧不被处理），故这里显式报错而不是
-// 猜测其内容——静默丢弃一个 binary 帧等于把上游的异常形态吞掉。
-var ErrBinaryFrame = errors.New("upws: 上游回传 binary 帧，Responses WS 只发文本帧")
 
 // SSE 合成用的分隔符。既有 SSE 管线认 `data: <json>\n\n`，与 HTTP 路径逐字同形，
 // 故下游（门控、协议转换、结算）无需知道这些字节来自 WS 而非 TCP 上的 HTTP 响应体。
@@ -165,7 +159,9 @@ func (r *frameReader) readFrame(timeout time.Duration) ([]byte, error) {
 		return nil, err
 	}
 	if kind != websocket.MessageText {
-		return nil, ErrBinaryFrame
+		// Responses WS 的事件面只走文本帧（openai/codex 的读循环按文本帧解析），
+		// 故这里显式报错而不是猜测 binary 帧的内容。
+		return nil, fmt.Errorf("upws: 上游回传 binary 帧，Responses WS 只发文本帧")
 	}
 	return data, nil
 }
