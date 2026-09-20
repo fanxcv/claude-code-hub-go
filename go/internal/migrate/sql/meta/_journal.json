@@ -883,6 +883,13 @@
       "when": 1789356383144,
       "tag": "0125_cache_regression_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1789866432536,
+      "tag": "0126_ledger_cost_cover_replay_predicate",
+      "breakpoints": true
     }
   ]
 }
