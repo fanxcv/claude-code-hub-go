@@ -4,9 +4,9 @@ import "context"
 
 // 本文件是 ConfigSource 的生产实现：把 providers 表的 slow_rate_* 列折算成 Params。
 //
-// 零开销保证（设计稿 §8 的设计约束，不是优化）：ProviderSnapshot 返回的开关状态
-// 走**内存快照**，每请求只做一次 map 查；未开启的渠道在 Recorder.Record 的首段即返回，
-// 一次 Redis 读写都不会发生。
+// 零开销保证（设计稿 §8 的设计约束，不是优化）：ProviderSource 返回的开关状态走**内存缓存**
+// （按 providerID 惰性装载，TTL 取 providers 域的失效周期，并随 DomainProviders 失效广播清空），
+// 每请求只做一次 map 查；未开启的渠道在 Recorder.Record 的首段即返回，一次 Redis 读写都不会发生。
 
 // ProviderConfig 是一个渠道的低速监控配置（从 providers 表的七个 slow_rate_* 列投影）。
 type ProviderConfig struct {
