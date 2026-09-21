@@ -32,6 +32,9 @@ type Options struct {
 	// Logger 供旁路记 warn（旁路失败不得冒泡成结算错误，故只能记日志）。
 	// nil 时静默。
 	Logger Logger
+	// SlowRate 是低速样本的旁路接收面（见 slow_rate_seam.go 的文件头）。
+	// nil 表示未装配：旁路整段跳过，结算路径行为与接线前完全一致。
+	SlowRate SlowRateRecorder
 	// Queue 是终态写入的异步队列（见 batch.go 的文件头）。
 	//
 	// nil（默认）表示同步写：终态与成本在 Settle 内写完再返回，与接线前逐字一致。
@@ -62,7 +65,9 @@ type Settler struct {
 	leaseSettler LeaseSettler
 	// tracer 是终态上报的旁路接收面；nil 即未装配。
 	tracer Tracer
-	logger Logger
+	// slowRate 是低速样本的旁路接收面；nil 即未装配。
+	slowRate SlowRateRecorder
+	logger   Logger
 	// queue 是终态写入的异步队列；nil（默认）即同步写。
 	queue *WriteQueue
 }
@@ -85,6 +90,7 @@ func New(writer Writer, options Options) *Settler {
 		newRows:      options.NewRows,
 		leaseSettler: options.LeaseSettler,
 		tracer:       options.Tracer,
+		slowRate:     options.SlowRate,
 		logger:       options.Logger,
 		queue:        options.Queue,
 	}
@@ -311,6 +317,9 @@ func (s *Settler) SettleContext(
 	// 也不会重复。
 	winner := func(writeCtx context.Context, result Result) {
 		s.affinityWinner(writeCtx, pc, settlement.Affinity, result.Committed)
+		// 低速样本与亲和写回同一时机、同一队列 ctx：终态提交之后才采样，
+		// 且异步模式下跟着队列走（见 batch.go 的 afterCommit）。
+		s.recordSlowRateCommitted(writeCtx, settlement.SlowRate, result.Committed)
 	}
 	result, err := s.settleContext(ctx, pc, settlement, create, winner)
 	if result.Queued {
@@ -322,6 +331,7 @@ func (s *Settler) SettleContext(
 	// 未入队（同步模式或队列满降级）：与接线前逐字一致——墓碑先、winner 后，且都在
 	// 写入返回之后。三种「没写成」的退出也走这里，结论同样是 Committed=false。
 	s.affinityWriteback(ctx, pc, settlement.Affinity, result.Committed)
+	s.recordSlowRateCommitted(ctx, settlement.SlowRate, result.Committed)
 	return result, err
 }
 

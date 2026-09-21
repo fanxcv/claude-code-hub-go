@@ -12,6 +12,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/forward"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/pubstatus"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/terminal"
@@ -478,6 +479,8 @@ func (s *storeSettler) logSettle(_ context.Context, pc *pctx.Context, settlement
 	if plan, ok := pc.LeaseSettlementPlan(); ok {
 		settlement.LeaseSettlement = plan
 	}
+	// 低速样本事实：两条路径（NonStream / Stream）在这里汇合，故构造一次即可覆盖两者。
+	settlement.SlowRate = s.slowRateSample(pc, settlement)
 	settleCtx, cancel := context.WithTimeout(context.Background(), settleTimeout)
 	defer cancel()
 	err := s.settle(settleCtx, pc, settlement)
@@ -489,6 +492,38 @@ func (s *storeSettler) logSettle(_ context.Context, pc *pctx.Context, settlement
 		})
 	}
 	return err
+}
+
+// slowRateSample 把一次终态折算成低速样本事实（不判定，判定在 slowrate 包）。
+//
+// 三处取值口径：
+//   - ProviderID 用行级 provider_id（resolveSettlementProviderID 已算好，直接复用）——
+//     慢的是「实际作答的那一家」，不是入口首选的候选（回退/竞速换家后两者不同）；
+//   - ModelKey 取客户端原始模型名，与公开状态同一口径（跨供应商别名归一，
+//     `pubstatus.ResolveSuccessRateModelKey`）；此处只有原始名一份事实，故直接传它；
+//   - SessionID / KeyID 供会话级冷却键：会话身份来自本请求的会话步骤记录（state.sessionID），
+//     密钥 id 来自鉴权槽位。未接线时保持零值，slowrate 会只做渠道级统计。
+func (s *storeSettler) slowRateSample(pc *pctx.Context, settlement terminal.Settlement) terminal.SlowRateSample {
+	sample := terminal.SlowRateSample{
+		ModelKey:     pubstatus.ResolveSuccessRateModelKey(&s.state.Model, nil),
+		StatusCode:   settlement.StatusCode,
+		DurationMS:   settlement.DurationMS,
+		FirstByteMS:  settlement.FirstByteMS,
+		OutputTokens: settlement.Usage.OutputTokens,
+		SessionID:    s.state.sessionID,
+	}
+	if settlement.ProviderID != nil {
+		sample.ProviderID = *settlement.ProviderID
+	}
+	if pc != nil {
+		if auth, ok := pc.Auth(); ok {
+			sample.KeyID = auth.KeyID
+		}
+		if id, ok := pc.MessageRequestID(); ok {
+			sample.RequestID = id
+		}
+	}
+	return sample
 }
 
 // baseSettlement 填两侧共有的字段（供应商、模型归属、失败归因）。

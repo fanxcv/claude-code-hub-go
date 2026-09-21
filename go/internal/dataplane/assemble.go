@@ -322,7 +322,10 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			LeaseSettler: options.LeaseSettler,
 			// 终态上报：拿到行 id 且赢得终态后交给出站观测面（见 terminal/trace_seam.go）。
 			Tracer: options.Tracer,
-			Logger: logger,
+			// 低速样本旁路（见 terminal/slow_rate_seam.go）：未开启监控的渠道在实现内即返回，
+			// 逐请求零 Redis 读写；缺 Redis 时为 nil，旁路整段跳过。
+			SlowRate: slowRateRecorder(options, logger),
+			Logger:   logger,
 			// 异步终态写队列（nil 即同步写，逐字保留原路径）。
 			Queue: settlementQueue,
 		})
