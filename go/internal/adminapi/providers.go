@@ -109,6 +109,10 @@ type providerSummary struct {
 	SlowRateRatioPerMille *int `json:"slowRateRatioPerMille"`
 	SlowRatePenaltyStep   *int `json:"slowRatePenaltyStep"`
 	SlowRatePenaltyMax    *int `json:"slowRatePenaltyMax"`
+	// SlowRateProbeAfterFirstByteSeconds 是首字后探测阈值 T（秒）；NULL = 不探测（机制默认关闭）。
+	// SlowRateProbeMinTokens 是探测时的最低已生成 token 数；NULL = 取代码默认值。
+	SlowRateProbeAfterFirstByteSeconds *int `json:"slowRateProbeAfterFirstByteSeconds"`
+	SlowRateProbeMinTokens             *int `json:"slowRateProbeMinTokens"`
 
 	ProxyURL              any  `json:"proxyUrl"`
 	ProxyFallbackToDirect bool `json:"proxyFallbackToDirect"`
@@ -1132,6 +1136,9 @@ func providerSummaryPayload(provider store.AdminProvider, statistics *providerSt
 		SlowRateRatioPerMille:         provider.SlowRateRatioPerMille,
 		SlowRatePenaltyStep:           provider.SlowRatePenaltyStep,
 		SlowRatePenaltyMax:            provider.SlowRatePenaltyMax,
+		// 探测两列也得写：这条链正是 1.9.11 事故处（读投影登了、本结构漏登 ⇒ 接口不回）。
+		SlowRateProbeAfterFirstByteSeconds: provider.SlowRateProbeAfterFirstByteSeconds,
+		SlowRateProbeMinTokens:             provider.SlowRateProbeMinTokens,
 
 		ProxyURL:              providerRedactURLCredentialsNullable(provider.ProxyURL),
 		ProxyFallbackToDirect: provider.ProxyFallbackToDirect,

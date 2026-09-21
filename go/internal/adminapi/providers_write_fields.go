@@ -98,6 +98,8 @@ var providerPreimageFieldNames = map[string]string{
 	"slow_rate_ratio_per_mille":                   "slowRateRatioPerMille",
 	"slow_rate_penalty_step":                      "slowRatePenaltyStep",
 	"slow_rate_penalty_max":                       "slowRatePenaltyMax",
+	"slow_rate_probe_after_first_byte_seconds":    "slowRateProbeAfterFirstByteSeconds",
+	"slow_rate_probe_min_tokens":                  "slowRateProbeMinTokens",
 	"tpm":                                         "tpm",
 	"rpm":                                         "rpm",
 	"rpd":                                         "rpd",
@@ -489,26 +491,28 @@ func providerCreateWriteSpecs() map[string]providerDecodeSpec {
 		// 低速降级：开关为非空 bool（与库中 NOT NULL DEFAULT false 一致），
 		// 五个参数列可空（null = 取代码默认值），故用 nullableInt spec——用非空 spec 会让
 		// 「清空输入框」变成 invalid_type（与 max_retry_attempts 同坑）。
-		"slow_rate_monitor_enabled":            providerBoolFieldSpec(),
-		"slow_rate_window_seconds":             providerNullableIntFieldSpec(nil, nil),
-		"slow_rate_baseline_window_seconds":    providerNullableIntFieldSpec(nil, nil),
-		"slow_rate_min_samples":                providerNullableIntFieldSpec(nil, nil),
-		"slow_rate_trigger_count":              providerNullableIntFieldSpec(nil, nil),
-		"slow_rate_ratio_per_mille":            providerNullableIntFieldSpec(nil, nil),
-		"slow_rate_penalty_step":               providerNullableIntFieldSpec(nil, nil),
-		"slow_rate_penalty_max":                providerNullableIntFieldSpec(nil, nil),
-		"website_url":                          providerNullableFieldSpec(0),
-		"favicon_url":                          providerNullableFieldSpec(0),
-		"cache_ttl_preference":                 providerNullableEnumFieldSpec(providerCacheTTLPreferences),
-		"swap_cache_ttl_billing":               providerBoolFieldSpec(),
-		"context_1m_preference":                providerNullableEnumFieldSpec(providerContext1mPreferences),
-		"codex_reasoning_effort_preference":    providerNullableEnumFieldSpec(providerCodexReasoningEfforts),
-		"codex_reasoning_summary_preference":   providerNullableEnumFieldSpec(providerCodexReasoningSummaries),
-		"codex_text_verbosity_preference":      providerNullableEnumFieldSpec(providerCodexTextVerbosities),
-		"codex_parallel_tool_calls_preference": providerNullableEnumFieldSpec(providerCodexBoolPreferences),
-		"codex_image_generation_preference":    providerNullableEnumFieldSpec(providerCodexImageGenerations),
-		"codex_service_tier_preference":        providerNullableEnumFieldSpec(providerCodexServiceTiers),
-		"codex_max_tokens_preference":          providerNullableFieldSpec(0),
+		"slow_rate_monitor_enabled":                providerBoolFieldSpec(),
+		"slow_rate_window_seconds":                 providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_baseline_window_seconds":        providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_min_samples":                    providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_trigger_count":                  providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_ratio_per_mille":                providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_penalty_step":                   providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_penalty_max":                    providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_probe_after_first_byte_seconds": providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_probe_min_tokens":               providerNullableIntFieldSpec(nil, nil),
+		"website_url":                              providerNullableFieldSpec(0),
+		"favicon_url":                              providerNullableFieldSpec(0),
+		"cache_ttl_preference":                     providerNullableEnumFieldSpec(providerCacheTTLPreferences),
+		"swap_cache_ttl_billing":                   providerBoolFieldSpec(),
+		"context_1m_preference":                    providerNullableEnumFieldSpec(providerContext1mPreferences),
+		"codex_reasoning_effort_preference":        providerNullableEnumFieldSpec(providerCodexReasoningEfforts),
+		"codex_reasoning_summary_preference":       providerNullableEnumFieldSpec(providerCodexReasoningSummaries),
+		"codex_text_verbosity_preference":          providerNullableEnumFieldSpec(providerCodexTextVerbosities),
+		"codex_parallel_tool_calls_preference":     providerNullableEnumFieldSpec(providerCodexBoolPreferences),
+		"codex_image_generation_preference":        providerNullableEnumFieldSpec(providerCodexImageGenerations),
+		"codex_service_tier_preference":            providerNullableEnumFieldSpec(providerCodexServiceTiers),
+		"codex_max_tokens_preference":              providerNullableFieldSpec(0),
 		"anthropic_max_tokens_preference": providerNullablePreferenceSpec(
 			validateMaxTokensPreference, "inherit or a positive integer string"),
 		"anthropic_thinking_budget_preference": providerNullablePreferenceSpec(
@@ -1195,7 +1199,8 @@ func providerWriteKindOf(name string) string {
 		// 低速降级：五参数均可空（null = 取代码默认值）；判定窗与基线窗是两列。
 		"slow_rate_window_seconds", "slow_rate_baseline_window_seconds",
 		"slow_rate_min_samples", "slow_rate_trigger_count", "slow_rate_ratio_per_mille",
-		"slow_rate_penalty_step", "slow_rate_penalty_max":
+		"slow_rate_penalty_step", "slow_rate_penalty_max",
+		"slow_rate_probe_after_first_byte_seconds", "slow_rate_probe_min_tokens":
 		return "nullable_int"
 	case "cost_multiplier", "limit_5h_usd", "limit_daily_usd", "limit_weekly_usd",
 		"limit_monthly_usd", "limit_total_usd":

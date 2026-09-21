@@ -355,6 +355,16 @@
         "label": "降权上限",
         "desc": "优先级增加的上限，防止渠道被永久挤出候选。留空取默认 30。",
         "placeholder": "30"
+      },
+      "probeAfterFirstByteSeconds": {
+        "label": "首字后探测阈值（秒）",
+        "desc": "自首字到达起计时；到点且速率不达标则中止该渠道并换家重试一次。留空即不启用该机制。",
+        "placeholder": "30"
+      },
+      "probeMinTokens": {
+        "label": "探测最低 token 数",
+        "desc": "已生成 token 低于此数不判定，避免把思考阶段误判为慢。留空取默认 50。",
+        "placeholder": "50"
       }
     }
   },

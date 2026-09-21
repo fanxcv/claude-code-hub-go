@@ -133,6 +133,9 @@ var providerWriteSamplePayload = map[string]string{
 	"slow_rate_ratio_per_mille":         `300`,
 	"slow_rate_penalty_step":            `10`,
 	"slow_rate_penalty_max":             `30`,
+	// 首字后探测两列（0130），同样走非空分支。
+	"slow_rate_probe_after_first_byte_seconds": `30`,
+	"slow_rate_probe_min_tokens":               `50`,
 }
 
 // TestProviderCreateFieldsBindToStoreTypes 覆盖创建入口：同一份表里除了 description

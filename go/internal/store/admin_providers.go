@@ -105,6 +105,10 @@ type AdminProvider struct {
 	SlowRateRatioPerMille *int `json:"slowRateRatioPerMille"`
 	SlowRatePenaltyStep   *int `json:"slowRatePenaltyStep"`
 	SlowRatePenaltyMax    *int `json:"slowRatePenaltyMax"`
+	// SlowRateProbeAfterFirstByteSeconds 是首字后探测阈值 T（秒）；NULL = 不探测（机制默认关闭）。
+	// SlowRateProbeMinTokens 是探测时的最低已生成 token 数；NULL = 取代码默认值。
+	SlowRateProbeAfterFirstByteSeconds *int `json:"slowRateProbeAfterFirstByteSeconds"`
+	SlowRateProbeMinTokens             *int `json:"slowRateProbeMinTokens"`
 
 	TPM *int `json:"tpm"`
 	RPM *int `json:"rpm"`
@@ -177,6 +181,8 @@ const adminProviderColumns = `
 	slow_rate_ratio_per_mille AS "slowRateRatioPerMille",
 	slow_rate_penalty_step AS "slowRatePenaltyStep",
 	slow_rate_penalty_max AS "slowRatePenaltyMax",
+	slow_rate_probe_after_first_byte_seconds AS "slowRateProbeAfterFirstByteSeconds",
+	slow_rate_probe_min_tokens AS "slowRateProbeMinTokens",
 	tpm, rpm, rpd, cc,
 	to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
 	to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "updatedAt"`

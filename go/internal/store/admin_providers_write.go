@@ -88,6 +88,10 @@ var adminProviderWriteFields = []adminProviderWriteField{
 	{"slow_rate_ratio_per_mille", "slow_rate_ratio_per_mille", providerNullableIntKind},
 	{"slow_rate_penalty_step", "slow_rate_penalty_step", providerNullableIntKind},
 	{"slow_rate_penalty_max", "slow_rate_penalty_max", providerNullableIntKind},
+	// 探测两列：NULL 语义各不相同——探测阈值 NULL = 不探测（机制关闭）；
+	// 最低 token 数 NULL = 取代码默认值。两者都不得有 DEFAULT（见 0130 迁移的契约测试）。
+	{"slow_rate_probe_after_first_byte_seconds", "slow_rate_probe_after_first_byte_seconds", providerNullableIntKind},
+	{"slow_rate_probe_min_tokens", "slow_rate_probe_min_tokens", providerNullableIntKind},
 	{"limit_5h_usd", "limit_5h_usd", providerNumericKind},
 	{"limit_5h_reset_mode", "limit_5h_reset_mode", providerTextKind},
 	{"limit_daily_usd", "limit_daily_usd", providerNumericKind},

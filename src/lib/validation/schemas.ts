@@ -623,6 +623,9 @@ export const CreateProviderSchema = z
     slow_rate_ratio_per_mille: z.coerce.number().int().min(0).max(1000).nullable().optional(),
     slow_rate_penalty_step: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_penalty_max: z.coerce.number().int().min(0).nullable().optional(),
+    // 首字后探测两列：null = 不探测（阈值）/ 取代码默认值（最低 token 数）。
+    slow_rate_probe_after_first_byte_seconds: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_probe_min_tokens: z.coerce.number().int().min(0).nullable().optional(),
     max_retry_attempts: z.coerce
       .number()
       .int("重试次数必须是整数")
@@ -875,6 +878,9 @@ export const UpdateProviderSchema = z
     slow_rate_ratio_per_mille: z.coerce.number().int().min(0).max(1000).nullable().optional(),
     slow_rate_penalty_step: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_penalty_max: z.coerce.number().int().min(0).nullable().optional(),
+    // 首字后探测两列：null = 不探测（阈值）/ 取代码默认值（最低 token 数）。
+    slow_rate_probe_after_first_byte_seconds: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_probe_min_tokens: z.coerce.number().int().min(0).nullable().optional(),
     max_retry_attempts: z.coerce
       .number()
       .int("重试次数必须是整数")

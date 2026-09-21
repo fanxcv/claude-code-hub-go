@@ -189,6 +189,18 @@ export const ProviderSummarySchema = z
       .int()
       .nullable()
       .describe("Upper bound on added priority; null uses the default."),
+    slowRateProbeAfterFirstByteSeconds: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        "Probe threshold T in seconds counted from first byte; null disables the probe (default off)."
+      ),
+    slowRateProbeMinTokens: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Minimum generated tokens before a probe can judge; null uses the default."),
     todayTotalCostUsd: z
       .string()
       .optional()
@@ -631,6 +643,18 @@ export const ProviderCreateSchema = z
       .nullable()
       .optional()
       .describe("Upper bound on added priority."),
+    slow_rate_probe_after_first_byte_seconds: z
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .describe("Probe threshold T in seconds counted from first byte; null disables the probe."),
+    slow_rate_probe_min_tokens: z
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .describe("Minimum generated tokens before a probe can judge."),
   })
   .strict()
   .describe("Provider create request. Hidden provider types and deprecated fields are rejected.");

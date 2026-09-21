@@ -63,6 +63,10 @@ type Provider struct {
 	SlowRateRatioPerMille *int `json:"slow_rate_ratio_per_mille"`
 	SlowRatePenaltyStep   *int `json:"slow_rate_penalty_step"`
 	SlowRatePenaltyMax    *int `json:"slow_rate_penalty_max"`
+	// SlowRateProbeAfterFirstByteSeconds 是首字后探测阈值 T（秒）；NULL = 不探测。
+	SlowRateProbeAfterFirstByteSeconds *int `json:"slow_rate_probe_after_first_byte_seconds"`
+	// SlowRateProbeMinTokens 是探测时的最低已生成 token 数；NULL = 取代码默认值。
+	SlowRateProbeMinTokens *int `json:"slow_rate_probe_min_tokens"`
 	// CostLimits 是供应商级金额限额（Node 的 filterByLimits 判定）。
 	CostLimits ProviderCostLimits `json:"-"`
 }
@@ -193,33 +197,35 @@ func providerFromStore(row store.Provider) Provider {
 	// 容错解码：脏值跳过并留给选路器告警，**不**让它把整批候选拖没（详见 store.DecodeGroupPriorities）。
 	groupPriorities, groupPriorityIssues := store.DecodeGroupPriorities(row.GroupPriorities)
 	return Provider{
-		ID:                            row.ID,
-		Name:                          row.Name,
-		ProviderType:                  convert.ProviderType(row.ProviderType),
-		URL:                           row.URL,
-		IsEnabled:                     row.IsEnabled,
-		Weight:                        row.Weight,
-		Priority:                      &priority,
-		CostMultiplier:                row.CostMultiplier,
-		GroupTag:                      row.GroupTag,
-		GroupPriorities:               groupPriorities,
-		groupPrioritiesIssues:         groupPriorityIssues,
-		AllowedModels:                 row.AllowedModels,
-		ProviderVendorID:              row.ProviderVendorID,
-		ProtocolConversionEnabled:     &conversionEnabled,
-		DisableSessionReuse:           row.DisableSessionReuse,
-		ActiveTimeStart:               row.ActiveTimeStart,
-		ActiveTimeEnd:                 row.ActiveTimeEnd,
-		AllowedClients:                row.AllowedClients,
-		BlockedClients:                row.BlockedClients,
-		SlowRateMonitorEnabled:        row.SlowRateMonitorEnabled,
-		SlowRateWindowSeconds:         row.SlowRateWindowSeconds,
-		SlowRateBaselineWindowSeconds: row.SlowRateBaselineWindowSeconds,
-		SlowRateMinSamples:            row.SlowRateMinSamples,
-		SlowRateTriggerCount:          row.SlowRateTriggerCount,
-		SlowRateRatioPerMille:         row.SlowRateRatioPerMille,
-		SlowRatePenaltyStep:           row.SlowRatePenaltyStep,
-		SlowRatePenaltyMax:            row.SlowRatePenaltyMax,
+		ID:                                 row.ID,
+		Name:                               row.Name,
+		ProviderType:                       convert.ProviderType(row.ProviderType),
+		URL:                                row.URL,
+		IsEnabled:                          row.IsEnabled,
+		Weight:                             row.Weight,
+		Priority:                           &priority,
+		CostMultiplier:                     row.CostMultiplier,
+		GroupTag:                           row.GroupTag,
+		GroupPriorities:                    groupPriorities,
+		groupPrioritiesIssues:              groupPriorityIssues,
+		AllowedModels:                      row.AllowedModels,
+		ProviderVendorID:                   row.ProviderVendorID,
+		ProtocolConversionEnabled:          &conversionEnabled,
+		DisableSessionReuse:                row.DisableSessionReuse,
+		ActiveTimeStart:                    row.ActiveTimeStart,
+		ActiveTimeEnd:                      row.ActiveTimeEnd,
+		AllowedClients:                     row.AllowedClients,
+		BlockedClients:                     row.BlockedClients,
+		SlowRateMonitorEnabled:             row.SlowRateMonitorEnabled,
+		SlowRateWindowSeconds:              row.SlowRateWindowSeconds,
+		SlowRateBaselineWindowSeconds:      row.SlowRateBaselineWindowSeconds,
+		SlowRateMinSamples:                 row.SlowRateMinSamples,
+		SlowRateTriggerCount:               row.SlowRateTriggerCount,
+		SlowRateRatioPerMille:              row.SlowRateRatioPerMille,
+		SlowRatePenaltyStep:                row.SlowRatePenaltyStep,
+		SlowRatePenaltyMax:                 row.SlowRatePenaltyMax,
+		SlowRateProbeAfterFirstByteSeconds: row.SlowRateProbeAfterFirstByteSeconds,
+		SlowRateProbeMinTokens:             row.SlowRateProbeMinTokens,
 		CostLimits: ProviderCostLimits{
 			Limit5hUSD:       numberPtr(row.Limit5hUSD),
 			Limit5hResetMode: row.Limit5hResetMode,

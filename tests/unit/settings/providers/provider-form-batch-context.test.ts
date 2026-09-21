@@ -257,3 +257,65 @@ describe("providerFormReducer - SET_SLOW_RATE_PARAMS / 基线窗字段", () => {
     expect(next.routing.slowRateBaselineWindowSeconds).toBe(7200);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 首字后低速探测：两列配置贯通（2026-09-21）
+// ---------------------------------------------------------------------------
+
+describe("providerFormReducer - SET_SLOW_RATE_PARAMS / 探测两列", () => {
+  it("batch 初始态探测两列都回退为 null（即不启用该机制）", () => {
+    const state = createInitialState("batch");
+
+    expect(state.routing.slowRateProbeAfterFirstByteSeconds).toBeNull();
+    expect(state.routing.slowRateProbeMinTokens).toBeNull();
+  });
+
+  it("create 初始态探测两列也回退为 null", () => {
+    const state = createInitialState("create");
+
+    expect(state.routing.slowRateProbeAfterFirstByteSeconds).toBeNull();
+    expect(state.routing.slowRateProbeMinTokens).toBeNull();
+  });
+
+  it("探测阈值可单独写入，且不扰动其它 slow rate 参数", () => {
+    const baseState = createInitialState("batch");
+
+    const next = providerFormReducer(baseState, {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRateProbeAfterFirstByteSeconds: 30 },
+    });
+
+    expect(next.routing.slowRateProbeAfterFirstByteSeconds).toBe(30);
+    // 其余两列（探测最低 token 数、判定窗）必须原样——探测两列是独立参数，不成对。
+    expect(next.routing.slowRateProbeMinTokens).toBeNull();
+    expect(next.routing.slowRateWindowSeconds).toBeNull();
+  });
+
+  it("探测最低 token 数可单独写入", () => {
+    const baseState = createInitialState("batch");
+
+    const next = providerFormReducer(baseState, {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRateProbeMinTokens: 50 },
+    });
+
+    expect(next.routing.slowRateProbeMinTokens).toBe(50);
+    expect(next.routing.slowRateProbeAfterFirstByteSeconds).toBeNull();
+  });
+
+  it("探测阈值可被写回 null（关掉机制）", () => {
+    const withProbe = providerFormReducer(createInitialState("batch"), {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRateProbeAfterFirstByteSeconds: 30 },
+    });
+
+    const cleared = providerFormReducer(withProbe, {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRateProbeAfterFirstByteSeconds: null },
+    });
+
+    // null 是「不探测」的明确取值（不是「取默认」），故必须能真的清空——
+    // 若被 reducer 当成「未提供」而保留旧值，管理员就永远关不掉这个机制。
+    expect(cleared.routing.slowRateProbeAfterFirstByteSeconds).toBeNull();
+  });
+});
