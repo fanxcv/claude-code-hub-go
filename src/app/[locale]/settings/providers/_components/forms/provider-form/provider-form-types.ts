@@ -49,7 +49,18 @@ export interface BasicInfoState {
   websiteUrl: string;
 }
 
-export interface RoutingState {
+export interface SlowRateParams {
+  // 低速降级（实验特性，默认关闭）：仅开启的供应商参与低速监控与降级。
+  // 五参数均为 null 时取代码默认值（10m / 100 条 / 200 千分比 / 10 / 30）。
+  slowRateMonitorEnabled: boolean;
+  slowRateWindowSeconds: number | null;
+  slowRateMinSamples: number | null;
+  slowRateRatioPerMille: number | null;
+  slowRatePenaltyStep: number | null;
+  slowRatePenaltyMax: number | null;
+}
+
+export interface RoutingState extends SlowRateParams {
   providerType: ProviderType;
   groupTag: string[];
   preserveClientIp: boolean;
@@ -165,6 +176,9 @@ export type ProviderFormAction =
   | { type: "SET_PRESERVE_CLIENT_IP"; payload: boolean }
   | { type: "SET_DISABLE_SESSION_REUSE"; payload: boolean }
   | { type: "SET_PROTOCOL_CONVERSION_ENABLED"; payload: boolean }
+  // 低速降级六个字段一起更新：它们是一个整体（开关 + 五参数），拆成六个 action 只增加
+  // 与 routing 状态的重复映射，没有额外表达力。
+  | { type: "SET_SLOW_RATE_PARAMS"; payload: Partial<SlowRateParams> }
   | { type: "SET_MODEL_REDIRECTS"; payload: ProviderModelRedirectRule[] }
   | { type: "SET_ALLOWED_MODELS"; payload: AllowedModelRule[] }
   | { type: "SET_ALLOWED_CLIENTS"; payload: string[] }

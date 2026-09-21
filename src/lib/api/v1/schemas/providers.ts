@@ -151,6 +151,32 @@ export const ProviderSummarySchema = z
       .string()
       .nullable()
       .describe("Gemini Google Search preference."),
+    slowRateMonitorEnabled: z.boolean().describe("Slow rate demotion enabled for this provider."),
+    slowRateWindowSeconds: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Slow rate sampling window in seconds; null uses the default."),
+    slowRateMinSamples: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Minimum samples before judging; null uses the default."),
+    slowRateRatioPerMille: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Slow threshold ratio per mille (200 = 0.2); null uses the default."),
+    slowRatePenaltyStep: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Priority added per threshold multiple; null uses the default."),
+    slowRatePenaltyMax: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Upper bound on added priority; null uses the default."),
     todayTotalCostUsd: z
       .string()
       .optional()
@@ -555,6 +581,38 @@ export const ProviderCreateSchema = z
       .string()
       .optional()
       .describe("Gemini Google Search preference."),
+    // 低速降级（实验特性，默认关闭）。五参数可空：null = 取代码默认值。
+    slow_rate_monitor_enabled: z.boolean().optional().describe("Enable slow rate demotion."),
+    slow_rate_window_seconds: z
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .describe("Slow rate sampling window in seconds."),
+    slow_rate_min_samples: z
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .describe("Minimum samples before judging."),
+    slow_rate_ratio_per_mille: z
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .describe("Slow threshold ratio per mille (200 = 0.2)."),
+    slow_rate_penalty_step: z
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .describe("Priority added per threshold multiple."),
+    slow_rate_penalty_max: z
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .describe("Upper bound on added priority."),
   })
   .strict()
   .describe("Provider create request. Hidden provider types and deprecated fields are rejected.");

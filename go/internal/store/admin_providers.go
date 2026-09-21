@@ -93,6 +93,14 @@ type AdminProvider struct {
 	OpenAIMaxTokens         *string         `json:"openaiMaxTokensPreference"`
 	GeminiGoogleSearch      *string         `json:"geminiGoogleSearchPreference"`
 
+	// 低速降级（逐渠道开关，默认全关）。
+	SlowRateMonitorEnabled bool `json:"slowRateMonitorEnabled"`
+	SlowRateWindowSeconds  *int `json:"slowRateWindowSeconds"`
+	SlowRateMinSamples     *int `json:"slowRateMinSamples"`
+	SlowRateRatioPerMille  *int `json:"slowRateRatioPerMille"`
+	SlowRatePenaltyStep    *int `json:"slowRatePenaltyStep"`
+	SlowRatePenaltyMax     *int `json:"slowRatePenaltyMax"`
+
 	TPM *int `json:"tpm"`
 	RPM *int `json:"rpm"`
 	RPD *int `json:"rpd"`
@@ -156,6 +164,12 @@ const adminProviderColumns = `
 	anthropic_adaptive_thinking AS "anthropicAdaptiveThinking",
 	openai_max_tokens_preference AS "openaiMaxTokensPreference",
 	gemini_google_search_preference AS "geminiGoogleSearchPreference",
+	slow_rate_monitor_enabled AS "slowRateMonitorEnabled",
+	slow_rate_window_seconds AS "slowRateWindowSeconds",
+	slow_rate_min_samples AS "slowRateMinSamples",
+	slow_rate_ratio_per_mille AS "slowRateRatioPerMille",
+	slow_rate_penalty_step AS "slowRatePenaltyStep",
+	slow_rate_penalty_max AS "slowRatePenaltyMax",
 	tpm, rpm, rpd, cc,
 	to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
 	to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "updatedAt"`

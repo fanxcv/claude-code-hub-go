@@ -793,6 +793,171 @@ export function OptionsSection({ subSectionRefs }: OptionsSectionProps) {
                 )}
               </div>
             </SectionCard>
+
+            {/* 低速降级（实验特性，默认关闭）：批量模式不暴露——Go 侧批次补丁契约（providerPatchFieldSpecs）
+                未含这六个字段，暴露了会得到「预览成功但应用被拒」。 */}
+            {!isBatch && (
+              <SectionCard
+                title={t("sections.routing.slowRate.title")}
+                description={t("sections.routing.slowRate.desc")}
+                icon={Timer}
+                variant="warning"
+              >
+                <div className="space-y-4">
+                  <ToggleRow
+                    label={t("sections.routing.slowRate.enabled.label")}
+                    description={t("sections.routing.slowRate.enabled.desc")}
+                  >
+                    <Switch
+                      id={isEdit ? "edit-slow-rate-enabled" : "slow-rate-enabled"}
+                      aria-label={t("sections.routing.slowRate.enabled.label")}
+                      checked={state.routing.slowRateMonitorEnabled}
+                      onCheckedChange={(checked) =>
+                        dispatch({
+                          type: "SET_SLOW_RATE_PARAMS",
+                          payload: { slowRateMonitorEnabled: checked },
+                        })
+                      }
+                      disabled={state.ui.isPending}
+                    />
+                  </ToggleRow>
+
+                  {state.routing.slowRateMonitorEnabled && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <SmartInputWrapper
+                        label={t("sections.routing.slowRate.windowSeconds.label")}
+                        description={t("sections.routing.slowRate.windowSeconds.desc")}
+                      >
+                        <Input
+                          id={isEdit ? "edit-slow-rate-window" : "slow-rate-window"}
+                          type="number"
+                          value={state.routing.slowRateWindowSeconds ?? ""}
+                          onChange={(e) =>
+                            dispatch({
+                              type: "SET_SLOW_RATE_PARAMS",
+                              payload: {
+                                slowRateWindowSeconds:
+                                  e.target.value === ""
+                                    ? null
+                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
+                              },
+                            })
+                          }
+                          placeholder={t("sections.routing.slowRate.windowSeconds.placeholder")}
+                          disabled={state.ui.isPending}
+                          min="0"
+                          step="1"
+                        />
+                      </SmartInputWrapper>
+
+                      <SmartInputWrapper
+                        label={t("sections.routing.slowRate.minSamples.label")}
+                        description={t("sections.routing.slowRate.minSamples.desc")}
+                      >
+                        <Input
+                          id={isEdit ? "edit-slow-rate-min-samples" : "slow-rate-min-samples"}
+                          type="number"
+                          value={state.routing.slowRateMinSamples ?? ""}
+                          onChange={(e) =>
+                            dispatch({
+                              type: "SET_SLOW_RATE_PARAMS",
+                              payload: {
+                                slowRateMinSamples:
+                                  e.target.value === ""
+                                    ? null
+                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
+                              },
+                            })
+                          }
+                          placeholder={t("sections.routing.slowRate.minSamples.placeholder")}
+                          disabled={state.ui.isPending}
+                          min="0"
+                          step="1"
+                        />
+                      </SmartInputWrapper>
+
+                      <SmartInputWrapper
+                        label={t("sections.routing.slowRate.ratioPerMille.label")}
+                        description={t("sections.routing.slowRate.ratioPerMille.desc")}
+                      >
+                        <Input
+                          id={isEdit ? "edit-slow-rate-ratio" : "slow-rate-ratio"}
+                          type="number"
+                          value={state.routing.slowRateRatioPerMille ?? ""}
+                          onChange={(e) =>
+                            dispatch({
+                              type: "SET_SLOW_RATE_PARAMS",
+                              payload: {
+                                slowRateRatioPerMille:
+                                  e.target.value === ""
+                                    ? null
+                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
+                              },
+                            })
+                          }
+                          placeholder={t("sections.routing.slowRate.ratioPerMille.placeholder")}
+                          disabled={state.ui.isPending}
+                          min="0"
+                          step="1"
+                        />
+                      </SmartInputWrapper>
+
+                      <SmartInputWrapper
+                        label={t("sections.routing.slowRate.penaltyStep.label")}
+                        description={t("sections.routing.slowRate.penaltyStep.desc")}
+                      >
+                        <Input
+                          id={isEdit ? "edit-slow-rate-step" : "slow-rate-step"}
+                          type="number"
+                          value={state.routing.slowRatePenaltyStep ?? ""}
+                          onChange={(e) =>
+                            dispatch({
+                              type: "SET_SLOW_RATE_PARAMS",
+                              payload: {
+                                slowRatePenaltyStep:
+                                  e.target.value === ""
+                                    ? null
+                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
+                              },
+                            })
+                          }
+                          placeholder={t("sections.routing.slowRate.penaltyStep.placeholder")}
+                          disabled={state.ui.isPending}
+                          min="0"
+                          step="1"
+                        />
+                      </SmartInputWrapper>
+
+                      <SmartInputWrapper
+                        label={t("sections.routing.slowRate.penaltyMax.label")}
+                        description={t("sections.routing.slowRate.penaltyMax.desc")}
+                      >
+                        <Input
+                          id={isEdit ? "edit-slow-rate-max" : "slow-rate-max"}
+                          type="number"
+                          value={state.routing.slowRatePenaltyMax ?? ""}
+                          onChange={(e) =>
+                            dispatch({
+                              type: "SET_SLOW_RATE_PARAMS",
+                              payload: {
+                                slowRatePenaltyMax:
+                                  e.target.value === ""
+                                    ? null
+                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
+                              },
+                            })
+                          }
+                          placeholder={t("sections.routing.slowRate.penaltyMax.placeholder")}
+                          disabled={state.ui.isPending}
+                          min="0"
+                          step="1"
+                        />
+                      </SmartInputWrapper>
+                    </div>
+                  )}
+                </div>
+              </SectionCard>
+            )}
           </div>
         </div>
       </motion.div>

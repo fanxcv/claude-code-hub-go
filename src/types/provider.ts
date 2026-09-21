@@ -369,6 +369,15 @@ export interface Provider {
   preserveClientIp: boolean;
   // 是否跳过当前供应商的 sticky session 复用
   disableSessionReuse: boolean;
+  // 低速降级（实验特性，默认关闭）：仅开启的供应商参与低速监控。
+  slowRateMonitorEnabled: boolean;
+  // 五个参数列可空，null = 取代码默认值（10m / 100 / 200‰ / 10 / 30）。
+  slowRateWindowSeconds: number | null;
+  slowRateMinSamples: number | null;
+  // 千分比：200 = 0.2
+  slowRateRatioPerMille: number | null;
+  slowRatePenaltyStep: number | null;
+  slowRatePenaltyMax: number | null;
   modelRedirects: ProviderModelRedirectRule[] | null;
 
   // Scheduled active time window (HH:mm format, null = always active)
@@ -503,6 +512,13 @@ export interface ProviderDisplay {
   preserveClientIp: boolean;
   // 是否跳过当前供应商的 sticky session 复用
   disableSessionReuse: boolean;
+  // 低速降级（实验特性，默认关闭）
+  slowRateMonitorEnabled: boolean;
+  slowRateWindowSeconds: number | null;
+  slowRateMinSamples: number | null;
+  slowRateRatioPerMille: number | null;
+  slowRatePenaltyStep: number | null;
+  slowRatePenaltyMax: number | null;
   modelRedirects: ProviderModelRedirectRule[] | null;
   // Scheduled active time window
   activeTimeStart: string | null;
@@ -773,6 +789,15 @@ export interface CreateProviderData {
   openai_max_tokens_preference?: OpenAIMaxTokensPreference | null;
   gemini_google_search_preference?: GeminiGoogleSearchPreference | null;
 
+  // 低速降级（实验特性，默认关闭，逐渠道开关）
+  slow_rate_monitor_enabled?: boolean;
+  slow_rate_window_seconds?: number | null;
+  slow_rate_min_samples?: number | null;
+  // 千分比：200 = 0.2
+  slow_rate_ratio_per_mille?: number | null;
+  slow_rate_penalty_step?: number | null;
+  slow_rate_penalty_max?: number | null;
+
   // 废弃字段（保留向后兼容）
   // TPM (Tokens Per Minute): 每分钟可处理的文本总量
   tpm: number | null;
@@ -864,6 +889,15 @@ export interface UpdateProviderData {
   anthropic_adaptive_thinking?: AnthropicAdaptiveThinkingConfig | null;
   openai_max_tokens_preference?: OpenAIMaxTokensPreference | null;
   gemini_google_search_preference?: GeminiGoogleSearchPreference | null;
+
+  // 低速降级（实验特性，默认关闭，逐渠道开关）
+  slow_rate_monitor_enabled?: boolean;
+  slow_rate_window_seconds?: number | null;
+  slow_rate_min_samples?: number | null;
+  // 千分比：200 = 0.2
+  slow_rate_ratio_per_mille?: number | null;
+  slow_rate_penalty_step?: number | null;
+  slow_rate_penalty_max?: number | null;
 
   // 废弃字段（保留向后兼容）
   // TPM (Tokens Per Minute): 每分钟可处理的文本总量

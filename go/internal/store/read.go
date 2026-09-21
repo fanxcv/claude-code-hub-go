@@ -151,6 +151,14 @@ type Provider struct {
 	AnthropicThinkingBudgetPreference *string         `json:"anthropic_thinking_budget_preference"`
 	GeminiGoogleSearchPreference      *string         `json:"gemini_google_search_preference"`
 	AnthropicAdaptiveThinking         json.RawMessage `json:"anthropic_adaptive_thinking"`
+	// 低速降级（逐渠道开关，默认全关）。参数列可空，NULL 表示取代码默认值；
+	// 未开启的渠道行为与开启前逐字一致（读取侧不读、写入侧不写）。
+	SlowRateMonitorEnabled bool `json:"slow_rate_monitor_enabled"`
+	SlowRateWindowSeconds  *int `json:"slow_rate_window_seconds"`
+	SlowRateMinSamples     *int `json:"slow_rate_min_samples"`
+	SlowRateRatioPerMille  *int `json:"slow_rate_ratio_per_mille"`
+	SlowRatePenaltyStep    *int `json:"slow_rate_penalty_step"`
+	SlowRatePenaltyMax     *int `json:"slow_rate_penalty_max"`
 }
 
 // ProviderEndpoint 是 provider_endpoints 的读取视图（供应商厂级端点）。

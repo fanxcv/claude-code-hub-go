@@ -313,6 +313,39 @@
           "disabled": "强制关闭"
         }
       }
+    },
+    "slowRate": {
+      "title": "低速降级（实验特性）",
+      "desc": "开启后，本渠道的响应速率会被统计；持续低于历史基线的渠道会被临时降低优先级。默认关闭，未开启的渠道行为与现状完全一致。",
+      "enabled": {
+        "label": "启用低速监控",
+        "desc": "仅对已开启的渠道采集样本与计算降权。"
+      },
+      "windowSeconds": {
+        "label": "统计窗口（秒）",
+        "desc": "滑动窗口长度。留空取默认 600 秒。",
+        "placeholder": "600"
+      },
+      "minSamples": {
+        "label": "最少样本数",
+        "desc": "窗口内样本不足此数不判定。留空取默认 100。",
+        "placeholder": "100"
+      },
+      "ratioPerMille": {
+        "label": "低速系数（千分比）",
+        "desc": "速率低于「基线 x 系数」即算低速。200 = 0.2。留空取默认 200。",
+        "placeholder": "200"
+      },
+      "penaltyStep": {
+        "label": "每档降权值",
+        "desc": "每满一档阈值增加的优先级量。留空取默认 10。",
+        "placeholder": "10"
+      },
+      "penaltyMax": {
+        "label": "降权上限",
+        "desc": "优先级增加的上限，防止渠道被永久挤出候选。留空取默认 30。",
+        "placeholder": "30"
+      }
     }
   },
   "rateLimit": {

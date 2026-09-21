@@ -90,6 +90,12 @@ var providerPreimageFieldNames = map[string]string{
 	"mcp_passthrough_type":                        "mcpPassthroughType",
 	"mcp_passthrough_url":                         "mcpPassthroughUrl",
 	"protocol_conversion_enabled":                 "protocolConversionEnabled",
+	"slow_rate_monitor_enabled":                   "slowRateMonitorEnabled",
+	"slow_rate_window_seconds":                    "slowRateWindowSeconds",
+	"slow_rate_min_samples":                       "slowRateMinSamples",
+	"slow_rate_ratio_per_mille":                   "slowRateRatioPerMille",
+	"slow_rate_penalty_step":                      "slowRatePenaltyStep",
+	"slow_rate_penalty_max":                       "slowRatePenaltyMax",
 	"tpm":                                         "tpm",
 	"rpm":                                         "rpm",
 	"rpd":                                         "rpd",
@@ -470,14 +476,23 @@ func providerCreateWriteSpecs() map[string]providerDecodeSpec {
 		"circuit_breaker_half_open_success_threshold": providerIntFieldSpec(false, nil, nil),
 		// 等待阶梯两列是可空（无默认）且可空值就是「不启用」：空值送 null（表单类型 `number | null`），
 		// 用非空 spec 会让「清空输入框」变成 invalid_type。上限只管不让负值进来。
-		"circuit_breaker_release_increment":    providerNullableIntFieldSpec(nil, nil),
-		"circuit_breaker_max_open_count":       providerNullableIntFieldSpec(nil, nil),
-		"proxy_url":                            providerNullableFieldSpec(0),
-		"proxy_fallback_to_direct":             providerBoolFieldSpec(),
-		"custom_headers":                       providerCustomHeadersSpec(),
-		"first_byte_timeout_streaming_ms":      providerTimeoutFieldSpec(&minTimeout, nil),
-		"streaming_idle_timeout_ms":            providerTimeoutFieldSpec(&minTimeout, nil),
-		"request_timeout_non_streaming_ms":     providerTimeoutFieldSpec(&minTimeout, nil),
+		"circuit_breaker_release_increment": providerNullableIntFieldSpec(nil, nil),
+		"circuit_breaker_max_open_count":    providerNullableIntFieldSpec(nil, nil),
+		"proxy_url":                         providerNullableFieldSpec(0),
+		"proxy_fallback_to_direct":          providerBoolFieldSpec(),
+		"custom_headers":                    providerCustomHeadersSpec(),
+		"first_byte_timeout_streaming_ms":   providerTimeoutFieldSpec(&minTimeout, nil),
+		"streaming_idle_timeout_ms":         providerTimeoutFieldSpec(&minTimeout, nil),
+		"request_timeout_non_streaming_ms":  providerTimeoutFieldSpec(&minTimeout, nil),
+		// 低速降级：开关为非空 bool（与库中 NOT NULL DEFAULT false 一致），
+		// 五个参数列可空（null = 取代码默认值），故用 nullableInt spec——用非空 spec 会让
+		// 「清空输入框」变成 invalid_type（与 max_retry_attempts 同坑）。
+		"slow_rate_monitor_enabled":            providerBoolFieldSpec(),
+		"slow_rate_window_seconds":             providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_min_samples":                providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_ratio_per_mille":            providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_penalty_step":               providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_penalty_max":                providerNullableIntFieldSpec(nil, nil),
 		"website_url":                          providerNullableFieldSpec(0),
 		"favicon_url":                          providerNullableFieldSpec(0),
 		"cache_ttl_preference":                 providerNullableEnumFieldSpec(providerCacheTTLPreferences),
@@ -1162,7 +1177,8 @@ func providerWriteKindOf(name string) string {
 		"limit_5h_reset_mode", "daily_reset_mode", "daily_reset_time":
 		return "text"
 	case "is_enabled", "preserve_client_ip", "disable_session_reuse",
-		"proxy_fallback_to_direct", "swap_cache_ttl_billing", "protocol_conversion_enabled":
+		"proxy_fallback_to_direct", "swap_cache_ttl_billing", "protocol_conversion_enabled",
+		"slow_rate_monitor_enabled":
 		return "bool"
 	case "weight", "priority", "circuit_breaker_failure_threshold",
 		"circuit_breaker_open_duration", "circuit_breaker_half_open_success_threshold",
@@ -1171,7 +1187,10 @@ func providerWriteKindOf(name string) string {
 		return "int"
 	case "limit_concurrent_sessions", "max_retry_attempts",
 		// 等待阶梯两列为可空（null = 不启用），故归 nullable_int 而不是 int。
-		"circuit_breaker_release_increment", "circuit_breaker_max_open_count", "tpm", "rpm", "rpd", "cc":
+		"circuit_breaker_release_increment", "circuit_breaker_max_open_count", "tpm", "rpm", "rpd", "cc",
+		// 低速降级五参数均可空（null = 取代码默认值）。
+		"slow_rate_window_seconds", "slow_rate_min_samples", "slow_rate_ratio_per_mille",
+		"slow_rate_penalty_step", "slow_rate_penalty_max":
 		return "nullable_int"
 	case "cost_multiplier", "limit_5h_usd", "limit_daily_usd", "limit_weekly_usd",
 		"limit_monthly_usd", "limit_total_usd":

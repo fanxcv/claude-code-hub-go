@@ -167,6 +167,13 @@ export function createInitialState(
             : false,
         // 批量模式不暴露协议转换开关（批量补丁契约未覆盖），始终回退默认值
         protocolConversionEnabled: false,
+        // 批量模式不暴露低速降级（批量补丁契约未覆盖），始终回退默认值：全关 + 全 null。
+        slowRateMonitorEnabled: false,
+        slowRateWindowSeconds: null,
+        slowRateMinSamples: null,
+        slowRateRatioPerMille: null,
+        slowRatePenaltyStep: null,
+        slowRatePenaltyMax: null,
         modelRedirects:
           analysis.routing.modelRedirects.status === "uniform"
             ? analysis.routing.modelRedirects.value
@@ -376,6 +383,12 @@ export function createInitialState(
         preserveClientIp: false,
         disableSessionReuse: false,
         protocolConversionEnabled: false,
+        slowRateMonitorEnabled: false,
+        slowRateWindowSeconds: null,
+        slowRateMinSamples: null,
+        slowRateRatioPerMille: null,
+        slowRatePenaltyStep: null,
+        slowRatePenaltyMax: null,
         modelRedirects: [],
         allowedModels: [],
         allowedClients: [],
@@ -460,6 +473,12 @@ export function createInitialState(
       preserveClientIp: sourceProvider?.preserveClientIp ?? false,
       disableSessionReuse: sourceProvider?.disableSessionReuse ?? false,
       protocolConversionEnabled: sourceProvider?.protocolConversionEnabled ?? false,
+      slowRateMonitorEnabled: sourceProvider?.slowRateMonitorEnabled ?? false,
+      slowRateWindowSeconds: sourceProvider?.slowRateWindowSeconds ?? null,
+      slowRateMinSamples: sourceProvider?.slowRateMinSamples ?? null,
+      slowRateRatioPerMille: sourceProvider?.slowRateRatioPerMille ?? null,
+      slowRatePenaltyStep: sourceProvider?.slowRatePenaltyStep ?? null,
+      slowRatePenaltyMax: sourceProvider?.slowRatePenaltyMax ?? null,
       modelRedirects: normalizeProviderModelRedirectRules(sourceProvider?.modelRedirects) ?? [],
       allowedModels: normalizeAllowedModelRules(sourceProvider?.allowedModels) ?? [],
       allowedClients: sourceProvider?.allowedClients ?? [],
@@ -579,6 +598,9 @@ export function providerFormReducer(
         ...state,
         routing: { ...state.routing, protocolConversionEnabled: action.payload },
       };
+    // 六个字段一次合并：payload 是部分集，未出现的键保持原值。
+    case "SET_SLOW_RATE_PARAMS":
+      return { ...state, routing: { ...state.routing, ...action.payload } };
     case "SET_MODEL_REDIRECTS":
       return { ...state, routing: { ...state.routing, modelRedirects: action.payload } };
     case "SET_ALLOWED_MODELS":

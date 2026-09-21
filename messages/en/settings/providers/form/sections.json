@@ -489,7 +489,40 @@
       "none": "Not configured",
       "redirects": "{count} redirects"
     },
-    "title": "Routing"
+    "title": "Routing",
+    "slowRate": {
+      "title": "Slow Rate Demotion (experimental)",
+      "desc": "When enabled, response speed for this provider is sampled; providers staying below their historical baseline are temporarily deprioritized. Off by default - providers left off behave exactly as before.",
+      "enabled": {
+        "label": "Enable slow rate monitoring",
+        "desc": "Samples and demotion apply only to providers with this on."
+      },
+      "windowSeconds": {
+        "label": "Sampling window (seconds)",
+        "desc": "Sliding window length. Leave empty for the default of 600.",
+        "placeholder": "600"
+      },
+      "minSamples": {
+        "label": "Minimum samples",
+        "desc": "No judgement until the window holds this many samples. Leave empty for the default of 100.",
+        "placeholder": "100"
+      },
+      "ratioPerMille": {
+        "label": "Slow threshold ratio (per mille)",
+        "desc": "A response counts as slow when below baseline x ratio. 200 = 0.2. Leave empty for the default of 200.",
+        "placeholder": "200"
+      },
+      "penaltyStep": {
+        "label": "Penalty per level",
+        "desc": "Priority added per threshold multiple. Leave empty for the default of 10.",
+        "placeholder": "10"
+      },
+      "penaltyMax": {
+        "label": "Penalty ceiling",
+        "desc": "Upper bound on added priority, so a provider is never pushed out of the candidate set for good. Leave empty for the default of 30.",
+        "placeholder": "30"
+      }
+    }
   },
   "timeout": {
     "desc": "Configure request timeout duration, 0 means disable timeout",

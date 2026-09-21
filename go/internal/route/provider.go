@@ -48,6 +48,13 @@ type Provider struct {
 	// 本包只负责把它们带到选路处，不重复实现匹配。
 	AllowedClients json.RawMessage `json:"allowed_clients"`
 	BlockedClients json.RawMessage `json:"blocked_clients"`
+	// 低速降级（逐渠道开关，默认全关）。选路侧只读，不参与本包判定。
+	SlowRateMonitorEnabled bool `json:"slow_rate_monitor_enabled"`
+	SlowRateWindowSeconds  *int `json:"slow_rate_window_seconds"`
+	SlowRateMinSamples     *int `json:"slow_rate_min_samples"`
+	SlowRateRatioPerMille  *int `json:"slow_rate_ratio_per_mille"`
+	SlowRatePenaltyStep    *int `json:"slow_rate_penalty_step"`
+	SlowRatePenaltyMax     *int `json:"slow_rate_penalty_max"`
 	// CostLimits 是供应商级金额限额（Node 的 filterByLimits 判定）。
 	CostLimits ProviderCostLimits `json:"-"`
 }
@@ -197,6 +204,12 @@ func providerFromStore(row store.Provider) Provider {
 		ActiveTimeEnd:             row.ActiveTimeEnd,
 		AllowedClients:            row.AllowedClients,
 		BlockedClients:            row.BlockedClients,
+		SlowRateMonitorEnabled:    row.SlowRateMonitorEnabled,
+		SlowRateWindowSeconds:     row.SlowRateWindowSeconds,
+		SlowRateMinSamples:        row.SlowRateMinSamples,
+		SlowRateRatioPerMille:     row.SlowRateRatioPerMille,
+		SlowRatePenaltyStep:       row.SlowRatePenaltyStep,
+		SlowRatePenaltyMax:        row.SlowRatePenaltyMax,
 		CostLimits: ProviderCostLimits{
 			Limit5hUSD:       numberPtr(row.Limit5hUSD),
 			Limit5hResetMode: row.Limit5hResetMode,

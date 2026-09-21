@@ -507,7 +507,10 @@ describe("OptionsSection", () => {
         container.querySelectorAll('[data-testid="switch"]')
       ) as HTMLButtonElement[];
 
-      expect(switches).toHaveLength(5);
+      // 6 个：协议转换、preserveClientIp、disableSessionReuse、swapCacheTtlBilling、
+      // 低速降级开关（新增），以及 codex 段的一个。create 模式下五参数只在开启后才渲染，
+      // 默认状态未开启，故不计入。
+      expect(switches).toHaveLength(6);
       for (const toggle of switches) {
         expect(toggle.hasAttribute("disabled")).toBe(true);
       }

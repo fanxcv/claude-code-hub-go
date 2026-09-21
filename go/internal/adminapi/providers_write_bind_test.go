@@ -122,6 +122,15 @@ var providerWriteSamplePayload = map[string]string{
 	"rpm": `100`,
 	"rpd": `100`,
 	"cc":  `100`,
+
+	// 低速降级：开关给 true（非空分支），五参数给真实值而不是 null（可空列的 null 分支
+	// 另有覆盖，这里走非空分支——事故恰恰出在非空分支）。
+	"slow_rate_monitor_enabled": `true`,
+	"slow_rate_window_seconds":  `600`,
+	"slow_rate_min_samples":     `100`,
+	"slow_rate_ratio_per_mille": `200`,
+	"slow_rate_penalty_step":    `10`,
+	"slow_rate_penalty_max":     `30`,
 }
 
 // TestProviderCreateFieldsBindToStoreTypes 覆盖创建入口：同一份表里除了 description

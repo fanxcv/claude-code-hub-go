@@ -612,6 +612,15 @@ export const CreateProviderSchema = z
     anthropic_adaptive_thinking: ANTHROPIC_ADAPTIVE_THINKING_CONFIG,
     openai_max_tokens_preference: MAX_TOKENS_PREFERENCE.optional().default("inherit"),
     gemini_google_search_preference: GEMINI_GOOGLE_SEARCH_PREFERENCE.optional().default("inherit"),
+    // 低速降级（实验特性，默认关闭）：列可空，空值送 null 表示取代码默认值。
+    // 用 .nullable().optional()（与 max_retry_attempts 同形），非空 spec 会让「清空输入框」变成 invalid_type。
+    slow_rate_monitor_enabled: z.boolean().optional(),
+    slow_rate_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_min_samples: z.coerce.number().int().min(0).nullable().optional(),
+    // 千分比：200 = 0.2。上限 1000 即系数 1.0（速率不可能高于基线本身还判低速）。
+    slow_rate_ratio_per_mille: z.coerce.number().int().min(0).max(1000).nullable().optional(),
+    slow_rate_penalty_step: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_penalty_max: z.coerce.number().int().min(0).nullable().optional(),
     max_retry_attempts: z.coerce
       .number()
       .int("重试次数必须是整数")
@@ -855,6 +864,13 @@ export const UpdateProviderSchema = z
     anthropic_adaptive_thinking: ANTHROPIC_ADAPTIVE_THINKING_CONFIG,
     openai_max_tokens_preference: MAX_TOKENS_PREFERENCE.optional(),
     gemini_google_search_preference: GEMINI_GOOGLE_SEARCH_PREFERENCE.optional(),
+    // 低速降级（实验特性，默认关闭）：与创建 schema 同形，见那里的说明。
+    slow_rate_monitor_enabled: z.boolean().optional(),
+    slow_rate_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_min_samples: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_ratio_per_mille: z.coerce.number().int().min(0).max(1000).nullable().optional(),
+    slow_rate_penalty_step: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_penalty_max: z.coerce.number().int().min(0).nullable().optional(),
     max_retry_attempts: z.coerce
       .number()
       .int("重试次数必须是整数")

@@ -342,6 +342,12 @@ function ProviderFormContent({
           preserve_client_ip: state.routing.preserveClientIp,
           disable_session_reuse: state.routing.disableSessionReuse,
           protocol_conversion_enabled: state.routing.protocolConversionEnabled,
+          slow_rate_monitor_enabled: state.routing.slowRateMonitorEnabled,
+          slow_rate_window_seconds: state.routing.slowRateWindowSeconds,
+          slow_rate_min_samples: state.routing.slowRateMinSamples,
+          slow_rate_ratio_per_mille: state.routing.slowRateRatioPerMille,
+          slow_rate_penalty_step: state.routing.slowRatePenaltyStep,
+          slow_rate_penalty_max: state.routing.slowRatePenaltyMax,
           model_redirects:
             state.routing.modelRedirects.length > 0 ? state.routing.modelRedirects : null,
           allowed_models:
