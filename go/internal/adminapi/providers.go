@@ -93,6 +93,20 @@ type providerSummary struct {
 	CircuitReleaseIncrement *int `json:"circuitBreakerReleaseIncrement"`
 	CircuitMaxOpenCount     *int `json:"circuitBreakerMaxOpenCount"`
 
+	// 低速降级（逐渠道开关与五参数，默认全关）。
+	//
+	// 必须在这里出现：读投影（store.AdminProvider）已带出这七列，汇总结构漏掉就等于
+	// 「库里写了、接口不回」——表单读不到已有配置，用户看到空白。本字段组在 1.9.11
+	// 首次上线时就踩过这一条（store 层登了、这里漏了），故与上面对阶梯字段的注释同例。
+	SlowRateMonitorEnabled bool `json:"slowRateMonitorEnabled"`
+	SlowRateWindowSeconds  *int `json:"slowRateWindowSeconds"`
+	// SlowRateMinSamples 是基线样本下限；SlowRateTriggerCount 是触发阈值。两者语义不同。
+	SlowRateMinSamples    *int `json:"slowRateMinSamples"`
+	SlowRateTriggerCount  *int `json:"slowRateTriggerCount"`
+	SlowRateRatioPerMille *int `json:"slowRateRatioPerMille"`
+	SlowRatePenaltyStep   *int `json:"slowRatePenaltyStep"`
+	SlowRatePenaltyMax    *int `json:"slowRatePenaltyMax"`
+
 	ProxyURL              any  `json:"proxyUrl"`
 	ProxyFallbackToDirect bool `json:"proxyFallbackToDirect"`
 	CustomHeaders         any  `json:"customHeaders"`
@@ -1105,6 +1119,14 @@ func providerSummaryPayload(provider store.AdminProvider, statistics *providerSt
 		CircuitHalfOpenThreshold: provider.CircuitHalfOpenThreshold,
 		CircuitReleaseIncrement:  provider.CircuitReleaseIncrement,
 		CircuitMaxOpenCount:      provider.CircuitMaxOpenCount,
+
+		SlowRateMonitorEnabled: provider.SlowRateMonitorEnabled,
+		SlowRateWindowSeconds:  provider.SlowRateWindowSeconds,
+		SlowRateMinSamples:     provider.SlowRateMinSamples,
+		SlowRateTriggerCount:   provider.SlowRateTriggerCount,
+		SlowRateRatioPerMille:  provider.SlowRateRatioPerMille,
+		SlowRatePenaltyStep:    provider.SlowRatePenaltyStep,
+		SlowRatePenaltyMax:     provider.SlowRatePenaltyMax,
 
 		ProxyURL:              providerRedactURLCredentialsNullable(provider.ProxyURL),
 		ProxyFallbackToDirect: provider.ProxyFallbackToDirect,
