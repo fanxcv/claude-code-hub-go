@@ -141,9 +141,13 @@ func NewSlowRateReader(opts SlowRateOptions) *SlowRateReader {
 // 零开销：`SlowRateMonitorEnabled` 为假的渠道不进 Redis——默认全关时本方法在开头的
 // 长度判断处直接返回，选路热路径上一个往返都不产生。
 //
-// 一次往返：每候选三条命令（状态键、基线键、样本滑窗键），全部压进同一个 pipeline；
-// 往返数不随候选数放大。状态与滑窗**必须同批**：惩罚由滑窗计数当场派生（见
-// deriveSlowRatePenalty），而派生所需的窗长就在状态里。
+// 两段往返，且**与候选数无关**：第一段读状态与基线（每候选两条命令），第二段只对「状态里带
+// 生效参数」的候选发区间计数（ZCount）。分两段是因为区间下界依赖窗长，而窗长来自第一段的
+// 状态结果——构造命令时还读不到。不用 Lua 合并：多个候选分属不同 hash tag（不同槽），
+// 跨槽多键 Lua 不适用，硬合并只会退化成「每候选一次往返」。
+//
+// 为何是区间计数而不是取回全量成员：本方法**每次选路**都走，而成员数的上界是「一个 TTL
+// （2 倍窗长）内的慢样本数」，不是常数；ZCount 只回一个整数，载荷 O(1)。
 func (r *SlowRateReader) Penalties(
 	ctx context.Context,
 	candidates []Provider,
@@ -169,7 +173,6 @@ func (r *SlowRateReader) Penalties(
 
 	states := make([]*redis.SliceCmd, len(enabled))
 	baselines := make([]*redis.StringCmd, len(enabled))
-	windows := make([]*redis.ZSliceCmd, len(enabled))
 	// Pipelined 而非 Pipeline+Exec：两者都是单次往返，但闭包形式让「哪些命令属于这一批」
 	// 在类型上不可分割，也让测试替身只需实现一个方法。
 	_, err := r.redis.Pipelined(ctx, func(pipe redis.Pipeliner) error {
@@ -182,7 +185,6 @@ func (r *SlowRateReader) Penalties(
 				SlowRateStateFieldPenaltyMax,
 			)
 			baselines[index] = pipe.Get(ctx, SlowRateBaselineKey(provider.ID, modelKey))
-			windows[index] = pipe.ZRangeWithScores(ctx, SlowRateSamplesKey(provider.ID, modelKey), 0, -1)
 		}
 		return nil
 	})
@@ -192,13 +194,50 @@ func (r *SlowRateReader) Penalties(
 	if err != nil && !errors.Is(err, redis.Nil) {
 		r.warn("route.slow_rate_penalty_read_failed", modelKey, err)
 	}
-	nowMS := r.now().UnixMilli()
+
+	decoded := make([]slowRateState, len(enabled))
+	needsCount := make([]int, 0, len(enabled))
 	for index := range enabled {
-		state := decodeSlowRateState(states[index])
+		decoded[index] = decodeSlowRateState(states[index])
+		if decoded[index].hasParams {
+			needsCount = append(needsCount, index)
+		}
+	}
+
+	// 第二段：只对参数齐备的候选发区间计数（参数缺失的走快照回退，不需要计数）。
+	liveCounts := make([]int, len(enabled))
+	if len(needsCount) > 0 {
+		nowMS := r.now().UnixMilli()
+		counts := make([]*redis.IntCmd, len(needsCount))
+		_, err := r.redis.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+			for offset, index := range needsCount {
+				// 下界取闭区间，与「窗内」的既有定义（score >= now-窗长）逐字一致。
+				lower := nowMS - int64(decoded[index].params.windowSeconds)*1000
+				counts[offset] = pipe.ZCount(
+					ctx,
+					SlowRateSamplesKey(enabled[index].ID, modelKey),
+					strconv.FormatInt(lower, 10),
+					"+inf",
+				)
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, redis.Nil) {
+			r.warn("route.slow_rate_penalty_read_failed", modelKey, err)
+		}
+		for offset, index := range needsCount {
+			// 读失败与「窗内无慢样本」同判（计 0 ⇒ 无惩罚，fail-open）。
+			if value, err := counts[offset].Result(); err == nil {
+				liveCounts[index] = int(value)
+			}
+		}
+	}
+
+	for index := range enabled {
+		state := decoded[index]
 		penalty := state.penalty
 		if state.hasParams {
-			liveCount := countSlowSamplesWithinWindow(windows[index], nowMS, state.params.windowSeconds)
-			penalty = deriveSlowRatePenalty(liveCount, state.params)
+			penalty = deriveSlowRatePenalty(liveCounts[index], state.params)
 		}
 		if penalty <= 0 {
 			continue
@@ -281,28 +320,6 @@ func deriveSlowRatePenalty(liveCount int, params slowRatePenaltyParams) int {
 		return params.penaltyMax
 	}
 	return penalty
-}
-
-// countSlowSamplesWithinWindow 数出分数落在 [now-窗长, +inf) 的成员数。
-//
-// 为什么在内存里过滤而不是用 `ZCount` 的分数区间：区间上界依赖窗长，而窗长要从**同一批**
-// 的状态命令结果里取——构造命令时还读不到，用 ZCount 就得再加一次往返。全量取回有明确上界
-// （ZSET 的 TTL 是 2 倍窗长，且只装窗内慢样本，实测个位数），故一次 ZRangeWithScores 划算。
-//
-// 读失败（键不存在、连接错）一律返回 0：与「窗内无慢样本」同判，即无惩罚（fail-open）。
-func countSlowSamplesWithinWindow(cmd *redis.ZSliceCmd, nowMS int64, windowSeconds int) int {
-	members, err := cmd.Result()
-	if err != nil {
-		return 0
-	}
-	threshold := float64(nowMS - int64(windowSeconds)*1000)
-	count := 0
-	for _, member := range members {
-		if member.Score >= threshold {
-			count++
-		}
-	}
-	return count
 }
 
 // InCooldown 批量判定候选里哪些「对本会话正在冷却期内」。

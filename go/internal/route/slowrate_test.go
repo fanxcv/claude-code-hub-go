@@ -24,8 +24,10 @@ type slowRateRedis struct {
 	values map[string]string
 	// zsets 存 ZSET 型键（慢样本滑窗）。
 	zsets map[string][]redis.Z
-	// pipelineCalls 记录 Pipelined 被调用的次数，用于钉住「一次请求不产生 N 次往返」。
+	// pipelineCalls 记录 Pipelined 被调用的次数，用于钉住「往返数不随候选数放大」。
 	pipelineCalls int
+	// zcountRanges 记录对滑窗发过的区间计数的 "下界|上界"，用于钉住「不再全量取回」。
+	zcountRanges []string
 	// readKeys 记录被读过的键，用于钉住「某个键根本没被读」（比「没调 Redis」更精确）。
 	readKeys []string
 }
@@ -90,19 +92,30 @@ func (p *slowRatePipeline) HMGet(_ context.Context, key string, fields ...string
 	return cmd
 }
 
-// ZRangeWithScores 取滑窗全量成员。键不存在给空集（与 Redis 一致）。
-func (p *slowRatePipeline) ZRangeWithScores(
-	_ context.Context,
-	key string,
-	_, _ int64,
-) *redis.ZSliceCmd {
+// ZCount 按分数区间数成员。
+//
+// 为什么不给个「恒等于全量」的简化替身：读侧改走区间计数后，替身假设区间语义，「窗外成员
+// 不计入」那条钉子就退化成恒真（假绿）。故这里真做区间判定，只支持实现实际会发的两种形态
+// （闭区间整数下界 + "+inf" 上界）；发别的形态就报错，不静默放过。
+func (p *slowRatePipeline) ZCount(_ context.Context, key string, min, max string) *redis.IntCmd {
 	p.redis.readKeys = append(p.redis.readKeys, key)
-	cmd := redis.NewZSliceCmd(p.ctx)
-	members := p.redis.zsets[key]
-	if members == nil {
-		members = []redis.Z{}
+	p.redis.zcountRanges = append(p.redis.zcountRanges, min+"|"+max)
+	cmd := redis.NewIntCmd(p.ctx)
+	lower, lowerErr := strconv.ParseFloat(min, 64)
+	upper, upperErr := strconv.ParseFloat(max, 64)
+	if lowerErr != nil || upperErr != nil {
+		cmd.SetErr(errors.New("slowRatePipeline: 只支持闭区间与 ±inf，实得 " + min + "|" + max))
+		p.cmds = append(p.cmds, cmd)
+		return cmd
 	}
-	cmd.SetVal(members)
+	count := 0
+	for _, member := range p.redis.zsets[key] {
+		if member.Score < lower || member.Score > upper {
+			continue
+		}
+		count++
+	}
+	cmd.SetVal(int64(count))
 	p.cmds = append(p.cmds, cmd)
 	return cmd
 }
@@ -142,8 +155,8 @@ func (p *slowRateFailingPipeline) HMGet(_ context.Context, _ string, _ ...string
 	return cmd
 }
 
-func (p *slowRateFailingPipeline) ZRangeWithScores(_ context.Context, _ string, _, _ int64) *redis.ZSliceCmd {
-	cmd := redis.NewZSliceCmd(context.Background())
+func (p *slowRateFailingPipeline) ZCount(_ context.Context, _ string, _, _ string) *redis.IntCmd {
+	cmd := redis.NewIntCmd(context.Background())
 	cmd.SetErr(errors.New("redis: connection refused"))
 	p.cmds = append(p.cmds, cmd)
 	return cmd
@@ -295,18 +308,92 @@ func TestSlowRateSkipsRedisWhenNotEnabled(t *testing.T) {
 	}
 }
 
-// TestSlowRateUsesSingleRoundTrip 钉住「一次请求不产生 N 次往返」。
-func TestSlowRateUsesSingleRoundTrip(t *testing.T) {
-	providers := []Provider{slowRateProvider(1), slowRateProvider(2), slowRateProvider(3)}
-	redisClient := &slowRateRedis{values: map[string]string{}}
-	selector := newSlowRateSelector(t, redisClient, providers)
+// TestSlowRateRoundTripsDoNotScaleWithCandidates 钉住「往返数不随候选数放大」。
+//
+// 为何是两段而不是一段：活窗计数的区间下界依赖窗长，而窗长来自第一段的状态结果——构造命令时
+// 还读不到。常量两段是对的，N 段才是问题，故这里钉的是「与候选数无关」而不是「等于 1」。
+func TestSlowRateRoundTripsDoNotScaleWithCandidates(t *testing.T) {
+	for _, count := range []int{1, 3, 8} {
+		providers := make([]Provider, 0, count)
+		values := map[string]string{}
+		for index := 1; index <= count; index++ {
+			providers = append(providers, slowRateProvider(int64(index)))
+			values[SlowRateStateKey(int64(index), "m1")] = slowRateStateValueWithParams(t, 0, 1800, 3, 10, 30)
+			values[SlowRateBaselineKey(int64(index), "m1")] = slowRateBaselineValue(t, "primary")
+		}
+		redisClient := &slowRateRedis{values: values}
+		selector := newSlowRateSelector(t, redisClient, providers)
 
-	if _, err := selector.Select(context.Background(), Request{Model: "m1"}); err != nil {
-		t.Fatalf("选路失败: %v", err)
+		if _, err := selector.Select(context.Background(), Request{Model: "m1"}); err != nil {
+			t.Fatalf("选路失败: %v", err)
+		}
+		if redisClient.pipelineCalls != 2 {
+			t.Errorf("%d 个候选时 Redis 往返次数 = %d，期望 2（常量，不得随候选数放大）",
+				count, redisClient.pipelineCalls)
+		}
 	}
-	// 三个候选、每个两条命令，必须压在一个 Pipelined 里。
-	if redisClient.pipelineCalls != 1 {
-		t.Errorf("Redis 往返次数 = %d，期望 1（候选数不得放大往返）", redisClient.pipelineCalls)
+}
+
+// TestSlowRateCountsSamplesByRangeNotByFetch 钉住「不再取回滑窗全量成员」。
+//
+// 为何必须有它：本方法**每次选路**都走，而成员数上界是「一个 TTL 内的慢样本数」，不是常数；
+// 取回全量会把载荷变成 O(成员数)。区间计数只回一个整数，故对滑窗的命令数与成员数无关。
+//
+// 反证：把实现的 ZCount 换成 ZCard（无区间），本钉子仍绿而「窗外不计入」那条变红——两条各钉
+// 一面（载荷面 / 语义面），缺一不可。
+func TestSlowRateCountsSamplesByRangeNotByFetch(t *testing.T) {
+	for _, members := range []int{1, 500} {
+		redisClient := &slowRateRedis{
+			values: map[string]string{
+				SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 0, 1800, 3, 10, 30),
+				SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
+			},
+			zsets: map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): slowRateSamples(members, 60_000)},
+		}
+		newSlowRateReaderAt(redisClient).Penalties(context.Background(), []Provider{slowRateProvider(9)}, "m1")
+
+		if len(redisClient.zcountRanges) != 1 {
+			t.Fatalf("%d 条成员时对滑窗的区间计数 = %d 次，期望 1（载荷不得随成员数增长）",
+				members, len(redisClient.zcountRanges))
+		}
+		lower, upper, found := strings.Cut(redisClient.zcountRanges[0], "|")
+		if !found || upper != "+inf" {
+			t.Fatalf("区间 = %q，期望上界为 +inf", redisClient.zcountRanges[0])
+		}
+		if _, err := strconv.ParseInt(lower, 10, 64); err != nil {
+			t.Errorf("区间下界 = %q，期望具体时刻（now-窗长）的整数而非无界", lower)
+		}
+	}
+}
+
+// TestSlowRatePenaltyEquivalenceWithMixedWindow 钉住迁移等价性：窗内成员与窗外成员混在一起时，
+// 派生结果与「只数窗内」的口径逐条相同。
+//
+// 反证：把区间下界去掉（改成 ZCard 或无区间计数），每条用例的计数都会被窗外成员抬高，本用例变红。
+func TestSlowRatePenaltyEquivalenceWithMixedWindow(t *testing.T) {
+	for _, tc := range []struct{ live, expired, want int }{
+		{0, 4, 0},
+		{2, 4, 0},
+		{3, 4, 10},
+		{6, 4, 20},
+		{9, 4, 30},
+		{12, 4, 30},
+	} {
+		t.Run(strconv.Itoa(tc.live)+"_expired_"+strconv.Itoa(tc.expired), func(t *testing.T) {
+			members := append(slowRateSamples(tc.live, 60_000), slowRateSamples(tc.expired, 1_900_000)...)
+			redisClient := &slowRateRedis{
+				values: map[string]string{
+					SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 999, 1800, 3, 10, 30),
+					SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
+				},
+				zsets: map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): members},
+			}
+			got := newSlowRateReaderAt(redisClient).Penalties(
+				context.Background(), []Provider{slowRateProvider(9)}, "m1")
+			if got[9] != tc.want {
+				t.Errorf("窗内 %d 条 + 窗外 %d 条 ⇒ 降权 %d，期望 %d", tc.live, tc.expired, got[9], tc.want)
+			}
+		})
 	}
 }
 
