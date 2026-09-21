@@ -59,6 +59,13 @@ func idleProvider(id int64) route.Provider {
 //
 // 固定 Rand 是让「亲和提名」与「重新选举」可分辨的手段：亲和路径只有一家候选（不经随机），
 // 重新选举走加权随机 ⇒ 两者落到不同供应商。
+//
+// 身份来源必须显式盖上「网关生成」：空闲闸门（`ProviderRouter.applyConversationIdle`）
+// 只在**前缀亲和层**参与时才有输入（它要求 `Result.Affinity` 与 `Result.AffinityLookup` 非空），
+// 而前缀层的触发条件是「客户端身份缺失」（`route/select.go` 的 SessionIdentity 判据）。
+// 本用例的 sessionID 是用例自造、并非客户端携带，故如实标为「网关生成」；若留零值
+// （`SessionIdentityClient` = 客户端显式携带），前缀层会被整段跳过、选路落回加权随机，
+// 于是本用例测的不再是空闲闸门，而会静默腐坏成「永远粘不住」的假红。
 func idleGateRouter(source route.Source, store *route.AffinityStore, logs *bytes.Buffer, sessionID string) *ProviderRouter {
 	options := route.Options{
 		Source:   source,
@@ -67,10 +74,11 @@ func idleGateRouter(source route.Source, store *route.AffinityStore, logs *bytes
 		Logger:   quietLogger(),
 	}
 	return &ProviderRouter{
-		selector:     route.NewSelector(options),
-		routeOptions: options,
-		sessionID:    sessionID,
-		logger:       logx.New(logs),
+		selector:        route.NewSelector(options),
+		routeOptions:    options,
+		sessionID:       sessionID,
+		sessionIdentity: route.SessionIdentityGenerated,
+		logger:          logx.New(logs),
 	}
 }
 
