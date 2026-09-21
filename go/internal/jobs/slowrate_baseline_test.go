@@ -138,9 +138,10 @@ func TestMedianRateEmpty(t *testing.T) {
 	}
 }
 
-// TestSlowLineRatioIsPerMille 钉住「系数是千分比整数」只有一处定义（200 = 0.2）。
+// TestSlowLineRatioIsPerMille 钉住「系数是千分比整数」只有一处定义（默认 300 = 0.3）。
 //
-// wb 验算（设计稿 §3）：历史中位 241.1 × 0.2 ≈ 48 tok/s，与实测劣化段慢请求中位 17.2 tok/s 分界吻合。
+// wb 验算：历史中位 239.7 × 0.3 ≈ 71.9 tok/s（系数原为 0.2 时的 47.9 见设计稿 §3，
+// 用户 2026-09-21 上调到 0.3 以收紧低速判定）。
 func TestSlowLineRatioIsPerMille(t *testing.T) {
 	if got := SlowLine(241.1, 200); math.Abs(got-48.22) > 1e-6 {
 		t.Fatalf("SlowLine(241.1, 200) = %v，期望 48.22", got)
@@ -148,9 +149,9 @@ func TestSlowLineRatioIsPerMille(t *testing.T) {
 	if got := SlowLine(100, 500); math.Abs(got-50) > 1e-9 {
 		t.Fatalf("SlowLine(100, 500) = %v，期望 50", got)
 	}
-	// 非正系数回落默认 200。
-	if got := SlowLine(100, 0); math.Abs(got-20) > 1e-9 {
-		t.Fatalf("SlowLine(100, 0) = %v，期望回落默认后的 20", got)
+	// 非正系数回落默认 300 ⇒ 100 × 0.3 = 30。
+	if got := SlowLine(100, 0); math.Abs(got-30) > 1e-9 {
+		t.Fatalf("SlowLine(100, 0) = %v，期望回落默认后的 30", got)
 	}
 }
 
@@ -198,14 +199,18 @@ func TestEffectiveHelpersFallBackOnUnset(t *testing.T) {
 	}
 }
 
-// TestGroupProviderConfigsByWindow 钉住「按窗口长度分组」——窗口长度逐渠道可覆写，
+// TestGroupProviderConfigsByWindow 钉住「按基线窗口长度分组」——基线窗逐渠道可覆写，
 // 而窗口边界进的是同一条计数查询，故必须先分组再查：同组共用一个 w1Start。
+//
+// 注意：分组只看 slow_rate_baseline_window_seconds，**不看**判定滑窗
+// （slow_rate_window_seconds）。两者曾共用一列，导致「调判定窗打坏基线」；
+// 该缺陷的专项回归见 slowrate_window_split_test.go。
 func TestGroupProviderConfigsByWindow(t *testing.T) {
 	short := 600
 	configs := []store.SlowRateProviderConfig{
-		{ProviderID: 1},                        // 默认窗
-		{ProviderID: 2},                        // 默认窗
-		{ProviderID: 3, WindowSeconds: &short}, // 覆写为 600s
+		{ProviderID: 1}, // 默认窗
+		{ProviderID: 2}, // 默认窗
+		{ProviderID: 3, BaselineWindowSeconds: &short}, // 覆写为 600s
 	}
 	groups := groupProviderConfigsByWindow(configs)
 	if len(groups) != 2 {
@@ -227,9 +232,9 @@ func TestGroupProviderConfigsByWindow(t *testing.T) {
 
 	// 非正覆写回落默认窗（与「没设」同义）。
 	zero := 0
-	fallback := groupProviderConfigsByWindow([]store.SlowRateProviderConfig{{ProviderID: 9, WindowSeconds: &zero}})
+	fallback := groupProviderConfigsByWindow([]store.SlowRateProviderConfig{{ProviderID: 9, BaselineWindowSeconds: &zero}})
 	if len(fallback[defaultWindow]) != 1 {
-		t.Fatalf("窗口长度 0 应回落默认窗，实得 %v", fallback)
+		t.Fatalf("基线窗 0 应回落默认窗，实得 %v", fallback)
 	}
 }
 

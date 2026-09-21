@@ -254,6 +254,31 @@ func TestNormalizeFillsDefaults(t *testing.T) {
 	}
 }
 
+// TestDefaultParamsWindowAndRatio 钉住用户 2026-09-21 定的两个出厂默认：
+// 判定滑窗 30 分钟、系数 0.3。
+//
+// 为何单列一条：这两个数是**产品口径**，改动会让全网渠道的降权敏感度变化；
+// 混在上面的 normalize 用例里，改错时错误信息指向的是「零值收敛」而不是具体数字。
+func TestDefaultParamsWindowAndRatio(t *testing.T) {
+	def := DefaultParams()
+	if def.WindowSeconds != 1800 {
+		t.Fatalf("判定滑窗默认 %d 秒，应为 1800（30 分钟）", def.WindowSeconds)
+	}
+	if def.RatioPerMille != 300 {
+		t.Fatalf("系数默认 %d，应为 300（0.3）", def.RatioPerMille)
+	}
+	// normalize 是「NULL 列 → 出厂默认」的唯一收敛点；零值必须收敛到**新**默认，
+	// 而不是残留的旧字面量（600 / 200）。
+	normalized := Params{}.normalize()
+	if normalized.WindowSeconds != 1800 || normalized.RatioPerMille != 300 {
+		t.Fatalf("normalize() 收敛到 %d/‰%d，应为 1800/‰300", normalized.WindowSeconds, normalized.RatioPerMille)
+	}
+	// 反面：旧的出厂值不得再出现（否则说明只改了 DefaultParams 而 normalize 另有硬编码）。
+	if normalized.WindowSeconds == 600 || normalized.RatioPerMille == 200 {
+		t.Fatal("仍收敛到旧默认（600s / 200‰）")
+	}
+}
+
 // TestNewRequiresRedisAndConfig：任一侧缺失即返回 nil（旁路整段跳过）。
 func TestNewRequiresRedisAndConfig(t *testing.T) {
 	if New(Options{Config: &stubConfig{}}) != nil {

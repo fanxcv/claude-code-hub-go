@@ -1,0 +1,1 @@
+ALTER TABLE "providers" ADD COLUMN "slow_rate_baseline_window_seconds" integer;

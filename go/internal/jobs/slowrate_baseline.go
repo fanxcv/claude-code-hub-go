@@ -67,10 +67,11 @@ const (
 	// 此时发布 extended_stale 基线只供会话级降级用。
 	slowRateBaselineStaleFloorSamples = 10
 
-	// slowRateBaselineDefaultRatioPerMille 是低速线系数的默认值（设计稿 §3：0.2）。
+	// slowRateBaselineDefaultRatioPerMille 是低速线系数的默认值（设计稿 §3 原为 0.2，
+	// 用户 2026-09-21 改为 0.3）。
 	//
-	// 用千分比整数存（200 = 0.2），与 providers 表的 *_per_mille 列同形（B1）。
-	slowRateBaselineDefaultRatioPerMille = 200
+	// 用千分比整数存（300 = 0.3），与 providers 表的 *_per_mille 列同形（B1）。
+	slowRateBaselineDefaultRatioPerMille = 300
 
 	// slowRateBaselineSampleCeiling 是单个 scope 拉取样本行的上限。
 	//
@@ -228,7 +229,7 @@ func (b *SlowRateBaseline) RunOnce(ctx context.Context) (SlowRateBaselineResult,
 	}
 
 	now := b.now()
-	// 主窗长度可逐渠道覆写（slow_rate_window_seconds），而窗口边界进的是同一条计数查询，
+	// 主窗长度可逐渠道覆写（slow_rate_baseline_window_seconds），而窗口边界进的是同一条计数查询，
 	// 故按「有效窗口长度」分组，每组一次查询。默认全用同一值时只有一组。
 	byWindow := groupProviderConfigsByWindow(configs)
 	// 本轮实际遇到的 scope 集合，供清扫判定（不在集合内且存在的键即残留）。
@@ -570,16 +571,19 @@ func SlowLine(median float64, ratioPerMille int) float64 {
 	return median * float64(ratioPerMille) / 1000
 }
 
-// groupProviderConfigsByWindow 按「有效窗口长度」把渠道分组。
+// groupProviderConfigsByWindow 按「有效基线窗口长度」把渠道分组。
 //
 // 窗口长度是逐渠道可覆写的，而窗口边界进的是同一条计数查询，故必须先分组再查：
 // 同一组共用一个 w1Start。默认全用同一值时只有一组。
+//
+// **只读 BaselineWindowSeconds**：判定滑窗（WindowSeconds）与本窗尺度不同（分钟 vs 天），
+// 历史上共用 slow_rate_window_seconds 一列导致「调判定窗打坏基线」（见 store.SlowRateProviderConfig）。
 func groupProviderConfigsByWindow(configs []store.SlowRateProviderConfig) map[int][]store.SlowRateProviderConfig {
 	out := make(map[int][]store.SlowRateProviderConfig)
 	for _, config := range configs {
 		seconds := int(slowRateBaselineW1Span / time.Second)
-		if config.WindowSeconds != nil && *config.WindowSeconds > 0 {
-			seconds = *config.WindowSeconds
+		if config.BaselineWindowSeconds != nil && *config.BaselineWindowSeconds > 0 {
+			seconds = *config.BaselineWindowSeconds
 		}
 		out[seconds] = append(out[seconds], config)
 	}
@@ -595,7 +599,9 @@ func providerIDsOf(configs []store.SlowRateProviderConfig) []int64 {
 	return out
 }
 
-// effectiveW1Span 是主窗的有效长度（0 或负值回落默认 3 天）。
+// effectiveW1Span 是主窗（基线）的有效长度（0 或负值回落默认 3 天）。
+//
+// 入参是**基线窗**取值（slow_rate_baseline_window_seconds），不是判定滑窗。
 func effectiveW1Span(windowSeconds int) time.Duration {
 	if windowSeconds <= 0 {
 		return slowRateBaselineW1Span
@@ -611,7 +617,7 @@ func effectiveMinSamples(value *int) int {
 	return *value
 }
 
-// effectiveRatioPerMille 是有效系数（nil 或非正值回落默认 200，即 0.2）。
+// effectiveRatioPerMille 是有效系数（nil 或非正值回落默认 300，即 0.3）。
 func effectiveRatioPerMille(value *int) int {
 	if value == nil || *value <= 0 {
 		return slowRateBaselineDefaultRatioPerMille

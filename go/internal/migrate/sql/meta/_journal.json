@@ -904,6 +904,13 @@
       "when": 1789981648387,
       "tag": "0128_slow_rate_trigger_count",
       "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1789995944921,
+      "tag": "0129_slow_rate_baseline_window_seconds",
+      "breakpoints": true
     }
   ]
 }

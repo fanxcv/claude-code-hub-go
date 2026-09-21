@@ -50,7 +50,12 @@ type Provider struct {
 	BlockedClients json.RawMessage `json:"blocked_clients"`
 	// 低速降级（逐渠道开关，默认全关）。选路侧只读，不参与本包判定。
 	SlowRateMonitorEnabled bool `json:"slow_rate_monitor_enabled"`
-	SlowRateWindowSeconds  *int `json:"slow_rate_window_seconds"`
+	// SlowRateWindowSeconds 是判定滑窗（默认 1800s）。
+	SlowRateWindowSeconds *int `json:"slow_rate_window_seconds"`
+	// SlowRateBaselineWindowSeconds 是基线主窗（默认 3 天，B3 基线任务读）。它是**本包不读**的列：
+	// 选路只需知道「这家开没开监控」，基线口径全在 jobs 侧。此处仍映射，是为了让模拟器/前端
+	// 拿到与库一致的行形（与其余六列同例），不是选路判定需要。
+	SlowRateBaselineWindowSeconds *int `json:"slow_rate_baseline_window_seconds"`
 	// SlowRateMinSamples 是基线样本下限（默认 100，基线任务读）。
 	SlowRateMinSamples *int `json:"slow_rate_min_samples"`
 	// SlowRateTriggerCount 是触发阈值（默认 3，样本写入器读）。两列语义不同，不可混用。
@@ -188,32 +193,33 @@ func providerFromStore(row store.Provider) Provider {
 	// 容错解码：脏值跳过并留给选路器告警，**不**让它把整批候选拖没（详见 store.DecodeGroupPriorities）。
 	groupPriorities, groupPriorityIssues := store.DecodeGroupPriorities(row.GroupPriorities)
 	return Provider{
-		ID:                        row.ID,
-		Name:                      row.Name,
-		ProviderType:              convert.ProviderType(row.ProviderType),
-		URL:                       row.URL,
-		IsEnabled:                 row.IsEnabled,
-		Weight:                    row.Weight,
-		Priority:                  &priority,
-		CostMultiplier:            row.CostMultiplier,
-		GroupTag:                  row.GroupTag,
-		GroupPriorities:           groupPriorities,
-		groupPrioritiesIssues:     groupPriorityIssues,
-		AllowedModels:             row.AllowedModels,
-		ProviderVendorID:          row.ProviderVendorID,
-		ProtocolConversionEnabled: &conversionEnabled,
-		DisableSessionReuse:       row.DisableSessionReuse,
-		ActiveTimeStart:           row.ActiveTimeStart,
-		ActiveTimeEnd:             row.ActiveTimeEnd,
-		AllowedClients:            row.AllowedClients,
-		BlockedClients:            row.BlockedClients,
-		SlowRateMonitorEnabled:    row.SlowRateMonitorEnabled,
-		SlowRateWindowSeconds:     row.SlowRateWindowSeconds,
-		SlowRateMinSamples:        row.SlowRateMinSamples,
-		SlowRateTriggerCount:      row.SlowRateTriggerCount,
-		SlowRateRatioPerMille:     row.SlowRateRatioPerMille,
-		SlowRatePenaltyStep:       row.SlowRatePenaltyStep,
-		SlowRatePenaltyMax:        row.SlowRatePenaltyMax,
+		ID:                            row.ID,
+		Name:                          row.Name,
+		ProviderType:                  convert.ProviderType(row.ProviderType),
+		URL:                           row.URL,
+		IsEnabled:                     row.IsEnabled,
+		Weight:                        row.Weight,
+		Priority:                      &priority,
+		CostMultiplier:                row.CostMultiplier,
+		GroupTag:                      row.GroupTag,
+		GroupPriorities:               groupPriorities,
+		groupPrioritiesIssues:         groupPriorityIssues,
+		AllowedModels:                 row.AllowedModels,
+		ProviderVendorID:              row.ProviderVendorID,
+		ProtocolConversionEnabled:     &conversionEnabled,
+		DisableSessionReuse:           row.DisableSessionReuse,
+		ActiveTimeStart:               row.ActiveTimeStart,
+		ActiveTimeEnd:                 row.ActiveTimeEnd,
+		AllowedClients:                row.AllowedClients,
+		BlockedClients:                row.BlockedClients,
+		SlowRateMonitorEnabled:        row.SlowRateMonitorEnabled,
+		SlowRateWindowSeconds:         row.SlowRateWindowSeconds,
+		SlowRateBaselineWindowSeconds: row.SlowRateBaselineWindowSeconds,
+		SlowRateMinSamples:            row.SlowRateMinSamples,
+		SlowRateTriggerCount:          row.SlowRateTriggerCount,
+		SlowRateRatioPerMille:         row.SlowRateRatioPerMille,
+		SlowRatePenaltyStep:           row.SlowRatePenaltyStep,
+		SlowRatePenaltyMax:            row.SlowRatePenaltyMax,
 		CostLimits: ProviderCostLimits{
 			Limit5hUSD:       numberPtr(row.Limit5hUSD),
 			Limit5hResetMode: row.Limit5hResetMode,

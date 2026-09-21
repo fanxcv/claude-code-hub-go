@@ -99,7 +99,10 @@ type providerSummary struct {
 	// 「库里写了、接口不回」——表单读不到已有配置，用户看到空白。本字段组在 1.9.11
 	// 首次上线时就踩过这一条（store 层登了、这里漏了），故与上面对阶梯字段的注释同例。
 	SlowRateMonitorEnabled bool `json:"slowRateMonitorEnabled"`
-	SlowRateWindowSeconds  *int `json:"slowRateWindowSeconds"`
+	// SlowRateWindowSeconds 是判定滑窗（默认 1800s）；SlowRateBaselineWindowSeconds 是基线主窗
+	// （默认 3 天）。两列尺度不同（分钟 vs 天），不可混用。
+	SlowRateWindowSeconds         *int `json:"slowRateWindowSeconds"`
+	SlowRateBaselineWindowSeconds *int `json:"slowRateBaselineWindowSeconds"`
 	// SlowRateMinSamples 是基线样本下限；SlowRateTriggerCount 是触发阈值。两者语义不同。
 	SlowRateMinSamples    *int `json:"slowRateMinSamples"`
 	SlowRateTriggerCount  *int `json:"slowRateTriggerCount"`
@@ -1122,11 +1125,13 @@ func providerSummaryPayload(provider store.AdminProvider, statistics *providerSt
 
 		SlowRateMonitorEnabled: provider.SlowRateMonitorEnabled,
 		SlowRateWindowSeconds:  provider.SlowRateWindowSeconds,
-		SlowRateMinSamples:     provider.SlowRateMinSamples,
-		SlowRateTriggerCount:   provider.SlowRateTriggerCount,
-		SlowRateRatioPerMille:  provider.SlowRateRatioPerMille,
-		SlowRatePenaltyStep:    provider.SlowRatePenaltyStep,
-		SlowRatePenaltyMax:     provider.SlowRatePenaltyMax,
+		// 基线主窗与判定滑窗是两列（尺度差三个数量级），故两行都得写。
+		SlowRateBaselineWindowSeconds: provider.SlowRateBaselineWindowSeconds,
+		SlowRateMinSamples:            provider.SlowRateMinSamples,
+		SlowRateTriggerCount:          provider.SlowRateTriggerCount,
+		SlowRateRatioPerMille:         provider.SlowRateRatioPerMille,
+		SlowRatePenaltyStep:           provider.SlowRatePenaltyStep,
+		SlowRatePenaltyMax:            provider.SlowRatePenaltyMax,
 
 		ProxyURL:              providerRedactURLCredentialsNullable(provider.ProxyURL),
 		ProxyFallbackToDirect: provider.ProxyFallbackToDirect,

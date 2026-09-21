@@ -56,12 +56,16 @@ type Params struct {
 // 「窗内低速次数 ≥ 阈值（默认 3）」与 §6 公式 `floor(slowCount / thresholdCount)`）。
 // 它与 slow_rate_min_samples（**基线样本下限**，默认 100，只由 B3 基线定时任务读，
 // 决定能否发布基线）是两件事，故拆作两列；本包只读前者。
+//
+// WindowSeconds 是**判定滑窗**（30 分钟），与基线主窗（slow_rate_baseline_window_seconds，
+// 默认 3 天）不同尺度。用户 2026-09-21 定的取值：判定窗 30 分钟、系数 0.3。
 func DefaultParams() Params {
 	return Params{
-		WindowSeconds: 600,
+		WindowSeconds: 1800,
 		// 触发阈值：窗内低速达到 3 条即进一档（设计稿 §5 / §6）。
-		TriggerCount:  3,
-		RatioPerMille: 200,
+		TriggerCount: 3,
+		// 系数 0.3：速率低于基线的 30% 即算低速（1000 为千分比满值）。
+		RatioPerMille: 300,
 		PenaltyStep:   10,
 		PenaltyMax:    30,
 		// 冷却期不在 providers 表里（表内没有它），故取常量。

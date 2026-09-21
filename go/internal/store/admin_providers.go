@@ -95,7 +95,10 @@ type AdminProvider struct {
 
 	// 低速降级（逐渠道开关，默认全关）。
 	SlowRateMonitorEnabled bool `json:"slowRateMonitorEnabled"`
-	SlowRateWindowSeconds  *int `json:"slowRateWindowSeconds"`
+	// SlowRateWindowSeconds 是判定滑窗（默认 1800s）；SlowRateBaselineWindowSeconds 是基线主窗
+	// （默认 3 天）。两列尺度不同（分钟 vs 天），不可混用。
+	SlowRateWindowSeconds         *int `json:"slowRateWindowSeconds"`
+	SlowRateBaselineWindowSeconds *int `json:"slowRateBaselineWindowSeconds"`
 	// SlowRateMinSamples 是基线样本下限；SlowRateTriggerCount 是触发阈值。两者语义不同。
 	SlowRateMinSamples    *int `json:"slowRateMinSamples"`
 	SlowRateTriggerCount  *int `json:"slowRateTriggerCount"`
@@ -168,6 +171,7 @@ const adminProviderColumns = `
 	gemini_google_search_preference AS "geminiGoogleSearchPreference",
 	slow_rate_monitor_enabled AS "slowRateMonitorEnabled",
 	slow_rate_window_seconds AS "slowRateWindowSeconds",
+	slow_rate_baseline_window_seconds AS "slowRateBaselineWindowSeconds",
 	slow_rate_min_samples AS "slowRateMinSamples",
 	slow_rate_trigger_count AS "slowRateTriggerCount",
 	slow_rate_ratio_per_mille AS "slowRateRatioPerMille",

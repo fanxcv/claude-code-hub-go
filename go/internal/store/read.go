@@ -154,7 +154,11 @@ type Provider struct {
 	// 低速降级（逐渠道开关，默认全关）。参数列可空，NULL 表示取代码默认值；
 	// 未开启的渠道行为与开启前逐字一致（读取侧不读、写入侧不写）。
 	SlowRateMonitorEnabled bool `json:"slow_rate_monitor_enabled"`
-	SlowRateWindowSeconds  *int `json:"slow_rate_window_seconds"`
+	// SlowRateWindowSeconds 是**判定滑窗**（默认 1800s）；SlowRateBaselineWindowSeconds 是
+	// **基线主窗**（默认 3 天，只由基线定时任务读）。两列尺度差三个数量级（分钟 vs 天），
+	// 曾是同一列，故拆开——共用一列时「调判定窗」会静默把基线打坏。
+	SlowRateWindowSeconds         *int `json:"slow_rate_window_seconds"`
+	SlowRateBaselineWindowSeconds *int `json:"slow_rate_baseline_window_seconds"`
 	// SlowRateMinSamples 是**基线样本下限**（默认 100），只由基线定时任务读。
 	SlowRateMinSamples *int `json:"slow_rate_min_samples"`
 	// SlowRateTriggerCount 是**触发阈值**（默认 3），由样本写入器读。两列不可混用。
