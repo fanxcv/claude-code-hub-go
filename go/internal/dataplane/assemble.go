@@ -260,7 +260,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	// 只给局部副本赋值会让故障转移路径静默丢失降权与冷却，而故障转移正是
 	// 「已粘会话撞上慢渠道」后最需要冷却生效的那条路。
 	if options.RouteOptions.SlowRate == nil {
-		options.RouteOptions.SlowRate = route.NewSlowRateReader(options.Redis, logger)
+		options.RouteOptions.SlowRate = route.NewSlowRateReader(route.SlowRateOptions{Redis: options.Redis, Logger: logger})
 	}
 	routeOptions := options.RouteOptions
 	routeOptions.Health = healthReader

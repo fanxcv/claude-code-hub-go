@@ -7,6 +7,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pubstatus"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowrate"
 )
 
 // 本文件钉住**跨包键形制必须逐字节一致**。这是本仓最容易静默失效的一类接缝：
@@ -88,6 +89,51 @@ func TestModelKeyMirrorsUpstream(t *testing.T) {
 		want := pubstatus.ResolveSuccessRateModelKey(&trimmed, nil)
 		if got := route.SlowRateModelKey(model); got != want {
 			t.Errorf("模型键不一致：route = %q，pubstatus = %q（输入 %q）", got, want, model)
+		}
+	}
+}
+
+// TestSamplesKeyMirrorsWriteSide 钉住慢样本滑窗键逐字节一致。
+//
+// 读侧（route）因 import 环只能自拼这个键，而它现在是**惩罚的唯一真源**：读侧据窗内活成员
+// 数当场派生惩罚。拼错一个字符的表现是「窗永远为空 ⇒ 惩罚恒为 0」——静默、无报错。
+func TestSamplesKeyMirrorsWriteSide(t *testing.T) {
+	for _, tc := range []struct {
+		providerID int64
+		modelKey   string
+	}{
+		{167, "deepseek-v4.1-flash"},
+		{1, "claude-opus-5"},
+		{999, "m"},
+	} {
+		want := slowrate.SamplesKey(tc.providerID, tc.modelKey)
+		got := route.SlowRateSamplesKey(tc.providerID, tc.modelKey)
+		if got != want {
+			t.Errorf("滑窗键不一致：\n  route    = %q\n  slowrate = %q", got, want)
+		}
+	}
+}
+
+// TestStateFieldNamesMirrorWriteSide 钉住状态 Hash 的字段名逐字节一致。
+//
+// 写侧把**生效参数**（窗长/阈值/步长/上限）随状态一起落 Hash，读侧据它们把滑窗计数折成惩罚。
+// 字段名在两侧各写一遍（import 环），任一侧改名都会让读侧判成「参数缺失」——那会静默退化成
+// 「回退读快照」，即本次刚修掉的那个 bug。故逐项比对。
+func TestStateFieldNamesMirrorWriteSide(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		writeSide string
+		readSide  string
+	}{
+		{"penalty", slowrate.StateFieldPenalty, route.SlowRateStateFieldPenalty},
+		{"windowSeconds", slowrate.StateFieldWindowSeconds, route.SlowRateStateFieldWindowSeconds},
+		{"triggerCount", slowrate.StateFieldTriggerCount, route.SlowRateStateFieldTriggerCount},
+		{"penaltyStep", slowrate.StateFieldPenaltyStep, route.SlowRateStateFieldPenaltyStep},
+		{"penaltyMax", slowrate.StateFieldPenaltyMax, route.SlowRateStateFieldPenaltyMax},
+	} {
+		if tc.readSide != tc.writeSide {
+			t.Errorf("状态字段 %s 不一致：\n  route    = %q\n  slowrate = %q",
+				tc.name, tc.readSide, tc.writeSide)
 		}
 	}
 }

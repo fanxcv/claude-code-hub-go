@@ -119,7 +119,7 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 
 	// 低速降权表（调度模拟器的降权维）：与数据面选路**同一份读取实现**（route.NewSlowRateReader）。
 	// 与 deps.ProviderCost 同一类读档读数；读不到不带任何降级（该维不降权），故不与选路共享装配。
-	slowRateReader := route.NewSlowRateReader(redisClient, logger)
+	slowRateReader := route.NewSlowRateReader(route.SlowRateOptions{Redis: redisClient, Logger: logger})
 	deps.SlowRatePenalties = slowRateReader
 	// /providers/health 的 per-渠道低速降权投影（界面要看「这家有没有被压、压了多少」）。
 	// 复用上面那一份读取实现做生效判定（两处判定必须只有一份）；缺 Redis 时为 nil，

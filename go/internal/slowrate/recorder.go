@@ -203,11 +203,17 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 	}
 
 	count := int(zcard.Val())
-	// 判定门槛（设计稿 §5 边界：不足阈值即不判定，保持当前状态不变，fail-open）。
+	// 判定门槛（设计稿 §5 边界：窗内计数不足阈值即**不推进状态**，fail-open）。
+	//
+	// 注意这**不是**「惩罚不衰减」：衰减由读侧当场派生实现（它数的是滑窗里的活成员，
+	// 见 route.deriveSlowRatePenalty），这里的提前返回只意味着「不把标记推得更重」。
 	if count < params.TriggerCount {
 		return
 	}
 	// 状态推进：窗内低速条数即 slowCount，惩罚按档位增长并封顶（设计稿 §6）。
+	//
+	// 同时写生效参数：读侧要据「滑窗内慢样本数」派生惩罚，而 admin 的合成 Provider
+	// 没有参数列，只能从这份 Hash 里取（见 route.SlowRateStateFieldWindowSeconds 一族）。
 	level := count / params.TriggerCount
 	penalty := level * params.PenaltyStep
 	if penalty > params.PenaltyMax {
@@ -215,8 +221,12 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 	}
 	statePipe := r.redis.Pipeline()
 	statePipe.HSet(ctx, stateKey,
+		StateFieldPenalty, penalty,
+		StateFieldWindowSeconds, params.WindowSeconds,
+		StateFieldTriggerCount, params.TriggerCount,
+		StateFieldPenaltyStep, params.PenaltyStep,
+		StateFieldPenaltyMax, params.PenaltyMax,
 		"slowCount", count,
-		"penalty", penalty,
 		"enteredAt", at,
 	)
 	statePipe.Expire(ctx, stateKey, ttl)
@@ -319,8 +329,28 @@ func scopeTag(providerID int64, modelKey string) string {
 	return fmt.Sprintf("{%d:%s}", providerID, modelKey)
 }
 
+// 状态 Hash 的字段名。读侧（internal/route）因 import 环不能引用本包，只能各写一遍字面量，
+// 由 route_test 的镜像钉子（slowrate_keys_mirror_test.go）逐字比对——改这里必改那里。
+//
+// 后四项是**生效参数**（已应用渠道覆写），读侧据它们把滑窗计数折成惩罚。
+const (
+	StateFieldPenalty       = "penalty"
+	StateFieldWindowSeconds = "windowSeconds"
+	StateFieldTriggerCount  = "triggerCount"
+	StateFieldPenaltyStep   = "penaltyStep"
+	StateFieldPenaltyMax    = "penaltyMax"
+)
+
 func samplesKey(providerID int64, modelKey string) string {
 	return "cch:slow:" + scopeTag(providerID, modelKey) + ":samples"
+}
+
+// SamplesKey 是该组合的慢样本滑窗键（ZSET，成员为请求 id，分数为写入毫秒，TTL 为 2 倍窗长）。
+//
+// 它是读侧派生惩罚的唯一真源，故必须跨包同形。导出是为了让镜像钉子有**真实对照物**
+// （同 jobs.BaselineKey 的用法）：读侧因 import 环只能自拼，错一个字符就静默失效。
+func SamplesKey(providerID int64, modelKey string) string {
+	return samplesKey(providerID, modelKey)
 }
 
 func stateKey(providerID int64, modelKey string) string {

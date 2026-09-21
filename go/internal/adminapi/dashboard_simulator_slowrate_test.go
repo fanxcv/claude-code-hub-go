@@ -167,7 +167,7 @@ func TestWireSimulatorDataSourcesSlowRateEndToEnd(t *testing.T) {
 		route.SlowRateBaselineKey(2, route.SlowRateModelKey("m1")): `{"median":241.1,"samples":120,"source":"primary"}`,
 	}}
 	api := &dashboardAPI{
-		deps:   Deps{SlowRatePenalties: route.NewSlowRateReader(redisClient, nil)},
+		deps:   Deps{SlowRatePenalties: route.NewSlowRateReader(route.SlowRateOptions{Redis: redisClient})},
 		logger: logx.New(nil),
 	}
 
@@ -194,7 +194,7 @@ func TestWireSimulatorDataSourcesSlowRateEndToEnd(t *testing.T) {
 
 	// 未开启监控的渠道不得被读（读侧的门）：换一家关监控的同 id 渠道，表必空。
 	disabled := &dashboardAPI{
-		deps:   Deps{SlowRatePenalties: route.NewSlowRateReader(redisClient, nil)},
+		deps:   Deps{SlowRatePenalties: route.NewSlowRateReader(route.SlowRateOptions{Redis: redisClient})},
 		logger: logx.New(nil),
 	}
 	disabledOptions := slowRateSimulatorOptions([]route.SimulateProvider{
@@ -241,19 +241,31 @@ func (p *slowRateFakePipeline) Get(_ context.Context, key string) *redis.StringC
 	return cmd
 }
 
-func (p *slowRateFakePipeline) HGet(_ context.Context, key, field string) *redis.StringCmd {
-	cmd := redis.NewStringCmd(context.Background())
+// HMGet 按字段取状态 Hash。语义对齐 Redis：字段不存在给 nil 元素、键不存在给全 nil，均不报错。
+func (p *slowRateFakePipeline) HMGet(_ context.Context, key string, fields ...string) *redis.SliceCmd {
+	cmd := redis.NewSliceCmd(context.Background())
+	var decoded map[string]string
 	if raw, ok := p.redis.values[key]; ok {
-		var fields map[string]string
-		if json.Unmarshal([]byte(raw), &fields) == nil {
-			if value, found := fields[field]; found {
-				cmd.SetVal(value)
-				p.cmds = append(p.cmds, cmd)
-				return cmd
-			}
-		}
+		_ = json.Unmarshal([]byte(raw), &decoded)
 	}
-	cmd.SetErr(redis.Nil)
+	values := make([]any, 0, len(fields))
+	for _, field := range fields {
+		if value, found := decoded[field]; found {
+			values = append(values, value)
+			continue
+		}
+		values = append(values, nil)
+	}
+	cmd.SetVal(values)
+	p.cmds = append(p.cmds, cmd)
+	return cmd
+}
+
+// ZRangeWithScores 取滑窗成员。本文件的夹具不造滑窗（状态里也没有生效参数），
+// 故一律空集——读侧因此走「参数缺失则回退快照」那条路。
+func (p *slowRateFakePipeline) ZRangeWithScores(_ context.Context, _ string, _, _ int64) *redis.ZSliceCmd {
+	cmd := redis.NewZSliceCmd(context.Background())
+	cmd.SetVal([]redis.Z{})
 	p.cmds = append(p.cmds, cmd)
 	return cmd
 }

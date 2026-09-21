@@ -80,19 +80,31 @@ func (p *slowRateHealthFakePipeline) Get(_ context.Context, key string) *redis.S
 	return cmd
 }
 
-func (p *slowRateHealthFakePipeline) HGet(_ context.Context, key, field string) *redis.StringCmd {
-	cmd := redis.NewStringCmd(context.Background())
+// HMGet 按字段取状态 Hash。语义对齐 Redis：字段不存在给 nil 元素、键不存在给全 nil，均不报错。
+func (p *slowRateHealthFakePipeline) HMGet(_ context.Context, key string, fields ...string) *redis.SliceCmd {
+	cmd := redis.NewSliceCmd(context.Background())
+	var decoded map[string]string
 	if raw, ok := p.redis.values[key]; ok {
-		var fields map[string]string
-		if json.Unmarshal([]byte(raw), &fields) == nil {
-			if value, found := fields[field]; found {
-				cmd.SetVal(value)
-				p.cmds = append(p.cmds, cmd)
-				return cmd
-			}
-		}
+		_ = json.Unmarshal([]byte(raw), &decoded)
 	}
-	cmd.SetErr(redis.Nil)
+	values := make([]any, 0, len(fields))
+	for _, field := range fields {
+		if value, found := decoded[field]; found {
+			values = append(values, value)
+			continue
+		}
+		values = append(values, nil)
+	}
+	cmd.SetVal(values)
+	p.cmds = append(p.cmds, cmd)
+	return cmd
+}
+
+// ZRangeWithScores 取滑窗成员。本文件的夹具不造滑窗（状态里也没有生效参数），
+// 故一律空集——读侧因此走「参数缺失则回退快照」那条路，正是这些用例要钉的行为。
+func (p *slowRateHealthFakePipeline) ZRangeWithScores(_ context.Context, _ string, _, _ int64) *redis.ZSliceCmd {
+	cmd := redis.NewZSliceCmd(context.Background())
+	cmd.SetVal([]redis.Z{})
 	p.cmds = append(p.cmds, cmd)
 	return cmd
 }
@@ -116,9 +128,12 @@ func matchSlowRatePattern(pattern, key string) (bool, bool) {
 	return key[:len(prefix)] == prefix && key[len(key)-len(suffix):] == suffix, true
 }
 
-// writeSlowRateState 按**写侧的真是形态**造夹具：状态键用 route.SlowRateStateKey 构造，
-// 哈希字段名与写侧一致（recorder.go:215 写 "penalty"）；基线键用 route.SlowRateBaselineKey，
+// writeSlowRateState 按**旧版写侧的形态**造夹具：状态键用 route.SlowRateStateKey 构造，
+// 哈希只带快照字段（不含 windowSeconds 一族生效参数）；基线键用 route.SlowRateBaselineKey，
 // 值是 jobs 冻结的 JSON 形状。
+//
+// 只带快照＝读侧判成「参数缺失」而回退读快照值——本文件几条用例钉的正是这条回退路径
+// （界面与选路同口径、extended_stale 抑制）。带参数那条主路径在 internal/route 的用例里钉。
 func writeSlowRateState(
 	values map[string]string,
 	providerID int64,
@@ -164,7 +179,7 @@ func TestProviderSlowRatesAggregatesPerProvider(t *testing.T) {
 	writeSlowRateState(values, 999, "model-a", 99, "primary")
 
 	client := &slowRateHealthFakeRedis{values: values}
-	reader := NewRedisProviderSlowRates(client, route.NewSlowRateReader(client, logx.New(nil)), logx.New(nil))
+	reader := NewRedisProviderSlowRates(client, route.NewSlowRateReader(route.SlowRateOptions{Redis: client, Logger: logx.New(nil)}), logx.New(nil))
 	if reader == nil {
 		t.Fatal("装配读面失败：应返回实现而不是 nil")
 	}
@@ -246,7 +261,7 @@ func TestProviderSlowRatesReportsReadFailure(t *testing.T) {
 		values:  map[string]string{},
 		scanErr: errors.New("redis down"),
 	}
-	reader := NewRedisProviderSlowRates(client, route.NewSlowRateReader(client, nil), nil)
+	reader := NewRedisProviderSlowRates(client, route.NewSlowRateReader(route.SlowRateOptions{Redis: client}), nil)
 	if _, err := reader.ProviderSlowRates(context.Background(), []int64{1}); err == nil {
 		t.Fatal("扫描失败时应返回错误，不得静默回空表")
 	}
@@ -274,7 +289,7 @@ func TestProvidersHealthCarriesSlowRate(t *testing.T) {
 		Problems: NewProblems(nil),
 		// 熔断面与低速面同一次装配里给（本文件的关注点是后者）。
 		CircuitStates:     NewRedisCircuitStates(client, nil, nil),
-		ProviderSlowRates: NewRedisProviderSlowRates(client, route.NewSlowRateReader(client, nil), nil),
+		ProviderSlowRates: NewRedisProviderSlowRates(client, route.NewSlowRateReader(route.SlowRateOptions{Redis: client}), nil),
 	}
 	router := New(Options{Deps: deps})
 	RegisterProviders(router, deps)

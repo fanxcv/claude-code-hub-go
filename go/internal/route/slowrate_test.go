@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
 	"github.com/redis/go-redis/v9"
@@ -18,7 +20,10 @@ import (
 // 变成可测事实（见 pipelineCalls）。
 type slowRateRedis struct {
 	redis.UniversalClient
+	// values 存 String 型键（基线 JSON）与 Hash 型键（状态 JSON，见 slowRateStateValue）。
 	values map[string]string
+	// zsets 存 ZSET 型键（慢样本滑窗）。
+	zsets map[string][]redis.Z
 	// pipelineCalls 记录 Pipelined 被调用的次数，用于钉住「一次请求不产生 N 次往返」。
 	pipelineCalls int
 	// readKeys 记录被读过的键，用于钉住「某个键根本没被读」（比「没调 Redis」更精确）。
@@ -64,24 +69,40 @@ func (p *slowRatePipeline) Get(_ context.Context, key string) *redis.StringCmd {
 	return cmd
 }
 
-func (p *slowRatePipeline) HGet(_ context.Context, key, field string) *redis.StringCmd {
+// HMGet 按字段取状态 Hash。语义对齐 Redis：字段不存在给 nil 元素，键不存在给全 nil，**都不报错**。
+func (p *slowRatePipeline) HMGet(_ context.Context, key string, fields ...string) *redis.SliceCmd {
 	p.redis.readKeys = append(p.redis.readKeys, key)
-	cmd := redis.NewStringCmd(p.ctx)
-	// 状态键在本替身里存成 JSON（{"penalty":"10"} 形态），与 HGet 取值语义等价。
+	cmd := redis.NewSliceCmd(p.ctx)
+	values := make([]any, 0, len(fields))
+	var decoded map[string]string
 	if raw, ok := p.redis.values[key]; ok {
-		var fields map[string]string
-		if json.Unmarshal([]byte(raw), &fields) == nil {
-			if value, found := fields[field]; found {
-				cmd.SetVal(value)
-				p.cmds = append(p.cmds, cmd)
-				return cmd
-			}
+		_ = json.Unmarshal([]byte(raw), &decoded)
+	}
+	for _, field := range fields {
+		if value, found := decoded[field]; found {
+			values = append(values, value)
+			continue
 		}
+		values = append(values, nil)
 	}
-	cmd.SetErr(redis.Nil)
-	if p.firstErr == nil {
-		p.firstErr = redis.Nil
+	cmd.SetVal(values)
+	p.cmds = append(p.cmds, cmd)
+	return cmd
+}
+
+// ZRangeWithScores 取滑窗全量成员。键不存在给空集（与 Redis 一致）。
+func (p *slowRatePipeline) ZRangeWithScores(
+	_ context.Context,
+	key string,
+	_, _ int64,
+) *redis.ZSliceCmd {
+	p.redis.readKeys = append(p.redis.readKeys, key)
+	cmd := redis.NewZSliceCmd(p.ctx)
+	members := p.redis.zsets[key]
+	if members == nil {
+		members = []redis.Z{}
 	}
+	cmd.SetVal(members)
 	p.cmds = append(p.cmds, cmd)
 	return cmd
 }
@@ -114,17 +135,42 @@ func (p *slowRateFailingPipeline) Get(_ context.Context, _ string) *redis.String
 	return cmd
 }
 
-func (p *slowRateFailingPipeline) HGet(_ context.Context, _, _ string) *redis.StringCmd {
-	cmd := redis.NewStringCmd(context.Background())
+func (p *slowRateFailingPipeline) HMGet(_ context.Context, _ string, _ ...string) *redis.SliceCmd {
+	cmd := redis.NewSliceCmd(context.Background())
 	cmd.SetErr(errors.New("redis: connection refused"))
 	p.cmds = append(p.cmds, cmd)
 	return cmd
 }
 
-// slowRateStateValue 构造状态键的值（penalty 字段）。
+func (p *slowRateFailingPipeline) ZRangeWithScores(_ context.Context, _ string, _, _ int64) *redis.ZSliceCmd {
+	cmd := redis.NewZSliceCmd(context.Background())
+	cmd.SetErr(errors.New("redis: connection refused"))
+	p.cmds = append(p.cmds, cmd)
+	return cmd
+}
+
+// slowRateStateValue 构造状态键的值（仅快照 penalty，**无生效参数**）。
+//
+// 这是旧版本写侧留下的形态：读侧参数缺失时会回退到这个快照值，故它是「回退路径」的夹具。
 func slowRateStateValue(t *testing.T, penalty int) string {
 	t.Helper()
-	raw, err := json.Marshal(map[string]string{"penalty": strconvItoa(penalty)})
+	raw, err := json.Marshal(map[string]string{SlowRateStateFieldPenalty: strconv.Itoa(penalty)})
+	if err != nil {
+		t.Fatalf("构造状态值失败: %v", err)
+	}
+	return string(raw)
+}
+
+// slowRateStateValueWithParams 构造带生效参数的状态键值（当前写侧的形态）。
+func slowRateStateValueWithParams(t *testing.T, penalty, windowSeconds, triggerCount, step, max int) string {
+	t.Helper()
+	raw, err := json.Marshal(map[string]string{
+		SlowRateStateFieldPenalty:       strconv.Itoa(penalty),
+		SlowRateStateFieldWindowSeconds: strconv.Itoa(windowSeconds),
+		SlowRateStateFieldTriggerCount:  strconv.Itoa(triggerCount),
+		SlowRateStateFieldPenaltyStep:   strconv.Itoa(step),
+		SlowRateStateFieldPenaltyMax:    strconv.Itoa(max),
+	})
 	if err != nil {
 		t.Fatalf("构造状态值失败: %v", err)
 	}
@@ -139,10 +185,6 @@ func slowRateBaselineValue(t *testing.T, source string) string {
 		t.Fatalf("构造基线值失败: %v", err)
 	}
 	return string(raw)
-}
-
-func strconvItoa(value int) string {
-	return string(rune('0'+value/10%10)) + string(rune('0'+value%10))
 }
 
 // slowRateProvider 是「已开启低速监控」的供应商。
@@ -160,7 +202,7 @@ func newSlowRateSelector(t *testing.T, client redis.UniversalClient, providers [
 	}
 	return NewSelector(Options{
 		Source:   source,
-		SlowRate: NewSlowRateReader(client, nil),
+		SlowRate: NewSlowRateReader(SlowRateOptions{Redis: client}),
 		Rand:     func() float64 { return 0 },
 	})
 }
@@ -278,7 +320,7 @@ func TestSlowRateExtendedStaleSuppressesChannelPenalty(t *testing.T) {
 		SlowRateStateKey(5, "m1"):    slowRateStateValue(t, 30),
 		SlowRateBaselineKey(5, "m1"): slowRateBaselineValue(t, "extended_stale"),
 	}}
-	reader := NewSlowRateReader(redisClient, nil)
+	reader := NewSlowRateReader(SlowRateOptions{Redis: redisClient})
 
 	penalties := reader.Penalties(context.Background(), []Provider{provider}, "m1")
 	if _, found := penalties[5]; found {
@@ -293,13 +335,134 @@ func TestSlowRateExtendedStaleSuppressesChannelPenalty(t *testing.T) {
 	}
 }
 
+// slowRateTestNowMS 是新增用例的统一「当前时刻」：拨钟后滑窗区间才是确定的。
+const slowRateTestNowMS = int64(1_000_000_000_000)
+
+// newSlowRateReaderAt 造一个时钟固定在本用例基准时刻的读取器。
+func newSlowRateReaderAt(client redis.UniversalClient) *SlowRateReader {
+	return NewSlowRateReader(SlowRateOptions{
+		Redis: client,
+		Now:   func() time.Time { return time.UnixMilli(slowRateTestNowMS) },
+	})
+}
+
+// slowRateSamples 造 count 条距基准时刻 offsetMS 毫秒的滑窗成员。
+func slowRateSamples(count int, offsetMS int64) []redis.Z {
+	members := make([]redis.Z, 0, count)
+	for index := 0; index < count; index++ {
+		members = append(members, redis.Z{
+			Score:  float64(slowRateTestNowMS - offsetMS),
+			Member: strconv.Itoa(index + 1),
+		})
+	}
+	return members
+}
+
+// TestSlowRatePenaltyDecaysWithWindow 钉住「惩罚随样本过期连续衰减」——本次 bug 的回归钉子。
+//
+// 症状（生产实测）：渠道的「低速降权 +10」出现后一直不消失。根因是惩罚读的是写侧留下的状态
+// 快照，而渠道恢复后不再产生慢样本、写侧也就不再触达 Redis，快照便停在最后一次推进的值上，
+// 直到状态键 TTL 到期为止。设计稿「恢复」一节要求的正是「惩罚值随样本过期连续衰减」，
+// 滑窗里的活成员数才是那个真值。
+//
+// 反证：把派生换回「只读状态快照」（即改动前的实现），本用例变红。
+func TestSlowRatePenaltyDecaysWithWindow(t *testing.T) {
+	provider := slowRateProvider(9)
+	reader := newSlowRateReaderAt(&slowRateRedis{
+		values: map[string]string{
+			// 状态里留着陈旧的惩罚 30，且带齐生效参数。
+			SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 30, 1800, 3, 10, 30),
+			SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
+		},
+		zsets: map[string][]redis.Z{},
+	})
+
+	if got := reader.Penalties(context.Background(), []Provider{provider}, "m1"); len(got) != 0 {
+		t.Fatalf("活窗内无慢样本却仍报降权 %v，期望无降权（陈旧快照必须被滑窗覆盖）", got)
+	}
+}
+
+// TestSlowRatePenaltyDerivesFromLiveWindow 钉住派生口径：floor(窗内计数/阈值)*步长，封顶上限。
+//
+// 状态里的快照刻意写成 999：它必须被派生值完全覆盖，而不是参与任何取舍。
+func TestSlowRatePenaltyDerivesFromLiveWindow(t *testing.T) {
+	for _, tc := range []struct {
+		count int
+		want  int
+	}{
+		{0, 0},
+		{2, 0},
+		{3, 10},
+		{6, 20},
+		{9, 30},
+		{12, 30},
+	} {
+		t.Run(strconv.Itoa(tc.count), func(t *testing.T) {
+			reader := newSlowRateReaderAt(&slowRateRedis{
+				values: map[string]string{
+					SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 999, 1800, 3, 10, 30),
+					SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
+				},
+				// 全部成员都在 1800s 窗内（距基准时刻 1 分钟）。
+				zsets: map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): slowRateSamples(tc.count, 60_000)},
+			})
+
+			got := reader.Penalties(context.Background(), []Provider{slowRateProvider(9)}, "m1")
+			if got[9] != tc.want {
+				t.Errorf("窗内 %d 条 ⇒ 降权 %d，期望 %d", tc.count, got[9], tc.want)
+			}
+		})
+	}
+}
+
+// TestSlowRatePenaltyIgnoresExpiredSamples 钉住：窗外成员不计入。
+//
+// 为什么必须自己过滤：窗外成员只在**写侧**被 `ZREMRANGEBYSCORE` 清掉，渠道一恢复就不再有写入，
+// 旧成员会一直留在 ZSET 里（TTL 是 2 倍窗长），直到整键过期。故读侧不能假设成员都是活的。
+//
+// 反证：把内层过滤改成「不过滤」（相当于无区间地数成员），本用例变红。
+func TestSlowRatePenaltyIgnoresExpiredSamples(t *testing.T) {
+	// 3 条在 1800s 窗内，3 条已过期（最早的在 1900s 之前）。
+	members := append(slowRateSamples(3, 60_000), slowRateSamples(3, 1_900_000)...)
+	reader := newSlowRateReaderAt(&slowRateRedis{
+		values: map[string]string{
+			SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 30, 1800, 3, 10, 30),
+			SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
+		},
+		zsets: map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): members},
+	})
+
+	got := reader.Penalties(context.Background(), []Provider{slowRateProvider(9)}, "m1")
+	if got[9] != 10 {
+		t.Errorf("窗内 3 条（另有 3 条已过期）⇒ 降权 %d，期望 10", got[9])
+	}
+}
+
+// TestSlowRatePenaltyFallsBackWhenParamsMissing 钉住兼容：旧版本写下的状态没有生效参数，
+// 此时回退读快照值——升级不该把正在生效的降权清零，等写侧下次推进自然带上参数。
+func TestSlowRatePenaltyFallsBackWhenParamsMissing(t *testing.T) {
+	reader := newSlowRateReaderAt(&slowRateRedis{
+		values: map[string]string{
+			SlowRateStateKey(9, "m1"):    slowRateStateValue(t, 30),
+			SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
+		},
+		// 滑窗里其实有 9 条，但参数缺失时一律不看窗（无从知道窗长）。
+		zsets: map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): slowRateSamples(9, 60_000)},
+	})
+
+	got := reader.Penalties(context.Background(), []Provider{slowRateProvider(9)}, "m1")
+	if got[9] != 30 {
+		t.Errorf("参数缺失时降权 = %d，期望回退到快照值 30", got[9])
+	}
+}
+
 // TestSlowRateFailsOpenOnRedisError 钉住 fail-open：Redis 读失败不得阻断选路。
 func TestSlowRateFailsOpenOnRedisError(t *testing.T) {
 	providers := []Provider{slowRateProvider(1), slowRateProvider(2)}
 	source := &stubSource{providers: providers, byID: map[int64]Provider{1: providers[0], 2: providers[1]}}
 	selector := NewSelector(Options{
 		Source:   source,
-		SlowRate: NewSlowRateReader(&slowRateFailingRedis{}, nil),
+		SlowRate: NewSlowRateReader(SlowRateOptions{Redis: &slowRateFailingRedis{}}),
 		Rand:     func() float64 { return 0 },
 	})
 

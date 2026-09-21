@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pubstatus"
@@ -29,10 +30,23 @@ import (
 //
 // 花括号是 Redis Cluster 的 hash tag：同一组合的多个键落同一槽，pipeline 才能压成一次往返。
 const (
-	slowRateKeyPrefix          = "cch:slow:"
-	slowRateStateSuffix        = ":state"
-	slowRateBaselineSuffix     = ":baseline"
-	slowRateStateFieldPenalty  = "penalty"
+	slowRateKeyPrefix      = "cch:slow:"
+	slowRateSamplesSuffix  = ":samples"
+	slowRateStateSuffix    = ":state"
+	slowRateBaselineSuffix = ":baseline"
+
+	// 状态 Hash 的字段名：与写侧（internal/slowrate）逐字节一致。本包因 import 环不能引用
+	// 那边的常量，两侧各写一遍字面量，由外部测试包的镜像钉子比对（slowrate_keys_mirror_test.go）。
+	//
+	// 后四项（窗长/阈值/步长/上限）是写侧随状态一起落的**生效参数**。读侧据「滑窗内慢样本数」
+	// 当场派生惩罚需要它们，而 admin 的 providers_health 构造的是合成 Provider（只有 id 与开关，
+	// 无参数列），取不到，只能从 Hash 带出。
+	SlowRateStateFieldPenalty       = "penalty"
+	SlowRateStateFieldWindowSeconds = "windowSeconds"
+	SlowRateStateFieldTriggerCount  = "triggerCount"
+	SlowRateStateFieldPenaltyStep   = "penaltyStep"
+	SlowRateStateFieldPenaltyMax    = "penaltyMax"
+
 	slowRateBaselineFieldName  = "source"
 	slowRateSourceExtended     = "extended_stale"
 	slowRateCooldownKeyPattern = "session-binding:v1:{%s}:provider:%s:cooldown"
@@ -58,6 +72,14 @@ func SlowRateBaselineKey(providerID int64, modelKey string) string {
 	return slowRateKeyPrefix + slowRateScopeTag(providerID, modelKey) + slowRateBaselineSuffix
 }
 
+// SlowRateSamplesKey 是该组合的慢样本滑窗键（ZSET，成员为请求 id，分数为写入毫秒）。
+//
+// 它是**选路惩罚的唯一真源**：惩罚由窗内成员数当场派生，而不是读状态里的快照
+// （快照只在写侧推进时刷新，渠道恢复后不再刷新，见 deriveSlowRatePenalty）。
+func SlowRateSamplesKey(providerID int64, modelKey string) string {
+	return slowRateKeyPrefix + slowRateScopeTag(providerID, modelKey) + slowRateSamplesSuffix
+}
+
 func slowRateScopeTag(providerID int64, modelKey string) string {
 	return "{" + strconv.FormatInt(providerID, 10) + ":" + modelKey + "}"
 }
@@ -81,14 +103,30 @@ func SlowRateCooldownKey(sessionID string, keyID, providerID int64) string {
 type SlowRateReader struct {
 	redis  redis.UniversalClient
 	logger *logx.Logger
+	// now 可注入时钟：活窗计数要拿「当前时刻」当区间上界，测试必须能拨钟。
+	now func() time.Time
+}
+
+// SlowRateOptions 是 SlowRateReader 的构造参数（同 HealthOptions 的形制）。
+type SlowRateOptions struct {
+	// Redis 为 nil 时返回 nil 读取器，调用方据此整段跳过（等同未装配）。
+	Redis redis.UniversalClient
+	// Logger 可空：只影响读失败时的那条 warn。
+	Logger *logx.Logger
+	// Now 可注入时钟。
+	Now func() time.Time
 }
 
 // NewSlowRateReader 构造读取器；Redis 为 nil 时返回 nil，调用方据此整段跳过（等同未装配）。
-func NewSlowRateReader(redisClient redis.UniversalClient, logger *logx.Logger) *SlowRateReader {
-	if redisClient == nil {
+func NewSlowRateReader(opts SlowRateOptions) *SlowRateReader {
+	if opts.Redis == nil {
 		return nil
 	}
-	return &SlowRateReader{redis: redisClient, logger: logger}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	return &SlowRateReader{redis: opts.Redis, logger: opts.Logger, now: now}
 }
 
 // Penalties 批量读候选渠道的渠道级惩罚。
@@ -103,7 +141,9 @@ func NewSlowRateReader(redisClient redis.UniversalClient, logger *logx.Logger) *
 // 零开销：`SlowRateMonitorEnabled` 为假的渠道不进 Redis——默认全关时本方法在开头的
 // 长度判断处直接返回，选路热路径上一个往返都不产生。
 //
-// 一次往返：状态键与基线键各一条命令，全部压进同一个 pipeline（候选数通常个位数）。
+// 一次往返：每候选三条命令（状态键、基线键、样本滑窗键），全部压进同一个 pipeline；
+// 往返数不随候选数放大。状态与滑窗**必须同批**：惩罚由滑窗计数当场派生（见
+// deriveSlowRatePenalty），而派生所需的窗长就在状态里。
 func (r *SlowRateReader) Penalties(
 	ctx context.Context,
 	candidates []Provider,
@@ -127,14 +167,22 @@ func (r *SlowRateReader) Penalties(
 		return out
 	}
 
-	states := make([]*redis.StringCmd, len(enabled))
+	states := make([]*redis.SliceCmd, len(enabled))
 	baselines := make([]*redis.StringCmd, len(enabled))
+	windows := make([]*redis.ZSliceCmd, len(enabled))
 	// Pipelined 而非 Pipeline+Exec：两者都是单次往返，但闭包形式让「哪些命令属于这一批」
 	// 在类型上不可分割，也让测试替身只需实现一个方法。
 	_, err := r.redis.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 		for index, provider := range enabled {
-			states[index] = pipe.HGet(ctx, SlowRateStateKey(provider.ID, modelKey), slowRateStateFieldPenalty)
+			states[index] = pipe.HMGet(ctx, SlowRateStateKey(provider.ID, modelKey),
+				SlowRateStateFieldPenalty,
+				SlowRateStateFieldWindowSeconds,
+				SlowRateStateFieldTriggerCount,
+				SlowRateStateFieldPenaltyStep,
+				SlowRateStateFieldPenaltyMax,
+			)
 			baselines[index] = pipe.Get(ctx, SlowRateBaselineKey(provider.ID, modelKey))
+			windows[index] = pipe.ZRangeWithScores(ctx, SlowRateSamplesKey(provider.ID, modelKey), 0, -1)
 		}
 		return nil
 	})
@@ -144,9 +192,15 @@ func (r *SlowRateReader) Penalties(
 	if err != nil && !errors.Is(err, redis.Nil) {
 		r.warn("route.slow_rate_penalty_read_failed", modelKey, err)
 	}
+	nowMS := r.now().UnixMilli()
 	for index := range enabled {
-		penalty, err := states[index].Int()
-		if err != nil || penalty <= 0 {
+		state := decodeSlowRateState(states[index])
+		penalty := state.penalty
+		if state.hasParams {
+			liveCount := countSlowSamplesWithinWindow(windows[index], nowMS, state.params.windowSeconds)
+			penalty = deriveSlowRatePenalty(liveCount, state.params)
+		}
+		if penalty <= 0 {
 			continue
 		}
 		// extended_stale（设计稿 §3 的 A4）只做会话级降级、不做渠道级惩罚：
@@ -157,6 +211,98 @@ func (r *SlowRateReader) Penalties(
 		out[enabled[index].ID] = penalty
 	}
 	return out
+}
+
+// slowRatePenaltyParams 是派生惩罚所需的四个生效参数（写侧随状态一起落 Hash）。
+type slowRatePenaltyParams struct {
+	windowSeconds int
+	triggerCount  int
+	penaltyStep   int
+	penaltyMax    int
+}
+
+// slowRateState 是读侧对一条状态 Hash 的解析结果。
+type slowRateState struct {
+	// penalty 是写侧留下的快照值，**仅在参数缺失**（旧版本写下的状态）时回退使用。
+	penalty int
+	// params 齐备时 hasParams 为真，惩罚改由滑窗计数当场派生。
+	params    slowRatePenaltyParams
+	hasParams bool
+}
+
+// decodeSlowRateState 解析 HMGet 的五个字段；任一环节不符预期一律返回零值。
+//
+// 返回值零值的含义是「既无快照也无参数」⇒ 调用方得到惩罚 0（fail-open，与读不到键同判）。
+func decodeSlowRateState(cmd *redis.SliceCmd) slowRateState {
+	raw, err := cmd.Result()
+	if err != nil || len(raw) < 5 {
+		return slowRateState{}
+	}
+	params := slowRatePenaltyParams{
+		windowSeconds: slowRateInt(raw[1]),
+		triggerCount:  slowRateInt(raw[2]),
+		penaltyStep:   slowRateInt(raw[3]),
+		penaltyMax:    slowRateInt(raw[4]),
+	}
+	return slowRateState{
+		penalty: slowRateInt(raw[0]),
+		params:  params,
+		// 四项都要为正才派生：写侧 normalize 已保证生效参数非零，缺任一即为旧数据。
+		hasParams: params.windowSeconds > 0 && params.triggerCount > 0 &&
+			params.penaltyStep > 0 && params.penaltyMax > 0,
+	}
+}
+
+// slowRateInt 把 HMGet 的元素折成 int；nil（字段不存在）与非数字一律 0。
+func slowRateInt(value any) int {
+	text, ok := value.(string)
+	if !ok {
+		return 0
+	}
+	number, err := strconv.Atoi(text)
+	if err != nil {
+		return 0
+	}
+	return number
+}
+
+// deriveSlowRatePenalty 由滑窗内的慢样本数派生惩罚：floor(count/阈值)*步长，封顶上限。
+//
+// 为什么必须当场派生而不能读状态里的快照：快照只在写侧推进时刷新，而渠道恢复后不再产生慢
+// 样本、写侧也就不再触达 Redis——快照会一直停在最后一次推进的值，直到状态键 TTL 到期
+// （2 倍窗长）。实测表现是「低速降权 +10 出现后一直不消失」。设计稿「恢复」一节要求的正是
+// 「惩罚值随样本过期连续衰减」，滑窗计数才是那个真值。
+func deriveSlowRatePenalty(liveCount int, params slowRatePenaltyParams) int {
+	if liveCount < params.triggerCount {
+		return 0
+	}
+	penalty := (liveCount / params.triggerCount) * params.penaltyStep
+	if penalty > params.penaltyMax {
+		return params.penaltyMax
+	}
+	return penalty
+}
+
+// countSlowSamplesWithinWindow 数出分数落在 [now-窗长, +inf) 的成员数。
+//
+// 为什么在内存里过滤而不是用 `ZCount` 的分数区间：区间上界依赖窗长，而窗长要从**同一批**
+// 的状态命令结果里取——构造命令时还读不到，用 ZCount 就得再加一次往返。全量取回有明确上界
+// （ZSET 的 TTL 是 2 倍窗长，且只装窗内慢样本，实测个位数），故一次 ZRangeWithScores 划算。
+//
+// 读失败（键不存在、连接错）一律返回 0：与「窗内无慢样本」同判，即无惩罚（fail-open）。
+func countSlowSamplesWithinWindow(cmd *redis.ZSliceCmd, nowMS int64, windowSeconds int) int {
+	members, err := cmd.Result()
+	if err != nil {
+		return 0
+	}
+	threshold := float64(nowMS - int64(windowSeconds)*1000)
+	count := 0
+	for _, member := range members {
+		if member.Score >= threshold {
+			count++
+		}
+	}
+	return count
 }
 
 // InCooldown 批量判定候选里哪些「对本会话正在冷却期内」。
