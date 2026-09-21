@@ -870,7 +870,8 @@ export const UpdateProviderSchema = z
     gemini_google_search_preference: GEMINI_GOOGLE_SEARCH_PREFERENCE.optional(),
     // 低速降级（实验特性，默认关闭）：与创建 schema 同形，见那里的说明。
     slow_rate_monitor_enabled: z.boolean().optional(),
-    slow_rate_window_seconds: z.coerce.number().int().min(0).nullable().optional(),    slow_rate_baseline_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_baseline_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_min_samples: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_trigger_count: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_ratio_per_mille: z.coerce.number().int().min(0).max(1000).nullable().optional(),
