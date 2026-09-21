@@ -156,6 +156,10 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 		// 亲和总闸的 env 侧：与 system_settings.affinity_enabled 取或（见 affinityDecision），
 		// 逐请求由 dataplane 的 affinitySwitchesFor 合并。
 		AffinityEnvEnabled: options.Cfg.Env.EnablePrefixAffinity,
+		// 会话绑定 TTL：与前缀亲和同源（PREFIX_AFFINITY_TTL_SECONDS，默认 3600）。
+		// 不填会让 BinderOptions.TTL 静默落回 session 包的 300s 默认，把设计稿要求的一小时粘性
+		// 砍成五分钟——内侧与外侧各有一条源码钉子钉住这条接线。
+		SessionBindingTTLSeconds: options.Cfg.Env.PrefixAffinityTTLSeconds,
 		RouteOptions: route.Options{
 			Affinity: affinity.store,
 			// 日志身份形制（使用记录页的「渠道复用 / 新会话新渠道」）靠它判定。
