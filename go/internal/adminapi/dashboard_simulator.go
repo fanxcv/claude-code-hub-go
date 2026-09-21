@@ -233,7 +233,25 @@ func (api *dashboardAPI) wireSimulatorDataSources(
 			return stats
 		}
 	}
+
+	// 低速降权表：与真实选路**同一份读取实现**（route.SlowRateReader.Penalties）。
+	//
+	// 为什么必须接：引擎与真实选路共用 resolveEffectivePriority，不接则预览显示基础档位、
+	// 真实选路显示降权后档位，两者静默不一致，而预览页正是排障时被信的那个。
+	//
+	// 候选里 `SlowRateMonitorEnabled` 为假的渠道由读侧自己滤掉（见 route.SlowRateReader.Penalties
+	// 的开关判定），这里不做二次筛；模型名取 options.ModelName（与 route 侧同一个归一口径）。
+	if api.deps.SlowRatePenalties != nil {
+		candidates := make([]route.Provider, 0, len(options.Providers))
+		for _, provider := range options.Providers {
+			candidates = append(candidates, provider.Provider)
+		}
+		options.SlowRatePenalties = api.deps.SlowRatePenalties.Penalties(ctx, candidates, options.ModelName)
+	}
 }
+
+// 低速降权读侧的实现必须是选路那一份：签名漂移或换实现会在这里编译不过。
+var _ SlowRatePenaltyReader = (*route.SlowRateReader)(nil)
 
 // simulatorLocation 取自然窗口（每日固定 / 周 / 月）要用的时区。
 //

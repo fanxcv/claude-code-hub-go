@@ -117,6 +117,10 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 	// 关闭时两族熔断都不参与判定：模拟器的端点统计给 circuitOpen=0、厂级熔断不排除供应商。
 	deps.EndpointCircuitBreaker = options.Cfg.Env.EnableEndpointCircuitBreaker
 
+	// 低速降权表（调度模拟器的降权维）：与数据面选路**同一份读取实现**（route.NewSlowRateReader）。
+	// 与 deps.ProviderCost 同一类读档读数；读不到不带任何降级（该维不降权），故不与选路共享装配。
+	deps.SlowRatePenalties = route.NewSlowRateReader(redisClient, logger)
+
 	// 粘性会话终止面（providers / provider-endpoints 写路径的副作用）：与上面读档的区别在于
 	// 它是写，缺装配不给任何路由降级，只让写路径记 warn（见 openStickySessions 的说明）。
 	deps.StickySessions = openStickySessions(redisClient, logger)

@@ -43,6 +43,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/cfgsync"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/limit"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/usagefeed"
 )
@@ -193,6 +194,20 @@ type ProviderCostReader interface {
 	) (allowed bool, detail string)
 }
 
+// SlowRatePenaltyReader 读渠道级低速降权表（providerID -> 降权量）。
+//
+// 为什么要有它：调度模拟器必须与**真实选路**读同一份降权表，否则预览页显示基础档位、
+// 真实选路显示降权后档位，而预览页正是排障时被信的那个（引擎注释见 route.SimulateOptions）。
+//
+// 签名与 `route.SlowRateReader.Penalties` 逐字一致：该方法是本接口的实现，
+// 由 dashboard_simulator.go 的编译期断言钉住，防止接缝静默腐烂。
+//
+// 读不到（nil）即不降权：与「全渠道未开启低速监控」同义——不能把「读不到」当成
+// 「降权表为空」，两者的选路结果相同、但前者是能力缺失，故引擎侧按不降权处理。
+type SlowRatePenaltyReader interface {
+	Penalties(ctx context.Context, candidates []route.Provider, requestModel string) map[int64]int
+}
+
 // Fixed5hWindowReader 读 5h 固定窗口的累计值与重置时刻
 // （Node 的 RateLimitService.getFixed5hWindowState，src/lib/rate-limit/service.ts:160-183）。
 //
@@ -230,6 +245,10 @@ type Deps struct {
 	// nil 表示未装配：该步骤退化为「只判熔断」，启动时会记 warn——与 Node 相比会少排除一批
 	// 已触顶的供应商，属可见的偏离而不是静默降级。
 	ProviderCost ProviderCostReader
+	// SlowRatePenalties 读低速降权表（providerID -> 降权量），供调度模拟器与真实选路**同表**。
+	// nil 表示未装配：调度模拟器的该维不降权——与「全渠道未开启低速监控」同义。
+	// 它不阻断任何路由注册（只是预览与真实选路在降权维不一致，属可见的偏离）。
+	SlowRatePenalties SlowRatePenaltyReader
 	// EndpointCircuitBreaker 对应 ENABLE_ENDPOINT_CIRCUIT_BREAKER（Node 默认 false）。
 	// 关闭时端点级与厂级熔断**都不参与判定**：模拟器的端点统计给 circuitOpen=0 / available=enabled，
 	// 厂级熔断也不排除任何供应商（Node 的 isVendorTypeCircuitOpen 首行就是这个开关）。

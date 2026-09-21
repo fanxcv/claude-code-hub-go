@@ -771,10 +771,22 @@ func (s *storeSettler) settle(ctx context.Context, pc *pctx.Context, settlement 
 	if err != nil {
 		return fmt.Errorf("dataplane: 终态结算失败: %w", err)
 	}
-	if !result.Committed {
-		s.logger.Debug("dataplane.settle_not_committed", map[string]any{"attempts": result.Attempts})
-	}
+	s.logSettleNotCommitted(result)
 	return nil
+}
+
+// logSettleNotCommitted 在「既未提交、也未入队」时留一条 debug。
+//
+// 为什么必须一并排除 Queued：异步写模式（MESSAGE_REQUEST_WRITE_MODE=async）下入队成功即返回
+// `Result{Queued:true}`，而 `Committed` 此时是零值 false——提交结论只有队列 flush 之后才有
+// （见 terminal.Result 与 terminal.SettleContext 的注释）。只看 Committed 会让**每个请求**
+// 都记一条「未提交」（生产实测 87 行 / 84 请求、attempts 恒 0），把真失败淹掉。
+// 入队之后的真失败由队列自报（terminal_async_flush_failed，带 error 与 cost_gap）。
+func (s *storeSettler) logSettleNotCommitted(result terminal.Result) {
+	if result.Committed || result.Queued {
+		return
+	}
+	s.logger.Debug("dataplane.settle_not_committed", map[string]any{"attempts": result.Attempts})
 }
 
 // nonStreamDuration 给出「请求进入数据面 → 上游正文读完」的耗时。
