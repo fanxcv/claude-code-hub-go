@@ -74,6 +74,9 @@ next-env.d.ts
 TRANSLATIONS_CHECKLIST.txt
 TRANSLATIONS_CHECKLIST.md
 
+# 设计稿与中间文档产物（仅本地留存，不入库）
+/docs/
+
 # i18n verification screenshots (temporary)
 /i18n-verification/
 /bmad

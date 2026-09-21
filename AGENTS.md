@@ -65,7 +65,7 @@
 - ⛔ 禁 Bash 直执数据库命令（mysql/psql/mongo）
 - ⛔ 禁临时脚本操库（Python/Node 手搓连接同禁）
 - 生产库写操作：先询用户，先留退路（备份/快照/事务），后动手
-- 变更必留 SQL 脚本存档：`docs/sql/YYYYMMDD_功能.sql`
+- 变更必留 SQL 脚本存档：`reference/sql/YYYYMMDD_功能.sql`
   ```sql
   -- 日期: YYYY-MM-DD
   -- 功能: 描述
@@ -73,8 +73,8 @@
 
 ### 文档目录
 
-- `docs/` 正式文档
-- `reference/` 临时/参考文档
+- `reference/` 临时/参考文档（设计稿与 SQL 存档走这里）
+- `docs/` **不再入库**：仅作本地中间产物目录（已进 `.gitignore`）
 <!-- project-db:END -->
 
 # AGENTS.md — CC Hub Go 仓库指南

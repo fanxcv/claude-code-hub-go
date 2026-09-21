@@ -22,7 +22,8 @@ import (
 // 供 B2 的判定侧（读 slowLine）与 B4 的选路侧（读 source / median）消费。本块**不做**
 // 样本写入（B2）、不做选路集成（B4）。
 //
-// 设计稿：docs/design-slow-provider-demotion.md §3（基线口径、四种「空」）、§4（键与 JSON 形状）。
+// 设计口径（基线窗口、四种「空」的语义、键与 JSON 形状）见仓库外的本地方案稿
+// docs/design-slow-provider-demotion.md（已不进库），改动本文件的语义前先与之一致。
 const (
 	// SlowRateBaselineTaskName 是任务名（与同包既有任务同风格：小写短横线）。
 	SlowRateBaselineTaskName = "slow-rate-baseline"

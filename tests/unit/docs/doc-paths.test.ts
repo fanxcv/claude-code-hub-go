@@ -35,7 +35,7 @@ const BUILD_OUTPUT_ALLOWLIST = new Set(["out", "go/cchd", "go/internal/uiapp/ass
  */
 const PATH_TEMPLATE_ALLOWLIST = new Set<string>([
   // AGENTS.md 的 project-db 注入块：SQL 归档文件的命名模板，`YYYYMMDD` 与 `功能` 都是占位。
-  "docs/sql/YYYYMMDD_功能.sql",
+  "reference/sql/YYYYMMDD_功能.sql",
 ]);
 
 /** 路径首段必须落在这些目录内，才被视为仓库内路径。 */
@@ -49,7 +49,6 @@ const TOP_LEVEL_DIRS = [
   "messages",
   "data",
   "dev",
-  "docs",
   "reference",
   "public",
   ".github",
