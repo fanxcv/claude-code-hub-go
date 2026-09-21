@@ -116,7 +116,11 @@ type asyncEntry struct {
 	write func(ctx context.Context) (Result, error)
 	// afterCommit 是调用方附加的「提交后动作」（当前是亲和 winner 写回）；异步模式下它由
 	// worker 在本条写完之后调用，因为提交结论只有在写完后才知道。
-	afterCommit func(Result)
+	//
+	// ctx 由队列传入：**必须是入队时派生的不可取消上下文**（entry.ctx 的带超时子代），
+	// 不能由闭包捕获请求 ctx——flush 发生在请求返回之后，那时请求 ctx 已取消，
+	// 亲和 CAS 写会静默失败（粘性绑定永不落库）。
+	afterCommit func(ctx context.Context, result Result)
 	// ctx 是入队时从请求上下文派生的**不可取消**上下文：请求在响应之后随时可能断开，
 	// 而这一笔写入仍需完成。
 	ctx context.Context
@@ -213,7 +217,7 @@ func (q *WriteQueue) enqueue(
 	ctx context.Context,
 	id int64,
 	write func(context.Context) (Result, error),
-	afterCommit func(Result),
+	afterCommit func(context.Context, Result),
 ) bool {
 	if q == nil {
 		return false
@@ -452,8 +456,8 @@ func (q *WriteQueue) flush(batch []*asyncEntry) {
 // pendingFailures，后者供 Flush 与退出序列判「能否关依赖」）。
 func (q *WriteQueue) process(entry *asyncEntry) {
 	ctx, cancel := context.WithTimeout(entry.ctx, asyncWriteTimeout)
+	defer cancel()
 	result, err := entry.write(ctx)
-	cancel()
 	switch {
 	case err == nil:
 		q.rows.Add(1)
@@ -476,7 +480,7 @@ func (q *WriteQueue) process(entry *asyncEntry) {
 		})
 	}
 	if entry.afterCommit != nil {
-		entry.afterCommit(result)
+		entry.afterCommit(ctx, result)
 	}
 	q.finishEntry(entry)
 }

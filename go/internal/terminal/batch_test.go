@@ -483,6 +483,69 @@ func TestAsyncQueueDefersAffinityWinnerButNotTombstone(t *testing.T) {
 	}
 }
 
+// ctxObservingWriteback 在 winner 写回时记下上下文的存活状态。
+//
+// 为什么必须记上下文：亲和写回在异步模式下由队列 flush 触发，而 flush 发生在请求返回**之后**
+// ——net/http 那时已取消请求 ctx。用请求 ctx 去写 Redis 会静默失败（CAS 脚本报 context canceled，
+// 写回返回 false），粘性绑定永不落库。
+type ctxObservingWriteback struct {
+	mu      sync.Mutex
+	ctxErr  error
+	written bool
+}
+
+func (w *ctxObservingWriteback) RecordWinner(ctx context.Context, _ int64) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ctxErr = ctx.Err()
+	w.written = true
+	return true
+}
+
+func (w *ctxObservingWriteback) TombstoneOnFailure(context.Context, int64) bool { return false }
+
+func (w *ctxObservingWriteback) result() (error, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.ctxErr, w.written
+}
+
+// 请求返回后（ctx 已取消）flush，winner 写回仍须带着可用上下文发出。
+func TestAsyncQueueAffinityWinnerOutlivesRequestContext(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: true}}}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 8, FlushInterval: time.Hour,
+	})
+	pc := newTestContext(t)
+	if err := pc.SetMessageRequestID(99); err != nil {
+		t.Fatalf("写行标识失败: %v", err)
+	}
+	recorder := &ctxObservingWriteback{}
+	pc.SetAffinityWriteback(recorder)
+
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	settlement := okSettlement(nil)
+	settlement.Affinity = AffinityDirective{WinnerProviderID: 5}
+	if _, err := settler.SettleContext(requestCtx, pc, settlement, nil); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	// 请求返回：与 net/http 同形，请求 ctx 到此取消。
+	cancelRequest()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := queue.Flush(ctx); err != nil {
+		t.Fatalf("冲队列失败: %v", err)
+	}
+	ctxErr, written := recorder.result()
+	if !written {
+		t.Fatal("winner 写回未发出")
+	}
+	if ctxErr != nil {
+		t.Fatalf("winner 写回不得携带已取消的请求上下文（真实 Redis CAS 会静默失败）：%v", ctxErr)
+	}
+}
+
 // 未赢得终态时（重复投递、patrol 先补）异步路径不得发 winner 写回。
 func TestAsyncQueueSkipsAffinityWinnerWhenNotCommitted(t *testing.T) {
 	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: false}}}

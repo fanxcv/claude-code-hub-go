@@ -131,8 +131,9 @@ func (s *Settler) Settle(ctx context.Context, id int64, settlement Settlement) (
 //     在 flush 时执行（见 batch.go）；队列满或已停时**退回同步写**，绝不丢。
 //   - 同步（默认）：与接线前逐字相同的路径。
 //
-// afterCommit 只在异步模式下由队列 worker 在写入完成后调用（提交结论那时才有）；
-// 同步（与降级同步写）路径**不调它**，由调用方在返回后自己发放——与接线前逐字一致。
+// afterCommit 只在异步模式下由队列 worker 在写入完成后调用（提交结论那时才有），
+// 且**由队列传入写上下文**；同步（与降级同步写）路径**不调它**，由调用方在返回后自己发放
+// ——与接线前逐字一致。
 //
 // pc 一路带到 settleNow：终态上报要的是行 id + 请求属性，而拦截类终态的行 id 由建行结果
 // 给出（pc 里没有），故两样都得传下去。
@@ -141,7 +142,7 @@ func (s *Settler) settle(
 	pc *pctx.Context,
 	id int64,
 	settlement Settlement,
-	afterCommit func(Result),
+	afterCommit func(context.Context, Result),
 ) (Result, error) {
 	patch, err := settlement.toPatch()
 	if err != nil {
@@ -262,7 +263,7 @@ func (s *Settler) settleBlocked(
 	pc *pctx.Context,
 	create store.CreateMessageRequestData,
 	settlement Settlement,
-	afterCommit func(Result),
+	afterCommit func(context.Context, Result),
 ) (Result, error) {
 	if settlement.StatusCode <= 0 {
 		return Result{}, incomplete("拦截类终态必须带状态码")
@@ -302,10 +303,14 @@ func (s *Settler) SettleContext(
 	// winner 写回只在终态提交之后发。异步写模式下提交结论只有 flush 之后才有，故把它作为
 	// 提交后动作交给队列；同步模式则由下面那句 affinityWriteback 在写入返回后发（接线前同形）。
 	//
+	// 异步路径的 ctx 由队列给出（入队时派生的不可取消上下文），**不得**由闭包捕获请求 ctx：
+	// flush 在请求返回之后，此刻请求 ctx 已取消，亲和 CAS 写会静默失败、粘性绑定永不落库，
+	// 每个后续请求都重跑初选与竞速。
+	//
 	// 终态上报不在这里：它裹在 settleNow 里（同步与异步同一处收口），故两条路径都不会漏、
 	// 也不会重复。
-	winner := func(result Result) {
-		s.affinityWinner(ctx, pc, settlement.Affinity, result.Committed)
+	winner := func(writeCtx context.Context, result Result) {
+		s.affinityWinner(writeCtx, pc, settlement.Affinity, result.Committed)
 	}
 	result, err := s.settleContext(ctx, pc, settlement, create, winner)
 	if result.Queued {
@@ -326,7 +331,7 @@ func (s *Settler) settleContext(
 	pc *pctx.Context,
 	settlement Settlement,
 	create *store.CreateMessageRequestData,
-	afterCommit func(Result),
+	afterCommit func(context.Context, Result),
 ) (Result, error) {
 	if pc != nil {
 		if id, ok := pc.MessageRequestID(); ok {
