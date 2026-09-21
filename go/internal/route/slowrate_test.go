@@ -30,6 +30,9 @@ type slowRateRedis struct {
 	zcountRanges []string
 	// readKeys 记录被读过的键，用于钉住「某个键根本没被读」（比「没调 Redis」更精确）。
 	readKeys []string
+	// getErrs 让指定键的 Get 返回**真实错误**（非 redis.Nil），用于钉住「基线读失败也不施惩罚」。
+	// 它与「键缺失」（values 未命中 ⇒ redis.Nil）是两条不同的路径，必须能分别构造。
+	getErrs map[string]error
 }
 
 func (f *slowRateRedis) Pipelined(
@@ -59,6 +62,14 @@ type slowRatePipeline struct {
 func (p *slowRatePipeline) Get(_ context.Context, key string) *redis.StringCmd {
 	p.redis.readKeys = append(p.redis.readKeys, key)
 	cmd := redis.NewStringCmd(p.ctx)
+	if err, ok := p.redis.getErrs[key]; ok {
+		cmd.SetErr(err)
+		if p.firstErr == nil {
+			p.firstErr = err
+		}
+		p.cmds = append(p.cmds, cmd)
+		return cmd
+	}
 	if value, ok := p.redis.values[key]; ok {
 		cmd.SetVal(value)
 	} else {
@@ -266,6 +277,9 @@ func TestSlowRatePenaltyAppliesAfterGroupOverride(t *testing.T) {
 }
 
 // TestSlowRatePenaltyShiftsTierSelection 钉住降权真能改变被选中的档位（端到端过一遍 resolve）。
+//
+// 夹具必须带**可用基线**（primary/extended）：读侧只对可用基线施渠道级惩罚
+// （见 TestSlowRatePenaltyRequiresUsableBaseline），无基线时该渠道按原有优先级参与选路。
 func TestSlowRatePenaltyShiftsTierSelection(t *testing.T) {
 	fast := slowRateProvider(1) // 档位 0
 	// 档位 10 的渠道被降权 30 → 40，仍不影响 0 档被选；反过来让档位 0 的被降权才有可观察变化。
@@ -273,7 +287,8 @@ func TestSlowRatePenaltyShiftsTierSelection(t *testing.T) {
 	slow.Priority = intPtr(0)
 
 	redisClient := &slowRateRedis{values: map[string]string{
-		SlowRateStateKey(1, "m1"): slowRateStateValue(t, 25),
+		SlowRateStateKey(1, "m1"):    slowRateStateValue(t, 25),
+		SlowRateBaselineKey(1, "m1"): slowRateBaselineValue(t, "primary"),
 	}}
 	selector := newSlowRateSelector(t, redisClient, []Provider{fast, slow})
 
@@ -419,6 +434,89 @@ func TestSlowRateExtendedStaleSuppressesChannelPenalty(t *testing.T) {
 	penalties = reader.Penalties(context.Background(), []Provider{provider}, "m1")
 	if penalties[5] != 30 {
 		t.Errorf("primary 组合降权 = %d，期望 30", penalties[5])
+	}
+}
+
+// TestSlowRatePenaltyRequiresUsableBaseline 钉住「只有可用基线才支撑渠道级惩罚」——A3 撤键的回归钉子。
+//
+// 症状（生产实测）：渠道的「低速降权 +10」在基线任务判定 A3（样本不足）并**撤键之后仍在生效**。
+// 根因是读侧只跳过来源等于 extended_stale 的组合，而键缺失、读失败、坏 JSON 都取到空串——空串不
+// 等于 extended_stale，于是惩罚照常按状态与滑窗施加。即：撤键这个动作对惩罚完全无效。
+//
+// 为何必须跳过：状态与滑窗里的「慢」是**写入时用当时那条基线判出来的**；基线既已被判定无效，
+// 再据它派生的状态降权，等于让陈旧判定继续生效——正是 A3 撤键要消除的东西。
+//
+// 夹具刻意用「带生效参数 + 滑窗里有 9 条慢样本」的**生产形态**：即便窗内确实有慢样本，
+// 没有可用基线也不得降权。
+//
+// 反证：把判定换回「只排除 extended_stale」（即改动前的实现），前四个子例变红。
+func TestSlowRatePenaltyRequiresUsableBaseline(t *testing.T) {
+	provider := slowRateProvider(9)
+	baselineKey := SlowRateBaselineKey(9, "m1")
+	// 生产形态的状态：带生效参数，惩罚由滑窗活计数当场派生（9 条 / 阈值 3 × 步长 10 = 30）。
+	stateValues := func() map[string]string {
+		return map[string]string{
+			SlowRateStateKey(9, "m1"): slowRateStateValueWithParams(t, 30, 600, 3, 10, 30),
+		}
+	}
+	samples := func() map[string][]redis.Z {
+		return map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): slowRateSamples(9, 60_000)}
+	}
+	withBaseline := func(value string) *slowRateRedis {
+		values := stateValues()
+		values[baselineKey] = value
+		return &slowRateRedis{values: values, zsets: samples()}
+	}
+
+	cases := []struct {
+		name        string
+		client      *slowRateRedis
+		wantPenalty bool
+	}{
+		{
+			name:   "键缺失（A3 撤键后的常态）",
+			client: &slowRateRedis{values: stateValues(), zsets: samples()},
+		},
+		{
+			name: "基线读取失败（Redis 报错，与键缺失是两条路径）",
+			client: &slowRateRedis{
+				values:  stateValues(),
+				zsets:   samples(),
+				getErrs: map[string]error{baselineKey: errors.New("redis: connection refused")},
+			},
+		},
+		{
+			name:   "基线值不是 JSON",
+			client: withBaseline("not json"),
+		},
+		{
+			name:   "extended_stale（A4：只做会话级降级）",
+			client: withBaseline(slowRateBaselineValue(t, "extended_stale")),
+		},
+		{
+			name:        "primary 有效基线",
+			client:      withBaseline(slowRateBaselineValue(t, "primary")),
+			wantPenalty: true,
+		},
+		{
+			name:        "extended 有效基线（A2 回退扩展窗）",
+			client:      withBaseline(slowRateBaselineValue(t, "extended")),
+			wantPenalty: true,
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			penalties := newSlowRateReaderAt(testCase.client).
+				Penalties(context.Background(), []Provider{provider}, "m1")
+			got := penalties[9]
+			if testCase.wantPenalty && got != 30 {
+				t.Fatalf("降权 = %d（表 %v），期望 30", got, penalties)
+			}
+			if !testCase.wantPenalty && got != 0 {
+				t.Fatalf("降权 = %d（表 %v），期望不收录（无可用基线不得降权）", got, penalties)
+			}
+		})
 	}
 }
 
@@ -654,11 +752,15 @@ func TestSlowRateCooldownAlsoBlocksAffinityNomination(t *testing.T) {
 }
 
 // TestSlowRateDecisionChainRecordsPenalty 钉住决策链留痕：降权必须能在链上看到。
+//
+// 夹具必须带**可用基线**：读侧只对可用基线施渠道级惩罚，否则本用例会因为「本来就不降权」
+// 而红，而不是因为留痕断了。
 func TestSlowRateDecisionChainRecordsPenalty(t *testing.T) {
 	first := slowRateProvider(1)
 	second := slowRateProvider(2)
 	redisClient := &slowRateRedis{values: map[string]string{
-		SlowRateStateKey(1, "m1"): slowRateStateValue(t, 25),
+		SlowRateStateKey(1, "m1"):    slowRateStateValue(t, 25),
+		SlowRateBaselineKey(1, "m1"): slowRateBaselineValue(t, "primary"),
 	}}
 	selector := newSlowRateSelector(t, redisClient, []Provider{first, second})
 

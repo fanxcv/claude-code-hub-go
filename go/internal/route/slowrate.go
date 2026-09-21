@@ -48,8 +48,19 @@ const (
 	SlowRateStateFieldPenaltyMax    = "penaltyMax"
 
 	slowRateBaselineFieldName  = "source"
-	slowRateSourceExtended     = "extended_stale"
 	slowRateCooldownKeyPattern = "session-binding:v1:{%s}:provider:%s:cooldown"
+)
+
+// 基线来源取值：与写侧 internal/jobs 的 BaselineSource 逐字一致（本包因 import 环不能引用
+// 那边的常量，两侧各写字面量，由 mirror 钉子比对）。
+//
+// 只有前两者算「可用基线」：primary 是主窗 W1 达标（A0），extended 是回退扩展窗（A2）。
+// extended_stale 是 A4（刚从故障/下线恢复，基线取自陈旧窗口）——设计稿明定它只做会话级降级、
+// 不做渠道级惩罚，故不在可用之列。
+const (
+	slowRateSourcePrimary       = "primary"
+	slowRateSourceExtended      = "extended"
+	slowRateSourceExtendedStale = "extended_stale"
 )
 
 // SlowRateModelKey 归一请求模型为「渠道 x 模型」组合键里的模型分量。
@@ -131,8 +142,9 @@ func NewSlowRateReader(opts SlowRateOptions) *SlowRateReader {
 
 // Penalties 批量读候选渠道的渠道级惩罚。
 //
-// 返回「providerID -> penalty」，只含**惩罚为正**且**未被 extended_stale 抑制**的渠道；
-// 读不到、读失败、惩罚非正一律不收录——调用方按「无惩罚」继续选路（fail-open）。
+// 返回「providerID -> penalty」，只含**惩罚为正**且**基线可用**的渠道：基线键缺失、读失败、
+// 坏 JSON、extended_stale（A4）一律不收录（见 slowRateBaselineUsable）；状态读不到、惩罚非正
+// 同样不收录——调用方按「无惩罚」继续选路（fail-open）。
 //
 // 为什么 fail-open 而不是 fail-closed：低速是**软降权**，不是硬故障。Redis 抖动时把候选
 // 整批降权（或反过来全部排除）会让一次故障变成选路行为突变，而低速机制本身并不承担
@@ -242,9 +254,9 @@ func (r *SlowRateReader) Penalties(
 		if penalty <= 0 {
 			continue
 		}
-		// extended_stale（设计稿 §3 的 A4）只做会话级降级、不做渠道级惩罚：
-		// 该组合刚从故障/下线恢复，基线取自陈旧窗口，不足以支撑一次全局范围的分层改写。
-		if slowRateBaselineSource(baselines[index]) == slowRateSourceExtended {
+		// 只有**有效**基线才支撑渠道级惩罚：设计稿 §3 对 A3（无基线）明定「不生成 penalty」、
+		// 「选路侧该渠道无 penalty」，对 A4（extended_stale）明定不做渠道级惩罚。
+		if !slowRateBaselineUsable(baselines[index]) {
 			continue
 		}
 		out[enabled[index].ID] = penalty
@@ -370,8 +382,10 @@ func (r *SlowRateReader) InCooldown(
 	return out
 }
 
-// slowRateBaselineSource 取基线 JSON 的 source 字段；缺失、非 JSON、读失败一律返回空串
-// （空串不等于 extended_stale，故惩罚照常生效——这是 fail-open 的一侧）。
+// slowRateBaselineSource 取基线 JSON 的 source 字段；键缺失、读失败、非 JSON 一律返回空串。
+//
+// 空串不是任何一种有效来源（见 slowRateBaselineUsable），调用方据此跳过惩罚：三种情形都意味着
+// 「这条基线读不出来」，而读不出来的基线不支撑任何判定。
 func slowRateBaselineSource(cmd *redis.StringCmd) string {
 	raw, err := cmd.Result()
 	if err != nil {
@@ -384,6 +398,27 @@ func slowRateBaselineSource(cmd *redis.StringCmd) string {
 		return ""
 	}
 	return payload.Source
+}
+
+// slowRateBaselineUsable 报告该基线是否足以支撑一次渠道级惩罚。
+//
+// 只有 primary（A0：主窗 W1 达标）与 extended（A2：回退扩展窗）算有效。其余一律不支撑：
+//   - extended_stale（A4）：基线取自陈旧窗口，设计稿明定不做渠道级惩罚；
+//   - 空串：键缺失、读失败、坏 JSON——slowRateBaselineSource 对这三种都返回空串。
+//
+// 为何**键缺失**也必须跳过（这正是本次修的缺陷）：状态 Hash 与慢样本滑窗里的「慢」，是写入时
+// 用当时那条基线判出来的。基线已被判定无效（A3：样本不足，基线任务已撤键），再据它派生的状态
+// 施惩罚，等于让陈旧判定继续生效——正是 A3 撤键要消除的东西。
+//
+// 这与 fail-open 不矛盾：fail-open 指的是「读不到就不降权、该渠道按原有优先级参与选路」，
+// 不是「读不到就照旧按陈旧状态降权」。
+func slowRateBaselineUsable(cmd *redis.StringCmd) bool {
+	switch slowRateBaselineSource(cmd) {
+	case slowRateSourcePrimary, slowRateSourceExtended:
+		return true
+	default:
+		return false
+	}
 }
 
 // warn 记一条选路侧的低速读失败。低速读失败不影响选路结果，故只记日志不返回错误。
