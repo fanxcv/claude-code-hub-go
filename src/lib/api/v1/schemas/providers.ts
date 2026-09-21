@@ -156,7 +156,14 @@ export const ProviderSummarySchema = z
       .number()
       .int()
       .nullable()
-      .describe("Slow rate sampling window in seconds; null uses the default."),
+      .describe("Slow rate sampling (decision) window in seconds; null uses the default of 1800."),
+    slowRateBaselineWindowSeconds: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        "Baseline aggregation window in seconds; null uses the default of 259200 (3 days). Only affects the baseline median window, not the decision window."
+      ),
     slowRateMinSamples: z
       .number()
       .int()
@@ -171,7 +178,7 @@ export const ProviderSummarySchema = z
       .number()
       .int()
       .nullable()
-      .describe("Slow threshold ratio per mille (200 = 0.2); null uses the default."),
+      .describe("Slow threshold ratio per mille (300 = 0.3); null uses the default."),
     slowRatePenaltyStep: z
       .number()
       .int()

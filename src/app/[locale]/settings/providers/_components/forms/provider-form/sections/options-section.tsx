@@ -851,6 +851,36 @@ export function OptionsSection({ subSectionRefs }: OptionsSectionProps) {
                       </SmartInputWrapper>
 
                       <SmartInputWrapper
+                        label={t("sections.routing.slowRate.baselineWindowSeconds.label")}
+                        description={t("sections.routing.slowRate.baselineWindowSeconds.desc")}
+                      >
+                        <Input
+                          id={
+                            isEdit ? "edit-slow-rate-baseline-window" : "slow-rate-baseline-window"
+                          }
+                          type="number"
+                          value={state.routing.slowRateBaselineWindowSeconds ?? ""}
+                          onChange={(e) =>
+                            dispatch({
+                              type: "SET_SLOW_RATE_PARAMS",
+                              payload: {
+                                slowRateBaselineWindowSeconds:
+                                  e.target.value === ""
+                                    ? null
+                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
+                              },
+                            })
+                          }
+                          placeholder={t(
+                            "sections.routing.slowRate.baselineWindowSeconds.placeholder"
+                          )}
+                          disabled={state.ui.isPending}
+                          min="0"
+                          step="1"
+                        />
+                      </SmartInputWrapper>
+
+                      <SmartInputWrapper
                         label={t("sections.routing.slowRate.minSamples.label")}
                         description={t("sections.routing.slowRate.minSamples.desc")}
                       >

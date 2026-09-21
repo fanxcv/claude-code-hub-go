@@ -51,9 +51,12 @@ export interface BasicInfoState {
 
 export interface SlowRateParams {
   // 低速降级（实验特性，默认关闭）：仅开启的供应商参与低速监控与降级。
-  // 六参数均为 null 时取代码默认值（10m / 100 条 / 3 次 / 200 千分比 / 10 / 30）。
+  // 参数均 null 时取代码默认值（30m / 3 天 / 100 条 / 3 次 / 300 千分比 / 10 / 30）。
   slowRateMonitorEnabled: boolean;
+  // slowRateWindowSeconds 是**判定滑窗**（默认 1800s）；slowRateBaselineWindowSeconds 是
+  // **基线主窗**（默认 259200s = 3 天）。两者尺度差三个数量级，曾是同一列，故拆开。
   slowRateWindowSeconds: number | null;
+  slowRateBaselineWindowSeconds: number | null;
   slowRateMinSamples: number | null;
   slowRateTriggerCount: number | null;
   slowRateRatioPerMille: number | null;

@@ -219,3 +219,41 @@ describe("providerFormReducer - SET_LIMIT_5H_RESET_MODE", () => {
     expect(rateLimit.limit5hResetMode).toBe("fixed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// 低速降级：判定窗与基线窗是两列（2026-09-21 拆列）
+// ---------------------------------------------------------------------------
+
+describe("providerFormReducer - SET_SLOW_RATE_PARAMS / 基线窗字段", () => {
+  it("batch 初始态两个窗口字段都回退为 null（批量契约暂不覆盖）", () => {
+    const state = createInitialState("batch");
+
+    expect(state.routing.slowRateWindowSeconds).toBeNull();
+    expect(state.routing.slowRateBaselineWindowSeconds).toBeNull();
+  });
+
+  it("基线窗可单独写入，且不覆盖判定窗", () => {
+    const baseState = createInitialState("batch");
+
+    // 只写基线窗：判定窗必须原样保留——两者曾是同一列，混写就是本次拆列要修的缺陷。
+    const next = providerFormReducer(baseState, {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRateBaselineWindowSeconds: 259200 },
+    });
+
+    expect(next.routing.slowRateBaselineWindowSeconds).toBe(259200);
+    expect(next.routing.slowRateWindowSeconds).toBeNull();
+  });
+
+  it("判定窗与基线窗可各自独立写入（两列不成对）", () => {
+    const baseState = createInitialState("batch");
+
+    const next = providerFormReducer(baseState, {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRateWindowSeconds: 1800, slowRateBaselineWindowSeconds: 7200 },
+    });
+
+    expect(next.routing.slowRateWindowSeconds).toBe(1800);
+    expect(next.routing.slowRateBaselineWindowSeconds).toBe(7200);
+  });
+});

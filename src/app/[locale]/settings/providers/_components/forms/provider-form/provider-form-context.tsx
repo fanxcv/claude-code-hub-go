@@ -170,6 +170,7 @@ export function createInitialState(
         // 批量模式不暴露低速降级（批量补丁契约未覆盖），始终回退默认值：全关 + 全 null。
         slowRateMonitorEnabled: false,
         slowRateWindowSeconds: null,
+        slowRateBaselineWindowSeconds: null,
         slowRateMinSamples: null,
         slowRateTriggerCount: null,
         slowRateRatioPerMille: null,
@@ -386,6 +387,7 @@ export function createInitialState(
         protocolConversionEnabled: false,
         slowRateMonitorEnabled: false,
         slowRateWindowSeconds: null,
+        slowRateBaselineWindowSeconds: null,
         slowRateMinSamples: null,
         slowRateTriggerCount: null,
         slowRateRatioPerMille: null,
@@ -477,6 +479,7 @@ export function createInitialState(
       protocolConversionEnabled: sourceProvider?.protocolConversionEnabled ?? false,
       slowRateMonitorEnabled: sourceProvider?.slowRateMonitorEnabled ?? false,
       slowRateWindowSeconds: sourceProvider?.slowRateWindowSeconds ?? null,
+      slowRateBaselineWindowSeconds: sourceProvider?.slowRateBaselineWindowSeconds ?? null,
       slowRateMinSamples: sourceProvider?.slowRateMinSamples ?? null,
       slowRateTriggerCount: sourceProvider?.slowRateTriggerCount ?? null,
       slowRateRatioPerMille: sourceProvider?.slowRateRatioPerMille ?? null,

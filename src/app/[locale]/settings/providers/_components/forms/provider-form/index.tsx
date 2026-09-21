@@ -344,6 +344,7 @@ function ProviderFormContent({
           protocol_conversion_enabled: state.routing.protocolConversionEnabled,
           slow_rate_monitor_enabled: state.routing.slowRateMonitorEnabled,
           slow_rate_window_seconds: state.routing.slowRateWindowSeconds,
+          slow_rate_baseline_window_seconds: state.routing.slowRateBaselineWindowSeconds,
           slow_rate_min_samples: state.routing.slowRateMinSamples,
           slow_rate_trigger_count: state.routing.slowRateTriggerCount,
           slow_rate_ratio_per_mille: state.routing.slowRateRatioPerMille,

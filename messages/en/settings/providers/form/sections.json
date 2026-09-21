@@ -499,8 +499,13 @@
       },
       "windowSeconds": {
         "label": "Sampling window (seconds)",
-        "desc": "Sliding window length. Leave empty for the default of 600.",
-        "placeholder": "600"
+        "desc": "Sliding window used for judging: demotion starts once this many slow samples land in it. Leave empty for the default of 1800 (30 minutes). It does not affect the baseline window.",
+        "placeholder": "1800"
+      },
+      "baselineWindowSeconds": {
+        "label": "Baseline window (seconds)",
+        "desc": "How much history is aggregated when computing the baseline median. Leave empty for the default of 259200 (3 days). It only affects the baseline range, not the judging window above.",
+        "placeholder": "259200"
       },
       "minSamples": {
         "label": "Baseline sample floor",
@@ -514,8 +519,8 @@
       },
       "ratioPerMille": {
         "label": "Slow threshold ratio (per mille)",
-        "desc": "A response counts as slow when below baseline x ratio. 200 = 0.2. Leave empty for the default of 200.",
-        "placeholder": "200"
+        "desc": "A response counts as slow when below baseline x ratio. 300 = 0.3. Leave empty for the default of 300.",
+        "placeholder": "300"
       },
       "penaltyStep": {
         "label": "Penalty per level",

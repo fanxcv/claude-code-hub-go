@@ -371,12 +371,15 @@ export interface Provider {
   disableSessionReuse: boolean;
   // 低速降级（实验特性，默认关闭）：仅开启的供应商参与低速监控。
   slowRateMonitorEnabled: boolean;
-  // 六个参数列可空，null = 取代码默认值（10m / 100 条 / 3 次 / 200‰ / 10 / 30）。
+  // 参数列可空，null = 取代码默认值（30m / 3 天 / 100 条 / 3 次 / 300‰ / 10 / 30）。
   // minSamples 是基线样本下限（默认 100）；triggerCount 是触发阈值（默认 3）。两列语义不同。
+  // windowSeconds 是**判定滑窗**（默认 1800s）；baselineWindowSeconds 是**基线主窗**（默认 3 天）。
+  // 两者尺度差三个数量级（分钟 vs 天），曾是同一列，故拆开。
   slowRateWindowSeconds: number | null;
+  slowRateBaselineWindowSeconds: number | null;
   slowRateMinSamples: number | null;
   slowRateTriggerCount: number | null;
-  // 千分比：200 = 0.2
+  // 千分比：300 = 0.3
   slowRateRatioPerMille: number | null;
   slowRatePenaltyStep: number | null;
   slowRatePenaltyMax: number | null;
@@ -517,6 +520,7 @@ export interface ProviderDisplay {
   // 低速降级（实验特性，默认关闭）
   slowRateMonitorEnabled: boolean;
   slowRateWindowSeconds: number | null;
+  slowRateBaselineWindowSeconds: number | null;
   slowRateMinSamples: number | null;
   slowRateTriggerCount: number | null;
   slowRateRatioPerMille: number | null;
