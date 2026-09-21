@@ -112,6 +112,11 @@ func (d Deps) sessionStep() Step {
 			router.SetConversationSession(result.SessionID)
 			router.SetConversationBinding(sessionBindingSnapshot(result))
 		}
+		// 会话绑定写回能力装进上下文：终态层只认 pctx 的中性接口（terminal 不得 import
+		// session，见 session/binding_writeback.go 的说明）。未装配/未就绪时为 nil，不装入。
+		if result.Binding != nil {
+			ctx.SetSessionBindingWriteback(result.Binding.Writeback)
+		}
 		return nil, nil
 	}
 }

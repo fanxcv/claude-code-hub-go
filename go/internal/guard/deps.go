@@ -319,6 +319,12 @@ type SessionBindingFacts struct {
 	Generation string
 	// ProviderID 为 0 表示空绑定（新会话或已清空）。
 	ProviderID int64
+	// Writeback 是终态写会话绑定的能力句柄（实现在会话包）。
+	//
+	// 为何由会话包一并交回而不是守卫链另建：键形制、generation 基准与 TTL 都在会话包；
+	// guard 只做一次转交（同 pctx.AffinityWriteback 的注入模式）。
+	// nil 表示本次不写（会话包未装配或 binder 未就绪）。
+	Writeback pctx.SessionBindingWriteback
 }
 
 // WarmupLogWriter 记录被抢答的 warmup 请求（provider_id = 0，不计费）。

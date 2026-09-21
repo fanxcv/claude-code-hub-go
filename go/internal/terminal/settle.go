@@ -374,7 +374,48 @@ func (s *Settler) affinityWriteback(
 ) {
 	s.affinityTombstone(ctx, pc, directive)
 	s.affinityWinner(ctx, pc, directive, committed)
+	// 会话绑定与亲和共用同一份终态事实：成功者与失败者都直接来自 directive。
+	// 为何共用而不是另开一列：两者的「谁是 winner、谁是失败者」完全同源（同一个
+	// forward 结果），各算一次只会得到一个可能与事实不符的副本。
+	s.sessionBindingWriteback(ctx, pc, directive, committed)
 }
+
+// sessionBindingWriteback 发放会话绑定的终态写回。
+//
+// 语义与亲和写回平行但**不等价**（不能合并成一个实现）：
+//   - 成功：CAS 把绑定指向 winner（generation fence 拒绍迟到写入）；
+//   - 供应商侧失败：写会话冷却（key TTL 60s），使后续请求绕开这家——
+//     亲和那边写的是墓碑（影响前缀提名），两者作用的键不同。
+//
+// 未装配（无会话身份、会话包未接线）时整段跳过，行为与接线前逐字一致。
+func (s *Settler) sessionBindingWriteback(
+	ctx context.Context,
+	pc *pctx.Context,
+	directive AffinityDirective,
+	committed bool,
+) {
+	if pc == nil {
+		return
+	}
+	writeback, ok := pc.SessionBindingWriteback()
+	if !ok || writeback == nil {
+		return
+	}
+	// 写回超时自建：异步写模式下本函数由队列 worker 在请求返回之后调用，此刻请求 ctx 已取消
+	// （与 affinity 写回、低速样本同一个坑）。
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionBindingTimeout)
+	defer cancel()
+	if directive.TombstoneProviderID > 0 {
+		writeback.CooldownOnFailure(writeCtx, directive.TombstoneProviderID)
+		return
+	}
+	if directive.WinnerProviderID > 0 && committed {
+		writeback.CompareAndSet(writeCtx, directive.WinnerProviderID)
+	}
+}
+
+// sessionBindingTimeout 是会话绑定写回的上界，与低速旁路同量级（Redis 默认命令超时）。
+const sessionBindingTimeout = 3 * time.Second
 
 // affinityTombstone 发放失败墓碑：它**不依赖**本次是否赢得终态。
 func (s *Settler) affinityTombstone(ctx context.Context, pc *pctx.Context, directive AffinityDirective) {

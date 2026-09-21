@@ -130,6 +130,7 @@ func (a *SessionBinderAdapter) readBindingFacts(ctx context.Context, sessionID s
 		KeyID:      keyID,
 		Generation: binding.Snapshot.Generation,
 		ProviderID: binding.Snapshot.ProviderID,
+		Writeback:  a.SessionBindingWriteback(sessionID, keyID, binding.Snapshot.Generation),
 	}
 }
 
