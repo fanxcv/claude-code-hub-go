@@ -326,7 +326,7 @@ func (b *SlowRateBaseline) clampW2Floor(
 //	A0 W1 达标                      -> 用 W1，source=primary
 //	A1 全期无行（不会走到：SlowRateScopeCounts 只返回有行的组合）
 //	A2 W1 不足、W2 达标且 W1 < 10   -> 用 W2，source=extended
-//	A3 W1 与 W2 都不足且 W1 < 10    -> 不发布，不写键（fail-open）
+//	A3 W1 与 W2 都不足且 W1 < 10    -> 不发布并**撤销旧键**（fail-open）
 //	A4 W1 不足但 >= 10 条、W2 达标  -> 用 W2，source=extended_stale（只供会话级降级）
 func (b *SlowRateBaseline) publishScope(
 	ctx context.Context,
@@ -338,7 +338,16 @@ func (b *SlowRateBaseline) publishScope(
 ) (published bool, truncated bool, err error) {
 	decision := DecideBaseline(scope.W1Samples, scope.W2Samples, effectiveMinSamples(config.MinSamples))
 	if !decision.Publish {
-		return false, false, nil
+		// A3：本轮**成功**判定为无基线（样本不足），必须把旧键撤掉。
+		//
+		// 为何必须撤：基线键 TTL 是 7 天，而 A3 意味着当前形态已不足以支撑一条基线；留着旧键
+		// 会让 recorder 继续据陈旧中位数判慢、写 state 与冷却，直到 TTL 到期（重建/形态变化后的
+		// 组合尤其如此）。设计稿对 A3 的要求是 fail-open，而读侧只在**键不存在**时才 fail-open，
+		// 所以「删键」正是 fail-open 的落地方式。
+		//
+		// 与「查询失败」的分界：查询失败时本函数在上面的 err 分支提前返回，根本走不到这里，
+		// 旧键因此保留——那是设计稿明定的「宁可留着，也不要在查询抖动时把基线清空」。
+		return false, false, b.revokeBaseline(ctx, scope)
 	}
 
 	var windowStart, windowEnd time.Time
@@ -459,6 +468,28 @@ func (b *SlowRateBaseline) medianForWindow(
 	}
 	median := MedianRate(rates)
 	return &median, int64(len(rates)), truncated, nil
+}
+
+// revokeBaseline 撤销某个 scope 的基线键（A3「成功判定为无基线」的唯一动作）。
+//
+// 为什么删而不是改写成一个「无基线」值：读侧（B4）的判定是「键不存在 ⇒ 不生成 penalty」
+// （fail-open），删键即达成；写一个哨兵值要在读侧多一条分支，多一处可能分叉的口径。
+//
+// 删键失败返回错误、由调用方按单 scope 失败处理（记 scope_failed 后继续）——不静默吞。
+func (b *SlowRateBaseline) revokeBaseline(
+	ctx context.Context,
+	scope store.SlowRateScopeSamples,
+) error {
+	key := BaselineKey(scope.ProviderID, scope.ModelKey)
+	if err := b.redis.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("jobs: 撤销陈旧低速基线失败: %w", err)
+	}
+	b.logger.Info("slow_rate_baseline_revoked", map[string]any{
+		"providerId": scope.ProviderID,
+		"modelKey":   scope.ModelKey,
+		"reason":     "no_baseline",
+	})
+	return nil
 }
 
 // writeBaseline 计算低速线并写键。
