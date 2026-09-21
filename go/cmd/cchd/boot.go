@@ -483,7 +483,10 @@ func runWith(rootCtx context.Context, options startup) error {
 			Logger:    logger,
 			LookupEnv: options.LookupEnv,
 			Pools:     storePools,
-			Notify:    notifyScheduler,
+			// 命令连接复用通知那条（同为命令道，非 Pub/Sub）；未配 REDIS_URL 时为 nil，
+			// 低速基线随之缺席（任务自身会记 warn）。
+			Redis:  notifyRedis,
+			Notify: notifyScheduler,
 		})
 		if startJobsErr != nil {
 			logger.Error("jobs_init_failed", map[string]any{"error": startJobsErr.Error()})

@@ -39,6 +39,8 @@ type jobsOptions struct {
 	LookupEnv config.LookupEnvFunc
 	// Pools 为 nil（未配置 DSN）时任务整体缺席。
 	Pools *store.Pools
+	// Redis 是命令连接（低速基线需要它：基线只存在于 Redis）。
+	Redis redis.UniversalClient
 	// Notify 是通知调度器（由 boot 在管理面装配前建好：管理面的写路径要拿它做重排）。
 	// 非 nil 时本函数把它的扫描任务注册进统一调度器——调度器与「何时跑」分开：
 	// boot 只负责建对象，跑不跑、停不停由这里的 scheduler 管。
@@ -70,9 +72,13 @@ func startJobs(ctx context.Context, options jobsOptions) (*jobsRuntime, error) {
 
 	notifyEnabled := enabled && boolEnv(lookup, "CCH_JOB_NOTIFY_ENABLED", false)
 	cacheEffectivenessEnabled := enabled && boolEnv(lookup, "CCH_JOB_CACHE_EFFECTIVENESS_ENABLED", true)
+	// 低速基线默认开：开关的**粒度在渠道**（providers.slow_rate_monitor_enabled，默认全关），
+	// 本 gate 只决定「这个进程要不要跑这个任务」。默认关会让已开启监控的渠道永远拿不到基线，
+	// 变成静默的功能缺失（与同族任务同判）。
+	slowRateBaselineEnabled := enabled && boolEnv(lookup, "CCH_JOB_SLOW_RATE_BASELINE_ENABLED", true)
 
 	// 守卫必须枚举**全部**任务开关：漏一个就会出现「只开该任务时整块被跳过」。
-	if !priceSyncEnabled && !backfillEnabled && !cacheEffectivenessEnabled &&
+	if !priceSyncEnabled && !backfillEnabled && !cacheEffectivenessEnabled && !slowRateBaselineEnabled &&
 		!(notifyEnabled && options.Notify != nil) {
 		logger.Info("jobs_disabled", map[string]any{"master": enabled})
 		return nil, nil
@@ -156,6 +162,34 @@ func startJobs(ctx context.Context, options jobsOptions) (*jobsRuntime, error) {
 			int(jobs.CacheEffectivenessDefaultEvery/time.Millisecond))) * time.Millisecond
 		if err := scheduler.Register(job.Task(interval)); err != nil {
 			return nil, err
+		}
+	}
+
+	// 渠道低速降级基线（设计稿 §3）：每小时按「渠道 x 模型」重算历史中位数。
+	// 与其它任务不同，它需要 Redis——基线只存在于 Redis（设计稿 §4），且消费方（B2/B4）也读 Redis。
+	// 无 Redis 时整块缺席：建出来也只会每轮报错。
+	if slowRateBaselineEnabled {
+		if options.Redis == nil {
+			logger.Warn("slow_rate_baseline_skipped", map[string]any{
+				"reason": "REDIS_URL 未配置，低速基线无处可写",
+			})
+		} else {
+			job, err := jobs.NewSlowRateBaseline(jobs.SlowRateBaselineOptions{
+				Pools:  options.Pools,
+				Redis:  options.Redis,
+				Logger: logger,
+				// 零开销的实现处：每轮只问一次「已开启监控的渠道」清单（providers 表的小结果集），
+				// 未开启的渠道既不查询也不写键。
+				EnabledProviders: options.Pools.SlowRateEnabledProviders,
+			})
+			if err != nil {
+				return nil, err
+			}
+			interval := time.Duration(intEnv(lookup, "CCH_JOB_SLOW_RATE_BASELINE_INTERVAL_MS",
+				int(jobs.SlowRateBaselineDefaultEvery/time.Millisecond))) * time.Millisecond
+			if err := scheduler.Register(job.Task(interval)); err != nil {
+				return nil, err
+			}
 		}
 	}
 
