@@ -19,6 +19,11 @@ type SessionBindingWriteback interface {
 	// CooldownOnFailure 在供应商侧失败后写会话级冷却（键 session-binding:v1:{tag}:provider:{id}:cooldown）；
 	// 返回 false 表示未写。
 	CooldownOnFailure(ctx context.Context, providerID int64) bool
+	// ClearBinding 在「资源/配置类失效」时清空绑定且**不写冷却**。
+	//
+	// 设计稿 §4：模型不支持、渠道停用属配置决策而非故障，不该染污「低速」语义。
+	// 返回 false 表示未写（被 generation fence 拒绝、或 Redis 失败）。
+	ClearBinding(ctx context.Context) bool
 }
 
 // SetSessionBindingWriteback 装入本次请求的会话绑定写回能力（会话守卫步骤调用）。

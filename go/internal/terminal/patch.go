@@ -73,13 +73,34 @@ type Settlement struct {
 
 // AffinityDirective 是一次终态的亲和写回指令。
 //
-// 两个字段互斥：同一次终态不可能既成功又失败，同时给时只有墓碑会写（保守侧）。
+// 两个 ID 字段互斥：同一次终态不可能既成功又失败，同时给时只有墓碑会写（保守侧）。
 type AffinityDirective struct {
 	// WinnerProviderID > 0 表示本次是成功终态：终态提交后把 tip 绑定写回给该供应商。
 	WinnerProviderID int64
 	// TombstoneProviderID > 0 表示本次终态系供应商侧失败：对提名边界写短 TTL 墓碑。
 	TombstoneProviderID int64
+	// TombstoneKind 是墓碑的语义种类，只在 TombstoneProviderID > 0 时有意义。
+	//
+	// 它**只影响会话绑定侧**的动作（故障写冷却 / 资源类失效只清绑定，见 Settler 的
+	// sessionBindingWriteback）；亲和侧的前缀墓碑对两类一视同仁，那是 Node 的语义
+	// （见 dataplane/affinity.go 的 tombstoneDirective）。
+	TombstoneKind AffinityTombstoneKind
 }
+
+// AffinityTombstoneKind 区分墓碑背后的失效种类，供会话绑定侧分流。
+//
+// 依据 design-session-sticky.md §4 的失效规则表：provider_error 写冷却，而
+// resource_not_found（上游 404、本地模型缺口）只清绑定——模型不支持不是故障，
+// 冷却会把一家只是缺模型的渠道记成「慢」，等它补上模型还会白背一段冷却。
+type AffinityTombstoneKind int
+
+const (
+	// AffinityTombstoneProviderError 是供应商故障（上游 5xx / 超时）。
+	// 取零值：既有构造点只填 TombstoneProviderID 时语义不变（仍是写冷却）。
+	AffinityTombstoneProviderError AffinityTombstoneKind = iota
+	// AffinityTombstoneResourceNotFound 是资源/配置类失效（上游 404：该家没有这个模型）。
+	AffinityTombstoneResourceNotFound
+)
 
 // ErrIncompleteTerminalPatch 表示终态 patch 会写出残缺的终态：要么没有状态码，
 // 要么在到达上游的请求上漏了 duration_ms（后者会让 outbox 事件永久缺 duration_ms）。

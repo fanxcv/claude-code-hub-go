@@ -32,8 +32,16 @@ func TestAffinityDirectiveForNonStream(t *testing.T) {
 			want:    terminal.AffinityDirective{TombstoneProviderID: 9},
 		},
 		{
-			name:    "上游 404 写墓碑",
+			name:    "上游 404 写资源类墓碑（会话绑定只清绑定）",
 			failure: &forward.Failure{Category: forward.CategoryResourceNotFound, ProviderID: 9, StatusCode: 404},
+			want: terminal.AffinityDirective{
+				TombstoneProviderID: 9,
+				TombstoneKind:       terminal.AffinityTombstoneResourceNotFound,
+			},
+		},
+		{
+			name:    "供应商故障的墓碑种类是故障类（零值，语义与改造前逐字一致）",
+			failure: &forward.Failure{Category: forward.CategoryProviderError, ProviderID: 9, StatusCode: 502},
 			want:    terminal.AffinityDirective{TombstoneProviderID: 9},
 		},
 		{

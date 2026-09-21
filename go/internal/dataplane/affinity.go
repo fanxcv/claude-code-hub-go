@@ -53,12 +53,26 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 }
 
 // tombstoneDirective 按 Node 的类别判据给出墓碑指令。
+//
+// 两类都写墓碑（Node forwarder.ts:2543-2552 的判据），但**墓碑种类不同**：
+//   - provider_error（真实 4xx/5xx、空响应、以 400 回传的容量故障）⇒ 会话绑定写冷却；
+//   - resource_not_found（上游 404、本地模型缺口）⇒ 会话绑定只清绑定、不写冷却。
+//
+// 前缀墓碑（亲和侧）对两者一视同仁：那家的模型确实不可用，后续同前缀请求也该绕开它。
+// 「该不该冷却这家」是会话绑定的语义，两者作用在不同的键上（见 terminal/settle.go）。
 func tombstoneDirective(failure *forward.Failure) terminal.AffinityDirective {
 	if failure.RequestScoped {
 		return terminal.AffinityDirective{}
 	}
-	if failure.Category != forward.CategoryProviderError && failure.Category != forward.CategoryResourceNotFound {
+	switch failure.Category {
+	case forward.CategoryProviderError:
+		return terminal.AffinityDirective{TombstoneProviderID: failure.ProviderID}
+	case forward.CategoryResourceNotFound:
+		return terminal.AffinityDirective{
+			TombstoneProviderID: failure.ProviderID,
+			TombstoneKind:       terminal.AffinityTombstoneResourceNotFound,
+		}
+	default:
 		return terminal.AffinityDirective{}
 	}
-	return terminal.AffinityDirective{TombstoneProviderID: failure.ProviderID}
 }

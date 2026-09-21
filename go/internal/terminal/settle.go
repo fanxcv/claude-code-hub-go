@@ -384,8 +384,11 @@ func (s *Settler) affinityWriteback(
 //
 // 语义与亲和写回平行但**不等价**（不能合并成一个实现）：
 //   - 成功：CAS 把绑定指向 winner（generation fence 拒绍迟到写入）；
-//   - 供应商侧失败：写会话冷却（key TTL 60s），使后续请求绕开这家——
-//     亲和那边写的是墓碑（影响前缀提名），两者作用的键不同。
+//   - 供应商故障：写会话冷却（key TTL 60s），使后续请求绕开这家；
+//   - 资源/配置类失效（上游 404：该家没这个模型）：**只清绑定、不写冷却**（设计稿 §4）。
+//
+// 第三类是本次才分的：它原来与第二类合并（同一 TombstoneProviderID），于是「模型不支持」
+// 也写了一家只是缺模型的渠道的冷却，染污「低速」语义。
 //
 // 未装配（无会话身份、会话包未接线）时整段跳过，行为与接线前逐字一致。
 func (s *Settler) sessionBindingWriteback(
@@ -406,6 +409,10 @@ func (s *Settler) sessionBindingWriteback(
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionBindingTimeout)
 	defer cancel()
 	if directive.TombstoneProviderID > 0 {
+		if directive.TombstoneKind == AffinityTombstoneResourceNotFound {
+			writeback.ClearBinding(writeCtx)
+			return
+		}
 		writeback.CooldownOnFailure(writeCtx, directive.TombstoneProviderID)
 		return
 	}
