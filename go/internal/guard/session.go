@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 )
 
 // 本文件复刻 session 与 warmup 两个步骤。
@@ -105,10 +106,30 @@ func (d Deps) sessionStep() Step {
 		// 会话身份也交给本次请求的选路器：前缀亲和要按**本会话**判定是否闲置过久
 		// （见 ProviderRouter.applyConversationIdle）。取的就是这里已解析出的身份，
 		// 与落库列 session_id、交给 MessageWriter 的 SessionLookup 钩子同一值。
+		// 会话绑定随身份一同交给选路器：它是粘性的第一优先级输入，且 ProviderID 为 0 的
+		// 空绑定也必须交（否则新会话永远绑不上——生成 generation 是 CAS 的基准）。
 		if router, ok := d.Provider.(*ProviderRouter); ok {
 			router.SetConversationSession(result.SessionID)
+			router.SetConversationBinding(sessionBindingSnapshot(result))
 		}
 		return nil, nil
+	}
+}
+
+// sessionBindingSnapshot 把会话守卫解析出的绑定事实转成选路包的快照。
+//
+// 返回 nil 的两种情形：会话包未给绑定事实（Redis 不可用/读取冲突），或会话 id 为空。
+// 注意 ProviderID 为 0 的空绑定**不返回 nil**：它是新会话，需要选路层正常选一家，
+// 且 Generation 是随后 CAS 写回的基准，丢了它新会话就永远绑不上。
+func sessionBindingSnapshot(result SessionResult) *route.SessionBindingSnapshot {
+	if result.SessionID == "" || result.Binding == nil {
+		return nil
+	}
+	return &route.SessionBindingSnapshot{
+		SessionID:  result.SessionID,
+		KeyID:      result.Binding.KeyID,
+		Generation: result.Binding.Generation,
+		ProviderID: result.Binding.ProviderID,
 	}
 }
 

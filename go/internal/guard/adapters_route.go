@@ -51,6 +51,9 @@ type ProviderRouter struct {
 	// 本次请求的选路器视图上（见 SetConversationSession 的说明）。空串 ⇒ 未接线或客户端未带，
 	// 空闲闸门 fail-open 并在日志里可辨。
 	sessionID string
+	// sessionBinding 是本次请求的会话绑定快照（会话守卫步骤随 sessionID 一同盖上）。
+	// nil 表示无绑定事实（未接线、Redis 不可用或读取冲突）——此时选路走前缀兜底或加权随机。
+	sessionBinding *route.SessionBindingSnapshot
 
 	// DetectClient 判定某供应商的客户端名单（Node Step 1 的 isClientAllowedDetailed）。
 	// 由 `Adapters.Apply` 注入（复用 `guard/client.go` 里那份 client-detector 移植），
@@ -170,6 +173,9 @@ func (r *ProviderRouter) Select(ctx context.Context, req *pctx.Context) (pctx.Pr
 		// 会话身份：会话级低速冷却的过滤依据（同值已在亲和空闲闸门用）。
 		// 未接线或客户端未带时为空串，冷却过滤整段不判定（fail-open）。
 		SessionID: r.sessionID,
+		// 会话绑定：会话粘性的第一优先级输入。
+		// 非 nil 且 ProviderID != 0 时短路前缀亲和与加权随机（见 route.nominateBySessionBinding）。
+		SessionBinding: r.sessionBinding,
 		// Endpoint 维度的判定（端点族、端点策略）属入口与端点包；零值表示不按端点维度排除。
 		AffinityBody: body,
 		// 两个请求级门槛：Node 在 pickRandomProvider 里每请求解析一次 systemTimezone 后做
@@ -319,6 +325,17 @@ func (r *ProviderRouter) SetConversationSession(sessionID string) {
 		return
 	}
 	r.sessionID = sessionID
+}
+
+// SetConversationBinding 盖上本次请求的会话绑定（会话守卫步骤调用，紧随 SetConversationSession）。
+//
+// 与 sessionID 同源同纪律：由会话守卫步骤解析后盖上，选路器自己不得反向取会话包
+// （session import guard，反向成环）。nil 表示无绑定事实（未接线/Redis 不可用/读取冲突）。
+func (r *ProviderRouter) SetConversationBinding(binding *route.SessionBindingSnapshot) {
+	if r == nil {
+		return
+	}
+	r.sessionBinding = binding
 }
 
 // now 取选路使用的时钟（与 route.Options.Now 同源，便于用例注入）。

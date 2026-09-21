@@ -92,6 +92,13 @@ func (a *SessionBinderAdapter) Ensure(ctx context.Context, req guard.SessionRequ
 		a.log.Warn("session.ensure.refresh_ttl_failed", map[string]any{"error": err.Error()})
 	}
 
+	// 读一次会话绑定，把「粘到哪一家」与 CAS 基准交给选路层。
+	//
+	// 为何此处必读而不能靠 lookupTenantSession/storeMapping 的副作用：那两处的读发生在
+	// **无客户端 session id** 的降级路径上，且返回值被丢弃；客户端自带 id 的主路径
+	// 此前完全不碰绑定。两条路径都需要这份事实，故在此统一读一次（幂等，且顺带续期）。
+	binding := a.readBindingFacts(ctx, sessionID, req.KeyID)
+
 	sequence, err := a.NextSequence(ctx, sessionID, req.KeyID)
 	if err != nil {
 		a.log.Warn("session.ensure.sequence_failed", map[string]any{"error": err.Error()})
@@ -99,7 +106,31 @@ func (a *SessionBinderAdapter) Ensure(ctx context.Context, req guard.SessionRequ
 	}
 	// AllowRawSession 为 false 时 Node 会注入 metadata.user_id（改写正文），属请求改写；
 	// 本适配不做改写，留待入口波次。
-	return guard.SessionResult{SessionID: sessionID, Sequence: sequence}, nil
+	return guard.SessionResult{SessionID: sessionID, Sequence: sequence, Binding: binding}, nil
+}
+
+// readBindingFacts 读一次会话绑定并归一为 guard 的中性事实。
+//
+// 读失败不阻断请求（与 Node 的绑定读取 fail-open 同向）：绑定读不到时选路走前缀兜底
+// 或加权随机，比「因为一次 Redis 抖动就 500」更合理。
+func (a *SessionBinderAdapter) readBindingFacts(ctx context.Context, sessionID string, keyID int64) *guard.SessionBindingFacts {
+	binding, err := a.binder.ReadOrReconcile(ctx, sessionID, keyID, a.ttlSeconds())
+	if err != nil {
+		a.log.Warn("session.ensure.binding_read_failed", map[string]any{"error": err.Error()})
+		return nil
+	}
+	if !binding.OK {
+		// 冲突（如 generation 不匹配、镜像不一致）：不阻断，但留一条可辨痕迹。
+		a.log.Warn("session.ensure.binding_read_conflict", map[string]any{
+			"conflictReason": binding.ConflictReason,
+		})
+		return nil
+	}
+	return &guard.SessionBindingFacts{
+		KeyID:      keyID,
+		Generation: binding.Snapshot.Generation,
+		ProviderID: binding.Snapshot.ProviderID,
+	}
 }
 
 // lookupTenantSession 复刻 getOrCreateSessionId 的「哈希键存在 + tenant 所有权校验」分支。

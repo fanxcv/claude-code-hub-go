@@ -301,6 +301,24 @@ type SessionRequest struct {
 type SessionResult struct {
 	SessionID string
 	Sequence  int
+	// Binding 是本次会话的绑定快照，供选路层判定会话粘性（nil 表示无绑定事实）。
+	//
+	// 为何带上 ProviderID 与 Generation：前者是「粘到哪一家」，后者是终态写回 CAS 的基准
+	// （generation fence 拒绝迟到写入）。选路层拿到它们才可能短路与回写；
+	// 丢了它们就只能每请求再读一次 Redis（且 CAS 无基准）。
+	Binding *SessionBindingFacts
+}
+
+// SessionBindingFacts 是会话绑定的事实快照（guard 包的中性视图）。
+//
+// 为什么不直接用 route.SessionBindingSnapshot：本包不为一个纯数据搬运引入选路包类型，
+// 且 route 与 session 都依赖 guard 方向不明；两个结构字段手工对齐，对齐点是
+// session/binding.go 的 BindingSnapshot 与 route/session_binding.go 的 SessionBindingSnapshot。
+type SessionBindingFacts struct {
+	KeyID      int64
+	Generation string
+	// ProviderID 为 0 表示空绑定（新会话或已清空）。
+	ProviderID int64
 }
 
 // WarmupLogWriter 记录被抢答的 warmup 请求（provider_id = 0，不计费）。
