@@ -155,6 +155,14 @@ type StoreOptions struct {
 	// SessionArtifacts 是会话工件的开关与体积上限（STORE_SESSION_MESSAGES /
 	// SESSION_REQUEST_ARTIFACT_MAX_BYTES / STORE_SESSION_RESPONSE_BODY）。
 	SessionArtifacts session.SessionArtifactOptions
+	// SessionBindingTTLSeconds 是会话绑定键的 TTL（秒）；唯一真源是 PREFIX_AFFINITY_TTL_SECONDS
+	// ——设计稿 §4 要求会话绑定**复用**前缀键的 TTL，而不是落回 session 包的
+	// DefaultBindingTTLSeconds（300s，Node 时代的默认值）。
+	//
+	// 零值会**静默**落回 300s（session.BinderOptions.TTL <= 0 的既有语义），故生产装配必须填：
+	// 填值点在 cmd/cchd/dataplane.go 的 NewStoreBacked 调用里，与 AffinityEnvEnabled 同一处
+	// （两者都取自 options.Cfg.Env）。本字段的存在性由 session_binding_ttl_wiring_nail_test.go 钉住。
+	SessionBindingTTLSeconds int
 	// CircuitAlerts 是熔断初次开闸的告警回调（health.Options 的同名回调）。
 	// 零值表示不告警：熔断照常开闸与恢复，只是不发 webhook。
 	CircuitAlerts CircuitAlerts
@@ -311,6 +319,9 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		binder := session.NewBinder(scriptClient)
 		sessionBinder = session.NewSessionBinderAdapter(session.BinderOptions{
 			Client: binder,
+			// TTL 为 0 时 session 包落回 DefaultBindingTTLSeconds（300s）；生产必须显式传入，
+			// 否则会话静默超过 5 分钟就丢绑定（见 StoreOptions.SessionBindingTTLSeconds）。
+			TTL:    time.Duration(options.SessionBindingTTLSeconds) * time.Second,
 			Logger: logger,
 		})
 		telemetry = newSessionTelemetry(binder, options.SessionArtifacts, logger)
@@ -506,7 +517,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		Now:    options.Now,
 	})
 
-	idleTimeouts := newIdleTimeoutCache(asProviderRowReader(options.Pools), options.Registry, logger, options.Now)
+	idleTimeouts := newIdleTimeoutCache(asProviderRowReader(options.Pools), options.Registry, logger)
 	idles := idleTimeouts.lookup
 
 	budget := gate.DefaultBudget()
@@ -681,7 +692,6 @@ type idleTimeoutCache struct {
 	rows   providerRowReader
 	ttl    *cfgsync.TTLMap[int64, providerTimeouts]
 	logger *logx.Logger
-	now    func() time.Time
 }
 
 // providerTimeouts 是超时缓存的一条值：一次查库同时取回静默超时与首字后停滞探测阈值。
@@ -698,12 +708,11 @@ type providerTimeouts struct {
 // 为何必须挂失效：管理面改供应商（providers_write.go 等十余处）会广播 DomainProviders；不挂的话
 // 改探测阈值/静默超时要等一个 TTL（ProviderCacheTTL = 30s）才生效，运维在界面上看到新值而数据面
 // 仍用旧值。registry 为 nil（无订阅通道的部署与单测）时退化为只靠 TTL 自愈，与同包低速缓存同。
-func newIdleTimeoutCache(rows providerRowReader, registry *cfgsync.Registry, logger *logx.Logger, now func() time.Time) *idleTimeoutCache {
+func newIdleTimeoutCache(rows providerRowReader, registry *cfgsync.Registry, logger *logx.Logger) *idleTimeoutCache {
 	cache := &idleTimeoutCache{
 		rows:   rows,
 		ttl:    cfgsync.NewTTLMap[int64, providerTimeouts](cfgsync.Spec(cfgsync.DomainProviders).TTL, idleTimeoutCacheSize),
 		logger: logger,
-		now:    now,
 	}
 	if registry != nil {
 		if _, err := registry.Bind(cfgsync.DomainProviders, cache.ttl.Clear); err != nil {

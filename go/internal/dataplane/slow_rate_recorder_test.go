@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -243,6 +244,34 @@ func TestSlowRateProviderQueryErrorIsNotCachedAndWarns(t *testing.T) {
 	}
 	if output := logs.String(); !strings.Contains(output, `"event":"dataplane.slow_rate_config_lookup_failed"`) {
 		t.Fatalf("查询失败必须留下 warn，实际输出=%q", output)
+	}
+}
+
+// TestSlowRateProviderWrappedNotFoundCountsAsMissingRow 钉住判定的**方式**：识别「行不存在」
+// 必须走 errors.Is，而不是与 store.ErrNotFound 做相等比较。
+//
+// 为何单列一条：真实读面今天返回的是**裸**哨兵（store/read.go 的 readSingleRowAs 直接 return
+// ErrNotFound），所以相等比较此刻也能过；但只要将来任何一层给它套上 %w 包装（本仓已有先例：
+// route 的 providerLookupError 就用 %w 同时保留两个哨兵），相等比较会**静默**退化成
+// 「行不存在被当成查询失败」——每条终态回查一次库、每次刷一条 warn，正是上一条用例要防的两个后果。
+func TestSlowRateProviderWrappedNotFoundCountsAsMissingRow(t *testing.T) {
+	restoreLogLevel(t, logx.LevelWarn)
+
+	reader := newCountingProviderReader()
+	reader.fail(999, fmt.Errorf("store: 只读查询失败: %w", store.ErrNotFound))
+	var logs bytes.Buffer
+	config := slowrate.NewSnapshotConfig(newProviderSlowRateSource(reader, nil, logx.New(&logs)))
+
+	for i := 0; i < 5; i++ {
+		if _, enabled := config.SlowRateConfig(context.Background(), 999); enabled {
+			t.Fatalf("第 %d 次：包装过的 ErrNotFound 同样表示行不存在，必须按未开启处理", i+1)
+		}
+	}
+	if got := reader.queries(); got != 1 {
+		t.Fatalf("包装过的 ErrNotFound 仍是稳定负结果，5 次读取应只查一次库，实际 %d 次", got)
+	}
+	if output := logs.String(); output != "" {
+		t.Fatalf("包装过的 ErrNotFound 不是故障，不得产生日志；实际输出=%q", output)
 	}
 }
 

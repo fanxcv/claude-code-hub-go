@@ -82,7 +82,7 @@ func TestIdleTimeoutProbeRespectsSlowRateMasterGate(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			reader := newProbeGateRowReader()
 			reader.set(167, probeGateRow(testCase.monitor, testCase.threshold))
-			cache := newIdleTimeoutCache(reader, nil, logx.New(nil), time.Now)
+			cache := newIdleTimeoutCache(reader, nil, logx.New(nil))
 
 			if got := cache.probeAfterFirstByte(167); got != testCase.wantProbe {
 				t.Fatalf("探测阈值应为 %d，实得 %d（monitor=%v threshold=%v）",
@@ -103,7 +103,7 @@ func TestIdleTimeoutProbeRespectsSlowRateMasterGate(t *testing.T) {
 func TestIdleTimeoutCacheHoldsThenRefreshesAfterClear(t *testing.T) {
 	reader := newProbeGateRowReader()
 	reader.set(167, probeGateRow(true, probeThresholdRef(30)))
-	cache := newIdleTimeoutCache(reader, nil, logx.New(nil), time.Now)
+	cache := newIdleTimeoutCache(reader, nil, logx.New(nil))
 
 	if got := cache.probeAfterFirstByte(167); got != 30 {
 		t.Fatalf("首次应为 30，实得 %d", got)
@@ -140,7 +140,7 @@ func TestIdleTimeoutCacheClearedByProvidersDomainBroadcast(t *testing.T) {
 
 	reader := newProbeGateRowReader()
 	reader.set(167, probeGateRow(true, probeThresholdRef(30)))
-	cache := newIdleTimeoutCache(reader, registry, logx.New(nil), time.Now)
+	cache := newIdleTimeoutCache(reader, registry, logx.New(nil))
 
 	if got := cache.probeAfterFirstByte(167); got != 30 {
 		t.Fatalf("首次应为 30，实得 %d", got)
