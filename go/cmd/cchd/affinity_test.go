@@ -14,8 +14,11 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// 亲和开关的合成规则逐字对齐 Node（config.ts:11-13 的 `env || settings`，
-// system-settings-cache.ts:168 的默认开）。
+// 亲和开关的合成规则：**总闸与模式各自独立**（2026-09-21 拆分，见 drizzle/0132）。
+//
+// 总闸沿袭 Node 的合成口径（config.ts:11-13 的 `env || settings`）；模式只取自系统设置，
+// 与总闸无关。拆分前两者挤在同一字段 `affinityIgnoreClientSessionId`，翻它的默认值会把
+// 整套亲和关掉，保持 true 又无法让会话粘性生效——本测试把拆分后的不变式钉住。
 func TestAffinityDecisionMirrorsNodeSemantics(t *testing.T) {
 	enabled, disabled := true, false
 	cases := []struct {
@@ -25,39 +28,63 @@ func TestAffinityDecisionMirrorsNodeSemantics(t *testing.T) {
 		settingsErr  error
 		wantEnabled  bool
 		wantSource   string
+		wantIgnore   bool // 模式开关的生效值（与总闸无关）
 		wantSettings bool // 是否记录了系统设置读取失败
 	}{
 		{
-			name:        "env 开、设置关：env 强制",
+			name:        "env 开、总闸关：env 强制",
 			envEnabled:  true,
-			settings:    &store.SystemSettings{AffinityIgnoreClientSessionID: disabled},
+			settings:    &store.SystemSettings{AffinityEnabled: disabled},
 			wantEnabled: true,
 			wantSource:  "env",
 		},
 		{
-			name:        "env 关、设置开：系统设置驱动（产品默认）",
-			settings:    &store.SystemSettings{AffinityIgnoreClientSessionID: enabled},
+			name:        "env 关、总闸开：系统设置驱动（产品默认）",
+			settings:    &store.SystemSettings{AffinityEnabled: enabled},
 			wantEnabled: true,
 			wantSource:  "system_setting",
 		},
 		{
 			name:        "两路都开：来源标明两路",
 			envEnabled:  true,
-			settings:    &store.SystemSettings{AffinityIgnoreClientSessionID: enabled},
+			settings:    &store.SystemSettings{AffinityEnabled: enabled},
 			wantEnabled: true,
 			wantSource:  "env+system_setting",
 		},
 		{
-			name:       "两路都关",
-			settings:   &store.SystemSettings{AffinityIgnoreClientSessionID: disabled},
+			name:       "总闸两路都关",
+			settings:   &store.SystemSettings{AffinityEnabled: disabled},
 			wantSource: "disabled",
 		},
 		{
-			name:         "系统设置读取失败：按 Node 默认值（开）处理并记录",
+			name:         "系统设置读取失败：按出厂默认（总闸开、模式为会话优先）处理并记录",
 			settingsErr:  context.DeadlineExceeded,
 			wantEnabled:  true,
 			wantSource:   "system_setting",
 			wantSettings: true,
+		},
+		{
+			// 拆分的核心不变式：模式为真**不得**把总闸关掉。
+			// 拆分前 AffinityIgnoreClientSessionID 一字段两用，此用例在旧语义下无法表达。
+			name:        "模式=强制前缀、总闸开：会话粘性关闭但亲和整体仍活",
+			settings:    &store.SystemSettings{AffinityEnabled: enabled, AffinityIgnoreClientSessionID: enabled},
+			wantEnabled: true,
+			wantSource:  "system_setting",
+			wantIgnore:  true,
+		},
+		{
+			// 模式独立于总闸：总闸关时模式字段照旧如实回报（它是配置事实，不是结论）。
+			name:       "模式=强制前缀、总闸关：模式仍如实回报，总闸仍为关",
+			settings:   &store.SystemSettings{AffinityEnabled: disabled, AffinityIgnoreClientSessionID: enabled},
+			wantSource: "disabled",
+			wantIgnore: true,
+		},
+		{
+			name:        "模式=会话优先（出厂方向）：忽略会话为假",
+			settings:    &store.SystemSettings{AffinityEnabled: enabled},
+			wantEnabled: true,
+			wantSource:  "system_setting",
+			wantIgnore:  false,
 		},
 	}
 	for _, tc := range cases {
@@ -68,6 +95,9 @@ func TestAffinityDecisionMirrorsNodeSemantics(t *testing.T) {
 			}
 			if status.Source != tc.wantSource {
 				t.Errorf("Source = %q，期望 %q", status.Source, tc.wantSource)
+			}
+			if status.IgnoreClientSessionID != tc.wantIgnore {
+				t.Errorf("IgnoreClientSessionID = %v，期望 %v", status.IgnoreClientSessionID, tc.wantIgnore)
 			}
 			if (status.SettingsErr != "") != tc.wantSettings {
 				t.Errorf("SettingsErr = %q，期望有值=%v", status.SettingsErr, tc.wantSettings)

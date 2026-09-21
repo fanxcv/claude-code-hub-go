@@ -26,10 +26,12 @@ type Options struct {
 	SlowRate *SlowRateReader
 	// Affinity 为 nil 时不启用前缀亲和。
 	Affinity *AffinityStore
-	// AffinityIgnoreClientSessionID 对应系统设置 affinityIgnoreClientSessionId：
-	// 为真时粘性交给最长前缀亲和（Node 的 skipSessionBinding 分支），
-	// 请求日志的 session_identity_kind 记作 prefix_affinity；为假时记 session_id。
-	// 它本身不参与选路判定（选路只看 Affinity 是否装配），只决定日志里的身份形制。
+	// AffinityIgnoreClientSessionID 是**模式开关**（对应系统设置 affinityIgnoreClientSessionId）：
+	// 为真时强制前缀指纹粘性——会话绑定层整层跳过，与前缀亲和时代行为一致；
+	// 为假时会话绑定优先、前缀亲和作兜底。它不管亲和开不开（那是 Affinity 是否装配）。
+	//
+	// 它同时决定请求日志的 session_identity_kind：为真且请求可指纹化时记 prefix_affinity，
+	// 否则记 session_id。
 	AffinityIgnoreClientSessionID bool
 	// Gates 是三个外部维度的钩子，零值即全部不判定。
 	Gates Gates
@@ -272,30 +274,42 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 	// 冷却等），而 applyFilters 正是那份校验的产物——在它之前短路等于绕开全部校验。
 	// 候选不在 healthy 池时**不短路**，继续走后续层级（设计稿 §4：熔断是暂时的，
 	// 绑定保留待恢复，但本次不钉死在它上面）。
-	if withAffinity {
-		if bound, ok := s.nominateBySessionBinding(ctx, req, excluded); ok {
-			selectedPriority := resolveEffectivePriority(bound, req.Group, penalties)
-			survivors := affinitySurvivors(filtered.healthy, bound.ID, req.Group, penalties)
-			dc.SurvivingCandidates = survivors
-			dc.ConsideredCandidates = consideredFromSurvivors(survivors)
-			dc.PriorityLevels = []int{selectedPriority}
-			dc.SelectedPriority = selectedPriority
-			dc.CandidatesAtPriority = []Candidate{{
-				ID:             bound.ID,
-				Name:           bound.Name,
-				Weight:         bound.Weight,
-				CostMultiplier: bound.CostMultiplier,
-			}}
-			return Result{
-				Provider:     &bound,
-				Context:      dc,
-				Method:       MethodSessionReuse,
-				Reason:       ReasonSelectedInitial,
-				CircuitState: s.circuitState(ctx, bound.ID),
-				timestamp:    nowMS,
-			}, nil
+	//
+	// 模式开关（AffinityIgnoreClientSessionID）为真时整层跳过：那就是「强制前缀粘性」
+	// 的语义，也是设计 §5 说的 kill switch。缺了这道门，把它置真并不会退回前缀行为
+	// （会话绑定短路只看 sessionID），kill switch 形同虚设。
+	//
+	// 总闸（s.opts.Affinity == nil 即未装配）门控**整层**：会话绑定与前缀同属亲和，
+	// 总闸关时两者都不参与选路。缺这道门会出现「总闸报 disabled，会话粘性却在跑」的矛盾态
+	// （会话绑定只看 req.SessionBinding，不查 store 是否装配）。
+	forcePrefix := s.opts.AffinityIgnoreClientSessionID
+	if withAffinity && s.opts.Affinity != nil {
+		if !forcePrefix {
+			if bound, ok := s.nominateBySessionBinding(ctx, req, excluded); ok {
+				selectedPriority := resolveEffectivePriority(bound, req.Group, penalties)
+				survivors := affinitySurvivors(filtered.healthy, bound.ID, req.Group, penalties)
+				dc.SurvivingCandidates = survivors
+				dc.ConsideredCandidates = consideredFromSurvivors(survivors)
+				dc.PriorityLevels = []int{selectedPriority}
+				dc.SelectedPriority = selectedPriority
+				dc.CandidatesAtPriority = []Candidate{{
+					ID:             bound.ID,
+					Name:           bound.Name,
+					Weight:         bound.Weight,
+					CostMultiplier: bound.CostMultiplier,
+				}}
+				return Result{
+					Provider:     &bound,
+					Context:      dc,
+					Method:       MethodSessionReuse,
+					Reason:       ReasonSelectedInitial,
+					CircuitState: s.circuitState(ctx, bound.ID),
+					timestamp:    nowMS,
+				}, nil
+			}
 		}
-		if req.SessionID == "" {
+		// 前缀层触发条件：无会话 ID（会话优先模式下的兜底），或强制前缀模式（忽略会话 ID）。
+		if req.SessionID == "" || forcePrefix {
 			nominate, lookup, writeback, affinityIdentity, nominated = s.nominateByAffinity(ctx, req, excluded)
 		}
 	}

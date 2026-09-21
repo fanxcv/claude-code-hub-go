@@ -147,6 +147,7 @@ type SystemSettingsBody struct {
 	IPGeoLookupEnabled           bool                          `json:"ipGeoLookupEnabled"`
 	StreamGateMode               string                        `json:"streamGateMode"`
 	AffinityIgnoreClientSession  bool                          `json:"affinityIgnoreClientSessionId"`
+	AffinityEnabled              bool                          `json:"affinityEnabled"`
 	ReplayEnabled                *bool                         `json:"replayEnabled"`
 	ReplayCacheTTLMinutes        int                           `json:"replayCacheTtlMinutes"`
 	CacheEffectivenessEnabled    *bool                         `json:"cacheEffectivenessEnabled"`
@@ -230,6 +231,7 @@ func buildSystemSettingsBody(row *store.AdminSystemSettings, now time.Time) Syst
 		IPGeoLookupEnabled:           row.IPGeoLookupEnabled,
 		StreamGateMode:               settingsEnumDefault(row.StreamGateMode, "enforce", "off", "shadow", "enforce"),
 		AffinityIgnoreClientSession:  row.AffinityIgnoreClientSession,
+		AffinityEnabled:              row.AffinityEnabled,
 		ReplayEnabled:                row.ReplayEnabled,
 		ReplayCacheTTLMinutes: settingsClampInt(
 			row.ReplayCacheTTLMinutes, replayCacheTTLMinutesMin, replayCacheTTLMinutesMax,
@@ -758,6 +760,7 @@ type systemSettingsUpdate struct {
 	ipGeoLookupEnabled               *bool
 	streamGateMode                   *string
 	affinityIgnoreClientSession      *bool
+	affinityEnabled                  *bool
 	replayEnabled                    *bool
 	replayEnabledPresent             bool
 	replayCacheTTLMinutes            *int
@@ -913,6 +916,9 @@ func (d systemSettingsUpdate) patch() store.AdminSystemSettingsPatch {
 	}
 	if d.affinityIgnoreClientSession != nil {
 		set(store.ColAffinityIgnoreClientSession, *d.affinityIgnoreClientSession)
+	}
+	if d.affinityEnabled != nil {
+		set(store.ColAffinityEnabled, *d.affinityEnabled)
 	}
 	if d.replayEnabledPresent {
 		set(store.ColReplayEnabled, nullableBool(d.replayEnabled))
@@ -1083,6 +1089,7 @@ func decodeSystemSettingsUpdate(
 		"enableResponseFixer":                          &decoded.enableResponseFixer,
 		"ipGeoLookupEnabled":                           &decoded.ipGeoLookupEnabled,
 		"affinityIgnoreClientSessionId":                &decoded.affinityIgnoreClientSession,
+		"affinityEnabled":                              &decoded.affinityEnabled,
 		"discoveryEnabled":                             &decoded.discoveryEnabled,
 	}
 	for name, target := range booleans {
@@ -1332,7 +1339,7 @@ var systemSettingsUpdateKeys = map[string]bool{
 	"quotaLeasePercentMonthly": true, "quotaLeaseCapUsd": true, "ipExtractionConfig": true,
 	"ipGeoLookupEnabled": true, "publicStatusWindowHours": true,
 	"publicStatusAggregationIntervalMinutes": true, "streamGateMode": true,
-	"affinityIgnoreClientSessionId": true, "replayEnabled": true, "replayCacheTtlMinutes": true,
+	"affinityIgnoreClientSessionId": true, "affinityEnabled": true, "replayEnabled": true, "replayCacheTtlMinutes": true,
 	"cacheEffectivenessEnabled": true,
 }
 

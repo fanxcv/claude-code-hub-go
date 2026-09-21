@@ -41,6 +41,8 @@ func TestSessionBindingWinsOverWeightedRandom(t *testing.T) {
 			providers: []Provider{bound, other},
 			byID:      map[int64]Provider{7: bound, 8: other},
 		},
+		// 总闸开（Affinity 非 nil）：会话绑定是亲和的一层，总闸关时整层不参与（见 resolve）。
+		Affinity: NewAffinityStore(AffinityOptions{Window: 8}),
 		// Rand 固定选第一个候选：若无绑定短路，加权随机会在两家间按脚本取。
 		Rand: (&scriptedRand{values: []float64{0}}).next,
 	})
@@ -55,6 +57,64 @@ func TestSessionBindingWinsOverWeightedRandom(t *testing.T) {
 	}
 	if result.Method != MethodSessionReuse {
 		t.Errorf("selectionMethod = %q，期望 %q", result.Method, MethodSessionReuse)
+	}
+}
+
+// TestSessionBindingSkippedWhenAffinityGateOff 总闸关（Affinity 未装配）时会话绑定整层不参与。
+//
+// 为什么必须钉：会话绑定短路只看 req.SessionBinding，不查总闸；若 resolve 不门控，
+// 会出现「/readyz 报 disabled，会话粘性却在跑」的矛盾态。
+func TestSessionBindingSkippedWhenAffinityGateOff(t *testing.T) {
+	bound := baseProvider(7, convert.ProviderClaude)
+	other := baseProvider(8, convert.ProviderClaude)
+
+	selector := NewSelector(Options{
+		Source: &stubSource{
+			providers: []Provider{bound, other},
+			byID:      map[int64]Provider{7: bound, 8: other},
+		},
+		// Affinity 为 nil = 总闸关。
+		Rand: (&scriptedRand{values: []float64{0}}).next,
+	})
+
+	request := sessionBindingRequest(bound.ID)
+	result, err := selector.Select(context.Background(), request)
+	if err != nil {
+		t.Fatalf("选路失败: %v", err)
+	}
+	if result.Method == MethodSessionReuse {
+		t.Error("总闸关时不得走会话绑定短路")
+	}
+	if result.AffinityLookup != nil {
+		t.Error("总闸关时不得带回亲和 lookup")
+	}
+}
+
+// TestSessionBindingSkippedWhenForcePrefix 模式开关为真（强制前缀）时会话绑定整层跳过。
+//
+// 这是设计 § 5 说的 kill switch：置真必须真的退回前缀行为，
+// 否则「强制前缀粘性」只是文案，会话依旧被绑定短路钉住。
+func TestSessionBindingSkippedWhenForcePrefix(t *testing.T) {
+	bound := baseProvider(7, convert.ProviderClaude)
+	other := baseProvider(8, convert.ProviderClaude)
+
+	selector := NewSelector(Options{
+		Source: &stubSource{
+			providers: []Provider{bound, other},
+			byID:      map[int64]Provider{7: bound, 8: other},
+		},
+		Affinity:                      NewAffinityStore(AffinityOptions{Window: 8}),
+		AffinityIgnoreClientSessionID: true,
+		Rand:                          (&scriptedRand{values: []float64{0}}).next,
+	})
+
+	request := sessionBindingRequest(bound.ID)
+	result, err := selector.Select(context.Background(), request)
+	if err != nil {
+		t.Fatalf("选路失败: %v", err)
+	}
+	if result.Method == MethodSessionReuse {
+		t.Error("强制前缀模式下不得走会话绑定短路（kill switch 未生效）")
 	}
 }
 
@@ -77,9 +137,10 @@ func TestSessionBindingRejectsCircuitOpenProvider(t *testing.T) {
 			providers: []Provider{bound, healthy},
 			byID:      map[int64]Provider{7: bound, 8: healthy},
 		},
-		Health: newTestHealth(t, client, true),
-		Now:    func() time.Time { return now },
-		Rand:   (&scriptedRand{values: []float64{0}}).next,
+		Affinity: NewAffinityStore(AffinityOptions{Window: 8}),
+		Health:   newTestHealth(t, client, true),
+		Now:      func() time.Time { return now },
+		Rand:     (&scriptedRand{values: []float64{0}}).next,
 	})
 
 	request := sessionBindingRequest(bound.ID)
@@ -107,7 +168,8 @@ func TestSessionBindingEmptyBindingFallsThrough(t *testing.T) {
 			providers: []Provider{first, second},
 			byID:      map[int64]Provider{7: first, 8: second},
 		},
-		Rand: (&scriptedRand{values: []float64{0}}).next,
+		Affinity: NewAffinityStore(AffinityOptions{Window: 8}),
+		Rand:     (&scriptedRand{values: []float64{0}}).next,
 	})
 
 	request := sessionBindingRequest(0)

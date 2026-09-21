@@ -30,13 +30,13 @@ type affinityStatus struct {
 	// Window 与 TTLSeconds 是生效的窗口与滑动 TTL，便于与 Node 对齐核对。
 	Window     int
 	TTLSeconds int
-	// SettingsErr 非空表示系统设置读取失败，已回落到 Node 的默认值（默认开）。
+	// SettingsErr 非空表示系统设置读取失败，已回落到出厂默认（总闸开、模式为会话优先）。
 	SettingsErr string
-	// IgnoreClientSessionID 是 affinityIgnoreClientSessionId 的生效值（Node 默认 true，
-	// `src/lib/config/system-settings-cache.ts:168` 的 DEFAULT_SETTINGS）。
+	// IgnoreClientSessionID 是 affinityIgnoreClientSessionId 的生效值（**模式开关**）。
 	//
-	// 它不参与选路判定（选路只看亲和是否装配），只决定请求日志的 session_identity_kind：
-	// 为真且请求可指纹化时记 prefix_affinity（跨会话复用同一渠道），否则记 session_id。
+	// 它为真时强制前缀指纹粘性（会话绑定层跳过）；为假时会话绑定优先、前缀作兜底。
+	// 它**不管**亲和开不开——那是 Enabled。2026-09-21 之前两者挤在同一字段，
+	// 于是「让会话粘性生效」与「保持亲和可用」不可兼得（见 drizzle/0132 迁移注释）。
 	IgnoreClientSessionID bool
 }
 
@@ -45,26 +45,39 @@ func (s affinityStatus) describe() string {
 	if !s.Enabled {
 		return "disabled（env 未开且系统设置未开）"
 	}
-	text := fmt.Sprintf("enabled（来源 %s，window %d，ttl %ds）", s.Source, s.Window, s.TTLSeconds)
+	mode := "会话粘性（前缀兜底）"
+	if s.IgnoreClientSessionID {
+		mode = "前缀指纹粘性（忽略会话 ID）"
+	}
+	text := fmt.Sprintf("enabled（来源 %s，window %d，ttl %ds，%s）", s.Source, s.Window, s.TTLSeconds, mode)
 	if s.SettingsErr != "" {
-		text += "；系统设置读取失败，已按 Node 默认值（开）处理"
+		text += "；系统设置读取失败，已按出厂默认（总闸开、模式为会话优先）处理"
 	}
 	return text
 }
 
-// affinityDecision 把两路开关合成结论，优先级逐字对齐 Node：`env || settings`。
+// affinityDecision 把两路总闸开关合成结论，优先级逐字对齐 Node：`env || settings`。
 //
-// 系统设置读取失败时按 Node 的默认值处理（affinityIgnoreClientSessionId 默认 true，
-// 见 proxy-runtime.ts:53,61 的两个 fallback 分支与 system-settings-cache.ts:168），
-// 而不是保守关掉——两侧不一致才是缺陷。
+// **两个开关各自独立**（2026-09-21 拆分，见 drizzle/0132）：
+//   - 总闸 (Enabled)：env `ENABLE_PREFIX_AFFINITY` 覆写，或系统设置 `affinity_enabled`（默认开）。
+//   - 模式 (IgnoreClientSessionID)：只取自系统设置 `affinity_ignore_client_session_id`，
+//     真 = 强制前缀粘性（会话绑定层跳过），假 = 会话优先、前缀兜底。
+//
+// 拆开的原因：原先该字段既当总闸又当模式，翻它的默认值会把整套亲和关掉，
+// 而保持 true 又无法让会话粘性生效——两个诉求不可兼得。
+//
+// 系统设置读取失败时按出厂默认处理（总闸开、模式为会话优先），而不是保守关掉
+// ——两侧不一致才是缺陷。
 func affinityDecision(envEnabled bool, settings *store.SystemSettings, settingsErr error) affinityStatus {
 	settingsEnabled := true
+	ignoreClientSession := false
 	status := affinityStatus{}
 	switch {
 	case settingsErr != nil:
 		status.SettingsErr = settingsErr.Error()
 	case settings != nil:
-		settingsEnabled = settings.AffinityIgnoreClientSessionID
+		settingsEnabled = settings.AffinityEnabled
+		ignoreClientSession = settings.AffinityIgnoreClientSessionID
 	}
 	switch {
 	case envEnabled && settingsEnabled:
@@ -77,10 +90,8 @@ func affinityDecision(envEnabled bool, settings *store.SystemSettings, settingsE
 		status.Source = "disabled"
 	}
 	status.Enabled = envEnabled || settingsEnabled
-	// 日志身份形制取设置的原值（不进 env 的或）：Node 里 skipSessionBinding 只由
-	// `affinityIgnoreClientSessionId && fingerprintable` 决定，ENABLE_PREFIX_AFFINITY
-	// 只是「要不要做亲和」，不改变身份形制。
-	status.IgnoreClientSessionID = settingsEnabled
+	// 模式只由系统设置决定：它只管「会话绑定层跳不跳」，不管亲和开不开。
+	status.IgnoreClientSessionID = ignoreClientSession
 	return status
 }
 

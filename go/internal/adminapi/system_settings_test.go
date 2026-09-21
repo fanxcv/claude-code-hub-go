@@ -23,6 +23,13 @@ import (
 //
 // systemSettingsFixtureProjection 是 Node 的 toSystemSettings 对 systemSettingsFixtureRow 的输出
 // （bun 生成，逐字粘贴）。
+//
+// **与 Node 的有意偏离（2026-09-21）**：`affinityEnabled` **不在** Node 的投影里，是 Go 侧新增的。
+// 原因：Node 把亲和的「总闸」与「忽略会话 ID」挤在同一字段 `affinityIgnoreClientSessionId`，
+// 于是「让会话粘性生效」与「保持亲和可用」不可兼得——翻它的默认值会连带关掉整套亲和。
+// Go 侧拆成两列：`affinity_enabled` 管总闸（见 drizzle/0132），
+// `affinity_ignore_client_session_id` 只管模式。故本条 golden 需手工加此键，
+// 它**不是** Node 行为的快照，而是有意偏离的声明；新增 Node 字段时应照旧逐字段对齐。
 const systemSettingsFixtureProjection = `{
   "id": 7,
   "siteTitle": "Fixture Hub",
@@ -76,6 +83,7 @@ const systemSettingsFixtureProjection = `{
   "ipGeoLookupEnabled": false,
   "streamGateMode": "shadow",
   "affinityIgnoreClientSessionId": false,
+  "affinityEnabled": true,
   "replayEnabled": null,
   "replayCacheTtlMinutes": 30,
   "cacheEffectivenessEnabled": true,
@@ -137,6 +145,7 @@ const systemSettingsFixtureRow = `{
   "ip_geo_lookup_enabled": false,
   "stream_gate_mode": "shadow",
   "affinity_ignore_client_session_id": false,
+  "affinity_enabled": true,
   "replay_enabled": null,
   "replay_cache_ttl_minutes": 999,
   "cache_effectiveness_enabled": true,

@@ -200,7 +200,9 @@ type EnvConfig struct {
 	EnableEndpointCircuitBreaker bool `env:"ENABLE_ENDPOINT_CIRCUIT_BREAKER"`
 	// ENABLE_LEGACY_ACTIONS_API
 	EnableLegacyActionsAPI bool `env:"ENABLE_LEGACY_ACTIONS_API"`
-	// ENABLE_PREFIX_AFFINITY：最长前缀亲和路由：链式指纹匹配的供应商粘性（软提名，仍走全套硬校验）
+	// ENABLE_PREFIX_AFFINITY：**亲和总闸**的 env 覆写（与系统设置 affinity_enabled 取或）。
+	// 开 = 启用供应商粘性（会话绑定优先、前缀指纹作兜底；两者均走全套硬校验）。
+	// 变量名沿用历史的 prefix 称谓，但它管的是整套亲和，不只前缀层。
 	EnablePrefixAffinity bool `env:"ENABLE_PREFIX_AFFINITY"`
 	// ENABLE_PROVIDER_CACHE：供应商缓存开关
 	EnableProviderCache bool `env:"ENABLE_PROVIDER_CACHE"`

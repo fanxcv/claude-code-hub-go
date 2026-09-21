@@ -718,9 +718,12 @@ type MessageWriter struct {
 	Body BodyFactory
 	// SessionLookup 取已绑定的会话身份；nil 表示会话包未接线。
 	SessionLookup func(*pctx.Context) (SessionResult, bool)
-	// IgnoreClientSessionID 对应系统设置 affinityIgnoreClientSessionId：为真时
-	// 粘性交给最长前缀亲和，会话身份的形制记作 prefix_affinity（Node 的 skipSessionBinding
+	// IgnoreClientSessionID 对应系统设置 affinityIgnoreClientSessionId（**模式开关**）：
+	// 为真时粘性交给最长前缀亲和，会话身份的形制记作 prefix_affinity（Node 的 skipSessionBinding
 	// 分支）。它是进程级事实，随亲和装配一起从系统设置读到（同 openAffinity 的读法）。
+	//
+	// 它**不是**亲和总闸（那由 Affinity 是否装配表达，见 route.Options.Affinity）：
+	// 本字段只回答「本次请求走的是哪条粘性」，与亲和开不开无关。
 	IgnoreClientSessionID bool
 	logger                *logx.Logger
 	rows                  counter

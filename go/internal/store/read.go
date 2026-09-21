@@ -60,8 +60,14 @@ type SystemSettings struct {
 	RacingTotalTimeoutMS                         int             `json:"racing_total_timeout_ms"`
 	StickyTimeoutCooldownMS                      int             `json:"sticky_timeout_cooldown_ms"`
 	StreamGateMode                               string          `json:"stream_gate_mode"`
-	// AffinityIgnoreClientSessionID 对齐 Node 的同名设置。
+	// AffinityIgnoreClientSessionID 是**模式开关**：为真时强制前缀指纹粘性（会话绑定层跳过），
+	// 为假时会话绑定优先、前缀亲和作兜底。
+	//
+	// 它**不再**是亲和总闸——总闸是 AffinityEnabled。2026-09-21 之前两者挤在同一列，
+	// 于是「让会话粘性生效」与「保持亲和可用」不可兼得（见 drizzle/0132 迁移注释）。
 	AffinityIgnoreClientSessionID bool `json:"affinity_ignore_client_session_id"`
+	// AffinityEnabled 是**总闸**：为假时整套亲和（前缀与会话绑定）都不参与选路。
+	AffinityEnabled bool `json:"affinity_enabled"`
 	// CacheEffectivenessEnabled 可空：Node 的语义是 `settings.cacheEffectivenessEnabled ?? env`
 	// （src/lib/system-settings/proxy-runtime.ts:77-78），故 nil（未设置）必须与 false（显式关闭）区分。
 	// 它门控 F3b 缓存模拟五列的写入（Node response-handler.ts:5430）。
