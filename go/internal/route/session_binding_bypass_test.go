@@ -111,14 +111,18 @@ func TestSessionBindingBypassNoneWhenBindingAdopted(t *testing.T) {
 }
 
 // TestSessionBindingBypassReadsFilterLedger 钉住判定读的是**过滤留痕**本身，而不是另算一遍：
-// 留痕里没有该家（已删除/查不到）时不得当成临时原因。
+// 留痕里没有该家（行已不存在）时不得当成临时原因。
+//
+// 另钉一支：**读绑定行失败**不进留痕（候选根本没读出来），必须由 lookupFailed 显式传入，
+// 否则它会被当成「行已不存在」而允许改绑（本 lane 修的缺陷）。
 func TestSessionBindingBypassReadsFilterLedger(t *testing.T) {
 	binding := &SessionBindingSnapshot{SessionID: "s", KeyID: 1, ProviderID: 7}
 	cases := []struct {
-		name     string
-		filtered []Filtered
-		binding  *SessionBindingSnapshot
-		want     SessionBindingBypass
+		name         string
+		filtered     []Filtered
+		binding      *SessionBindingSnapshot
+		lookupFailed bool
+		want         SessionBindingBypass
 	}{
 		{name: "无绑定", filtered: nil, binding: nil, want: SessionBindingBypassNone},
 		{name: "空绑定", filtered: nil, binding: &SessionBindingSnapshot{ProviderID: 0}, want: SessionBindingBypassNone},
@@ -126,10 +130,13 @@ func TestSessionBindingBypassReadsFilterLedger(t *testing.T) {
 		{name: "熔断", filtered: []Filtered{{ID: 7, Reason: ReasonCircuitOpen}}, binding: binding, want: SessionBindingBypassTransient},
 		{name: "会话冷却", filtered: []Filtered{{ID: 7, Reason: ReasonSlowRateCooldown}}, binding: binding, want: SessionBindingBypassTransient},
 		{name: "停用", filtered: []Filtered{{ID: 7, Reason: ReasonDisabled}}, binding: binding, want: SessionBindingBypassNone},
+		{name: "读绑定行失败", filtered: nil, binding: binding, lookupFailed: true, want: SessionBindingBypassTransient},
+		{name: "读失败但本无绑定", filtered: nil, binding: nil, lookupFailed: true, want: SessionBindingBypassNone},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := sessionBindingBypass(testCase.filtered, testCase.binding); got != testCase.want {
+			got := sessionBindingBypass(testCase.filtered, testCase.binding, testCase.lookupFailed)
+			if got != testCase.want {
 				t.Errorf("sessionBindingBypass = %v，期望 %v", got, testCase.want)
 			}
 		})

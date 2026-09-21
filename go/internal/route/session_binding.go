@@ -1,6 +1,9 @@
 package route
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // SessionBindingSnapshot 是会话绑定的只读快照，供选路层判定会话粘性。
 //
@@ -53,22 +56,53 @@ func (s *Selector) f3bCacheScoreFacts(req Request) *AffinityWriteback {
 	}
 }
 
+// sessionBindingNomination 是会话绑定层「本次为什么没（能）采用既有绑定」的结果。
+//
+// 为什么不让调用方自己看 error：判定必须收在一处（见 sessionBindingBypass）。这里只负责
+// 把**读绑定行失败**这一支从「行不存在 / 校验不过」里分出来——两者的处置相反。
+type sessionBindingNomination int
+
+const (
+	// sessionBindingNotNominated 表示本次没有采用既有绑定。含三种情形：无绑定、绑定行已不存在
+	// （ErrProviderNotFound）、绑定候选未过硬校验。三者均属**结构性**失效或本就不适用，
+	// 由 sessionBindingBypass 按过滤留痕判定（允许改绑）。
+	sessionBindingNotNominated sessionBindingNomination = iota
+	// sessionBindingNominated 表示绑定候选已采用，选路短路。
+	sessionBindingNominated
+	// sessionBindingLookupFailed 表示**读绑定行失败**（DB 抖动/超时/快照装载失败）。
+	//
+	// 它是**临时**原因：不改任何配置就可能恢复，故绑定必须保留、本次成功终态不得改绑。
+	// 与「行已不存在」（ErrProviderNotFound，结构性、允许改绑）严格分开：压成一支，
+	// 一次瞬时读错就会把会话永久搬走。
+	sessionBindingLookupFailed
+)
+
 func (s *Selector) nominateBySessionBinding(
 	ctx context.Context,
 	req Request,
 	excluded map[int64]bool,
-) (Provider, bool) {
+) (Provider, sessionBindingNomination) {
 	if req.SessionBinding == nil || req.SessionBinding.ProviderID == 0 {
-		return Provider{}, false
+		return Provider{}, sessionBindingNotNominated
 	}
 	provider, err := s.opts.Source.Provider(ctx, req.SessionBinding.ProviderID)
-	if err != nil || provider == nil {
-		return Provider{}, false
+	if err != nil {
+		if errors.Is(err, ErrProviderNotFound) {
+			// 行已不存在：结构性失效，旧绑定已死，允许改绑。
+			return Provider{}, sessionBindingNotNominated
+		}
+		// 其余 error 一律是**读失败**（DB 抖动/超时/快照装载失败）：临时原因，绑定必须保留。
+		// 不按具体错误码细分：本层只需回答「能不能恢复」，而「要改配置才恢复」的失效
+		// 都走不到这里（停用/不兼容的候选是读得出来的，由 validateAffinityCandidate 拦下）。
+		return Provider{}, sessionBindingLookupFailed
+	}
+	if provider == nil {
+		return Provider{}, sessionBindingNotNominated
 	}
 	if !s.validateAffinityCandidate(ctx, *provider, req, excluded) {
-		return Provider{}, false
+		return Provider{}, sessionBindingNotNominated
 	}
-	return *provider, true
+	return *provider, sessionBindingNominated
 }
 
 // SessionBindingBypass 说明「既有会话绑定为何未在本次被采用」，是终态能否改绑的唯一判据来源。
@@ -107,14 +141,24 @@ func (b SessionBindingBypass) String() string {
 	return "none"
 }
 
-// sessionBindingBypass 由过滤留痕判定「既有绑定未被采用」是否属临时原因。
+// sessionBindingBypass 判定「既有绑定未被采用」是否属临时原因。
 //
 // 为何读留痕而不在 validateAffinityCandidate 里另算一遍：留痕（DecisionContext.FilteredProviders）
 // 就是本次过滤的同一份结论，另算必然与它分叉（过滤链一改，两处就不同步）。
-// 该家不在留痕里却有既有绑定 ⇒ 绑定指向的行已查不到（已删除/查询失败），属结构性失效，允许改绑。
-func sessionBindingBypass(filtered []Filtered, binding *SessionBindingSnapshot) SessionBindingBypass {
+//
+// lookupFailed 是**读绑定行失败**那一支，必须由调用方显式传来：该情形下候选根本没读出来，
+// 过滤阶段压根没见到它，故它**不进留痕**；而「留痕里没有该家」那一支是**行已不存在**
+// （结构性失效，允许改绑），两者处置相反，不能靠同一条推断兼收。
+func sessionBindingBypass(
+	filtered []Filtered,
+	binding *SessionBindingSnapshot,
+	lookupFailed bool,
+) SessionBindingBypass {
 	if binding == nil || binding.ProviderID == 0 {
 		return SessionBindingBypassNone
+	}
+	if lookupFailed {
+		return SessionBindingBypassTransient
 	}
 	for _, record := range filtered {
 		if record.ID != binding.ProviderID {
@@ -125,6 +169,7 @@ func sessionBindingBypass(filtered []Filtered, binding *SessionBindingSnapshot) 
 		}
 		return SessionBindingBypassNone
 	}
+	// 留痕里没有该家：绑定指向的行已查不到（已删除，或已停用而不在启用态列表里），属结构性失效。
 	return SessionBindingBypassNone
 }
 

@@ -196,8 +196,8 @@ type Result struct {
 	// SessionBindingBypass 说明既有会话绑定为何未被本次采用，供终态判定「成功侧能否改绑」。
 	//
 	// 零值（SessionBindingBypassNone）即允许改绑：无既有绑定、绑定被采用、或绑定因结构性
-	// 原因被跳过。仅 SessionBindingBypassTransient（熔断/会话冷却等活动时段、限额、本次已试过）
-	// 要求保留原绑定——设计稿 §4：熔断是暂时的，待恢复后会话仍粘回去。
+	// 原因被跳过。SessionBindingBypassTransient（熔断/会话冷却等活动时段、限额、本次已试过，
+	// 以及**读绑定行失败**）要求保留原绑定——设计稿 §4：熔断是暂时的，待恢复后会话仍粘回去。
 	SessionBindingBypass SessionBindingBypass
 
 	// timestamp 是结果产出的毫秒时间戳，仅供落链使用，不参与选路语义。
@@ -340,7 +340,8 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 	switches := s.affinitySwitches(ctx)
 	if withAffinity && s.opts.Affinity != nil && switches.Enabled {
 		if !switches.ForcePrefix {
-			if bound, ok := s.nominateBySessionBinding(ctx, req, excluded); ok {
+			bound, nomination := s.nominateBySessionBinding(ctx, req, excluded)
+			if nomination == sessionBindingNominated {
 				selectedPriority := resolveEffectivePriority(bound, req.Group, penalties)
 				survivors := affinitySurvivors(filtered.healthy, bound.ID, req.Group, penalties)
 				dc.SurvivingCandidates = survivors
@@ -364,9 +365,16 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 					timestamp:         nowMS,
 				}, nil
 			}
-			// 既有绑定未被采用：判定它是临时原因（熔断/会话冷却等）还是结构性原因。
+			// 既有绑定未被采用：判定它是临时原因（熔断/会话冷却/读绑定行失败等）还是结构性原因。
 			// 临时原因下终态成功侧**不得**改绑（设计稿 §4：熔断是暂时的，绑定保留待恢复）。
-			bindingBypass = sessionBindingBypass(dc.FilteredProviders, req.SessionBinding)
+			//
+			// 「读绑定行失败」必须由这里显式传入（nomination）：该情形下候选根本没读出来，
+			// 不进过滤留痕，靠留痕推断只会把它当成「行已不存在」而允许改绑。
+			bindingBypass = sessionBindingBypass(
+				dc.FilteredProviders,
+				req.SessionBinding,
+				nomination == sessionBindingLookupFailed,
+			)
 		}
 		// 前缀层触发条件：客户端身份缺失，或强制前缀模式（忽略会话 ID）。
 		//

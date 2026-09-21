@@ -154,14 +154,33 @@ func (s *StoreSource) Providers(ctx context.Context) ([]Provider, error) {
 	return providers, nil
 }
 
+// ErrProviderNotFound 表示按 id 查供应商时**该行不存在**，与「查询失败」相对。
+//
+// 为什么必须把这一支显式标出来：候选被跳过时两种情形都表现为 error，但处置相反——
+// 「行已不存在」是**结构性**失效（旧绑定已死，允许改绑），「读失败」（DB 抖动/超时）是
+// **临时**原因（绑定必须保留，见 SessionBindingBypass）。若压平成同一种 error，一次瞬时
+// 读错就会把会话永久搬走（设计稿 §4：熔断等临时故障恢复后会话仍须粘回去）。
+var ErrProviderNotFound = errors.New("route: 供应商不存在")
+
+// providerLookupError 把 store 的「无行」哨兵译成 route 的 ErrProviderNotFound，其余错误原样透传。
+//
+// 为什么单独成函数：这一支的翻译就是缺陷本体（原先压平成普通 error，调用方再也分不出
+// 「行不存在」与「读失败」），独立成函数才能用**纯单测**钉住它——否则钉子只能用 stub 源，
+// 真实读取面把哨兵压平了也不会红。
+//
+// 两个哨兵都用 %w 保留（Go 1.20+ 多 %w）：调用方既能 errors.Is 到 route 的哨兵，也不丢 store 的链。
+func providerLookupError(id int64, err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%w (id=%d): %w", ErrProviderNotFound, id, err)
+	}
+	return err
+}
+
 // Provider 复刻 findProviderById 的读取面。
 func (s *StoreSource) Provider(ctx context.Context, id int64) (*Provider, error) {
 	row, err := s.pools.FindProviderByID(ctx, id)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, fmt.Errorf("route: 供应商 %d 不存在", id)
-		}
-		return nil, err
+		return nil, providerLookupError(id, err)
 	}
 	provider := providerFromStore(*row)
 	return &provider, nil
