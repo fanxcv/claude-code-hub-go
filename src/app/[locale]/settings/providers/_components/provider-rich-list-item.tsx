@@ -15,6 +15,7 @@ import {
   ScrollText,
   ShieldCheck,
   Trash,
+  TrendingDown,
   TrendingUp,
   XCircle,
 } from "lucide-react";
@@ -518,6 +519,19 @@ function ProviderRichListItemInner({
   const showCircuitBadges = provider.isEnabled;
   // 阶梯徽标跟同一开关：它是「熔断的细节」，给禁用者报级数同样是误导。
   const showLadderBadge = showCircuitBadges && ladderLevel > 0;
+
+  // 低速降权：只在有生效降权时呈现（`penalty` 为 null 即「无降权」或「读不到」，两者都不占位）。
+  //
+  // 与熔断徽标同一条纪律（上面 showCircuitBadges 的说明）：读数存在 Redis，停用渠道的
+  // 旧降权照样留着，而它**不参与选路**——给禁用渠道堆降权徽标会引导管理员去查一件不存在的
+  // 问题。禁用本身另有明确标示（开关勾选态 + 左侧灰边条），信息不会丢。
+  //
+  // 读不到（available=false）同样不占位：本徽标回答「被压了多少」，读不到时无值可报
+  // （而「读不到」另有熔断面已建立的那套语义，不在这里编一个 0）。
+  const slowRatePenalty = healthStatus?.slowRate?.penalty ?? null;
+  const showSlowRateBadge = showCircuitBadges && slowRatePenalty !== null;
+  const slowRateModelKey = healthStatus?.slowRate?.modelKey ?? null;
+  const slowRateCombinations = healthStatus?.slowRate?.combinations ?? 0;
   const accentColor = hasKeyCircuitOpen
     ? "border-l-red-500"
     : hasEndpointCircuitOpen
@@ -636,6 +650,27 @@ function ProviderRichListItemInner({
                     minutes: ladderWindowMinutes,
                   })
                 : tList("ladder.badge", { level: ladderLevel })}
+            </Badge>
+          )}
+          {/* 低速降权：被降了多少 + 是哪个模型把它压下去的。
+              多组合时把「还有 N 个」一并说清——单看一个模型名会让人以为只有它在慢。 */}
+          {showSlowRateBadge && slowRatePenalty !== null && (
+            <Badge
+              variant="outline"
+              className="flex items-center gap-1 bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800"
+              title={tList("slowRate.tooltip")}
+            >
+              <TrendingDown className="h-3 w-3" />
+              {slowRateCombinations > 1
+                ? tList("slowRate.badgeWithModels", {
+                    penalty: slowRatePenalty,
+                    model: slowRateModelKey ?? "",
+                    count: slowRateCombinations,
+                  })
+                : tList("slowRate.badge", {
+                    penalty: slowRatePenalty,
+                    model: slowRateModelKey ?? "",
+                  })}
             </Badge>
           )}
           {/* Endpoint-level circuit badge */}
@@ -900,6 +935,26 @@ function ProviderRichListItemInner({
                       minutes: ladderWindowMinutes,
                     })
                   : tList("ladder.badge", { level: ladderLevel })}
+              </Badge>
+            )}
+            {/* 低速降权（桌面端同款，见那里的说明）。 */}
+            {showSlowRateBadge && slowRatePenalty !== null && (
+              <Badge
+                variant="outline"
+                className="flex items-center gap-1 flex-shrink-0 bg-amber-50 text-amber-700 border-amber-300 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-400 dark:border-amber-800"
+                title={tList("slowRate.tooltip")}
+              >
+                <TrendingDown className="h-3 w-3" />
+                {slowRateCombinations > 1
+                  ? tList("slowRate.badgeWithModels", {
+                      penalty: slowRatePenalty,
+                      model: slowRateModelKey ?? "",
+                      count: slowRateCombinations,
+                    })
+                  : tList("slowRate.badge", {
+                      penalty: slowRatePenalty,
+                      model: slowRateModelKey ?? "",
+                    })}
               </Badge>
             )}
             {/* Endpoint-level circuit badge */}

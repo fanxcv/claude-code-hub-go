@@ -119,7 +119,12 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 
 	// 低速降权表（调度模拟器的降权维）：与数据面选路**同一份读取实现**（route.NewSlowRateReader）。
 	// 与 deps.ProviderCost 同一类读档读数；读不到不带任何降级（该维不降权），故不与选路共享装配。
-	deps.SlowRatePenalties = route.NewSlowRateReader(redisClient, logger)
+	slowRateReader := route.NewSlowRateReader(redisClient, logger)
+	deps.SlowRatePenalties = slowRateReader
+	// /providers/health 的 per-渠道低速降权投影（界面要看「这家有没有被压、压了多少」）。
+	// 复用上面那一份读取实现做生效判定（两处判定必须只有一份）；缺 Redis 时为 nil，
+	// 那响应里 slowRate 一律 null，前端整段不显示。
+	deps.ProviderSlowRates = adminapi.NewRedisProviderSlowRates(redisClient, slowRateReader, logger)
 
 	// 粘性会话终止面（providers / provider-endpoints 写路径的副作用）：与上面读档的区别在于
 	// 它是写，缺装配不给任何路由降级，只让写路径记 warn（见 openStickySessions 的说明）。

@@ -13,6 +13,11 @@
     "badgeWithWindow": "第 {level} 阶熔断 · 本次 {minutes} 分钟",
     "tooltip": "等待阶梯：连续多次半开试探都没恢复，熔断时长按 基础时长 + 递增时长 × 级数 递增（级数封顶最大次数）；恢复后归零。"
   },
+  "slowRate": {
+    "badge": "低速降权 +{penalty}（{model}）",
+    "badgeWithModels": "低速降权 +{penalty}（{model} 等 {count} 个模型）",
+    "tooltip": "低速降级：该渠道近期生成速率持续低于自身基线，选路时按此降权量后移优先级（降权不改熔断与竞速）。同一渠道的多个模型各自评估，此处显示降权最重的那一个及其组合数。"
+  },
   "officialWebsite": "官网",
   "viewFullKey": "查看完整 API Key",
   "viewFullKeyDesc": "请妥善保管，不要泄露给他人",

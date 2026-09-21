@@ -641,6 +641,36 @@ export interface ProviderCircuitHealth {
    * 服务端不报这个数字，界面因此也不必为它堆字。
    */
   openWindowMinutes: number | null;
+  /**
+   * 低速降权运行态（Go 侧增强字段，Node 无此键）。
+   *
+   * 三态是刻意的，界面必须区分：
+   * - `null`/缺省：服务端未装配该读面（无 Redis），整段不显示；
+   * - `available === false`：读面在但本次读不到，显示「读不到」而非「无降权」；
+   * - `available === true` 且 `penalty === null`：确实无降权（不是 0，0 与 null 同义于此）。
+   */
+  slowRate?: ProviderSlowRateHealth | null;
+}
+
+/**
+ * 渠道级低速降权读数（`/api/v1/providers/health` 的 `slowRate` 字段）。
+ *
+ * 聚合口径：一个渠道可有多个「渠道 × 模型」组合各带降权，本投影取**最大值**，
+ * `modelKey` 是取到该最大值的那一个组合，`combinations` 是生效组合数。
+ *
+ * `available === false` 时 `penalty` 一律为 null：**不用 0 冒充**——
+ * 0 与「无降权」同义，必须与「读不到」可区分（与 ProviderCircuitLogsState 同纪律）。
+ */
+export interface ProviderSlowRateHealth {
+  available: boolean;
+  /** 降权量（生效最大值）。无降权或读不到即 null。 */
+  penalty: number | null;
+  /** 降权最重的那一个组合的模型键。无降权即 null。 */
+  modelKey: string | null;
+  /** 有生效降权的组合数（含 modelKey 那一个）。 */
+  combinations: number;
+  /** 只在 available === false 时给出（例如 redis_unavailable）。 */
+  unavailableReason?: string | null;
 }
 
 /**

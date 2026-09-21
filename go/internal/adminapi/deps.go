@@ -249,6 +249,10 @@ type Deps struct {
 	// nil 表示未装配：调度模拟器的该维不降权——与「全渠道未开启低速监控」同义。
 	// 它不阻断任何路由注册（只是预览与真实选路在降权维不一致，属可见的偏离）。
 	SlowRatePenalties SlowRatePenaltyReader
+	// ProviderSlowRates 读**per-渠道**的低速降权聚合读数（/providers/health 的 slowRate 字段）。
+	// nil 表示未装配：该响应里 `slowRate` 一律为 null，前端整段不显示这一维
+	// （不是「无降权」——两者必须可区分，故不用零值对象冒充）。
+	ProviderSlowRates ProviderSlowRateReader
 	// EndpointCircuitBreaker 对应 ENABLE_ENDPOINT_CIRCUIT_BREAKER（Node 默认 false）。
 	// 关闭时端点级与厂级熔断**都不参与判定**：模拟器的端点统计给 circuitOpen=0 / available=enabled，
 	// 厂级熔断也不排除任何供应商（Node 的 isVendorTypeCircuitOpen 首行就是这个开关）。
