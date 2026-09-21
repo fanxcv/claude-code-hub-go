@@ -69,8 +69,14 @@ func TestSessionBindingWritebackSplitsByTombstoneKind(t *testing.T) {
 			recorder := &stubSessionBinding{}
 			pc.SetSessionBindingWriteback(recorder)
 
-			New(&fakeWriter{}, Options{}).sessionBindingWriteback(
-				context.Background(), pc, tc.directive, tc.committed,
+			// 同步路径对同一条指令发两次：失败半 + 成功半（与 affinityWriteback 同形）。
+			// 两半走同一个分派器，故这里的断言仍然覆盖三种结局的分流。
+			settler := New(&fakeWriter{}, Options{})
+			settler.sessionBindingWriteback(
+				context.Background(), pc, tc.directive, sessionBindingFailure, tc.committed,
+			)
+			settler.sessionBindingWriteback(
+				context.Background(), pc, tc.directive, sessionBindingWinner, tc.committed,
 			)
 
 			if recorder.clearCount != tc.wantClear {

@@ -317,6 +317,10 @@ func (s *Settler) SettleContext(
 	// 也不会重复。
 	winner := func(writeCtx context.Context, result Result) {
 		s.affinityWinner(writeCtx, pc, settlement.Affinity, result.Committed)
+		// 会话绑定的**成功侧**与亲和 winner 同一时机、同一队列 ctx：只在终态真提交之后
+		// 才 CAS。异步模式下它必须跟着队列走——漏掉这一步，生产（async）路径上会话绑定
+		// 写回会**一次都不发放**，绑定永远没有胜出渠道、后续请求无从提名。
+		s.sessionBindingWriteback(writeCtx, pc, settlement.Affinity, sessionBindingWinner, result.Committed)
 		// 低速样本与亲和写回同一时机、同一队列 ctx：终态提交之后才采样，
 		// 且异步模式下跟着队列走（见 batch.go 的 afterCommit）。
 		s.recordSlowRateCommitted(writeCtx, settlement.SlowRate, result.Committed)
@@ -325,7 +329,11 @@ func (s *Settler) SettleContext(
 	if result.Queued {
 		// 已入队：墓碑**不随异步写入推迟**（它与是否赢得终态无关，Node 在失败判定处立即
 		// fire-and-forget）；winner 由队列在 flush 之后发。
+		//
+		// 会话绑定的**失败侧**与墓碑同机，理由同源：它同样不依赖是否赢得终态，而它的
+		// 作用恰恰是让「下一个请求绕开这家」——推迟到 flush 会让该效果晚一个批次生效。
 		s.affinityTombstone(ctx, pc, settlement.Affinity)
+		s.sessionBindingWriteback(ctx, pc, settlement.Affinity, sessionBindingFailure, false)
 		return result, err
 	}
 	// 未入队（同步模式或队列满降级）：与接线前逐字一致——墓碑先、winner 后，且都在
@@ -377,38 +385,48 @@ func (s *Settler) affinityWriteback(
 	// 会话绑定与亲和共用同一份终态事实：成功者与失败者都直接来自 directive。
 	// 为何共用而不是另开一列：两者的「谁是 winner、谁是失败者」完全同源（同一个
 	// forward 结果），各算一次只会得到一个可能与事实不符的副本。
-	s.sessionBindingWriteback(ctx, pc, directive, committed)
+	//
+	// 同步路径两半各发一次（与亲和侧的两个函数同形）；异步路径不调这两句，
+	// 而是由 SettleContext 在各自时机分别调同一个函数（见那里的注释）。
+	s.sessionBindingWriteback(ctx, pc, directive, sessionBindingFailure, committed)
+	s.sessionBindingWriteback(ctx, pc, directive, sessionBindingWinner, committed)
 }
 
-// sessionBindingWriteback 发放会话绑定的终态写回。
+// sessionBindingWriteback 发放会话绑定的终态写回，是**唯一的分派点**：三种结局
+// （成功 CAS / ProviderError 写冷却 / ResourceNotFound 只清绑定）只在这里判定。
 //
 // 语义与亲和写回平行但**不等价**（不能合并成一个实现）：
-//   - 成功：CAS 把绑定指向 winner（generation fence 拒绍迟到写入）；
+//   - 成功：CAS 把绑定指向 winner（generation fence 拒绝迟到写入）；
 //   - 供应商故障：写会话冷却（key TTL 60s），使后续请求绕开这家；
-//   - 资源/配置类失效（上游 404：该家没这个模型）：**只清绑定、不写冷却**（设计稿 §4）。
+//   - 资源/配置类失效（上游 404：该家没这个模型）：**只清绑定、不写冷却**（设计稿 §4）
+//     ——模型不支持是配置决策而非故障，写冷却会把「缺模型」记成「慢」。
 //
-// 第三类是本次才分的：它原来与第二类合并（同一 TombstoneProviderID），于是「模型不支持」
-// 也写了一家只是缺模型的渠道的冷却，染污「低速」语义。
+// 两半的时机不同，故调用方用 phase 选本次发哪一半：
+//   - sessionBindingFailure 不依赖是否赢得终态，异步模式下与墓碑同机、在入队处立即发放
+//     （它的作用正是让下一个请求绕开这家，推迟一个批次即削弱效果）；
+//   - sessionBindingWinner 必须等终态**真提交**（异步即队列 flush 之后），否则会把粘性
+//     指向一个本次并未真正服务成功的供应商。
+//
+// 同步路径（含队列满降级）两半各发一次；异步路径入队处发失败半、提交后动作发成功半。
+// 两条路径调的是同一个函数、同一套判据，故不可能分叉。
 //
 // 未装配（无会话身份、会话包未接线）时整段跳过，行为与接线前逐字一致。
 func (s *Settler) sessionBindingWriteback(
 	ctx context.Context,
 	pc *pctx.Context,
 	directive AffinityDirective,
+	phase sessionBindingPhase,
 	committed bool,
 ) {
-	if pc == nil {
+	if !sessionBindingApplies(directive, phase, committed) {
 		return
 	}
-	writeback, ok := pc.SessionBindingWriteback()
-	if !ok || writeback == nil {
+	writeback, writeCtx, cancel, ok := s.sessionBindingTarget(ctx, pc)
+	if !ok {
 		return
 	}
-	// 写回超时自建：异步写模式下本函数由队列 worker 在请求返回之后调用，此刻请求 ctx 已取消
-	// （与 affinity 写回、低速样本同一个坑）。
-	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionBindingTimeout)
 	defer cancel()
-	if directive.TombstoneProviderID > 0 {
+	if phase == sessionBindingFailure {
 		if directive.TombstoneKind == AffinityTombstoneResourceNotFound {
 			writeback.ClearBinding(writeCtx)
 			return
@@ -416,9 +434,52 @@ func (s *Settler) sessionBindingWriteback(
 		writeback.CooldownOnFailure(writeCtx, directive.TombstoneProviderID)
 		return
 	}
-	if directive.WinnerProviderID > 0 && committed {
-		writeback.CompareAndSet(writeCtx, directive.WinnerProviderID)
+	writeback.CompareAndSet(writeCtx, directive.WinnerProviderID)
+}
+
+// sessionBindingPhase 选择本次发放的是哪一半——两半的时机不同，必须能分开调（见上）。
+type sessionBindingPhase int
+
+const (
+	// sessionBindingFailure 是失败侧：写冷却或清绑定，不依赖是否赢得终态。
+	sessionBindingFailure sessionBindingPhase = iota
+	// sessionBindingWinner 是成功侧：CAS 指向 winner，只在终态真提交之后。
+	sessionBindingWinner
+)
+
+// sessionBindingApplies 判「本次这一半要不要发放」。判据与 phase 都收在这里，故两条
+// 路径不可能对「什么时候该写」产生分歧。
+func sessionBindingApplies(directive AffinityDirective, phase sessionBindingPhase, committed bool) bool {
+	switch phase {
+	case sessionBindingFailure:
+		return directive.TombstoneProviderID > 0
+	case sessionBindingWinner:
+		return directive.WinnerProviderID > 0 && committed
+	default:
+		return false
 	}
+}
+
+// sessionBindingTarget 取本次请求的会话绑定写回实现与它的写上下文。
+//
+// 第四个返回值在「本次不写会话绑定」时为 false（无会话身份、会话包未装配，或守卫链
+// 未接线）——调用方据此跳过，而不是推断。
+//
+// 写上下文按终态层的既有纪律自建：异步写模式下本函数由队列 worker 在请求返回之后调用，
+// 此刻请求 ctx 已取消（与 affinity 写回、低速样本同一个坑），拿它去写 Redis 会静默失败。
+func (s *Settler) sessionBindingTarget(
+	ctx context.Context,
+	pc *pctx.Context,
+) (pctx.SessionBindingWriteback, context.Context, context.CancelFunc, bool) {
+	if pc == nil {
+		return nil, nil, nil, false
+	}
+	writeback, ok := pc.SessionBindingWriteback()
+	if !ok || writeback == nil {
+		return nil, nil, nil, false
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionBindingTimeout)
+	return writeback, writeCtx, cancel, true
 }
 
 // sessionBindingTimeout 是会话绑定写回的上界，与低速旁路同量级（Redis 默认命令超时）。
