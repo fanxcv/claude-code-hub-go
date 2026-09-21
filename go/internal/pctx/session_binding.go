@@ -43,6 +43,35 @@ func (c *Context) SetSessionBindingWriteback(writeback SessionBindingWriteback) 
 	c.sessionBinding = writeback
 }
 
+// SetSessionBindingKeep 记下「本次成功终态不得改写会话绑定」及其原因。
+//
+// 由守卫链在选路之后按 route.Result.SessionBindingBypass 调用（选路层才知道绑定为何没被采用）。
+// 原因只用于留痕与排障，判定本身由「是否调用过本方法」决定；空原因不记（等于不抑制）。
+func (c *Context) SetSessionBindingKeep(reason string) {
+	if c == nil || reason == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionBindingKeep = reason
+}
+
+// SessionBindingKeepReason 返回「本次不得改绑」的原因；第二个返回值为 false 表示允许改绑。
+//
+// 设计稿 §4：熔断/会话冷却等临时原因下绑定保留，待恢复后会话仍粘回去——那时若照旧 CAS，
+// 会话就被永久搬到备用，「仍粘回去」即为假。
+func (c *Context) SessionBindingKeepReason() (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionBindingKeep == "" {
+		return "", false
+	}
+	return c.sessionBindingKeep, true
+}
+
 // SessionBindingWriteback 取本次请求的会话绑定写回能力。
 //
 // 第二个返回值为 false 表示本次请求不写会话绑定（无会话身份、会话包未装配，

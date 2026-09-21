@@ -114,6 +114,12 @@ type StoreOptions struct {
 	Tracer terminal.Tracer
 	// RouteOptions 覆盖选路器参数（健康、亲和、闸门）；Source 恒由本函数填。
 	RouteOptions route.Options
+	// AffinityEnvEnabled 是亲和总闸的 env 侧（ENABLE_PREFIX_AFFINITY），与 system_settings
+	// 的 affinity_enabled 取或（与 cmd/cchd 的 affinityDecision 同序）。
+	//
+	// 为何要在这里传：总闸与模式都改成逐请求读快照（见 affinitySwitchGate），而快照读取面
+	// 在本函数里（adapters.Settings），env 侧却在进程装配处——两边在这一点汇合。
+	AffinityEnvEnabled bool
 	// DialOptions 覆盖拨号参数（超时、上游连接上限）。
 	DialOptions dial.Options
 	// Limits 是转发路径上限；零值取 forward 的默认。
@@ -469,6 +475,10 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		Now:          options.Now,
 		Logger:       logger,
 		EndpointGate: options.RouteOptions.EndpointGate,
+		// 亲和开关逐请求读：总闸与模式都能在运行时由管理面改（设计稿 §7 把模式开关
+		// 明定为配置回滚手段）。调用方显式注入的读取面优先（测试用）。
+		AffinityIgnoreClientSessionID: options.RouteOptions.AffinityIgnoreClientSessionID,
+		AffinitySwitches:              affinitySwitchesFor(options, adapters.Settings),
 	})
 
 	deps := guard.Deps{Logger: logger}
@@ -767,4 +777,35 @@ func publicStatusRollupRecorder(options StoreOptions, logger *logx.Logger) termi
 		logger,
 		nil,
 	)
+}
+
+// affinitySwitchesFor 给出逐请求读亲和开关的注入缝。
+//
+// 为什么必须逐请求读：构造期快照会让「管理面返回 200 且广播失效、运行中选路却不变」，
+// 而设计稿 §7 正是把管理面 affinityIgnoreClientSessionId 当作**配置回滚手段**。
+//
+// 读的是 cfgsync 的 system_settings 快照（60s TTL + 失效广播），不是每请求一次真库查询
+// ——与 wsEligibility、dialOptions.HTTP2Enabled 同一手法。
+//
+// 总闸取 `env || 快照`，快照读取失败时按出厂默认（总闸开、模式为会话优先）fail-open：
+// 与 cmd/cchd 的 affinityDecision 同一口径，两侧不一致才是缺陷。
+func affinitySwitchesFor(options StoreOptions, settings guard.SettingsSource) func(context.Context) route.AffinitySwitches {
+	if options.RouteOptions.AffinitySwitches != nil {
+		return options.RouteOptions.AffinitySwitches
+	}
+	envEnabled := options.AffinityEnvEnabled
+	return func(ctx context.Context) route.AffinitySwitches {
+		if settings == nil {
+			// 无设置读取面：按出厂默认（总闸开、模式为会话优先），与 affinityDecision 同向。
+			return route.AffinitySwitches{Enabled: true}
+		}
+		snapshot, err := settings.FindSystemSettings(ctx)
+		if err != nil || snapshot == nil {
+			return route.AffinitySwitches{Enabled: true}
+		}
+		return route.AffinitySwitches{
+			Enabled:     envEnabled || snapshot.AffinityEnabled,
+			ForcePrefix: snapshot.AffinityIgnoreClientSessionID,
+		}
+	}
 }

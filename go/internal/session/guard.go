@@ -62,11 +62,15 @@ func (a *SessionBinderAdapter) Ensure(ctx context.Context, req guard.SessionRequ
 		// Redis/脚本不可用：Node 在 getOrCreateSessionId 里降级为生成新会话（不查库），
 		// 序号同样降级；守卫链继续放行，会话语义退化为「每请求独立」。
 		a.log.Warn("session.ensure.redis_unavailable", map[string]any{"note": "降级生成会话"})
-		return guard.SessionResult{SessionID: GenerateSessionID(), Sequence: fallbackSequence()}, nil
+		return guard.SessionResult{SessionID: GenerateSessionID(), Sequence: fallbackSequence(), IdentitySource: guard.SessionIdentityGenerated}, nil
 	}
 
 	sessionID := ExtractClientSessionID(req.Body, req.Headers)
+	// identitySource 记下会话 id 从哪来：前缀兜底层靠它判定是否参与本次选路。
+	// 后两条分支（找回/生成）都属「客户端身份缺失」，故对兜底层等价（见 guard.SessionIdentitySource）。
+	identitySource := guard.SessionIdentityClient
 	if sessionID == "" {
+		identitySource = guard.SessionIdentityGenerated
 		// 正文哈希降级：只在取得到有效哈希且 Redis 可用时尝试复用。
 		hash := CalculateMessagesHash(req.Body["messages"])
 		if hash != "" {
@@ -75,6 +79,7 @@ func (a *SessionBinderAdapter) Ensure(ctx context.Context, req guard.SessionRequ
 				a.log.Warn("session.ensure.hash_lookup_failed", map[string]any{"error": err.Error()})
 			} else if ok {
 				sessionID = existing
+				identitySource = guard.SessionIdentityRecovered
 				// 复用已绑定的会话：刷新最后活动时间（对应 Node 的 refreshSessionTTL）。
 				if err := a.binder.MarkLastSeen(ctx, sessionID, a.ttl); err != nil {
 					a.log.Warn("session.ensure.refresh_ttl_failed", map[string]any{"error": err.Error()})
@@ -106,7 +111,7 @@ func (a *SessionBinderAdapter) Ensure(ctx context.Context, req guard.SessionRequ
 	}
 	// AllowRawSession 为 false 时 Node 会注入 metadata.user_id（改写正文），属请求改写；
 	// 本适配不做改写，留待入口波次。
-	return guard.SessionResult{SessionID: sessionID, Sequence: sequence, Binding: binding}, nil
+	return guard.SessionResult{SessionID: sessionID, Sequence: sequence, IdentitySource: identitySource, Binding: binding}, nil
 }
 
 // readBindingFacts 读一次会话绑定并归一为 guard 的中性事实。

@@ -301,6 +301,13 @@ type SessionRequest struct {
 type SessionResult struct {
 	SessionID string
 	Sequence  int
+	// IdentitySource 是本次会话身份的**来源**。
+	//
+	// 为什么必须带它：前缀兜底层（route 的前缀亲和）服务的是**客户端未带会话 id** 的请求
+	// （设计稿 §2），而会话包在那种情形下总会生成或恢复出一个非空 SessionID。只看 SessionID
+	// 是否为空，这道兜底在生产链上永不触发——无 id 的客户端（curl、旧客户端）就此失去旧版
+	// 已有的前缀粘性（§9 验收项 2 要求它们记 prefix_affinity）。
+	IdentitySource SessionIdentitySource
 	// Binding 是本次会话的绑定快照，供选路层判定会话粘性（nil 表示无绑定事实）。
 	//
 	// 为何带上 ProviderID 与 Generation：前者是「粘到哪一家」，后者是终态写回 CAS 的基准
@@ -308,6 +315,21 @@ type SessionResult struct {
 	// 丢了它们就只能每请求再读一次 Redis（且 CAS 无基准）。
 	Binding *SessionBindingFacts
 }
+
+// SessionIdentitySource 是会话身份的来源（guard 包的中性视图）。
+//
+// 三个取值对应会话包 Ensure 的三条分支：客户端显式携带 / 按正文哈希找回既有会话 /
+// 网关生成。后两者同属「客户端身份缺失」，前缀兜底层对它们一视同仁。
+type SessionIdentitySource int
+
+const (
+	// SessionIdentityClient 是客户端显式携带了会话 id。
+	SessionIdentityClient SessionIdentitySource = iota
+	// SessionIdentityRecovered 是客户端未带 id，但按正文哈希找回了既有会话。
+	SessionIdentityRecovered
+	// SessionIdentityGenerated 是客户端未带 id 且未找到既有会话，由网关生成。
+	SessionIdentityGenerated
+)
 
 // SessionBindingFacts 是会话绑定的事实快照（guard 包的中性视图）。
 //

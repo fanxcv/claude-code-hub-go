@@ -111,6 +111,7 @@ func (d Deps) sessionStep() Step {
 		if router, ok := d.Provider.(*ProviderRouter); ok {
 			router.SetConversationSession(result.SessionID)
 			router.SetConversationBinding(sessionBindingSnapshot(result))
+			router.SetConversationIdentity(routeSessionIdentity(result.IdentitySource))
 		}
 		// 会话绑定写回能力装进上下文：终态层只认 pctx 的中性接口（terminal 不得 import
 		// session，见 session/binding_writeback.go 的说明）。未装配/未就绪时为 nil，不装入。
@@ -135,6 +136,21 @@ func sessionBindingSnapshot(result SessionResult) *route.SessionBindingSnapshot 
 		KeyID:      result.Binding.KeyID,
 		Generation: result.Binding.Generation,
 		ProviderID: result.Binding.ProviderID,
+	}
+}
+
+// routeSessionIdentity 把守卫侧的身份来源折成选路包的枚举。
+//
+// 为何要有这一跳：两个包各持一份枚举（route 不得反向依赖 guard/session，见 route.Request
+// 的说明），映射只此一处，故两侧不会分叉。未知值一律按「客户端显式携带」——那是接线前的行为。
+func routeSessionIdentity(source SessionIdentitySource) route.SessionIdentity {
+	switch source {
+	case SessionIdentityRecovered:
+		return route.SessionIdentityRecovered
+	case SessionIdentityGenerated:
+		return route.SessionIdentityGenerated
+	default:
+		return route.SessionIdentityClient
 	}
 }
 

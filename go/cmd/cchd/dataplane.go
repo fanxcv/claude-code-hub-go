@@ -153,6 +153,9 @@ func openDataPlane(ctx context.Context, options dataPlaneOptions) (http.Handler,
 		NewRows: usageRows,
 		// 终态上报：拿到行 id 且赢得终态后交给出站观测面（未配 key 时为空接口）。
 		Tracer: tracing.AsTracer(traces),
+		// 亲和总闸的 env 侧：与 system_settings.affinity_enabled 取或（见 affinityDecision），
+		// 逐请求由 dataplane 的 affinitySwitchesFor 合并。
+		AffinityEnvEnabled: options.Cfg.Env.EnablePrefixAffinity,
 		RouteOptions: route.Options{
 			Affinity: affinity.store,
 			// 日志身份形制（使用记录页的「渠道复用 / 新会话新渠道」）靠它判定。

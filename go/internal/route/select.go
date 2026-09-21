@@ -13,6 +13,22 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 )
 
+// AffinitySwitches 是一次请求上亲和的生效开关。
+//
+// 两个开关各自独立（2026-09-21 拆分，见 drizzle/0132）：
+//   - Enabled（总闸）：关时**整层**不参与选路（会话绑定与前缀同属亲和）；
+//   - ForcePrefix（模式）：真时只跳过会话绑定层，强制前缀指纹粘性。
+//
+// 为何是逐请求值而不是构造期 bool：设计稿 §7 把管理面 affinityIgnoreClientSessionId
+// 明定为**配置回滚手段**，总闸（system_settings.affinity_enabled）同样可在运行时改。
+// 构造期快照会让「管理面返回 200 且广播失效、运行中选路却不变」——运维据此回滚必然失败。
+type AffinitySwitches struct {
+	// Enabled 为假时会话绑定与前缀层都不参与选路。
+	Enabled bool
+	// ForcePrefix 为真时只跳过会话绑定层（前缀层照旧）。
+	ForcePrefix bool
+}
+
 // Options 是选路器的构造选项。
 type Options struct {
 	// Source 提供供应商与端点快照，必填。
@@ -33,6 +49,12 @@ type Options struct {
 	// 它同时决定请求日志的 session_identity_kind：为真且请求可指纹化时记 prefix_affinity，
 	// 否则记 session_id。
 	AffinityIgnoreClientSessionID bool
+	// AffinitySwitches 是**逐请求**读亲和开关的注入缝；nil 时回落到 AffinityIgnoreClientSessionID
+	// 的静态值（总闸按 Affinity 是否装配判定），即接线前的行为。
+	//
+	// 实现应复用 system_settings 的 cfgsync 快照（60s TTL + 失效广播），而不是每请求一次真库查询
+	// ——仓内同款先例见 dataplane 的 wsEligibility 与 dialOptions.HTTP2Enabled。
+	AffinitySwitches func(ctx context.Context) AffinitySwitches
 	// Gates 是三个外部维度的钩子，零值即全部不判定。
 	Gates Gates
 	// Rand 是加权选择的随机源，返回 [0,1)；nil 时用全局随机源。
@@ -120,7 +142,30 @@ type Request struct {
 	// 它是「会话级粘性」的注入缝：绑定读取在 session 包，本包只消费快照
 	// （route 不得 import session：session → guard → route 成环）。
 	SessionBinding *SessionBindingSnapshot
+	// SessionIdentity 是本次会话身份的来源。前缀兜底层按「客户端是否显式带了 id」
+	// 决定进不进，而不是按 SessionID 是否为空——会话包在客户端未带 id 时总会生成或
+	// 恢复出一个非空 SessionID，按空串判定会让这道兜底永不触发（见 select.go 的注释）。
+	// 零值即 SessionIdentityClient：既有调用方不传时行为与接线前逐字一致。
+	SessionIdentity SessionIdentity
 }
+
+// SessionIdentity 是会话身份的来源，决定前缀兜底层是否参与本次选路。
+//
+// 依据设计稿 §2：「前缀亲和（兜底）：sessionID == "" && fingerprintable」，
+// 即它服务的是**客户端未带会话 id** 的请求（curl、不支持会话的旧客户端）。
+type SessionIdentity int
+
+const (
+	// SessionIdentityClient 是客户端显式携带了会话 id（metadata.user_id / session_id 或
+	// Codex 路径）。此情形走会话绑定层，**不**进前缀兜底（设计稿裁决 A：session id 为主）。
+	// 取零值：既有调用方不传时行为与接线前逐字一致。
+	SessionIdentityClient SessionIdentity = iota
+	// SessionIdentityRecovered 是客户端未带 id，但按正文哈希找回了既有会话。
+	// 仍属「客户端身份缺失」，故前缀兜底照旧参与（会话绑定命中时它会先短路）。
+	SessionIdentityRecovered
+	// SessionIdentityGenerated 是客户端未带 id 且未找到既有会话，由网关生成。
+	SessionIdentityGenerated
+)
 
 // Result 是一次选路的结果与留痕。
 type Result struct {
@@ -147,6 +192,13 @@ type Result struct {
 	// 存在）。**与 AffinityLookup 不同**：查找不可用（Redis 故障）时仍非 nil，
 	// 因为身份事实只依赖指纹链与键，不依赖 Redis。请求日志的 session_identity_kind 取它。
 	AffinityIdentity *AffinityIdentity
+
+	// SessionBindingBypass 说明既有会话绑定为何未被本次采用，供终态判定「成功侧能否改绑」。
+	//
+	// 零值（SessionBindingBypassNone）即允许改绑：无既有绑定、绑定被采用、或绑定因结构性
+	// 原因被跳过。仅 SessionBindingBypassTransient（熔断/会话冷却等活动时段、限额、本次已试过）
+	// 要求保留原绑定——设计稿 §4：熔断是暂时的，待恢复后会话仍粘回去。
+	SessionBindingBypass SessionBindingBypass
 
 	// timestamp 是结果产出的毫秒时间戳，仅供落链使用，不参与选路语义。
 	timestamp int64
@@ -267,6 +319,8 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		writeback        *AffinityWriteback
 		affinityIdentity *AffinityIdentity
 		nominated        bool
+		// bindingBypass 是「既有绑定未被采用」的性质，随 Result 交到终态层决定能否改绑。
+		bindingBypass SessionBindingBypass
 	)
 	// 会话绑定层（第一优先级）：会话存在且已有非空绑定时短路，不查前缀、不跑加权随机。
 	//
@@ -282,9 +336,10 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 	// 总闸（s.opts.Affinity == nil 即未装配）门控**整层**：会话绑定与前缀同属亲和，
 	// 总闸关时两者都不参与选路。缺这道门会出现「总闸报 disabled，会话粘性却在跑」的矛盾态
 	// （会话绑定只看 req.SessionBinding，不查 store 是否装配）。
-	forcePrefix := s.opts.AffinityIgnoreClientSessionID
-	if withAffinity && s.opts.Affinity != nil {
-		if !forcePrefix {
+	// 亲和开关逐请求读（见 Options.AffinitySwitches）：总闸与模式都可在运行时由管理面改。
+	switches := s.affinitySwitches(ctx)
+	if withAffinity && s.opts.Affinity != nil && switches.Enabled {
+		if !switches.ForcePrefix {
 			if bound, ok := s.nominateBySessionBinding(ctx, req, excluded); ok {
 				selectedPriority := resolveEffectivePriority(bound, req.Group, penalties)
 				survivors := affinitySurvivors(filtered.healthy, bound.ID, req.Group, penalties)
@@ -309,9 +364,17 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 					timestamp:         nowMS,
 				}, nil
 			}
+			// 既有绑定未被采用：判定它是临时原因（熔断/会话冷却等）还是结构性原因。
+			// 临时原因下终态成功侧**不得**改绑（设计稿 §4：熔断是暂时的，绑定保留待恢复）。
+			bindingBypass = sessionBindingBypass(dc.FilteredProviders, req.SessionBinding)
 		}
-		// 前缀层触发条件：无会话 ID（会话优先模式下的兜底），或强制前缀模式（忽略会话 ID）。
-		if req.SessionID == "" || forcePrefix {
+		// 前缀层触发条件：客户端身份缺失，或强制前缀模式（忽略会话 ID）。
+		//
+		// 「客户端身份缺失」而非「SessionID 为空」：会话包在客户端未带 id 时总会生成或恢复
+		// 出一个非空 SessionID（session/guard.go），按空串判定会让这道兜底在生产链上
+		// **永不触发**——无 id 的客户端（curl、旧客户端）就此失去旧版已有的前缀粘性。
+		// 设计稿 §2 正是把该情形定义为前缀兜底，§9 验收项 2 要求其记 prefix_affinity。
+		if req.SessionID == "" || req.SessionIdentity != SessionIdentityClient || switches.ForcePrefix {
 			nominate, lookup, writeback, affinityIdentity, nominated = s.nominateByAffinity(ctx, req, excluded)
 		}
 	}
@@ -339,27 +402,29 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 			CostMultiplier: nominate.Provider.CostMultiplier,
 		}}
 		return Result{
-			Provider:          &nominate.Provider,
-			Context:           dc,
-			Method:            MethodPrefixAffinity,
-			Reason:            ReasonSelectedAffinity,
-			CircuitState:      s.circuitState(ctx, nominate.Provider.ID),
-			Affinity:          &nominate,
-			AffinityLookup:    lookup,
-			AffinityWriteback: writeback,
-			AffinityIdentity:  affinityIdentity,
-			timestamp:         nowMS,
+			Provider:             &nominate.Provider,
+			Context:              dc,
+			Method:               MethodPrefixAffinity,
+			Reason:               ReasonSelectedAffinity,
+			CircuitState:         s.circuitState(ctx, nominate.Provider.ID),
+			Affinity:             &nominate,
+			AffinityLookup:       lookup,
+			AffinityWriteback:    writeback,
+			AffinityIdentity:     affinityIdentity,
+			SessionBindingBypass: bindingBypass,
+			timestamp:            nowMS,
 		}, nil
 	}
 
 	if len(filtered.healthy) == 0 {
 		return Result{
-			Context:           dc,
-			Method:            MethodWeightedRandom,
-			AffinityLookup:    lookup,
-			AffinityWriteback: writeback,
-			AffinityIdentity:  affinityIdentity,
-			timestamp:         nowMS,
+			Context:              dc,
+			Method:               MethodWeightedRandom,
+			AffinityLookup:       lookup,
+			AffinityWriteback:    writeback,
+			AffinityIdentity:     affinityIdentity,
+			SessionBindingBypass: bindingBypass,
+			timestamp:            nowMS,
 		}, nil
 	}
 
@@ -421,16 +486,29 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		method = MethodGroupFiltered
 	}
 	return Result{
-		Provider:          &selected,
-		Context:           dc,
-		Method:            method,
-		Reason:            ReasonSelectedInitial,
-		CircuitState:      s.circuitState(ctx, selected.ID),
-		AffinityLookup:    lookup,
-		AffinityWriteback: writeback,
-		AffinityIdentity:  affinityIdentity,
-		timestamp:         nowMS,
+		Provider:             &selected,
+		Context:              dc,
+		Method:               method,
+		Reason:               ReasonSelectedInitial,
+		CircuitState:         s.circuitState(ctx, selected.ID),
+		AffinityLookup:       lookup,
+		AffinityWriteback:    writeback,
+		AffinityIdentity:     affinityIdentity,
+		SessionBindingBypass: bindingBypass,
+		timestamp:            nowMS,
 	}, nil
+}
+
+// affinitySwitches 给出本次请求生效的亲和开关。
+//
+// 未注入逐请求读取面时回落到静态值：总闸按 Affinity 是否装配判定（调用方已先查过），
+// 模式取 AffinityIgnoreClientSessionID。这条回落是**接线前的行为**，既有测试与模拟器
+// （无请求上下文、无设置快照）依赖它。
+func (s *Selector) affinitySwitches(ctx context.Context) AffinitySwitches {
+	if s.opts.AffinitySwitches != nil {
+		return s.opts.AffinitySwitches(ctx)
+	}
+	return AffinitySwitches{Enabled: true, ForcePrefix: s.opts.AffinityIgnoreClientSessionID}
 }
 
 // consideredCandidates 把「通过全部硬校验的候选池」投影为决策留痕。

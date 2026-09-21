@@ -54,6 +54,13 @@ type ProviderRouter struct {
 	// sessionBinding 是本次请求的会话绑定快照（会话守卫步骤随 sessionID 一同盖上）。
 	// nil 表示无绑定事实（未接线、Redis 不可用或读取冲突）——此时选路走前缀兜底或加权随机。
 	sessionBinding *route.SessionBindingSnapshot
+	// sessionIdentity 是会话身份的**来源**（客户端显式携带 / 按正文哈希恢复 / 网关生成），
+	// 由会话守卫步骤随 sessionID 一同盖上。
+	//
+	// 为什么需要它：前缀兜底层服务的是「客户端未带 id」的请求，而会话包总会为这类请求
+	// 生成或恢复出一个非空 SessionID——只看 SessionID 是否为空，这道兜底永不触发。
+	// 零值即「客户端显式携带」，与接线前的行为一致。
+	sessionIdentity route.SessionIdentity
 
 	// DetectClient 判定某供应商的客户端名单（Node Step 1 的 isClientAllowedDetailed）。
 	// 由 `Adapters.Apply` 注入（复用 `guard/client.go` 里那份 client-detector 移植），
@@ -176,6 +183,8 @@ func (r *ProviderRouter) Select(ctx context.Context, req *pctx.Context) (pctx.Pr
 		// 会话绑定：会话粘性的第一优先级输入。
 		// 非 nil 且 ProviderID != 0 时短路前缀亲和与加权随机（见 route.nominateBySessionBinding）。
 		SessionBinding: r.sessionBinding,
+		// 会话身份来源：前缀兜底层按它判定是否参与（客户端未带 id 时才兜底）。
+		SessionIdentity: r.sessionIdentity,
 		// Endpoint 维度的判定（端点族、端点策略）属入口与端点包；零值表示不按端点维度排除。
 		AffinityBody: body,
 		// 两个请求级门槛：Node 在 pickRandomProvider 里每请求解析一次 systemTimezone 后做
@@ -229,10 +238,18 @@ func (r *ProviderRouter) Select(ctx context.Context, req *pctx.Context) (pctx.Pr
 	} else {
 		req.SetSelectionChainEntry(encoded)
 	}
+	// 会话绑定保留事实：本次选路若因**临时原因**（熔断/会话冷却/活动时段/限额/本次已试过）
+	// 跳过了既有绑定，终态成功侧就不得改绑——设计稿 §4：熔断是暂时的，绑定保留待恢复，
+	// 待恢复后会话仍粘回去。判定在选路层（只有它知道绑定为何没被采用），动作在终态层，
+	// 故经 pctx 转交（见 pctx.SetSessionBindingKeep 与 terminal 的成功侧闸门）。
+	if result.SessionBindingBypass.KeepsBinding() {
+		req.SetSessionBindingKeep(result.SessionBindingBypass.String())
+	}
 	r.logger.Debug("guard.adapters.provider_selected", map[string]any{
-		"providerId": result.Provider.ID,
-		"method":     string(result.Method),
-		"reason":     string(result.Reason),
+		"providerId":           result.Provider.ID,
+		"method":               string(result.Method),
+		"reason":               string(result.Reason),
+		"sessionBindingBypass": result.SessionBindingBypass.String(),
 	})
 	return pctx.ProviderSelection{
 		ProviderID: result.Provider.ID,
@@ -336,6 +353,17 @@ func (r *ProviderRouter) SetConversationBinding(binding *route.SessionBindingSna
 		return
 	}
 	r.sessionBinding = binding
+}
+
+// SetConversationIdentity 盖上本次请求的会话身份来源（会话守卫步骤调用，紧随 SetConversationSession）。
+//
+// 与 sessionID 同源同纪律。零值（route.SessionIdentityClient）即客户端显式携带，
+// 与未接线时的行为一致。
+func (r *ProviderRouter) SetConversationIdentity(source route.SessionIdentity) {
+	if r == nil {
+		return
+	}
+	r.sessionIdentity = source
 }
 
 // now 取选路使用的时钟（与 route.Options.Now 同源，便于用例注入）。

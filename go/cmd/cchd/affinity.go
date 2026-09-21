@@ -114,7 +114,8 @@ func (s affinitySetup) close() {
 //
 //   - 未配置 REDIS_URL 时返回零值：存储为 nil，选择器完全不启用亲和（既不查找也不提名）。
 //     这与「Node 读到坏绑定后 fail-open 回落加权随机」是两件事：没有 Redis 就没有亲和。
-//   - 开关关闭时同样不建存储，并立即释放刚建的连接（省掉每请求的 Redis 往返）。
+//   - 开关关闭时**仍然建存储**（见下方 return 前的注释）：总闸与模式已改成逐请求读，
+//     按启动时的开关决定建不建，会让运行时打开得到「报 enabled、实际不生效」的假象。
 //   - 系统设置行读取失败不阻断启动：按 Node 的默认值处理并如实记录（见 affinityDecision）。
 func openAffinity(ctx context.Context, cfg config.Config, pools *store.Pools, logger *logx.Logger) affinitySetup {
 	if cfg.RedisURL == "" {
@@ -140,10 +141,15 @@ func openAffinity(ctx context.Context, cfg config.Config, pools *store.Pools, lo
 	status.Window = route.AffinityWindow(cfg.Env.PrefixAffinityWindow)
 	status.TTLSeconds = cfg.Env.PrefixAffinityTTLSeconds
 
+	// 存储**无条件**建：总闸与模式都已改成逐请求读（见 route.Options.AffinitySwitches 与
+	// dataplane 的 affinitySwitchesFor），若仍按启动时的开关决定建不建，运行时把它打开就只会
+	// 得到「报 enabled、实际不生效」——与接口返 200 的假象同类。
+	// 关着时的零开销由选路层保证：总闸为假即整层不进，一次 Redis 都不发。
 	if !status.Enabled {
-		_ = client.Close()
-		logger.Info("affinity_disabled", map[string]any{"source": status.Source})
-		return affinitySetup{status: status}
+		logger.Info("affinity_disabled", map[string]any{
+			"source": status.Source,
+			"note":   "开关逐请求读、存储已建，运行时打开即生效（无需重启）",
+		})
 	}
 	return affinitySetup{
 		store: route.NewAffinityStore(route.AffinityOptions{

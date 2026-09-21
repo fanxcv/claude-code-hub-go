@@ -70,3 +70,79 @@ func (s *Selector) nominateBySessionBinding(
 	}
 	return *provider, true
 }
+
+// SessionBindingBypass 说明「既有会话绑定为何未在本次被采用」，是终态能否改绑的唯一判据来源。
+//
+// 为什么必须区分：设计稿 §4 失效规则对熔断逐字明定「跳过该 provider、继续走后续层级
+// （不写冷却、**不清空绑定**）」，表下注「熔断是暂时的，绑定保留；待熔断恢复后会话仍粘回去」。
+// 若不加区分，绑定 provider 因熔断/会话冷却被跳过、备用成功之后，成功侧的 CAS 会把绑定
+// 改写成备用——「待恢复仍粘回去」即为假，且此后每次熔断都把会话永久搬走一次。
+//
+// 它是零值安全的：零值（SessionBindingBypassNone）即「本次不抑制改绑」，与接线前的行为逐字一致。
+type SessionBindingBypass int
+
+const (
+	// SessionBindingBypassNone 表示本次不抑制改绑。三种情形：无既有绑定、绑定被正常采用、
+	// 或绑定因**结构性**原因被跳过。最后一种允许改绑是对的——旧绑定已结构性失效
+	// （渠道停用、模型/端点不兼容），新 winner 才是该会话该去的地方。
+	SessionBindingBypassNone SessionBindingBypass = iota
+	// SessionBindingBypassTransient 表示既有绑定**仅因临时原因**被跳过：绑定必须保留，
+	// 本次成功终态**不得**改绑。
+	SessionBindingBypassTransient
+)
+
+// KeepsBinding 报告本次成功终态是否必须保留既有绑定。
+//
+// 接线层（guard 选路适配器）据它决定是否给 pctx 盖「不得改绑」的事实，终态层再据 pctx
+// 跳过成功侧 CAS。判定收在这里一处，两侧不各算一遍。
+func (b SessionBindingBypass) KeepsBinding() bool {
+	return b == SessionBindingBypassTransient
+}
+
+// String 返回稳定标识，供日志与排障（勿当协议值或落库值）。
+func (b SessionBindingBypass) String() string {
+	if b == SessionBindingBypassTransient {
+		return "transient"
+	}
+	return "none"
+}
+
+// sessionBindingBypass 由过滤留痕判定「既有绑定未被采用」是否属临时原因。
+//
+// 为何读留痕而不在 validateAffinityCandidate 里另算一遍：留痕（DecisionContext.FilteredProviders）
+// 就是本次过滤的同一份结论，另算必然与它分叉（过滤链一改，两处就不同步）。
+// 该家不在留痕里却有既有绑定 ⇒ 绑定指向的行已查不到（已删除/查询失败），属结构性失效，允许改绑。
+func sessionBindingBypass(filtered []Filtered, binding *SessionBindingSnapshot) SessionBindingBypass {
+	if binding == nil || binding.ProviderID == 0 {
+		return SessionBindingBypassNone
+	}
+	for _, record := range filtered {
+		if record.ID != binding.ProviderID {
+			continue
+		}
+		if transientRejection(record.Reason) {
+			return SessionBindingBypassTransient
+		}
+		return SessionBindingBypassNone
+	}
+	return SessionBindingBypassNone
+}
+
+// transientRejection 报告某条排除理由是否属**临时**（不需改任何配置即可能恢复）。
+//
+// 分界原则只一条：**不改配置就可能恢复的属临时**，绑定该留着等它回来；要改配置才恢复的
+// （停用、模型/端点/格式不兼容、客户端名单）属结构性，允许改绑。逐条依据：
+//
+//	circuit_open          设计稿 §4 明定「跳过、不清空绑定、待恢复后仍粘回去」
+//	slow_rate_cooldown    低速写侧只写冷却、不清绑定（设计稿 §4 同源语义）
+//	schedule_inactive     活动时段按钟点恢复
+//	rate_limited          金额/额度窗口按时间恢复
+//	excluded              本次请求内已试过并失败（故障转移），不是该渠道的结构性结论
+func transientRejection(reason Reason) bool {
+	switch reason {
+	case ReasonCircuitOpen, ReasonSlowRateCooldown, ReasonScheduleInactive, ReasonRateLimited, ReasonExcluded:
+		return true
+	default:
+		return false
+	}
+}
