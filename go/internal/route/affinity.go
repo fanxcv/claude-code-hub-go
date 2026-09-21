@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -1173,6 +1174,7 @@ type AffinityNomination struct {
 func (s *Selector) nominateByAffinity(
 	ctx context.Context,
 	req Request,
+	filtered []Filtered,
 	excluded map[int64]bool,
 ) (AffinityNomination, *AffinityLookup, *AffinityWriteback, *AffinityIdentity, bool) {
 	if s.opts.Affinity == nil || req.KeyID == 0 || req.AffinityBody == nil || req.Format == "" {
@@ -1216,9 +1218,21 @@ func (s *Selector) nominateByAffinity(
 
 	provider, err := s.opts.Source.Provider(ctx, hint.ProviderID)
 	if err != nil || provider == nil {
+		// 读该行失败与「该行真的不存在」处置相反：前者是**临时**原因（DB 抖动/超时/快照装载
+		// 失败），tip 绑定必须保留、本次成功终态不得改写；后者（ErrProviderNotFound，或源里
+		// 没有这一家且不报错）是结构性失效，旧绑定已死，允许改写。
+		//
+		// 为何必须分开：terminal 成功侧对非 nil 的 writeback 无条件调 RecordWinner（写 tip
+		// 绑定），压成一支的后果是一次瞬时读错就把会话永久改粘到备用，直到 TTL。
+		lookupFailed := err != nil && !errors.Is(err, ErrProviderNotFound)
+		writeback.Bypass = affinityBypass(filtered, hint.ProviderID, lookupFailed)
 		return AffinityNomination{}, lookup, writeback, identity, false
 	}
 	if !s.validateAffinityCandidate(ctx, *provider, req, excluded) {
+		// 校验拒绝同样要分流：临时类（熔断、会话冷却、活动时段、限额、本次已试过）按设计稿
+		// §4「跳过该 provider…不清空绑定；待恢复后仍粘回去」须保绑定；结构性失效（停用、
+		// 模型/端点不兼容、名单）允许改写。分界表只有一处（transientRejection）。
+		writeback.Bypass = affinityBypass(filtered, hint.ProviderID, false)
 		return AffinityNomination{}, lookup, writeback, identity, false
 	}
 	// 提名被接受才登记命中指纹与提名者：墓碑只对提名者写。

@@ -160,14 +160,8 @@ func sessionBindingBypass(
 	if lookupFailed {
 		return SessionBindingBypassTransient
 	}
-	for _, record := range filtered {
-		if record.ID != binding.ProviderID {
-			continue
-		}
-		if transientRejection(record.Reason) {
-			return SessionBindingBypassTransient
-		}
-		return SessionBindingBypassNone
+	if transientBypass(filtered, binding.ProviderID) {
+		return SessionBindingBypassTransient
 	}
 	// 留痕里没有该家：绑定指向的行已查不到（已删除，或已停用而不在启用态列表里），属结构性失效。
 	return SessionBindingBypassNone
@@ -190,4 +184,18 @@ func transientRejection(reason Reason) bool {
 	default:
 		return false
 	}
+}
+
+// transientBypass 在过滤留痕里查某家被排除的理由是否属临时；留痕里没有该家时返回 false。
+//
+// 「留痕里没有」不等于「临时」：那一支是行已不存在（已删除，或已停用而不在启用态列表里），
+// 属结构性失效。两条粘性路径（会话绑定、前缀亲和）共用这一处查法，避免各算一遍而分叉。
+func transientBypass(filtered []Filtered, providerID int64) bool {
+	for _, record := range filtered {
+		if record.ID != providerID {
+			continue
+		}
+		return transientRejection(record.Reason)
+	}
+	return false
 }

@@ -383,7 +383,7 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		// **永不触发**——无 id 的客户端（curl、旧客户端）就此失去旧版已有的前缀粘性。
 		// 设计稿 §2 正是把该情形定义为前缀兜底，§9 验收项 2 要求其记 prefix_affinity。
 		if req.SessionID == "" || req.SessionIdentity != SessionIdentityClient || switches.ForcePrefix {
-			nominate, lookup, writeback, affinityIdentity, nominated = s.nominateByAffinity(ctx, req, excluded)
+			nominate, lookup, writeback, affinityIdentity, nominated = s.nominateByAffinity(ctx, req, dc.FilteredProviders, excluded)
 		}
 	}
 	if nominated {

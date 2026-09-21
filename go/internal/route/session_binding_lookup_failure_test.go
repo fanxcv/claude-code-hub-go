@@ -3,6 +3,7 @@ package route
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
@@ -164,6 +165,13 @@ func TestProviderLookupErrorPreservesNotFoundSentinel(t *testing.T) {
 	}
 	if errors.Is(providerLookupError(7, transient), ErrProviderNotFound) {
 		t.Error("读失败不得被译成「行不存在」——那会让一次瞬时读错永久改绑")
+	}
+
+	// 包装哨兵：判据用的是 errors.Is 而非 ==，故读取面把 store.ErrNotFound 再包一层
+	// （驱动/连接池包装）时，翻译必须仍认得出它。
+	wrapped := providerLookupError(7, fmt.Errorf("pgx: %w", store.ErrNotFound))
+	if !errors.Is(wrapped, ErrProviderNotFound) {
+		t.Errorf("包装过的行不存在必须仍译成 ErrProviderNotFound，实得 %v", wrapped)
 	}
 
 	// 两个哨兵的语义相反，绝不可相等（相等即分派失效）。

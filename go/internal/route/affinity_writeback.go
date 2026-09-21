@@ -36,6 +36,49 @@ type AffinityWriteback struct {
 	// 墓碑只对它写：失败者不是提名者时写墓碑，会让后续请求绕开一个健康供应商
 	// （Node affinity-recorder.ts 的 tombstoneAffinityOnFailure 首段判定）。
 	NominatedProviderID int64
+	// Bypass 是「既有 tip 绑定为何未被本次采用」的分类，RecordWinner 据它决定能否改写。
+	// 零值（AffinityBypassNone）即允许改写，与接线前行为逐字一致。
+	Bypass AffinityBypass
+}
+
+// AffinityBypass 说明「既有前缀绑定为何未被本次采用」，是 tip 绑定能否被改写的唯一判据来源。
+//
+// 为什么必须区分：设计稿 §4 失效规则对熔断逐字明定「跳过该 provider、继续走后续层级
+// （不写冷却、**不清空绑定**）」，表下注「熔断是暂时的，绑定保留；待熔断恢复后会话仍粘回去」。
+// 前缀层与会话层一样有 winner 写回（RecordWinner 写 tip 绑定），故不加区分时，一次瞬时读错
+// 或一次临时过滤，备用成功后就会把会话永久改粘到备用，直到 TTL。
+//
+// 零值安全：零值即「本次不抑制改写」，与接线前行为逐字一致。
+type AffinityBypass int
+
+const (
+	// AffinityBypassNone 表示本次不抑制改写。三种情形：无既有绑定、绑定被正常采用、
+	// 或绑定因**结构性**原因未被采用。最后一种允许改写是对的——旧绑定已结构性失效
+	// （渠道停用、模型/端点不兼容、行已不存在），新 winner 才是该会话该去的地方。
+	AffinityBypassNone AffinityBypass = iota
+	// AffinityBypassTransient 表示既有绑定**仅因临时原因**未被采用：tip 绑定必须保留，
+	// 本次成功终态不得改写它。
+	AffinityBypassTransient
+)
+
+// KeepsBinding 报告本次成功终态是否必须保留既有 tip 绑定。
+func (b AffinityBypass) KeepsBinding() bool { return b == AffinityBypassTransient }
+
+// affinityBypass 判定「既有前缀绑定未被采用」是否属临时原因。
+//
+// lookupFailed 必须由调用方显式传来：该情形下提名者根本没读出来，过滤阶段压根没见到它，
+// 故它不进留痕；而「留痕里没有该家」那一支是行已不存在（结构性失效），两者处置相反。
+func affinityBypass(filtered []Filtered, providerID int64, lookupFailed bool) AffinityBypass {
+	if providerID == 0 {
+		return AffinityBypassNone
+	}
+	if lookupFailed {
+		return AffinityBypassTransient
+	}
+	if transientBypass(filtered, providerID) {
+		return AffinityBypassTransient
+	}
+	return AffinityBypassNone
 }
 
 // CacheScoreFacts 把「F3b 缓存模拟列」所需的事实交给调用方（数据面）。
@@ -55,10 +98,11 @@ func (w AffinityWriteback) CacheScoreFacts() (scopeTag, matchedFP, tipFP string,
 //   - 流式：response-handler.ts:5414 的 postTerminalSideEffects（计费落库之后）；
 //   - 回放命中、竞速败者、失败重试**不得**调用。
 //
-// 返回 false 只有两类原因：本次不该写（无 store、tip 落在系统段、generation 缺失），
-// 或 generation CAS 失败——后者正是 fence 要挡的情形，不报错、只放弃。
+// 返回 false 有四类原因：本次不该写（无 store、tip 落在系统段、generation 缺失）、
+// generation CAS 失败（正是 fence 要挡的情形，不报错、只放弃）、或既有 tip 绑定仅因
+// **临时**原因未被采用（Bypass，见 AffinityBypass：写下去等于让一次瞬时读错永久改粘备用）。
 func (w AffinityWriteback) RecordWinner(ctx context.Context, winnerProviderID int64) bool {
-	if w.store == nil || winnerProviderID <= 0 || w.TipDepth == 0 {
+	if w.store == nil || winnerProviderID <= 0 || w.TipDepth == 0 || w.Bypass.KeepsBinding() {
 		return false
 	}
 	return w.store.Put(ctx, w.ScopeTag, w.TipFP, winnerProviderID, w.IdentityFP, w.Generation)
