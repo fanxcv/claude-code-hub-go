@@ -32,6 +32,15 @@ export interface ConsideredCandidate {
   costMultiplier: number;
   /** 本次最终选中该家。 */
   selected: boolean;
+  /**
+   * 本次选路给该渠道叠加的低速降权量（Go 侧 `ConsideredCandidate.SlowPenalty`）。
+   *
+   * 0 或缺席 = 未降权（Go 侧带 `omitempty`，未开启低速监控时该键不出现在链上）。
+   * **已计入 `effectivePriority`**：它不是可与 `effectivePriority` 相加的独立项，而是解释
+   * 「该值为何偏离配置值」的额外事实——`priority` 与 `effectivePriority` 的差值可能来自两维
+   * （分组覆盖、低速降权），只把差值说成「分组覆盖」会把降权造成的偏离误报成因由。
+   */
+  slowPenalty?: number;
 }
 
 /**

@@ -89,6 +89,7 @@ export function ConsideredCandidatesList({
       <div className="space-y-1">
         {ordered.map((candidate) => {
           const state = stateOf(candidate);
+          const slowPenalty = candidate.slowPenalty ?? 0;
           return (
             <div
               key={candidate.id}
@@ -101,14 +102,40 @@ export function ConsideredCandidatesList({
                   {t("logicTrace.consideredTier", { tier: candidate.effectivePriority })}
                 </Badge>
                 {candidate.priority !== candidate.effectivePriority && (
-                  // 两者不同即「分组覆盖改写了档位」——不标出来，读的人会拿供应商列表里的
+                  // 两个值不同即「生效档位≠配置档位」——不标出来，读的人会拿供应商列表里的
                   // 配置值去核对，于是把一次正确选择看成矛盾。
+                  //
+                  // 但差值**未必**全由分组覆盖造成：`effectivePriority` 已在分组覆盖之后又叠了
+                  // 低速降权，故差值可能来自两维。从两个数字确实拆不出各自贡献，所以这里如实
+                  // 并列三者（配置值、生效值、降权量），并在有降权时换用不含「分组覆盖」归因的
+                  // 文案——把降权造成的偏离说成「分组覆盖」是把一次正确选择误报成另一种成因。
                   <span
                     className="text-muted-foreground"
-                    title={t("logicTrace.consideredOverride")}
+                    title={
+                      slowPenalty > 0
+                        ? t("logicTrace.consideredSlowPenaltyHint", { penalty: slowPenalty })
+                        : t("logicTrace.consideredOverride")
+                    }
                   >
-                    {t("logicTrace.consideredConfigured", { priority: candidate.priority })}
+                    {slowPenalty > 0
+                      ? t("logicTrace.consideredConfiguredEffective", {
+                          priority: candidate.priority,
+                          effective: candidate.effectivePriority,
+                        })
+                      : t("logicTrace.consideredConfigured", { priority: candidate.priority })}
                   </span>
+                )}
+                {slowPenalty > 0 && (
+                  // 独立、可辨认的降权标记：它是与 W/CostMultiplier 并列的**另一维**事实，
+                  // 不塞进上面那句里，免得与「配置→生效」的差值混为一谈。
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] border-amber-500/50 text-amber-600 dark:text-amber-500"
+                    data-testid="considered-slow-penalty"
+                    title={t("logicTrace.consideredSlowPenaltyHint", { penalty: slowPenalty })}
+                  >
+                    {t("logicTrace.consideredSlowPenalty", { penalty: slowPenalty })}
+                  </Badge>
                 )}
                 <span className="text-muted-foreground">W:{candidate.weight}</span>
                 <span className="text-muted-foreground">x{candidate.costMultiplier}</span>

@@ -1,9 +1,15 @@
+/**
+ * @vitest-environment happy-dom
+ */
+
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ReactNode } from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { NextIntlClientProvider } from "next-intl";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import dashboardMessages from "../../../../../../../../messages/en/dashboard.json";
 import ipDetailsMessages from "../../../../../../../../messages/en/ipDetails.json";
 import providerChainMessages from "../../../../../../../../messages/en/provider-chain.json";
@@ -37,6 +43,38 @@ function renderWithIntl(node: ReactNode) {
       {node}
     </NextIntlClientProvider>
   );
+}
+
+afterEach(() => {
+  while (document.body.firstChild) document.body.firstChild.remove();
+});
+
+/**
+ * 挂载到真实 DOM（happy-dom）而不是静态渲染：StepCard 的 details **仅在展开时**才进 DOM，
+ * 静态渲染拿不到折叠内容。用真实点击驱动展开，才是用户实际看到的形态。
+ */
+function mountWithIntl(node: ReactNode) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => {
+    root.render(
+      <NextIntlClientProvider locale="en" messages={messages} timeZone="UTC">
+        {node}
+      </NextIntlClientProvider>
+    );
+  });
+  return container;
+}
+
+/** 点击所有可展开的 StepCard 头部（role=button），使折叠的 details 进 DOM。 */
+function expandAllStepCards(container: HTMLElement) {
+  const headers = Array.from(container.querySelectorAll('[role="button"][aria-expanded]'));
+  act(() => {
+    for (const header of headers) {
+      header.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }
+  });
 }
 
 /**
@@ -410,5 +448,64 @@ describe("LogicTraceTab 把 unsupported 当作「已失败并继续」", () => {
 
     expect(html).toContain("bg-rose-50");
     expect(html).not.toContain("bg-slate-50");
+  });
+});
+
+describe("LogicTraceTab 低速冷却的过滤项文案", () => {
+  /**
+   * 「被强制从会话移除」这一半的可见面（本任务只确认、不重实现）：Go 侧把该会话因低速冷却
+   * 跳过的渠道写进 `decisionContext.filteredProviders`，`reason` 与 `details` **都是原始 token**
+   * `slow_rate_cooldown`。界面上必须渲染出词条里的本地化文案，而不是把 token 直接显示给用户。
+   *
+   * 生产实测（2026-09-21，wb=167 开启低速监控后）：近 70 分钟里 25 条请求中 1 条以该 reason
+   * 被排除；同时 7 条链项含 `slow_rate_cooldown` 的过滤项。
+   */
+  function cooldownContext() {
+    return {
+      totalProviders: 6,
+      enabledProviders: 5,
+      targetType: "codex" as const,
+      groupFilterApplied: true,
+      beforeHealthCheck: 5,
+      afterHealthCheck: 3,
+      priorityLevels: [5],
+      selectedPriority: 5,
+      candidatesAtPriority: [],
+      consideredCandidates: [],
+      filteredProviders: [
+        {
+          id: 167,
+          name: "wb",
+          reason: "slow_rate_cooldown" as const,
+          details: "slow_rate_cooldown",
+        },
+      ],
+    };
+  }
+
+  test("filteredProviders 的 slow_rate_cooldown 渲染本地化文案，而非原始 token", () => {
+    const container = mountWithIntl(
+      <LogicTraceTab
+        statusCode={200}
+        errorMessage={null}
+        providerChain={[
+          attemptEntry({ decisionContext: cooldownContext(), reason: "initial_selection" }),
+        ]}
+        sessionId={null}
+        initialExpandedChainIndex={0}
+      />
+    );
+
+    // 该过滤项落在折叠的 StepCard 里，先展开再读。
+    expandAllStepCards(container);
+    const html = container.innerHTML;
+
+    // en 词条值（本用例用 en 词表渲染）。
+    expect(html).toContain("Slow Rate Cooldown");
+    expect(html).toContain(
+      "This session recently hit a slow response on this provider; skipped during cooldown"
+    );
+    // 原始 token 不得作为用户可见文案直接露出（它只该是查找词条的键）。
+    expect(html).not.toContain(">slow_rate_cooldown<");
   });
 });

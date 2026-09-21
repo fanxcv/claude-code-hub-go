@@ -235,3 +235,86 @@ describe("ConsideredCandidatesList 亲和短路行", () => {
     expect(html.match(/data-candidate-state="lower-tier"/g)).toHaveLength(3);
   });
 });
+
+/**
+ * 低速降权（`slowPenalty`）的归因面。
+ *
+ * 生产实证（2026-09-21）：wb(167) 开启低速监控后，近 70 分钟里它的 25 条请求有 14 条链项含
+ * `slowPenalty`。此前界面只显示生效档位，用户看不出「优先级被改到了多少、是哪一维改的」——
+ * `effectivePriority` 已在分组覆盖之后又叠了降权，而旧文案一律把 `priority != effectivePriority`
+ * 说成「分组覆盖改写了档位」，于是降权造成的偏离被误报成另一种成因。
+ */
+describe("ConsideredCandidatesList 低速降权", () => {
+  function penalizedCandidates(slowPenalty?: number) {
+    return [
+      {
+        id: 167,
+        name: "wb",
+        priority: 15,
+        effectivePriority: 25,
+        slowPenalty,
+        weight: 1,
+        costMultiplier: 1,
+        selected: false,
+      },
+      {
+        id: 156,
+        name: "HC Chat",
+        priority: 5,
+        effectivePriority: 5,
+        weight: 1,
+        costMultiplier: 1,
+        selected: true,
+      },
+    ];
+  }
+
+  test("降权量独立呈现，且归因不再把差值整体说成「分组覆盖」", () => {
+    const html = render(
+      <ConsideredCandidatesList candidates={penalizedCandidates(10)} selectedPriority={5} />
+    );
+
+    // 用户报的就是「看不到优先级被改到了多少」——降权量必须显出来。
+    expect(html).toContain("Slow-rate penalty +10");
+    expect(html).toContain('data-testid="considered-slow-penalty"');
+    // 差值须说成「配置 -> 生效」，并并列降权量（两个数字拆不出各自贡献，故如实并列三者）。
+    expect(html).toContain("configured P15");
+    expect(html).toContain("effective P25");
+    // 旧文案把差值一律归因于分组覆盖，有降权时不得再出现。
+    expect(html).not.toContain("configured P15</span>");
+    expect(html).not.toContain("A group override rewrote");
+  });
+
+  test("无降权时形态与本改动前逐字一致（omitempty 契约的前端对应面）", () => {
+    const html = render(
+      <ConsideredCandidatesList candidates={penalizedCandidates()} selectedPriority={5} />
+    );
+
+    // 缺席与 0 都必须不产生降权标记。
+    expect(html).not.toContain("Slow-rate penalty");
+    expect(html).not.toContain('data-testid="considered-slow-penalty"');
+    // 非零降权才换文案；此处仍是旧的「配置 P{priority}」那句。
+    expect(html).toContain("configured P15");
+    expect(html).not.toContain("effective P25");
+
+    const zero = render(
+      <ConsideredCandidatesList candidates={penalizedCandidates(0)} selectedPriority={5} />
+    );
+    expect(zero).toBe(html);
+  });
+
+  test("亲和短路行（survivingCandidates 走同一组件）同样带降权标记", () => {
+    // 亲和行只多一个 affinitySkippedIds 位，成员渲染是同一张清单——降权标记必须同样生效。
+    const html = render(
+      <ConsideredCandidatesList
+        candidates={penalizedCandidates(10)}
+        selectedPriority={5}
+        affinitySkippedIds={[167]}
+        matchedProviderName="HC Chat"
+      />
+    );
+
+    expect(html).toContain("Slow-rate penalty +10");
+    expect(html.match(/data-candidate-state="affinity-skipped"/g)).toHaveLength(1);
+  });
+});
