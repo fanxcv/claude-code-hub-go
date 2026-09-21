@@ -93,6 +93,7 @@ var providerPreimageFieldNames = map[string]string{
 	"slow_rate_monitor_enabled":                   "slowRateMonitorEnabled",
 	"slow_rate_window_seconds":                    "slowRateWindowSeconds",
 	"slow_rate_min_samples":                       "slowRateMinSamples",
+	"slow_rate_trigger_count":                     "slowRateTriggerCount",
 	"slow_rate_ratio_per_mille":                   "slowRateRatioPerMille",
 	"slow_rate_penalty_step":                      "slowRatePenaltyStep",
 	"slow_rate_penalty_max":                       "slowRatePenaltyMax",
@@ -490,6 +491,7 @@ func providerCreateWriteSpecs() map[string]providerDecodeSpec {
 		"slow_rate_monitor_enabled":            providerBoolFieldSpec(),
 		"slow_rate_window_seconds":             providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_min_samples":                providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_trigger_count":              providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_ratio_per_mille":            providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_penalty_step":               providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_penalty_max":                providerNullableIntFieldSpec(nil, nil),
@@ -1189,7 +1191,7 @@ func providerWriteKindOf(name string) string {
 		// 等待阶梯两列为可空（null = 不启用），故归 nullable_int 而不是 int。
 		"circuit_breaker_release_increment", "circuit_breaker_max_open_count", "tpm", "rpm", "rpd", "cc",
 		// 低速降级五参数均可空（null = 取代码默认值）。
-		"slow_rate_window_seconds", "slow_rate_min_samples", "slow_rate_ratio_per_mille",
+		"slow_rate_window_seconds", "slow_rate_min_samples", "slow_rate_trigger_count", "slow_rate_ratio_per_mille",
 		"slow_rate_penalty_step", "slow_rate_penalty_max":
 		return "nullable_int"
 	case "cost_multiplier", "limit_5h_usd", "limit_daily_usd", "limit_weekly_usd",

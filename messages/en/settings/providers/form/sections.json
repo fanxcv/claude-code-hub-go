@@ -503,9 +503,14 @@
         "placeholder": "600"
       },
       "minSamples": {
-        "label": "Minimum samples",
-        "desc": "No judgement until the window holds this many samples. Leave empty for the default of 100.",
+        "label": "Baseline sample floor",
+        "desc": "No baseline is published (and slow rate is not judged) until the last three days hold this many usable samples. Leave empty for the default of 100.",
         "placeholder": "100"
+      },
+      "triggerCount": {
+        "label": "Trigger threshold",
+        "desc": "Demotion starts once this many slow samples land in the window, and it is the divisor for demotion levels. Leave empty for the default of 3.",
+        "placeholder": "3"
       },
       "ratioPerMille": {
         "label": "Slow threshold ratio (per mille)",

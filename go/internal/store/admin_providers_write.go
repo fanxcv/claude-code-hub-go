@@ -83,6 +83,7 @@ var adminProviderWriteFields = []adminProviderWriteField{
 	{"slow_rate_monitor_enabled", "slow_rate_monitor_enabled", providerBoolKind},
 	{"slow_rate_window_seconds", "slow_rate_window_seconds", providerNullableIntKind},
 	{"slow_rate_min_samples", "slow_rate_min_samples", providerNullableIntKind},
+	{"slow_rate_trigger_count", "slow_rate_trigger_count", providerNullableIntKind},
 	{"slow_rate_ratio_per_mille", "slow_rate_ratio_per_mille", providerNullableIntKind},
 	{"slow_rate_penalty_step", "slow_rate_penalty_step", providerNullableIntKind},
 	{"slow_rate_penalty_max", "slow_rate_penalty_max", providerNullableIntKind},

@@ -327,9 +327,14 @@
         "placeholder": "600"
       },
       "minSamples": {
-        "label": "最少样本数",
-        "desc": "窗口内样本不足此数不判定。留空取默认 100。",
+        "label": "基线样本下限",
+        "desc": "最近三天的有效样本不足此数则不发布基线（不判定低速）。留空取默认 100。",
         "placeholder": "100"
+      },
+      "triggerCount": {
+        "label": "触发阈值",
+        "desc": "窗口内低速样本达此数即开始降权，并作为降权档位的分母。留空取默认 3。",
+        "placeholder": "3"
       },
       "ratioPerMille": {
         "label": "低速系数（千分比）",

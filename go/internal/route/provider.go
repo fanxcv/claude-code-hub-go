@@ -51,10 +51,13 @@ type Provider struct {
 	// 低速降级（逐渠道开关，默认全关）。选路侧只读，不参与本包判定。
 	SlowRateMonitorEnabled bool `json:"slow_rate_monitor_enabled"`
 	SlowRateWindowSeconds  *int `json:"slow_rate_window_seconds"`
-	SlowRateMinSamples     *int `json:"slow_rate_min_samples"`
-	SlowRateRatioPerMille  *int `json:"slow_rate_ratio_per_mille"`
-	SlowRatePenaltyStep    *int `json:"slow_rate_penalty_step"`
-	SlowRatePenaltyMax     *int `json:"slow_rate_penalty_max"`
+	// SlowRateMinSamples 是基线样本下限（默认 100，基线任务读）。
+	SlowRateMinSamples *int `json:"slow_rate_min_samples"`
+	// SlowRateTriggerCount 是触发阈值（默认 3，样本写入器读）。两列语义不同，不可混用。
+	SlowRateTriggerCount  *int `json:"slow_rate_trigger_count"`
+	SlowRateRatioPerMille *int `json:"slow_rate_ratio_per_mille"`
+	SlowRatePenaltyStep   *int `json:"slow_rate_penalty_step"`
+	SlowRatePenaltyMax    *int `json:"slow_rate_penalty_max"`
 	// CostLimits 是供应商级金额限额（Node 的 filterByLimits 判定）。
 	CostLimits ProviderCostLimits `json:"-"`
 }
@@ -207,6 +210,7 @@ func providerFromStore(row store.Provider) Provider {
 		SlowRateMonitorEnabled:    row.SlowRateMonitorEnabled,
 		SlowRateWindowSeconds:     row.SlowRateWindowSeconds,
 		SlowRateMinSamples:        row.SlowRateMinSamples,
+		SlowRateTriggerCount:      row.SlowRateTriggerCount,
 		SlowRateRatioPerMille:     row.SlowRateRatioPerMille,
 		SlowRatePenaltyStep:       row.SlowRatePenaltyStep,
 		SlowRatePenaltyMax:        row.SlowRatePenaltyMax,

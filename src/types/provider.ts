@@ -371,9 +371,11 @@ export interface Provider {
   disableSessionReuse: boolean;
   // 低速降级（实验特性，默认关闭）：仅开启的供应商参与低速监控。
   slowRateMonitorEnabled: boolean;
-  // 五个参数列可空，null = 取代码默认值（10m / 100 / 200‰ / 10 / 30）。
+  // 六个参数列可空，null = 取代码默认值（10m / 100 条 / 3 次 / 200‰ / 10 / 30）。
+  // minSamples 是基线样本下限（默认 100）；triggerCount 是触发阈值（默认 3）。两列语义不同。
   slowRateWindowSeconds: number | null;
   slowRateMinSamples: number | null;
+  slowRateTriggerCount: number | null;
   // 千分比：200 = 0.2
   slowRateRatioPerMille: number | null;
   slowRatePenaltyStep: number | null;
@@ -516,6 +518,7 @@ export interface ProviderDisplay {
   slowRateMonitorEnabled: boolean;
   slowRateWindowSeconds: number | null;
   slowRateMinSamples: number | null;
+  slowRateTriggerCount: number | null;
   slowRateRatioPerMille: number | null;
   slowRatePenaltyStep: number | null;
   slowRatePenaltyMax: number | null;
@@ -793,6 +796,7 @@ export interface CreateProviderData {
   slow_rate_monitor_enabled?: boolean;
   slow_rate_window_seconds?: number | null;
   slow_rate_min_samples?: number | null;
+  slow_rate_trigger_count?: number | null;
   // 千分比：200 = 0.2
   slow_rate_ratio_per_mille?: number | null;
   slow_rate_penalty_step?: number | null;
@@ -894,6 +898,7 @@ export interface UpdateProviderData {
   slow_rate_monitor_enabled?: boolean;
   slow_rate_window_seconds?: number | null;
   slow_rate_min_samples?: number | null;
+  slow_rate_trigger_count?: number | null;
   // 千分比：200 = 0.2
   slow_rate_ratio_per_mille?: number | null;
   slow_rate_penalty_step?: number | null;

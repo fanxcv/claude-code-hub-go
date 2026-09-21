@@ -96,10 +96,12 @@ type AdminProvider struct {
 	// 低速降级（逐渠道开关，默认全关）。
 	SlowRateMonitorEnabled bool `json:"slowRateMonitorEnabled"`
 	SlowRateWindowSeconds  *int `json:"slowRateWindowSeconds"`
-	SlowRateMinSamples     *int `json:"slowRateMinSamples"`
-	SlowRateRatioPerMille  *int `json:"slowRateRatioPerMille"`
-	SlowRatePenaltyStep    *int `json:"slowRatePenaltyStep"`
-	SlowRatePenaltyMax     *int `json:"slowRatePenaltyMax"`
+	// SlowRateMinSamples 是基线样本下限；SlowRateTriggerCount 是触发阈值。两者语义不同。
+	SlowRateMinSamples    *int `json:"slowRateMinSamples"`
+	SlowRateTriggerCount  *int `json:"slowRateTriggerCount"`
+	SlowRateRatioPerMille *int `json:"slowRateRatioPerMille"`
+	SlowRatePenaltyStep   *int `json:"slowRatePenaltyStep"`
+	SlowRatePenaltyMax    *int `json:"slowRatePenaltyMax"`
 
 	TPM *int `json:"tpm"`
 	RPM *int `json:"rpm"`
@@ -167,6 +169,7 @@ const adminProviderColumns = `
 	slow_rate_monitor_enabled AS "slowRateMonitorEnabled",
 	slow_rate_window_seconds AS "slowRateWindowSeconds",
 	slow_rate_min_samples AS "slowRateMinSamples",
+	slow_rate_trigger_count AS "slowRateTriggerCount",
 	slow_rate_ratio_per_mille AS "slowRateRatioPerMille",
 	slow_rate_penalty_step AS "slowRatePenaltyStep",
 	slow_rate_penalty_max AS "slowRatePenaltyMax",

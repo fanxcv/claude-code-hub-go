@@ -1,0 +1,1 @@
+ALTER TABLE "providers" ADD COLUMN "slow_rate_trigger_count" integer;

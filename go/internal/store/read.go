@@ -155,10 +155,13 @@ type Provider struct {
 	// 未开启的渠道行为与开启前逐字一致（读取侧不读、写入侧不写）。
 	SlowRateMonitorEnabled bool `json:"slow_rate_monitor_enabled"`
 	SlowRateWindowSeconds  *int `json:"slow_rate_window_seconds"`
-	SlowRateMinSamples     *int `json:"slow_rate_min_samples"`
-	SlowRateRatioPerMille  *int `json:"slow_rate_ratio_per_mille"`
-	SlowRatePenaltyStep    *int `json:"slow_rate_penalty_step"`
-	SlowRatePenaltyMax     *int `json:"slow_rate_penalty_max"`
+	// SlowRateMinSamples 是**基线样本下限**（默认 100），只由基线定时任务读。
+	SlowRateMinSamples *int `json:"slow_rate_min_samples"`
+	// SlowRateTriggerCount 是**触发阈值**（默认 3），由样本写入器读。两列不可混用。
+	SlowRateTriggerCount  *int `json:"slow_rate_trigger_count"`
+	SlowRateRatioPerMille *int `json:"slow_rate_ratio_per_mille"`
+	SlowRatePenaltyStep   *int `json:"slow_rate_penalty_step"`
+	SlowRatePenaltyMax    *int `json:"slow_rate_penalty_max"`
 }
 
 // ProviderEndpoint 是 provider_endpoints 的读取视图（供应商厂级端点）。

@@ -248,9 +248,9 @@ func TestNormalizeFillsDefaults(t *testing.T) {
 	if got != def {
 		t.Fatalf("零值应收敛到出厂默认 %+v，得到 %+v", def, got)
 	}
-	// 触发阈值语义（不是样本下限 100）。
-	if def.MinSamples != 3 {
-		t.Fatalf("触发阈值默认 %d，应为 3（设计稿 §5：窗内低速次数 >= 阈值）", def.MinSamples)
+	// 触发阈值语义来自新列 slow_rate_trigger_count（不是基线样本下限 100）。
+	if def.TriggerCount != 3 {
+		t.Fatalf("触发阈值默认 %d，应为 3（设计稿 §5：窗内低速次数 >= 阈值）", def.TriggerCount)
 	}
 }
 
@@ -280,9 +280,102 @@ func TestBaselineUndecodableIsFailOpen(t *testing.T) {
 
 // TestSamplingSkipsWhenRateAboveLine：速率高于低速线的样本不写（判据 4 的反面）。
 func TestSamplingSkipsWhenRateAboveLine(t *testing.T) {
-	params := Params{MinSamples: 3, RatioPerMille: 200}
+	params := Params{TriggerCount: 3, RatioPerMille: 200}
 	// 基线 100，低速线 20；样本速率 200 远高于线。
 	if isSlow(200, 100, params) {
 		t.Fatal("高速样本不该判为低速")
+	}
+}
+
+// sourceStubProvider 是 ProviderSource 的测试替身，直接给出 ProviderConfig。
+//
+// 为什么需要它：上面那个 stubConfig 直接给 Params，跳过了「列 → Params」这一段，
+// 于是「TriggerCount 到底取自新列还是取自常量」在测试里无从分辨。本测试补上这一段。
+type sourceStubProvider struct {
+	config ProviderConfig
+	found  bool
+}
+
+func (p *sourceStubProvider) SlowRateProvider(_ context.Context, _ int64) (ProviderConfig, bool) {
+	return p.config, p.found
+}
+
+// TestTriggerCountComesFromColumnNotConstant 是本次拆列的**反证用例**。
+//
+// 拆列的全部意义在于「阈值语义由 slow_rate_trigger_count 这一列决定」。若实现仍从
+// slow_rate_min_samples（或干脆写死常量 3）取值，功能看似照跑，而配置面完全失效——
+// 这正是「加了列但没人读」会静默通过的那类缺陷。
+//
+// 断言方式：给一个**非默认**的 TriggerCount（7）与一个同样非默认的旧列值（100），
+// 验算出来的 Params.TriggerCount 必须是 7 而非 3、也非 100。
+func TestTriggerCountComesFromColumnNotConstant(t *testing.T) {
+	seven := 7
+	hundred := 100
+	source := &sourceStubProvider{
+		found: true,
+		config: ProviderConfig{
+			Enabled: true,
+			// 新列（本次新增）：触发阈值。
+			TriggerCount: &seven,
+			// 旧列（基线样本下限）：实现若误读它，验算结果会是 100。
+			RatioPerMille: &hundred,
+		},
+	}
+	config := NewSnapshotConfig(source)
+	if config == nil {
+		t.Fatal("SnapshotConfig 不应为 nil")
+	}
+	params, ok := config.SlowRateConfig(context.Background(), 167)
+	if !ok {
+		t.Fatal("已开启的渠道应返回 ok")
+	}
+	if params.TriggerCount != 7 {
+		t.Fatalf("TriggerCount: 得到 %d，期望 7（须取自 slow_rate_trigger_count 列，"+
+			"若为 3 说明写死了常量，若为 100 说明误读了基线样本下限列）", params.TriggerCount)
+	}
+}
+
+// TestTriggerCountFallsBackWhenColumnNull 钉住 NULL 列取代码默认值（不是取 0）。
+func TestTriggerCountFallsBackWhenColumnNull(t *testing.T) {
+	source := &sourceStubProvider{
+		found:  true,
+		config: ProviderConfig{Enabled: true},
+	}
+	config := NewSnapshotConfig(source)
+	params, ok := config.SlowRateConfig(context.Background(), 167)
+	if !ok {
+		t.Fatal("已开启的渠道应返回 ok")
+	}
+	if params.TriggerCount != 0 {
+		t.Fatalf("归一化前 TriggerCount 应为 0（NULL 折成 0），得到 %d", params.TriggerCount)
+	}
+	// normalize 之后才应变成出厂默认 3。
+	if got := params.normalize().TriggerCount; got != 3 {
+		t.Fatalf("NULL 列应收敛到出厂默认 3，得到 %d", got)
+	}
+}
+
+// TestProviderConfigIgnoresBaselineFloorColumn 钉住拆分的另一半：本包**不读**旧列。
+//
+// old floor 列仍在 ProviderConfig 之外——若有人把 `slow_rate_min_samples` 加回本结构
+// 并参与验算，两列语义会再次合流，拆列白做。
+func TestProviderConfigIgnoresBaselineFloorColumn(t *testing.T) {
+	hundred := 100
+	source := &sourceStubProvider{
+		found: true,
+		config: ProviderConfig{
+			Enabled: true,
+			// 只给旧列语义的值：本包不读它，故验算出的其他参数应为默认。
+			WindowSeconds: &hundred,
+		},
+	}
+	config := NewSnapshotConfig(source)
+	params, _ := config.SlowRateConfig(context.Background(), 167)
+	// WindowSeconds 会取该值（它确实是本包的列），但 TriggerCount 不会受它影响。
+	if params.WindowSeconds != 100 {
+		t.Fatalf("WindowSeconds: 得到 %d，期望 100", params.WindowSeconds)
+	}
+	if params.TriggerCount != 0 {
+		t.Fatalf("TriggerCount 不应受基线样本下限列影响，得到 %d", params.TriggerCount)
 	}
 }

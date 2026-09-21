@@ -43,29 +43,28 @@ type Facts struct {
 // Params 是一个渠道生效的低速监控参数（渠道覆写优先，缺省取 DefaultParams）。
 type Params struct {
 	WindowSeconds   int
-	MinSamples      int
+	TriggerCount    int
 	RatioPerMille   int
 	PenaltyStep     int
 	PenaltyMax      int
 	CooldownSeconds int
 }
 
-// DefaultParams 是五个渠道参数与冷却期的出厂值（与 providers 表 slow_rate_* 列的语义一致）。
+// DefaultParams 是六个渠道参数与冷却期的出厂值（与 providers 表 slow_rate_* 列的语义一致）。
 //
-// MinSamples 对应列 slow_rate_min_samples，语义是**触发阈值**（设计稿 §5 状态表：
-// 「窗内低速次数 ≥ 阈值（默认 3）」与 §6 公式 `floor(slowCount / thresholdCount)`），
-// 不是「样本下限 100」——后者是基线计算（B3，3 天窗 ≥ 100 条）的口径。
-// B1 的 i18n 占位文案写成了「最少样本数 / 默认 100」，与列名同义但与设计稿的阈值语义不符，
-// 已在报告里登记为需修项。
+// TriggerCount 对应列 slow_rate_trigger_count，语义是**触发阈值**（设计稿 §5 状态表：
+// 「窗内低速次数 ≥ 阈值（默认 3）」与 §6 公式 `floor(slowCount / thresholdCount)`）。
+// 它与 slow_rate_min_samples（**基线样本下限**，默认 100，只由 B3 基线定时任务读，
+// 决定能否发布基线）是两件事，故拆作两列；本包只读前者。
 func DefaultParams() Params {
 	return Params{
 		WindowSeconds: 600,
 		// 触发阈值：窗内低速达到 3 条即进一档（设计稿 §5 / §6）。
-		MinSamples:    3,
+		TriggerCount:  3,
 		RatioPerMille: 200,
 		PenaltyStep:   10,
 		PenaltyMax:    30,
-		// 冷却期不在 providers 表里（B1 的六列没有它），故取常量。
+		// 冷却期不在 providers 表里（表内没有它），故取常量。
 		CooldownSeconds: 60,
 	}
 }
@@ -76,8 +75,8 @@ func (p Params) normalize() Params {
 	if p.WindowSeconds <= 0 {
 		p.WindowSeconds = def.WindowSeconds
 	}
-	if p.MinSamples <= 0 {
-		p.MinSamples = def.MinSamples
+	if p.TriggerCount <= 0 {
+		p.TriggerCount = def.TriggerCount
 	}
 	if p.RatioPerMille <= 0 {
 		p.RatioPerMille = def.RatioPerMille
@@ -144,7 +143,7 @@ func New(options Options) *Recorder {
 
 // minOutputTokens 是单样本的输出 token 下限。
 //
-// 它与 providers 表的 slow_rate_min_samples（滑窗内样本数下限）**不是同一件事**：
+// 它与 providers 表的 slow_rate_trigger_count（窗内低速样本数阈值）**不是同一件事**：
 // 后者决定「窗口样本够不够判定」，本常量决定「这一条样本的速率有没有意义」。
 // 短输出的速率由帧解析与网络往返主导，与生成能力无关（1-token 工具调用没有速率可言），
 // 故照设计稿 §2 取常量 50，不做渠道覆写。
@@ -201,11 +200,11 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 
 	count := int(zcard.Val())
 	// 判定门槛（设计稿 §5 边界：不足阈值即不判定，保持当前状态不变，fail-open）。
-	if count < params.MinSamples {
+	if count < params.TriggerCount {
 		return
 	}
 	// 状态推进：窗内低速条数即 slowCount，惩罚按档位增长并封顶（设计稿 §6）。
-	level := count / params.MinSamples
+	level := count / params.TriggerCount
 	penalty := level * params.PenaltyStep
 	if penalty > params.PenaltyMax {
 		penalty = params.PenaltyMax

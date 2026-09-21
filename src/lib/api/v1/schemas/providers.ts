@@ -161,7 +161,12 @@ export const ProviderSummarySchema = z
       .number()
       .int()
       .nullable()
-      .describe("Minimum samples before judging; null uses the default."),
+      .describe("Baseline sample floor for publishing a baseline; null uses the default."),
+    slowRateTriggerCount: z
+      .number()
+      .int()
+      .nullable()
+      .describe("Slow samples within the window before demotion kicks in; null uses the default."),
     slowRateRatioPerMille: z
       .number()
       .int()
@@ -594,7 +599,13 @@ export const ProviderCreateSchema = z
       .int()
       .nullable()
       .optional()
-      .describe("Minimum samples before judging."),
+      .describe("Baseline sample floor for publishing a baseline."),
+    slow_rate_trigger_count: z
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .describe("Slow samples within the window before demotion kicks in."),
     slow_rate_ratio_per_mille: z
       .number()
       .int()

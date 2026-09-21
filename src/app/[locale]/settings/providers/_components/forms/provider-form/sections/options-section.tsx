@@ -877,6 +877,32 @@ export function OptionsSection({ subSectionRefs }: OptionsSectionProps) {
                       </SmartInputWrapper>
 
                       <SmartInputWrapper
+                        label={t("sections.routing.slowRate.triggerCount.label")}
+                        description={t("sections.routing.slowRate.triggerCount.desc")}
+                      >
+                        <Input
+                          id={isEdit ? "edit-slow-rate-trigger-count" : "slow-rate-trigger-count"}
+                          type="number"
+                          value={state.routing.slowRateTriggerCount ?? ""}
+                          onChange={(e) =>
+                            dispatch({
+                              type: "SET_SLOW_RATE_PARAMS",
+                              payload: {
+                                slowRateTriggerCount:
+                                  e.target.value === ""
+                                    ? null
+                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
+                              },
+                            })
+                          }
+                          placeholder={t("sections.routing.slowRate.triggerCount.placeholder")}
+                          disabled={state.ui.isPending}
+                          min="0"
+                          step="1"
+                        />
+                      </SmartInputWrapper>
+
+                      <SmartInputWrapper
                         label={t("sections.routing.slowRate.ratioPerMille.label")}
                         description={t("sections.routing.slowRate.ratioPerMille.desc")}
                       >

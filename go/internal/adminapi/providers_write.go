@@ -145,7 +145,7 @@ var providerCreateFieldNames = []string{
 	"anthropic_adaptive_thinking", "openai_max_tokens_preference",
 	"gemini_google_search_preference", "tpm", "rpm", "rpd", "cc",
 	"slow_rate_monitor_enabled", "slow_rate_window_seconds", "slow_rate_min_samples",
-	"slow_rate_ratio_per_mille", "slow_rate_penalty_step", "slow_rate_penalty_max",
+	"slow_rate_trigger_count", "slow_rate_ratio_per_mille", "slow_rate_penalty_step", "slow_rate_penalty_max",
 }
 
 // providerUpdateFieldNames = 创建字段全集 + description（Node 的 ProviderUpdateSchema 是

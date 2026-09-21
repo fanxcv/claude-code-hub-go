@@ -617,6 +617,7 @@ export const CreateProviderSchema = z
     slow_rate_monitor_enabled: z.boolean().optional(),
     slow_rate_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_min_samples: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_trigger_count: z.coerce.number().int().min(0).nullable().optional(),
     // 千分比：200 = 0.2。上限 1000 即系数 1.0（速率不可能高于基线本身还判低速）。
     slow_rate_ratio_per_mille: z.coerce.number().int().min(0).max(1000).nullable().optional(),
     slow_rate_penalty_step: z.coerce.number().int().min(0).nullable().optional(),
@@ -868,6 +869,7 @@ export const UpdateProviderSchema = z
     slow_rate_monitor_enabled: z.boolean().optional(),
     slow_rate_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_min_samples: z.coerce.number().int().min(0).nullable().optional(),
+    slow_rate_trigger_count: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_ratio_per_mille: z.coerce.number().int().min(0).max(1000).nullable().optional(),
     slow_rate_penalty_step: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_penalty_max: z.coerce.number().int().min(0).nullable().optional(),

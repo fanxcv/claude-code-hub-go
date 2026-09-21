@@ -49,7 +49,7 @@ func (s *providerSlowRateSource) SlowRateProvider(ctx context.Context, providerI
 	return slowrate.ProviderConfig{
 		Enabled:       row.SlowRateMonitorEnabled,
 		WindowSeconds: row.SlowRateWindowSeconds,
-		MinSamples:    row.SlowRateMinSamples,
+		TriggerCount:  row.SlowRateTriggerCount,
 		RatioPerMille: row.SlowRateRatioPerMille,
 		PenaltyStep:   row.SlowRatePenaltyStep,
 		PenaltyMax:    row.SlowRatePenaltyMax,
