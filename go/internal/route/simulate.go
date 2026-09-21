@@ -121,6 +121,11 @@ type SimulateOptions struct {
 	TotalCostAllowed func(ctx context.Context, p SimulateProvider) (bool, string)
 	// EndpointStats 取端点池统计；返回 nil 表示该供应商不参与端点维度（无 vendor）。
 	EndpointStats func(ctx context.Context, p SimulateProvider) *SimulateEndpointStats
+	// SlowRatePenalties 是本次模拟的低速降权表（providerID -> 降权量）；nil 即不降权。
+	//
+	// 与真实选路同表：它必须由同一份渠道配置与同一批 `cch:slow:*:state` 键算出，
+	// 否则预览与真实选路会在「这家为何排在后面」上给出两个答案。
+	SlowRatePenalties map[int64]int
 }
 
 // Simulate 跑一遍调度模拟，返回与前端契约同形的结果。
@@ -128,6 +133,15 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 	modelName := strings.TrimSpace(opts.ModelName)
 	groupFilter := simulateGroupFilter(opts.GroupTags)
 	steps := make([]SimulateStep, 0, 9)
+
+	// 低速降权表：由调用方（管理面）传入。
+	//
+	// 为什么要接进来：本引擎与真实选路**共用同一个** resolveEffectivePriority，
+	// 而模拟页的用途正是「为什么这家排在后面」。不接的话预览显示基础档位、真实选路显示降权后档位，
+	// 两者静默不一致，而预览页正是排障时被信的那个。
+	//
+	// 未接（nil）即不降权：与「未开启低速监控」同义，也保证既有调用方（含测试）行为不变。
+	penalties := penaltyTable(opts.SlowRatePenalties)
 
 	current := opts.Providers
 
@@ -139,8 +153,8 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 		"groupFilter", 1, current, groupKept,
 		snapshotsExcept(current, groupKept, func(p SimulateProvider) *string {
 			return stringPtr("provider_group_mismatch")
-		}, groupFilter, nil, nil),
-		groupFilter, nil,
+		}, groupFilter, nil, nil, penalties),
+		groupFilter, penalties, nil,
 	))
 	current = groupKept
 
@@ -152,8 +166,8 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 		"formatCompatibility", 2, current, formatKept,
 		snapshotsExcept(current, formatKept, func(p SimulateProvider) *string {
 			return stringPtr("format " + string(opts.Format) + " incompatible with " + string(p.ProviderType))
-		}, groupFilter, nil, nil),
-		groupFilter, nil,
+		}, groupFilter, nil, nil, penalties),
+		groupFilter, penalties, nil,
 	))
 	current = formatKept
 
@@ -163,8 +177,8 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 		"enabledCheck", 3, current, enabledKept,
 		snapshotsExcept(current, enabledKept, func(SimulateProvider) *string {
 			return stringPtr("provider_disabled")
-		}, groupFilter, nil, nil),
-		groupFilter, nil,
+		}, groupFilter, nil, nil, penalties),
+		groupFilter, penalties, nil,
 	))
 	current = enabledKept
 
@@ -176,8 +190,8 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 		"activeTime", 4, current, activeKept,
 		snapshotsExcept(current, activeKept, func(p SimulateProvider) *string {
 			return stringPtr("outside active window " + dashIfNil(p.ActiveTimeStart) + "-" + dashIfNil(p.ActiveTimeEnd))
-		}, groupFilter, nil, nil),
-		groupFilter, nil,
+		}, groupFilter, nil, nil, penalties),
+		groupFilter, penalties, nil,
 	))
 	current = activeKept
 
@@ -195,10 +209,10 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 	if modelName != "" {
 		allowFiltered = snapshotsExcept(current, allowKept, func(SimulateProvider) *string {
 			return stringPtr("model " + modelName + " did not match allowlist")
-		}, groupFilter, nil, nil)
+		}, groupFilter, nil, nil, penalties)
 	}
 	steps = append(steps, buildSimulateStep(
-		"modelAllowlist", 5, current, allowKept, allowFiltered, groupFilter, allowNote,
+		"modelAllowlist", 5, current, allowKept, allowFiltered, groupFilter, penalties, allowNote,
 	))
 	current = allowKept
 
@@ -208,26 +222,26 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 	for _, p := range current {
 		if p.ProviderVendorID != nil && *p.ProviderVendorID > 0 &&
 			opts.VendorTypeCircuit != nil && opts.VendorTypeCircuit(ctx, p) {
-			healthFiltered = append(healthFiltered, snapshotOf(p, groupFilter, stringPtr("vendor_type_circuit_open"), nil, nil))
+			healthFiltered = append(healthFiltered, snapshotOf(p, groupFilter, stringPtr("vendor_type_circuit_open"), nil, nil, penalties))
 			continue
 		}
 		if opts.ProviderCircuit != nil {
 			if open, state := opts.ProviderCircuit(ctx, p); open {
-				healthFiltered = append(healthFiltered, snapshotOf(p, groupFilter, stringPtr("provider_circuit_"+state), nil, nil))
+				healthFiltered = append(healthFiltered, snapshotOf(p, groupFilter, stringPtr("provider_circuit_"+state), nil, nil, penalties))
 				continue
 			}
 		}
 		if opts.ProviderCostAllowed != nil {
 			allowed, reason := opts.ProviderCostAllowed(ctx, p)
 			if !allowed {
-				healthFiltered = append(healthFiltered, snapshotOf(p, groupFilter, stringPtr(reason), nil, nil))
+				healthFiltered = append(healthFiltered, snapshotOf(p, groupFilter, stringPtr(reason), nil, nil, penalties))
 				continue
 			}
 		}
 		if opts.TotalCostAllowed != nil {
 			allowed, reason := opts.TotalCostAllowed(ctx, p)
 			if !allowed {
-				healthFiltered = append(healthFiltered, snapshotOf(p, groupFilter, stringPtr(reason), nil, nil))
+				healthFiltered = append(healthFiltered, snapshotOf(p, groupFilter, stringPtr(reason), nil, nil, penalties))
 				continue
 			}
 		}
@@ -237,12 +251,12 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 		StepName: "healthAndLimits", StepIndex: 6,
 		InputCount: len(current), OutputCount: len(healthy),
 		FilteredOut: healthFiltered,
-		Surviving:   snapshotsOf(healthy, groupFilter, nil, nil),
+		Surviving:   snapshotsOf(healthy, groupFilter, nil, nil, penalties),
 	})
 	current = healthy
 
 	// 第 7 步：优先级梯队（只保留最小有效优先级那一档）。
-	tiers := buildSimulatePriorityTiers(current, groupFilter, modelName, opts.EndpointStats == nil)
+	tiers := buildSimulatePriorityTiers(current, groupFilter, modelName, penalties, opts.EndpointStats == nil)
 	selectedTier := -1
 	for i := range tiers {
 		if tiers[i].IsSelected {
@@ -269,15 +283,15 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 		}
 		tierFiltered = append(tierFiltered, snapshotOf(
 			p, groupFilter,
-			stringPtr("effective_priority="+strconv.Itoa(resolveEffectivePriority(p.Provider, groupFilter))),
-			redirectedModelPtr(modelName, p), nil,
+			stringPtr("effective_priority="+strconv.Itoa(resolveEffectivePriority(p.Provider, groupFilter, penalties))),
+			redirectedModelPtr(modelName, p), nil, penalties,
 		))
 	}
 	steps = append(steps, SimulateStep{
 		StepName: "priorityTiers", StepIndex: 7,
 		InputCount: len(current), OutputCount: len(selectedProviders),
 		FilteredOut: tierFiltered,
-		Surviving:   snapshotsOf(selectedProviders, groupFilter, nil, func(p SimulateProvider) *string { return redirectedModelPtr(modelName, p) }),
+		Surviving:   snapshotsOf(selectedProviders, groupFilter, nil, func(p SimulateProvider) *string { return redirectedModelPtr(modelName, p) }, penalties),
 	})
 	current = selectedProviders
 
@@ -295,7 +309,7 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 		default:
 			details = "no_redirect_rule_matched"
 		}
-		redirectSurviving = append(redirectSurviving, snapshotOf(p, groupFilter, stringPtr(details), target, nil))
+		redirectSurviving = append(redirectSurviving, snapshotOf(p, groupFilter, stringPtr(details), target, nil, penalties))
 	}
 	redirectNote := "redirects_apply_after_provider_selection"
 	if modelName == "" {
@@ -316,7 +330,7 @@ func Simulate(ctx context.Context, opts SimulateOptions) (SimulateResult, error)
 			stats = opts.EndpointStats(ctx, p)
 		}
 		endpointSurviving = append(endpointSurviving, snapshotOf(
-			p, groupFilter, stringPtr("endpoint_pool_is_reported_as_downstream_risk_only"), nil, stats,
+			p, groupFilter, stringPtr("endpoint_pool_is_reported_as_downstream_risk_only"), nil, stats, penalties,
 		))
 	}
 	steps = append(steps, SimulateStep{
@@ -369,6 +383,7 @@ func buildSimulatePriorityTiers(
 	providers []SimulateProvider,
 	groupFilter string,
 	modelName string,
+	penalties penaltyTable,
 	_ bool,
 ) []SimulatePriorityTier {
 	if len(providers) == 0 {
@@ -376,7 +391,7 @@ func buildSimulatePriorityTiers(
 	}
 	priorities := make([]int, 0, len(providers))
 	for _, p := range providers {
-		priorities = append(priorities, resolveEffectivePriority(p.Provider, groupFilter))
+		priorities = append(priorities, resolveEffectivePriority(p.Provider, groupFilter, penalties))
 	}
 	slices.Sort(priorities)
 	priorities = slices.Compact(priorities)
@@ -387,7 +402,7 @@ func buildSimulatePriorityTiers(
 		at := make([]SimulateProvider, 0)
 		totalWeight := 0
 		for _, p := range providers {
-			if resolveEffectivePriority(p.Provider, groupFilter) != priority {
+			if resolveEffectivePriority(p.Provider, groupFilter, penalties) != priority {
 				continue
 			}
 			at = append(at, p)
@@ -402,7 +417,7 @@ func buildSimulatePriorityTiers(
 				percent = 100 / float64(len(at))
 			}
 			mapped = append(mapped, SimulatePriorityProvider{
-				SimulateProviderSnapshot: snapshotOf(p, groupFilter, nil, redirectedModelPtr(modelName, p), nil),
+				SimulateProviderSnapshot: snapshotOf(p, groupFilter, nil, redirectedModelPtr(modelName, p), nil, penalties),
 				WeightPercent:            percent,
 			})
 		}
@@ -430,13 +445,14 @@ func buildSimulateStep(
 	output []SimulateProvider,
 	filtered []SimulateProviderSnapshot,
 	groupFilter string,
+	penalties penaltyTable,
 	note *string,
 ) SimulateStep {
 	return SimulateStep{
 		StepName: name, StepIndex: index,
 		InputCount: len(input), OutputCount: len(output),
 		FilteredOut: filtered,
-		Surviving:   snapshotsOf(output, groupFilter, nil, nil),
+		Surviving:   snapshotsOf(output, groupFilter, nil, nil, penalties),
 		Note:        note,
 	}
 }
@@ -449,6 +465,7 @@ func snapshotsExcept(
 	groupFilter string,
 	redirect func(SimulateProvider) *string,
 	stats func(SimulateProvider) *SimulateEndpointStats,
+	penalties penaltyTable,
 ) []SimulateProviderSnapshot {
 	keptIDs := make(map[int64]bool, len(kept))
 	for _, p := range kept {
@@ -467,7 +484,7 @@ func snapshotsExcept(
 		if stats != nil {
 			statsPtr = stats(p)
 		}
-		out = append(out, snapshotOf(p, groupFilter, details(p), redirectPtr, statsPtr))
+		out = append(out, snapshotOf(p, groupFilter, details(p), redirectPtr, statsPtr, penalties))
 	}
 	return out
 }
@@ -477,6 +494,7 @@ func snapshotsOf(
 	groupFilter string,
 	details func(SimulateProvider) *string,
 	redirect func(SimulateProvider) *string,
+	penalties penaltyTable,
 ) []SimulateProviderSnapshot {
 	out := make([]SimulateProviderSnapshot, 0, len(providers))
 	for _, p := range providers {
@@ -488,7 +506,7 @@ func snapshotsOf(
 		if redirect != nil {
 			redirectPtr = redirect(p)
 		}
-		out = append(out, snapshotOf(p, groupFilter, detailsPtr, redirectPtr, nil))
+		out = append(out, snapshotOf(p, groupFilter, detailsPtr, redirectPtr, nil, penalties))
 	}
 	return out
 }
@@ -500,6 +518,7 @@ func snapshotOf(
 	details *string,
 	redirectedModel *string,
 	endpointStats *SimulateEndpointStats,
+	penalties penaltyTable,
 ) SimulateProviderSnapshot {
 	return SimulateProviderSnapshot{
 		ID:                p.ID,
@@ -507,7 +526,7 @@ func snapshotOf(
 		ProviderType:      p.ProviderType,
 		GroupTag:          p.GroupTag,
 		Priority:          p.EffectivePriority(),
-		EffectivePriority: resolveEffectivePriority(p.Provider, groupFilter),
+		EffectivePriority: resolveEffectivePriority(p.Provider, groupFilter, penalties),
 		Weight:            p.Weight,
 		Details:           details,
 		RedirectedModel:   redirectedModel,

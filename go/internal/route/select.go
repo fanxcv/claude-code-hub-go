@@ -19,6 +19,11 @@ type Options struct {
 	Source Source
 	// Health 为 nil 时不做熔断判定（等于「全健康」）。
 	Health *HealthReader
+	// SlowRate 为 nil 时不启用低速降权（等于全关）。
+	//
+	// 它与 `SlowRateMonitorEnabled` 是**两层**门：本字段是进程级装配（整个机制开不开），
+	// 渠道级开关是逐渠道的（哪几家参与）。未装配时连读表函数都不进，故默认部署零开销。
+	SlowRate *SlowRateReader
 	// Affinity 为 nil 时不启用前缀亲和。
 	Affinity *AffinityStore
 	// AffinityIgnoreClientSessionID 对应系统设置 affinityIgnoreClientSessionId：
@@ -97,6 +102,13 @@ type Request struct {
 	// 返回 nil 表示该供应商未配名单（Node 在两侧名单都空时直接放行，不做判定）。
 	// nil 字段本身表示不判定（回退到 Options.Gates.Client）。
 	ClientGate func(p Provider) *ClientRestriction
+
+	// SessionID 是本次请求的客户端会话身份，用于会话级低速冷却的过滤。
+	//
+	// 为何由调用方传而不是本包自取：会话身份的提取在 session 包，而 session 依赖 guard、
+	// guard 依赖本包——本包反向依赖立即成环。这与 AffinityLookup 的注入缝同一模式：
+	// 由 guard 适配器（已握有会话身份）填进来。空串表示无会话（不判定冷却，回落到渠道级降权）。
+	SessionID string
 }
 
 // Result 是一次选路的结果与留痕。
@@ -210,6 +222,16 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		excluded[id] = true
 	}
 
+	// 低速降级的两次只读（渠道级降权 + 本会话冷却）在过滤之前一次取齐。
+	//
+	// 为何在过滤前：过滤阶段要用冷却集排除候选，降权阶段要用降权表排序——两者都必须先于
+	// 本场的候选遍历。两次读均走 pipeline 且只看开启监控的渠道，未装配或全关时零往返。
+	//
+	// 为何传全量 providers 而不是过滤后的集：过滤结果依赖冷却集本身（先有鸡先有蛋），
+	// 而多读几家未开启渠道的键代价为零（它们不进 Redis）。
+	penalties := s.slowRatePenalties(ctx, providers, req)
+	cooldown := s.slowRateCooldown(ctx, providers, req)
+
 	filtered := s.applyFilters(ctx, providers, filterInput{
 		requestedModel: req.Model,
 		format:         req.Format,
@@ -220,6 +242,7 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		gates:          s.opts.Gates,
 		scheduleGate:   req.ScheduleGate,
 		clientGate:     req.ClientGate,
+		cooldown:       cooldown,
 	})
 	dc := filtered.context
 
@@ -249,8 +272,8 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		// 是跨路径统一的「参与池」（界面读它），survivingCandidates 多带一位 affinitySkipped，
 		// 回答「为何未参与竞争」。只写后者的话，统一读前者的界面在亲和行上什么也看不到——
 		// 生产 3 小时窗口 1549 行 affinity_hit 正是如此（considered 合计 0、surviving 合计 5108）。
-		selectedPriority := resolveEffectivePriority(nominate.Provider, req.Group)
-		survivors := affinitySurvivors(filtered.healthy, nominate.Provider.ID, req.Group)
+		selectedPriority := resolveEffectivePriority(nominate.Provider, req.Group, penalties)
+		survivors := affinitySurvivors(filtered.healthy, nominate.Provider.ID, req.Group, penalties)
 		dc.SurvivingCandidates = survivors
 		dc.ConsideredCandidates = consideredFromSurvivors(survivors)
 		dc.PriorityLevels = []int{selectedPriority}
@@ -286,11 +309,11 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		}, nil
 	}
 
-	top := selectTopPriority(filtered.healthy, req.Group)
-	dc.PriorityLevels = priorityLevels(filtered.healthy, req.Group)
+	top := selectTopPriority(filtered.healthy, req.Group, penalties)
+	dc.PriorityLevels = priorityLevels(filtered.healthy, req.Group, penalties)
 	// 与分层同源：排序用的是 resolveEffectivePriority（含分组覆盖），这里若用配置值，就会把
 	// 「选中了 0 档」记成「选中了配置档位」，使用者据此误判成「低优先级被选中」。
-	dc.SelectedPriority = resolveEffectivePriority(top[0], req.Group)
+	dc.SelectedPriority = resolveEffectivePriority(top[0], req.Group, penalties)
 
 	pref := newSameProtocolPreference(req.Format, s.opts.SameProtocolWeightK)
 	weights := make([]int64, len(top))
@@ -338,7 +361,7 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 	}
 
 	selected := s.selectOptimal(top, weights, preferSameOnly, sameFlags)
-	dc.ConsideredCandidates = consideredCandidates(filtered.healthy, selected.ID, req.Group)
+	dc.ConsideredCandidates = consideredCandidates(filtered.healthy, selected.ID, req.Group, penalties)
 	method := MethodWeightedRandom
 	if dc.GroupFilterApplied {
 		method = MethodGroupFiltered
@@ -371,44 +394,46 @@ func consideredCandidates(
 	healthy []Provider,
 	selectedID int64,
 	userGroup string,
+	penalties penaltyTable,
 ) []ConsideredCandidate {
 	if len(healthy) < 2 {
 		return nil
 	}
 	out := make([]ConsideredCandidate, 0, len(healthy))
 	for _, p := range healthy {
-		out = append(out, consideredCandidate(p, selectedID, userGroup))
+		out = append(out, consideredCandidate(p, selectedID, userGroup, penalties))
 	}
 	return out
 }
 
 // consideredCandidate 把一家供应商投影为候选留痕（两个数组共用，保证字段同形）。
-func consideredCandidate(p Provider, selectedID int64, userGroup string) ConsideredCandidate {
+func consideredCandidate(p Provider, selectedID int64, userGroup string, penalties penaltyTable) ConsideredCandidate {
 	return ConsideredCandidate{
 		ID:                p.ID,
 		Name:              p.Name,
 		Priority:          p.EffectivePriority(),
-		EffectivePriority: resolveEffectivePriority(p, userGroup),
+		EffectivePriority: resolveEffectivePriority(p, userGroup, penalties),
 		Weight:            p.Weight,
 		CostMultiplier:    p.CostMultiplier,
 		Selected:          p.ID == selectedID,
+		SlowPenalty:       penalties[p.ID],
 	}
 }
 
 // selectTopPriority 复刻 selectTopPriority：只保留有效优先级最小（数值最小 = 最高优先）的一组。
-func selectTopPriority(providers []Provider, userGroup string) []Provider {
+func selectTopPriority(providers []Provider, userGroup string, penalties penaltyTable) []Provider {
 	if len(providers) == 0 {
 		return nil
 	}
-	lowest := resolveEffectivePriority(providers[0], userGroup)
+	lowest := resolveEffectivePriority(providers[0], userGroup, penalties)
 	for _, p := range providers[1:] {
-		if value := resolveEffectivePriority(p, userGroup); value < lowest {
+		if value := resolveEffectivePriority(p, userGroup, penalties); value < lowest {
 			lowest = value
 		}
 	}
 	out := make([]Provider, 0, len(providers))
 	for _, p := range providers {
-		if resolveEffectivePriority(p, userGroup) == lowest {
+		if resolveEffectivePriority(p, userGroup, penalties) == lowest {
 			out = append(out, p)
 		}
 	}
@@ -416,10 +441,10 @@ func selectTopPriority(providers []Provider, userGroup string) []Provider {
 }
 
 // priorityLevels 复刻 Node 的 priorityLevels：去重后升序。
-func priorityLevels(providers []Provider, userGroup string) []int {
+func priorityLevels(providers []Provider, userGroup string, penalties penaltyTable) []int {
 	out := make([]int, 0, len(providers))
 	for _, p := range providers {
-		out = append(out, resolveEffectivePriority(p, userGroup))
+		out = append(out, resolveEffectivePriority(p, userGroup, penalties))
 	}
 	slices.Sort(out)
 	return slices.Compact(out)

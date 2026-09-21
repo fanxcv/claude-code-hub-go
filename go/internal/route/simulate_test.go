@@ -462,7 +462,7 @@ func TestToSimulateProvidersUsesRouteProjection(t *testing.T) {
 	if !projected.ConversionEnabled() {
 		t.Errorf("protocol_conversion_enabled 未投影")
 	}
-	if got := resolveEffectivePriority(projected, "g1"); got != 1 {
+	if got := resolveEffectivePriority(projected, "g1", nil); got != 1 {
 		t.Errorf("分组优先级覆盖应生效（期望 1，实际 %d）", got)
 	}
 	if !providerSupportsModel(projected, "deepseek-v4-flash") {

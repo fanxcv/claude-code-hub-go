@@ -253,6 +253,15 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	// → adapters.go 的 newProviderRouter），本函数后面那个 selector 只负责故障转移。
 	// 两处加候选投影共三个消费点任意一处拿到 nil，熔断就只影响展示、不影响行为。
 	healthReader := resolveHealth(options)
+	// 低速降权的选路侧读面（nil 时整段跳过，等同未启用）。
+	//
+	// 写在 options.RouteOptions 上而不是局部副本上：下游有两个选器——守卫链里的
+	// （经 AdapterOptions.RouteOptions）与下面那个只负责故障转移的 selector。
+	// 只给局部副本赋值会让故障转移路径静默丢失降权与冷却，而故障转移正是
+	// 「已粘会话撞上慢渠道」后最需要冷却生效的那条路。
+	if options.RouteOptions.SlowRate == nil {
+		options.RouteOptions.SlowRate = route.NewSlowRateReader(options.Redis, logger)
+	}
 	routeOptions := options.RouteOptions
 	routeOptions.Health = healthReader
 
@@ -453,6 +462,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	selector := route.NewSelector(route.Options{
 		Source:       route.NewStoreSource(options.Pools),
 		Health:       healthReader,
+		SlowRate:     options.RouteOptions.SlowRate,
 		Affinity:     options.RouteOptions.Affinity,
 		Gates:        gates,
 		Rand:         options.RouteOptions.Rand,

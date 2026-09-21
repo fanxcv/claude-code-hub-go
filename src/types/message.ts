@@ -226,7 +226,8 @@ export interface ProviderChainItem {
         | "model_not_allowed"
         | "schedule_inactive" // 供应商不在调度时间窗口内
         | "disabled"
-        | "client_restriction"; // Provider filtered due to client restriction
+        | "client_restriction" // Provider filtered due to client restriction
+        | "slow_rate_cooldown"; // This session recently hit a slow response on this provider
       details?: string; // 额外信息（如费用：$15.2/$15）
       clientRestrictionContext?: {
         matchType: "blocklist_hit" | "allowlist_miss";

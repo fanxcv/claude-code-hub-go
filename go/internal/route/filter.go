@@ -52,6 +52,8 @@ type filterInput struct {
 	// scheduleGate / clientGate 是本次请求的判定（非 nil 时优先于 gates 的同名钩子）。
 	scheduleGate func(p Provider) bool
 	clientGate   func(p Provider) *ClientRestriction
+	// cooldown 是本次请求的「本会话冷却中」渠道集（nil 即不判定，回落到只有渠道级降权）。
+	cooldown map[int64]bool
 }
 
 // filterResult 是候选过滤的结果与留痕。
@@ -180,6 +182,12 @@ func (s *Selector) applyFilters(
 			dc.FilteredProviders = append(dc.FilteredProviders, record)
 			continue
 		}
+		// 会话级低速冷却在**熔断之后**判定（软回避不应改写硬故障的归因）。
+		// 它不改变 afterHealthCheck 的口径：那个计数是熔断步的产物，本判定属另一个维度。
+		if blocked, record := s.slowRateRejection(p, in); blocked {
+			dc.FilteredProviders = append(dc.FilteredProviders, record)
+			continue
+		}
 		healthy = append(healthy, p)
 	}
 	dc.AfterHealthCheck = len(healthy)
@@ -189,6 +197,25 @@ func (s *Selector) applyFilters(
 
 // basicFilterRejection 判定「基础过滤」维度：启用态、排除列表、调度窗口、格式兼容、
 // 模型允许集、限额。理由取值与 Node 的记录循环逐条对齐。
+// slowRateRejection 判定该候选是否因「本会话的低速冷却」而不该参与本次竞争。
+//
+// 与熔断的关系：两者独立不合并（设计稿 §5 边界表）。熔断是硬故障排除（`healthRejection`），
+// 本判定是「本会话刚刚在这家磨过」的软回避，只作用于**本会话**。因此先跑熔断、再跑本判定，
+// 且本判定命中时记的是专门理由（而不是 circuit_open）。
+//
+// 只在 Options.SlowRate 已装配且本次请求带会话身份时判定；in.cooldown 为 nil 时直接返回。
+func (s *Selector) slowRateRejection(p Provider, in filterInput) (bool, Filtered) {
+	record := Filtered{ID: p.ID, Name: p.Name}
+	if in.cooldown == nil || !in.cooldown[p.ID] {
+		return false, record
+	}
+	record.Reason = ReasonSlowRateCooldown
+	// Details 取 i18n 键形态（与 circuit_open / rate_limited 等同例）：前端先按 filterDetails.<值>
+	// 查词表，查不到才回落原值。写死中文会让英文界面露出中文，违反「用户可见文案走 i18n」。
+	record.Details = "slow_rate_cooldown"
+	return true, record
+}
+
 func (s *Selector) basicFilterRejection(
 	ctx context.Context,
 	p Provider,

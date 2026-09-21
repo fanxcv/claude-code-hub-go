@@ -143,7 +143,7 @@ func TestResolveEffectivePriorityRequiresGroupMembership(t *testing.T) {
 			provider.GroupPriorities = tc.overrides
 			provider.Priority = intPtr(tc.priority)
 
-			if got := resolveEffectivePriority(provider, tc.userGroup); got != tc.want {
+			if got := resolveEffectivePriority(provider, tc.userGroup, nil); got != tc.want {
 				t.Fatalf("resolveEffectivePriority = %d，期望 %d（%s）", got, tc.want, tc.why)
 			}
 		})
@@ -494,7 +494,7 @@ func TestAffinityPathExposesHigherTierCandidates(t *testing.T) {
 // `被跳过者 == 0`，两者在「通过集只有一家、而提名者不在其中」时分叉——两次独立计算正是分叉的入口。
 func TestSurvivorProjectionsAgreeOnEdgeCases(t *testing.T) {
 	passers := productionReplay(t)[3:7] // 138/162/145/163，提名 999 不在其中
-	survivors := affinitySurvivors(passers, 999, "codex,fan")
+	survivors := affinitySurvivors(passers, 999, "codex,fan", nil)
 	considered := consideredFromSurvivors(survivors)
 	if len(survivors) != len(passers) || len(considered) != len(passers) {
 		t.Fatalf("提名者不在通过集内时，两个键都应记全：surviving=%d considered=%d",
@@ -514,7 +514,7 @@ func TestSurvivorProjectionsAgreeOnEdgeCases(t *testing.T) {
 
 	// 通过集只有一家且就是提名者：没有可说之事，两个键一起缺席（黄金样本键集不受影响）。
 	alone := productionReplay(t)[3:4]
-	if got := affinitySurvivors(alone, 138, "codex,fan"); got != nil {
+	if got := affinitySurvivors(alone, 138, "codex,fan", nil); got != nil {
 		t.Fatalf("唯一候选人必然被选中，survivingCandidates 不该出现：%+v", got)
 	} else if mirror := consideredFromSurvivors(got); mirror != nil {
 		t.Fatalf("consideredCandidates 应随之一起缺席：%+v", mirror)

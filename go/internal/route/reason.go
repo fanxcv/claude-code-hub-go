@@ -29,6 +29,13 @@ const (
 	ReasonRateLimited Reason = "rate_limited"
 	// ReasonEndpointUnavailable 供应商厂下无任何启用端点（Go 侧前置排除，默认关闭）。
 	ReasonEndpointUnavailable Reason = "endpoint_unavailable"
+	// ReasonSlowRateCooldown 本会话对该渠道正在低速冷却期内（设计稿 §8 的会话级强制降级）。
+	//
+	// 说明：前端 `src/types/message.ts` 的过滤理由联合类型与 `provider-chain-formatter.ts` 的
+	// 图标映射是封闭枚举，新取值会落到默认分支。这是取舍而非遗漏：会话级冷却只在开启低速监控的
+	// 渠道上产生，界面文案与图标待前端一并补（已登记在报告「未确证」）。理由文本与详情
+	// 在链上可读，不依赖前端映射也能事后归因。
+	ReasonSlowRateCooldown Reason = "slow_rate_cooldown"
 )
 
 // Filtered 是一个被过滤的候选及其理由，对应 Node 的 decisionContext.filteredProviders[]。
@@ -152,6 +159,19 @@ type ConsideredCandidate struct {
 	CostMultiplier    json.Number `json:"costMultiplier"`
 	// Selected 为真表示本次最终选中该家。
 	Selected bool `json:"selected"`
+
+	// SlowPenalty 是本次选路给该渠道叠加的低速降权量（0 = 未降权）。
+	//
+	// **为何必须落在本结构**：降权改的是排序依据，若链上不记它，就会出现「同一批候选、
+	// 同一 userGroup，某家却排在后面」而界面无从归因的情形——那正是仓内已经栽过的
+	// 「不可见排除层」。记下它，用户才能回答「这个渠道为何排在后面」。
+	//
+	// **为何带 omitempty**：`decisionContext` 是落链契约，`chain_test.go` 对键集有精确相等断言
+	// （黄金样本 13 键）。未开启低速监控时降权恒为 0，本键不出现在 JSON 里，既有对拍逐字节不受影响；
+	// 开了监控才多出这个键——那时链上多一个键正是预期行为（与 SameProtocol 同一手法）。
+	// 仓内先例：reason.go 的 ModelSupportedProviders 用 `json:"-"` 避开对拍，代价是界面看不到；
+	// 本字段是排障必需，故取出路 omitempty 而非隐藏。
+	SlowPenalty int `json:"slowPenalty,omitempty"`
 }
 
 // SurvivingCandidate 是一项**通过全部硬校验却未参与竞争**的候选，用于回填「因前缀亲和短路而
@@ -189,7 +209,7 @@ type SurvivingCandidate struct {
 // 边界：若提名者不在通过集内（选择器级闸门放行、而请求级闸门把它滤掉了），整表都记
 // affinitySkipped，不会有 Selected 项。这是如实记录，不做补偿——把非通过者也塞进来会让
 // 「通过集」这个词失去意义。
-func affinitySurvivors(healthy []Provider, selectedID int64, userGroup string) []SurvivingCandidate {
+func affinitySurvivors(healthy []Provider, selectedID int64, userGroup string, penalties penaltyTable) []SurvivingCandidate {
 	if len(healthy) == 0 {
 		return nil
 	}
@@ -201,7 +221,7 @@ func affinitySurvivors(healthy []Provider, selectedID int64, userGroup string) [
 			skipped++
 		}
 		out = append(out, SurvivingCandidate{
-			ConsideredCandidate: consideredCandidate(p, selectedID, userGroup),
+			ConsideredCandidate: consideredCandidate(p, selectedID, userGroup, penalties),
 			AffinitySkipped:     !selected,
 		})
 	}

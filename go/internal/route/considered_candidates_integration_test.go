@@ -117,7 +117,7 @@ func TestIntegrationGroupOverrideNeedsProviderMembership(t *testing.T) {
 	}
 	for _, item := range want {
 		provider := findProvider(t, providers, item.id)
-		if got := resolveEffectivePriority(provider, "codex,fan"); got != item.want {
+		if got := resolveEffectivePriority(provider, "codex,fan", nil); got != item.want {
 			t.Fatalf("id=%d 的分层优先级 = %d，期望 %d（%s）", item.id, got, item.want, item.why)
 		}
 	}

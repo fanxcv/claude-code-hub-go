@@ -89,7 +89,8 @@
     "health_check_failed": "Health Check Failed",
     "endpoint_circuit_open": "Endpoint Circuit Open",
     "endpoint_disabled": "Endpoint Disabled",
-    "client_restriction": "Client Restriction"
+    "client_restriction": "Client Restriction",
+    "slow_rate_cooldown": "Slow Rate Cooldown"
   },
   "filterDetails": {
     "vendor_type_circuit_open": "Vendor-type temporarily circuit-broken",
@@ -102,7 +103,8 @@
     "allowlist_miss": "Not in allowed list",
     "detectedClient": "Detected: {client}",
     "providerAllowlist": "Allowlist: {list}",
-    "providerBlocklist": "Blocklist: {list}"
+    "providerBlocklist": "Blocklist: {list}",
+    "slow_rate_cooldown": "This session recently hit a slow response on this provider; skipped during cooldown"
   },
   "details": {
     "selectionMethod": "Selection",

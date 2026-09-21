@@ -68,9 +68,19 @@ func matchProviderGroups(providerGroupTag *string, groups []string) bool {
 	return false
 }
 
-// resolveEffectivePriority 解析某供应商在给定用户组下的**分层优先级**。
+// resolveEffectivePriority 解析某供应商在给定用户组下的**分层优先级**，并叠加低速降权。
 //
 // 语义：分组覆盖存在时取「匹配分组中的最小优先级」，否则回退 priority 列（缺省 0）。数值小 = 更优先。
+// 然后加上 penalties 给该渠道的降权值（见 penaltyTable）。
+//
+// **为什么降权必须加在本函数内部**（不变量，改动前先读这段）：本函数是全仓分层值的**唯一漏斗**，
+// 非测试调用点二十余处（`select.go` 的亲和短路、SelectedPriority、候选投影、selectTopPriority、
+// priorityLevels，以及 `simulate.go` 的模拟预览）。排序、留痕、模拟三侧全部经它取数，
+// 所以在这里加 = 一次覆盖全部读数；在外面包一层新函数则那些调用点仍走旧漏斗，
+// 读数与实际选路分叉（SelectedPriority 记的档位与实际排序不一致，界面归因就错了）。
+//
+// **降权只作用于分组覆盖之后**：penalized 的入参是 baseEffectivePriority 的返回值，构造上不可能提前。
+// 若直接在 provider.Priority 列上减，有分组覆盖时那一列根本不参与排序，降权会被覆盖吃掉、等于不生效。
 //
 // 与 Node 的**一处有意偏离**（2026-09-14）：覆盖键必须让**该供应商自己也在那个组里**才生效。
 // Node 只校验「用户在 g 组」且「provider.group_priorities 里有 g 键」，于是把供应商从分组摘除时，
@@ -83,7 +93,36 @@ func matchProviderGroups(providerGroupTag *string, groups []string) bool {
 // 不可能分叉。Node 已退役，对齐它不再是硬约束，组内语义自洽优先；本偏离已登记在
 // 容错：userGroup 为空、覆盖表为空（jsonb null 解出来即 nil）、覆盖表里没有匹配键，一律回退
 // priority 列，不 panic——覆盖表是历史脏数据的常见栖身处（列无写入侧校验）。
-func resolveEffectivePriority(provider Provider, userGroup string) int {
+
+// penaltyTable 是本次请求的「渠道 -> 低速降权值」表（providerID -> 降权量）。
+//
+// 为何是 map 而不是每个调用点自己传一个 int：同一场选路里，排序、留痕、模拟都要求
+// 「同一渠道得到同一个降权值」。若每个调用点各自取数，一处读得 10、另一处读得 0，
+// 就会出现「排序按降权后的档位、留痕却记降权前的档位」这类静默分叉。
+// 由调用方算一次、往下传，是让「同一事实只有一个来源」在类型层成立。
+//
+// nil 与空表同义：不给任何渠道降权（未开启监控时恒为此）。
+type penaltyTable map[int64]int
+
+// penalized 把降权叠加到分层值上。nil 表、无该渠道、非正值一律原样返回——
+// 降权是**单向**的（只能让渠道更不优先），不允许出现负值把渠道抬上去。
+func (t penaltyTable) penalized(base int, providerID int64) int {
+	penalty, ok := t[providerID]
+	if !ok || penalty <= 0 {
+		return base
+	}
+	return base + penalty
+}
+
+func resolveEffectivePriority(provider Provider, userGroup string, penalties penaltyTable) int {
+	return penalties.penalized(baseEffectivePriority(provider, userGroup), provider.ID)
+}
+
+// baseEffectivePriority 是**未叠加低速降权**的分层值（分组覆盖后的结果）。
+//
+// 拆出它不是为了多一个漏斗（那正是要避免的分叉），而是为了让「降权加在覆盖**之后**」这条规则
+// 在**类型层**成立：penalized 只可能作用在覆盖完毕的返回值上，调用方无从绕过。
+func baseEffectivePriority(provider Provider, userGroup string) int {
 	if userGroup == "" || len(provider.GroupPriorities) == 0 {
 		return provider.EffectivePriority()
 	}

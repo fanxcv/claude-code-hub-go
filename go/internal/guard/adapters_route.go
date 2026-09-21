@@ -167,6 +167,9 @@ func (r *ProviderRouter) Select(ctx context.Context, req *pctx.Context) (pctx.Pr
 		Format: r.formatOf(req),
 		Group:  r.groupOf(ctx, req),
 		KeyID:  r.keyIDOf(req),
+		// 会话身份：会话级低速冷却的过滤依据（同值已在亲和空闲闸门用）。
+		// 未接线或客户端未带时为空串，冷却过滤整段不判定（fail-open）。
+		SessionID: r.sessionID,
 		// Endpoint 维度的判定（端点族、端点策略）属入口与端点包；零值表示不按端点维度排除。
 		AffinityBody: body,
 		// 两个请求级门槛：Node 在 pickRandomProvider 里每请求解析一次 systemTimezone 后做
