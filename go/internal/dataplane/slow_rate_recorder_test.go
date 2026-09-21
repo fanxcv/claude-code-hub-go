@@ -1,7 +1,10 @@
 package dataplane
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,22 +22,42 @@ import (
 // terminal 的异步写 worker 承担的。判据只能落在「查了几次库」上，故需要一个能计数的存储替身。
 
 // countingProviderReader 是按 providerID 计数的存储替身。
+//
+// 替身必须与真实读面**同形**，否则钉子会被假契约蒙混过去——本文件先前正是栽在这上面：
+// 替身以 (nil, nil) 表示「查不到行」，而真实 readSingleRowAs 返回 ErrNotFound，于是
+// 「负结果已缓存」那条断言一直是绿的，生产却每条终态都回查一次库。
 type countingProviderReader struct {
 	mu    sync.Mutex
 	rows  map[int64]*store.Provider
+	errs  map[int64]error
 	calls int
 }
 
 func newCountingProviderReader() *countingProviderReader {
-	return &countingProviderReader{rows: map[int64]*store.Provider{}}
+	return &countingProviderReader{rows: map[int64]*store.Provider{}, errs: map[int64]error{}}
 }
 
-// FindProviderByID 命中即返回该行；未登记即返回 (nil, nil)——与真实读面「查不到行」同形。
+// FindProviderByID 命中即返回该行；未登记返回 (nil, store.ErrNotFound)——与真实读面
+// store/read.go 的 readSingleRowAs（isNoRows → ErrNotFound）同形；注入过错误的 id 返回该错误。
 func (r *countingProviderReader) FindProviderByID(_ context.Context, id int64) (*store.Provider, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls++
-	return r.rows[id], nil
+	if err, ok := r.errs[id]; ok {
+		return nil, err
+	}
+	row, ok := r.rows[id]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return row, nil
+}
+
+// fail 让某 providerID 的读面返回给定错误（模拟真查询失败，而非行不存在）。
+func (r *countingProviderReader) fail(id int64, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.errs[id] = err
 }
 
 func (r *countingProviderReader) set(id int64, row *store.Provider) {
@@ -168,4 +191,67 @@ func TestSlowRateProviderCacheClearedByDomainBroadcast(t *testing.T) {
 	if !enabled || params.WindowSeconds != window || params.TriggerCount != trigger {
 		t.Fatalf("失效广播后必须看到新值，收到 enabled=%v params=%+v", enabled, params)
 	}
+}
+
+// TestSlowRateProviderMissingRowCachesNegativeAndDoesNotWarn 钉住「行不存在」这一档的
+// **双重**后果：只查一次库（负结果进缓存），且**不产生任何日志**。
+//
+// 为何「不 warn」也是判据：真实读面用 ErrNotFound 表达「行不存在」（store/read.go），
+// 把它当查询失败的话，除了每条终态回查一次库，还会每次刷一条
+// slow_rate_config_lookup_failed——生产上这类噪音正是把真故障淹掉的原因。
+func TestSlowRateProviderMissingRowCachesNegativeAndDoesNotWarn(t *testing.T) {
+	restoreLogLevel(t, logx.LevelWarn)
+
+	reader := newCountingProviderReader()
+	var logs bytes.Buffer
+	config := slowrate.NewSnapshotConfig(newProviderSlowRateSource(reader, nil, logx.New(&logs)))
+
+	for i := 0; i < 5; i++ {
+		if _, enabled := config.SlowRateConfig(context.Background(), 999); enabled {
+			t.Fatalf("第 %d 次：行不存在的渠道必须按未开启处理", i+1)
+		}
+	}
+	if got := reader.queries(); got != 1 {
+		t.Fatalf("行不存在的 5 次读取应只查一次库（负结果进缓存），实际 %d 次", got)
+	}
+	if output := logs.String(); output != "" {
+		t.Fatalf("行不存在不是故障，不得产生日志；实际输出=%q", output)
+	}
+}
+
+// TestSlowRateProviderQueryErrorIsNotCachedAndWarns 是上一条的**反面**：真正的查询失败
+// （超时/连接断开等）是瞬时故障，既不得进缓存（否则一次抖动把错值钉住一个 TTL），
+// 也必须留下 warn（否则故障不可观测）。
+//
+// 两条合起来才钉得住分界：只测任一侧，把「所有错误都缓存」或「所有错误都不缓存」的实现
+// 都能蒙混过关。
+func TestSlowRateProviderQueryErrorIsNotCachedAndWarns(t *testing.T) {
+	restoreLogLevel(t, logx.LevelWarn)
+
+	reader := newCountingProviderReader()
+	reader.fail(999, errors.New("store: 只读查询失败: 连接已关闭"))
+	var logs bytes.Buffer
+	config := slowrate.NewSnapshotConfig(newProviderSlowRateSource(reader, nil, logx.New(&logs)))
+
+	for i := 0; i < 3; i++ {
+		if _, enabled := config.SlowRateConfig(context.Background(), 999); enabled {
+			t.Fatalf("第 %d 次：查询失败的渠道必须按未开启处理", i+1)
+		}
+	}
+	if got := reader.queries(); got != 3 {
+		t.Fatalf("查询失败不得进缓存，3 次读取应查 3 次库，实际 %d 次", got)
+	}
+	if output := logs.String(); !strings.Contains(output, `"event":"dataplane.slow_rate_config_lookup_failed"`) {
+		t.Fatalf("查询失败必须留下 warn，实际输出=%q", output)
+	}
+}
+
+// restoreLogLevel 把日志级别设为 level，并在用例结束时还原（与仓内既有捕获日志的用例同手法）。
+func restoreLogLevel(t *testing.T, level logx.Level) {
+	t.Helper()
+	previous := logx.CurrentLevel()
+	if !logx.SetLevel(string(level)) {
+		t.Fatalf("无法把日志级别设为 %s（当前 %s）", level, previous)
+	}
+	t.Cleanup(func() { logx.SetLevel(previous) })
 }

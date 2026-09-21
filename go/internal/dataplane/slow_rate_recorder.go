@@ -2,6 +2,7 @@ package dataplane
 
 import (
 	"context"
+	"errors"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/cfgsync"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
@@ -58,6 +59,11 @@ func asProviderRowReader(pools *store.Pools) providerRowReader {
 //
 // 为何连「行不存在」也缓存：只缓存正结果等于没修——已删除的 providerID 每次终态仍会回查。
 // 查库**报错**不进缓存（瞬时故障不该被钉住一个 TTL），故本结构不表示错误态。
+//
+// 「行不存在」在 store 侧**不是无错返回**：readSingleRowAs 命中 sql.ErrNoRows 时返回
+// ErrNotFound（store/read.go 的 isNoRows 分支），FindProviderByID 原样上抛。故判定必须走
+// errors.Is(err, store.ErrNotFound)——只看 err != nil 会把「稳定的负结果」当成瞬时故障，
+// 于是负缓存永不命中，本类型存在的全部理由落空。
 type slowRateConfigEntry struct {
 	config slowrate.ProviderConfig
 	exists bool
@@ -94,6 +100,8 @@ func newProviderSlowRateSource(providers providerRowReader, registry *cfgsync.Re
 // SlowRateProvider 实现 slowrate.ProviderSource。
 //
 // 读不到行（已删除/禁用）或查询失败一律返回 false：调用方按未开启处理（fail-open）。
+// 但两者的**缓存语义相反**：行不存在是稳定的负结果（进缓存、不打日志），查询失败是瞬时
+// 故障（不进缓存、打 warn）——混为一谈会让不存在的 providerID 每条终态都回查一次库。
 func (s *providerSlowRateSource) SlowRateProvider(ctx context.Context, providerID int64) (slowrate.ProviderConfig, bool) {
 	if s == nil || s.providers == nil || providerID <= 0 {
 		return slowrate.ProviderConfig{}, false
@@ -103,6 +111,13 @@ func (s *providerSlowRateSource) SlowRateProvider(ctx context.Context, providerI
 	}
 	row, err := s.providers.FindProviderByID(ctx, providerID)
 	if err != nil {
+		// ErrNotFound 是**稳定的负结果**（行确实不存在），不是故障：与「查到了但没开监控」
+		// 同档，必须进缓存。漏了这一档的后果是双重的——不存在的 providerID 每条终态都回查
+		// 一次库，且每次刷一条 slow_rate_config_lookup_failed，把真故障淹在噪音里。
+		if errors.Is(err, store.ErrNotFound) {
+			s.cache.Set(providerID, slowRateConfigEntry{})
+			return slowrate.ProviderConfig{}, false
+		}
 		if s.logger != nil {
 			s.logger.Warn("dataplane.slow_rate_config_lookup_failed", map[string]any{
 				"providerId": providerID,
@@ -112,6 +127,8 @@ func (s *providerSlowRateSource) SlowRateProvider(ctx context.Context, providerI
 		return slowrate.ProviderConfig{}, false
 	}
 	if row == nil {
+		// 防御分支：*store.Pools 在无行时走上面的 ErrNotFound，到不了这里。保留是因为
+		// providerRowReader 是接口，别的实现可能以 (nil, nil) 表达同一事实。
 		s.cache.Set(providerID, slowRateConfigEntry{})
 		return slowrate.ProviderConfig{}, false
 	}
