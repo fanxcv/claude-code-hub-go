@@ -3,9 +3,12 @@ package session
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/guard"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
@@ -108,8 +111,15 @@ func (a *SessionBinderAdapter) lookupTenantSession(ctx context.Context, hash str
 	raw := a.binder.client.rc.Raw()
 	key := TenantContentHashSessionKey(keyID, hash)
 	existing, err := raw.Get(ctx, key).Result()
+	if errors.Is(err, redis.Nil) {
+		// 键不存在是**正常路径**（首见会话），不是故障：原注释「调用方按未找到处理」只说了
+		// 一半——调用方拿到的 err 非空就走 warn，于是每次未命中都报一条
+		// `session.ensure.hash_lookup_failed`（生产实测该 warn 的 error 值全是 redis: nil）。
+		// 归入「未找到」语义后，真实 Redis 故障（超时、连接拒绝、命令错）仍照旧上抛。
+		return "", false, nil
+	}
 	if err != nil {
-		return "", false, err // redis.Nil 等一并向上抛，调用方按未找到处理
+		return "", false, err
 	}
 
 	// proveContentHashSessionOwnership：legacy owner 必须是当前 key。
