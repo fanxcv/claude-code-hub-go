@@ -352,7 +352,6 @@ function ProviderFormContent({
           slow_rate_penalty_max: state.routing.slowRatePenaltyMax,
           slow_rate_probe_after_first_byte_seconds:
             state.routing.slowRateProbeAfterFirstByteSeconds,
-          slow_rate_probe_min_tokens: state.routing.slowRateProbeMinTokens,
           model_redirects:
             state.routing.modelRedirects.length > 0 ? state.routing.modelRedirects : null,
           allowed_models:

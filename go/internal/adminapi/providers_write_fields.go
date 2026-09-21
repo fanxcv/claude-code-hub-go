@@ -99,11 +99,10 @@ var providerPreimageFieldNames = map[string]string{
 	"slow_rate_penalty_step":                      "slowRatePenaltyStep",
 	"slow_rate_penalty_max":                       "slowRatePenaltyMax",
 	"slow_rate_probe_after_first_byte_seconds":    "slowRateProbeAfterFirstByteSeconds",
-	"slow_rate_probe_min_tokens":                  "slowRateProbeMinTokens",
-	"tpm":                                         "tpm",
-	"rpm":                                         "rpm",
-	"rpd":                                         "rpd",
-	"cc":                                          "cc",
+	"tpm": "tpm",
+	"rpm": "rpm",
+	"rpd": "rpd",
+	"cc":  "cc",
 }
 
 // providerPayloadFieldForCamel 反向查表（撤销回写时要把前像的 camelCase 名翻译回 payload 名）。
@@ -500,7 +499,6 @@ func providerCreateWriteSpecs() map[string]providerDecodeSpec {
 		"slow_rate_penalty_step":                   providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_penalty_max":                    providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_probe_after_first_byte_seconds": providerNullableIntFieldSpec(nil, nil),
-		"slow_rate_probe_min_tokens":               providerNullableIntFieldSpec(nil, nil),
 		"website_url":                              providerNullableFieldSpec(0),
 		"favicon_url":                              providerNullableFieldSpec(0),
 		"cache_ttl_preference":                     providerNullableEnumFieldSpec(providerCacheTTLPreferences),
@@ -1200,7 +1198,7 @@ func providerWriteKindOf(name string) string {
 		"slow_rate_window_seconds", "slow_rate_baseline_window_seconds",
 		"slow_rate_min_samples", "slow_rate_trigger_count", "slow_rate_ratio_per_mille",
 		"slow_rate_penalty_step", "slow_rate_penalty_max",
-		"slow_rate_probe_after_first_byte_seconds", "slow_rate_probe_min_tokens":
+		"slow_rate_probe_after_first_byte_seconds":
 		return "nullable_int"
 	case "cost_multiplier", "limit_5h_usd", "limit_daily_usd", "limit_weekly_usd",
 		"limit_monthly_usd", "limit_total_usd":

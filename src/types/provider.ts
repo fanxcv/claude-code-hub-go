@@ -383,10 +383,8 @@ export interface Provider {
   slowRateRatioPerMille: number | null;
   slowRatePenaltyStep: number | null;
   slowRatePenaltyMax: number | null;
-  // 首字后探测两列：probeAfterFirstByteSeconds 是探测阈值 T（秒），null = 不探测（机制默认关闭）；
-  // probeMinTokens 是探测时的最低已生成 token 数，null = 取代码默认值。
+  // 首字后停滞探测阈值 T（秒）：null = 不探测（机制默认关闭）。
   slowRateProbeAfterFirstByteSeconds: number | null;
-  slowRateProbeMinTokens: number | null;
   modelRedirects: ProviderModelRedirectRule[] | null;
 
   // Scheduled active time window (HH:mm format, null = always active)
@@ -530,9 +528,8 @@ export interface ProviderDisplay {
   slowRateRatioPerMille: number | null;
   slowRatePenaltyStep: number | null;
   slowRatePenaltyMax: number | null;
-  // 首字后探测两列：null = 不探测（阈值）/ 取代码默认值（最低 token 数）。
+  // 首字后停滞探测阈值：null = 不探测。
   slowRateProbeAfterFirstByteSeconds: number | null;
-  slowRateProbeMinTokens: number | null;
   modelRedirects: ProviderModelRedirectRule[] | null;
   // Scheduled active time window
   activeTimeStart: string | null;
@@ -842,9 +839,8 @@ export interface CreateProviderData {
   slow_rate_ratio_per_mille?: number | null;
   slow_rate_penalty_step?: number | null;
   slow_rate_penalty_max?: number | null;
-  // 首字后探测两列：null = 不探测 / 取代码默认值。
+  // 首字后停滞探测阈值：null = 不探测。
   slow_rate_probe_after_first_byte_seconds?: number | null;
-  slow_rate_probe_min_tokens?: number | null;
 
   // 废弃字段（保留向后兼容）
   // TPM (Tokens Per Minute): 每分钟可处理的文本总量
@@ -947,9 +943,8 @@ export interface UpdateProviderData {
   slow_rate_ratio_per_mille?: number | null;
   slow_rate_penalty_step?: number | null;
   slow_rate_penalty_max?: number | null;
-  // 首字后探测两列：null = 不探测 / 取代码默认值。
+  // 首字后停滞探测阈值：null = 不探测。
   slow_rate_probe_after_first_byte_seconds?: number | null;
-  slow_rate_probe_min_tokens?: number | null;
 
   // 废弃字段（保留向后兼容）
   // TPM (Tokens Per Minute): 每分钟可处理的文本总量

@@ -20,13 +20,12 @@ type ProviderConfig struct {
 	RatioPerMille *int
 	PenaltyStep   *int
 	PenaltyMax    *int
-	// ProbeAfterFirstByteSeconds / ProbeMinTokens 是「首字后低速探测换家」的两列。
+	// ProbeAfterFirstByteSeconds 是「首字后停滞探测换家」的阈值列。
 	//
-	// 它们**不进 Params**：Params 描述的是终态判定（请求结束后看整段速率），而这两列
-	// 描述的是**中途探测**（请求进行中看首字后的已生成量）。两者是两个时刻、两套判据，
-	// 混进同一个结构会让「哪个参数归哪条路」变模糊。读取面见 SlowRateProbeConfig。
+	// 它**不进 Params**：Params 描述的是终态判定（请求结束后看整段速率），而这列
+	// 描述的是**中途探测**（请求进行中看首字后是否迟迟不出内容）。两者是两个时刻、
+	// 两套判据，混进同一个结构会让「哪个参数归哪条路」变模糊。读取面见 SlowRateProbeConfig。
 	ProbeAfterFirstByteSeconds *int
-	ProbeMinTokens             *int
 }
 
 // ProviderSource 给出某渠道的低速监控配置。
@@ -68,15 +67,15 @@ func (c *SnapshotConfig) SlowRateConfig(ctx context.Context, providerID int64) (
 	}, true
 }
 
-// SlowRateProbeConfig 给出某渠道的中途探测参数（探测两列 + 系数）。
+// SlowRateProbeConfig 给出某渠道的中途探测参数（探测阈值）。
 //
 // 与 SlowRateConfig 分开的两个理由：
-//   - 语义不同：那条是终态判定，本条是中途探测（见 ProviderConfig 里两列的注释）；
+//   - 语义不同：那条是终态判定，本条是中途探测（见 ProviderConfig 里这列的注释）；
 //   - 闸门不同：本条额外的闸门是**探测阈值必须为正**——列的 NULL 折成 0，而 T <= 0 的
 //     语义正是「不探测」。所以这里不像 SlowRateConfig 那样把 0 交给 normalize 收敛
 //     （那会把它静默改回 30），而是如实返回 0 并让 IsSlowProbe 恒 false。
 //
-// 返回的 ProbeParams 已是可用值（MinTokens/RatioPerMille 已收敛）。
+// 返回的 ProbeParams 已是可用值。
 func (c *SnapshotConfig) SlowRateProbeConfig(ctx context.Context, providerID int64) (ProbeParams, bool) {
 	if c == nil || c.source == nil {
 		return ProbeParams{}, false
@@ -87,9 +86,7 @@ func (c *SnapshotConfig) SlowRateProbeConfig(ctx context.Context, providerID int
 	}
 	return ProbeParams{
 		AfterFirstByteSeconds: deref(config.ProbeAfterFirstByteSeconds),
-		MinTokens:             deref(config.ProbeMinTokens),
-		RatioPerMille:         deref(config.RatioPerMille),
-	}.normalize(), true
+	}, true
 }
 
 // deref 把可空列折成 0，交给 Params.normalize 收敛到出厂默认。

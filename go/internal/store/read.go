@@ -172,10 +172,8 @@ type Provider struct {
 	SlowRateRatioPerMille *int `json:"slow_rate_ratio_per_mille"`
 	SlowRatePenaltyStep   *int `json:"slow_rate_penalty_step"`
 	SlowRatePenaltyMax    *int `json:"slow_rate_penalty_max"`
-	// SlowRateProbeAfterFirstByteSeconds 是**首字后探测阈值**（秒）；NULL = 不探测（机制默认关闭）。
+	// SlowRateProbeAfterFirstByteSeconds 是**首字后停滞探测阈值**（秒）；NULL = 不探测（机制默认关闭）。
 	SlowRateProbeAfterFirstByteSeconds *int `json:"slow_rate_probe_after_first_byte_seconds"`
-	// SlowRateProbeMinTokens 是探测时的**最低已生成 token 数**；NULL = 取代码默认值。
-	SlowRateProbeMinTokens *int `json:"slow_rate_probe_min_tokens"`
 }
 
 // ProviderEndpoint 是 provider_endpoints 的读取视图（供应商厂级端点）。

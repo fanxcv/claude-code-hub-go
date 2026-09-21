@@ -53,9 +53,8 @@ func (s *providerSlowRateSource) SlowRateProvider(ctx context.Context, providerI
 		RatioPerMille: row.SlowRateRatioPerMille,
 		PenaltyStep:   row.SlowRatePenaltyStep,
 		PenaltyMax:    row.SlowRatePenaltyMax,
-		// 探测两列：本包只透传，判定（IsSlowProbe）与接线在 slowrate 与 forward/gate 侧。
+		// 探测阈值列：本包只透传，接线与判定在 forward/gate 侧。
 		ProbeAfterFirstByteSeconds: row.SlowRateProbeAfterFirstByteSeconds,
-		ProbeMinTokens:             row.SlowRateProbeMinTokens,
 	}, true
 }
 

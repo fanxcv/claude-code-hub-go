@@ -119,9 +119,8 @@ func TestProviderSummaryCarriesSlowRateColumns(t *testing.T) {
 		"slowRateRatioPerMille",
 		"slowRatePenaltyStep",
 		"slowRatePenaltyMax",
-		// 首字后探测两列（0130）：与上面七列同一条链，同样必须出现在响应里。
+		// 首字后停滞探测阈值（0130）：与上面七列同一条链，同样必须出现在响应里。
 		"slowRateProbeAfterFirstByteSeconds",
-		"slowRateProbeMinTokens",
 	}
 	present := make(map[string]bool)
 	for _, tag := range jsonTagsOf(providerSummary{}) {

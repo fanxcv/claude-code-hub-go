@@ -62,10 +62,8 @@ export interface SlowRateParams {
   slowRateRatioPerMille: number | null;
   slowRatePenaltyStep: number | null;
   slowRatePenaltyMax: number | null;
-  // 首字后探测两列：probeAfterFirstByteSeconds 是探测阈值 T（秒），null = 不探测（机制默认关闭）；
-  // probeMinTokens 是探测时的最低已生成 token 数，null = 取代码默认值。
+  // 首字后停滞探测阈值 T（秒）：null = 不探测（机制默认关闭）。
   slowRateProbeAfterFirstByteSeconds: number | null;
-  slowRateProbeMinTokens: number | null;
 }
 
 export interface RoutingState extends SlowRateParams {

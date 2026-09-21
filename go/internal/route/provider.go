@@ -63,10 +63,8 @@ type Provider struct {
 	SlowRateRatioPerMille *int `json:"slow_rate_ratio_per_mille"`
 	SlowRatePenaltyStep   *int `json:"slow_rate_penalty_step"`
 	SlowRatePenaltyMax    *int `json:"slow_rate_penalty_max"`
-	// SlowRateProbeAfterFirstByteSeconds 是首字后探测阈值 T（秒）；NULL = 不探测。
+	// SlowRateProbeAfterFirstByteSeconds 是首字后停滞探测阈值 T（秒）；NULL = 不探测。
 	SlowRateProbeAfterFirstByteSeconds *int `json:"slow_rate_probe_after_first_byte_seconds"`
-	// SlowRateProbeMinTokens 是探测时的最低已生成 token 数；NULL = 取代码默认值。
-	SlowRateProbeMinTokens *int `json:"slow_rate_probe_min_tokens"`
 	// CostLimits 是供应商级金额限额（Node 的 filterByLimits 判定）。
 	CostLimits ProviderCostLimits `json:"-"`
 }
@@ -225,7 +223,6 @@ func providerFromStore(row store.Provider) Provider {
 		SlowRatePenaltyStep:                row.SlowRatePenaltyStep,
 		SlowRatePenaltyMax:                 row.SlowRatePenaltyMax,
 		SlowRateProbeAfterFirstByteSeconds: row.SlowRateProbeAfterFirstByteSeconds,
-		SlowRateProbeMinTokens:             row.SlowRateProbeMinTokens,
 		CostLimits: ProviderCostLimits{
 			Limit5hUSD:       numberPtr(row.Limit5hUSD),
 			Limit5hResetMode: row.Limit5hResetMode,

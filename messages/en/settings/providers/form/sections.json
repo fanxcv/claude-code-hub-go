@@ -533,14 +533,9 @@
         "placeholder": "30"
       },
       "probeAfterFirstByteSeconds": {
-        "label": "Probe threshold after first byte (seconds)",
-        "desc": "Counted from first byte arrival; once reached with an under-target rate, this provider is aborted and one retry is made on another. Leave empty to leave this mechanism off.",
+        "label": "Stall probe threshold after first byte (seconds)",
+        "desc": "Counted from first byte arrival; once reached with no content frame produced yet, this provider is aborted and a retry is made on another. Leave empty to leave this mechanism off.",
         "placeholder": "30"
-      },
-      "probeMinTokens": {
-        "label": "Probe minimum tokens",
-        "desc": "No judgement is made below this many generated tokens, so a thinking phase is not mistaken for slowness. Leave empty for the default of 50.",
-        "placeholder": "50"
       }
     }
   },

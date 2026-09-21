@@ -194,13 +194,8 @@ export const ProviderSummarySchema = z
       .int()
       .nullable()
       .describe(
-        "Probe threshold T in seconds counted from first byte; null disables the probe (default off)."
+        "Stall threshold T in seconds counted from first byte; null disables the probe (default off)."
       ),
-    slowRateProbeMinTokens: z
-      .number()
-      .int()
-      .nullable()
-      .describe("Minimum generated tokens before a probe can judge; null uses the default."),
     todayTotalCostUsd: z
       .string()
       .optional()
@@ -648,13 +643,7 @@ export const ProviderCreateSchema = z
       .int()
       .nullable()
       .optional()
-      .describe("Probe threshold T in seconds counted from first byte; null disables the probe."),
-    slow_rate_probe_min_tokens: z
-      .number()
-      .int()
-      .nullable()
-      .optional()
-      .describe("Minimum generated tokens before a probe can judge."),
+      .describe("Stall threshold T in seconds counted from first byte; null disables the probe."),
   })
   .strict()
   .describe("Provider create request. Hidden provider types and deprecated fields are rejected.");

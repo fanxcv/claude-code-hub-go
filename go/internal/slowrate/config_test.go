@@ -8,8 +8,8 @@ import (
 
 // 本文件钉住两件事：
 //  1. SlowRateConfig 与 SlowRateProbeConfig 读的是**同一份渠道快照**，但走两条不同的
-//     参数化路径（终态判定 vs 中途探测）——探测两列绝不能渗进 Params；
-//  2. 「列 NULL ⇒ 不探测」这条产品承诺。它由 T <= 0 承载，而 normalize **不收** T，
+//     参数化路径（终态判定 vs 中途探测）——探测阈值绝不能渗进 Params；
+//  2. 「列 NULL ⇒ 不探测」这条产品承诺。它由 T <= 0 承载（读取面**不收敛** T），
 //     所以 NULL 折成的 0 必须原样传到 IsSlowProbe 并让判定恒 false。若哪天有人「顺手」
 //     把 T 也收敛到默认 30，本文件会红。
 
@@ -24,7 +24,7 @@ func (s stubProviderSource) SlowRateProvider(context.Context, int64) (ProviderCo
 
 func intPtr(value int) *int { return &value }
 
-// TestSlowRateConfigCarriesOnlyTerminalParams 钉住探测两列不进 Params。
+// TestSlowRateConfigCarriesOnlyTerminalParams 钉住探测阈值不进 Params。
 func TestSlowRateConfigCarriesOnlyTerminalParams(t *testing.T) {
 	config := NewSnapshotConfig(stubProviderSource{
 		found: true,
@@ -36,7 +36,6 @@ func TestSlowRateConfigCarriesOnlyTerminalParams(t *testing.T) {
 			PenaltyStep:                intPtr(10),
 			PenaltyMax:                 intPtr(30),
 			ProbeAfterFirstByteSeconds: intPtr(30),
-			ProbeMinTokens:             intPtr(50),
 		},
 	})
 
@@ -56,7 +55,7 @@ func TestSlowRateProbeConfigNullThresholdDisablesProbe(t *testing.T) {
 		config: ProviderConfig{
 			Enabled:       true,
 			RatioPerMille: intPtr(300),
-			// 两个探测列都是 NULL：机制对该渠道关闭。
+			// 探测阈值为 NULL：机制对该渠道关闭。
 		},
 	})
 
@@ -67,9 +66,9 @@ func TestSlowRateProbeConfigNullThresholdDisablesProbe(t *testing.T) {
 	if params.AfterFirstByteSeconds != 0 {
 		t.Fatalf("NULL 阈值应折成 0（不探测），实得 %d", params.AfterFirstByteSeconds)
 	}
-	// 端到端复核：NULL 阈值下无论等多久、吐多少 token，都不能判出慢。
+	// 端到端复核：NULL 阈值下无论等多久都不能判出停滞。
 	verdict := IsSlowProbe(
-		ProbeInput{TokensSoFar: 100000, ElapsedSinceFirstByte: time.Hour, Baseline: 240},
+		ProbeInput{ElapsedSinceFirstByte: time.Hour},
 		params,
 	)
 	if verdict {
@@ -77,15 +76,13 @@ func TestSlowRateProbeConfigNullThresholdDisablesProbe(t *testing.T) {
 	}
 }
 
-// TestSlowRateProbeConfigDefaultsMinTokens 钉住「列留空取出厂值」只作用于 MinTokens，
-// 不作用于阈值 T（两者的零值语义相反）。
-func TestSlowRateProbeConfigDefaultsMinTokens(t *testing.T) {
+// TestSlowRateProbeConfigKeepsExplicitThreshold 钉住显式配置的阈值原样保留（不被收敛改写）。
+func TestSlowRateProbeConfigKeepsExplicitThreshold(t *testing.T) {
 	config := NewSnapshotConfig(stubProviderSource{
 		found: true,
 		config: ProviderConfig{
 			Enabled:                    true,
-			ProbeAfterFirstByteSeconds: intPtr(30),
-			// ProbeMinTokens 留空。
+			ProbeAfterFirstByteSeconds: intPtr(12),
 		},
 	})
 
@@ -93,10 +90,7 @@ func TestSlowRateProbeConfigDefaultsMinTokens(t *testing.T) {
 	if !ok {
 		t.Fatal("应返回 ok=true")
 	}
-	if params.MinTokens != DefaultProbeMinTokens {
-		t.Errorf("留空的最低 token 数应取出厂值 %d，实得 %d", DefaultProbeMinTokens, params.MinTokens)
-	}
-	if params.AfterFirstByteSeconds != 30 {
+	if params.AfterFirstByteSeconds != 12 {
 		t.Errorf("显式配置的阈值应原样保留，实得 %d", params.AfterFirstByteSeconds)
 	}
 }

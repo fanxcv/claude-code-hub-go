@@ -1041,36 +1041,6 @@ export function OptionsSection({ subSectionRefs }: OptionsSectionProps) {
                           step="1"
                         />
                       </SmartInputWrapper>
-
-                      <SmartInputWrapper
-                        label={t("sections.routing.slowRate.probeMinTokens.label")}
-                        description={t("sections.routing.slowRate.probeMinTokens.desc")}
-                      >
-                        <Input
-                          id={
-                            isEdit
-                              ? "edit-slow-rate-probe-min-tokens"
-                              : "slow-rate-probe-min-tokens"
-                          }
-                          type="number"
-                          value={state.routing.slowRateProbeMinTokens ?? ""}
-                          onChange={(e) =>
-                            dispatch({
-                              type: "SET_SLOW_RATE_PARAMS",
-                              payload: {
-                                slowRateProbeMinTokens:
-                                  e.target.value === ""
-                                    ? null
-                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
-                              },
-                            })
-                          }
-                          placeholder={t("sections.routing.slowRate.probeMinTokens.placeholder")}
-                          disabled={state.ui.isPending}
-                          min="0"
-                          step="1"
-                        />
-                      </SmartInputWrapper>
                     </div>
                   )}
                 </div>
