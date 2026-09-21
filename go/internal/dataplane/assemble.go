@@ -506,7 +506,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		Now:    options.Now,
 	})
 
-	idleTimeouts := newIdleTimeoutCache(options.Pools, logger, options.Now)
+	idleTimeouts := newIdleTimeoutCache(asProviderRowReader(options.Pools), options.Registry, logger, options.Now)
 	idles := idleTimeouts.lookup
 
 	budget := gate.DefaultBudget()
@@ -670,12 +670,15 @@ func buildGates(options StoreOptions) (route.Gates, bool) {
 	return gates, false
 }
 
-// idleTimeoutCache 缓存 providers.streaming_idle_timeout_ms。
+// idleTimeoutCache 缓存 providers 的两个热路径口径：静默超时与首字后停滞探测阈值。
 //
-// 为什么必须缓存：Stream 每发起一次上游读都会问一次静默超时，逐次查库会把热路径变成
-// 「每 chunk 一次 SQL」。TTL 沿用 providers 域的失效周期，容量等于启用态供应商数。
+// 为什么必须缓存：Stream 每发起一次上游读都会问一次静默超时、每进一次门控都会问一次探测阈值，
+// 逐次查库会把热路径变成「每 chunk 一次 SQL」。TTL 沿用 providers 域的失效周期，容量等于启用态
+// 供应商数，并挂 DomainProviders 失效广播（见 newIdleTimeoutCache）。
+//
+// 读面用接口而非 *store.Pools：与同包 providerSlowRateSource 同一手法，按行造钉子不必连库。
 type idleTimeoutCache struct {
-	pools  *store.Pools
+	rows   providerRowReader
 	ttl    *cfgsync.TTLMap[int64, providerTimeouts]
 	logger *logx.Logger
 	now    func() time.Time
@@ -690,14 +693,27 @@ type providerTimeouts struct {
 	probeSeconds int
 }
 
-// newIdleTimeoutCache 建静默超时缓存。
-func newIdleTimeoutCache(pools *store.Pools, logger *logx.Logger, now func() time.Time) *idleTimeoutCache {
-	return &idleTimeoutCache{
-		pools:  pools,
+// newIdleTimeoutCache 建静默超时缓存，并把缓存挂到 providers 域的失效广播上。
+//
+// 为何必须挂失效：管理面改供应商（providers_write.go 等十余处）会广播 DomainProviders；不挂的话
+// 改探测阈值/静默超时要等一个 TTL（ProviderCacheTTL = 30s）才生效，运维在界面上看到新值而数据面
+// 仍用旧值。registry 为 nil（无订阅通道的部署与单测）时退化为只靠 TTL 自愈，与同包低速缓存同。
+func newIdleTimeoutCache(rows providerRowReader, registry *cfgsync.Registry, logger *logx.Logger, now func() time.Time) *idleTimeoutCache {
+	cache := &idleTimeoutCache{
+		rows:   rows,
 		ttl:    cfgsync.NewTTLMap[int64, providerTimeouts](cfgsync.Spec(cfgsync.DomainProviders).TTL, idleTimeoutCacheSize),
 		logger: logger,
 		now:    now,
 	}
+	if registry != nil {
+		if _, err := registry.Bind(cfgsync.DomainProviders, cache.ttl.Clear); err != nil {
+			logger.Error("dataplane.idle_timeout_cache_bind_failed", map[string]any{
+				"domain": string(cfgsync.DomainProviders),
+				"error":  err.Error(),
+			})
+		}
+	}
+	return cache
 }
 
 // lookup 返回某供应商的流式静默超时；0 表示不限制（与 Node 的默认一致）。
@@ -709,9 +725,10 @@ func (c *idleTimeoutCache) lookup(providerID int64) time.Duration {
 	return time.Duration(timeouts.idleMS) * time.Millisecond
 }
 
-// probeAfterFirstByte 返回某供应商的首字后停滞探测阈值 T（秒）；0 或未配置表示不探测。
+// probeAfterFirstByte 返回某渠道的首字后停滞探测阈值 T（秒）；0 表示不探测。
 //
-// 它与静默超时同源（同一行 providers，同一次查库）——列 NULL 即机制关闭，绝无出厂兜底。
+// 它与静默超时同源（同一行 providers，同一次查库）——列 NULL 即机制关闭，绝无出厂兜底；
+// 另受低速监控总闸约束（见 timeoutsFromRow）。
 func (c *idleTimeoutCache) probeAfterFirstByte(providerID int64) int {
 	timeouts, ok := c.resolve(providerID)
 	if !ok {
@@ -722,7 +739,7 @@ func (c *idleTimeoutCache) probeAfterFirstByte(providerID int64) int {
 
 // resolve 取缓存或查库，一次解出两个超时口径；ok 为假表示查不到（两口径都按「不限制」处理）。
 func (c *idleTimeoutCache) resolve(providerID int64) (providerTimeouts, bool) {
-	if c == nil || providerID == 0 {
+	if c == nil || c.rows == nil || providerID == 0 {
 		return providerTimeouts{}, false
 	}
 	if value, ok := c.ttl.Get(providerID); ok {
@@ -730,7 +747,7 @@ func (c *idleTimeoutCache) resolve(providerID int64) (providerTimeouts, bool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	row, err := c.pools.FindProviderByID(ctx, providerID)
+	row, err := c.rows.FindProviderByID(ctx, providerID)
 	if err != nil || row == nil {
 		if err != nil {
 			c.logger.Debug("dataplane.idle_timeout_lookup_failed", map[string]any{
@@ -740,12 +757,22 @@ func (c *idleTimeoutCache) resolve(providerID int64) (providerTimeouts, bool) {
 		}
 		return providerTimeouts{}, false
 	}
-	value := providerTimeouts{idleMS: row.StreamingIdleTimeoutMS}
-	if row.SlowRateProbeAfterFirstByteSeconds != nil {
-		value.probeSeconds = *row.SlowRateProbeAfterFirstByteSeconds
-	}
+	value := timeoutsFromRow(row)
 	c.ttl.Set(providerID, value)
 	return value, true
+}
+
+// timeoutsFromRow 把一行 providers 折成两个超时口径。
+//
+// 探测阈值受低速监控总闸约束：总闸关即整条低速机制关闭，探测不得继续生效——与
+// slowrate.SnapshotConfig.SlowRateConfig 的闸门同口径（那边也是 !Enabled 即整段跳过）。
+// 静默超时**不受**该闸约束：它是另一件事，不属低速监控。
+func timeoutsFromRow(row *store.Provider) providerTimeouts {
+	value := providerTimeouts{idleMS: row.StreamingIdleTimeoutMS}
+	if row.SlowRateMonitorEnabled && row.SlowRateProbeAfterFirstByteSeconds != nil {
+		value.probeSeconds = *row.SlowRateProbeAfterFirstByteSeconds
+	}
+	return value
 }
 
 // 编译期断言：未使用的辅助函数与错误值在此显式保留，避免误删。
