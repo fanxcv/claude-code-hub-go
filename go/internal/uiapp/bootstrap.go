@@ -91,6 +91,27 @@ func bootstrapTag(payload bootstrap) ([]byte, error) {
 	return tag, nil
 }
 
+// bootstrapExempt 判断某个壳是否**按设计不承载**引导数据。
+//
+// 只有根壳是这样：它是导出期的**跳转桩**而不是页面。scripts/build-ui-export.mjs 的
+// EXPORT_ROOT_PAGE 写的根页组件恒返回 null，只在 useEffect 里把浏览器送到
+// `/<locale>/dashboard`，故它加载的 chunk 闭包里没有任何 __CCH_BOOTSTRAP__ 的读取方
+// ——「没注入」对它不产生任何后果（不会退到回退探针，也不涉及角色敏感重定向）。
+//
+// 它连 `</head>` 都没有的成因：根页 src/app/page.tsx 之上没有根布局（`<html>`/`<head>` 由
+// src/app/[locale]/layout.tsx 提供，根页不经过它），Next 导出的是**片段**而非完整文档。
+// 生产产物普查可复核：73 份壳里 72 份都有 `<html>`/`<head>`/`<body>`，只有根壳是片段，
+// 这正是这条告警在生产里只来自 `/` 的原因。
+//
+// 反过来说：**非**根壳缺注入点仍是真缺陷——那一页要渲染 UiSessionGate，没有引导数据就会
+// 退到回退探针多打一次请求，角色敏感的重定向也拿不到 user.role。故那条告警保持 warn 级。
+//
+// 与退役语种跳转壳（ja/ru/zh-TW）的区别：它们同属“跳转桩”物种，但自带 `<head>`，
+// 走的是正常的 `</head>` 注入点，不会落到本判定。
+func bootstrapExempt(key string) bool {
+	return key == rootShell
+}
+
 // inject 把引导数据插进壳 HTML；返回注入后的正文与是否注入成功。
 //
 // 落点优先级：壳里的显式标记（bootstrapMarker，被整段替换）→ `</head>` 之前 →
@@ -101,7 +122,21 @@ func (h *Handler) inject(
 	r *http.Request,
 	body []byte,
 	locale string,
+	key string,
 ) ([]byte, bool) {
+	if bootstrapExempt(key) {
+		// 按设计不承载引导数据（当前只有根壳，见 bootstrapExempt）。放在最前：
+		// 省掉后面的元数据读取、会话解析（Redis 往返）与编码，与「本来就不注入」同义。
+		//
+		// 留 debug 级痕迹而不是完全不记：这条“没发起”本身是事实，静默会让
+		// “根壳是否真被请求过”失去可观测性。
+		h.logger.Debug("uiapp_shell_bootstrap_exempt", map[string]any{
+			"path": r.URL.Path,
+			"key":  key,
+			"note": "该壳按设计不承载引导数据，缺注入点不是缺陷",
+		})
+		return body, false
+	}
 	if len(body) > h.shellMax {
 		h.logger.Warn("uiapp_shell_too_large_to_inject", map[string]any{
 			"path":     r.URL.Path,
@@ -145,6 +180,7 @@ func (h *Handler) inject(
 	}
 	h.logger.Warn("uiapp_shell_injection_point_missing", map[string]any{
 		"path": r.URL.Path,
+		"key":  key,
 		"hint": "壳里既没有 " + bootstrapMarker + " 也没有 " + headClose + "，引导数据未注入",
 	})
 	return body, false

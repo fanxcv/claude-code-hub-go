@@ -1,6 +1,7 @@
 package uiapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 )
 
 // testAssets 造一份最小产物：两个带 locale 的壳（一个用显式标记、一个只有 </head>）、
@@ -303,6 +306,70 @@ func TestBootstrapInjection(t *testing.T) {
 	oversized := do(tiny, http.MethodGet, "/zh-CN/dashboard", nil)
 	if strings.Contains(oversized.Body.String(), "__CCH_BOOTSTRAP__") {
 		t.Error("壳超过体积上限时不应注入")
+	}
+}
+
+// 根壳缺注入点是**误报**，非根壳缺注入点仍是真缺陷。
+//
+// 为何分开钉：生产唯一的告警来源是 `/`（根壳）。它是导出期的跳转桩——根页组件恒返回 null、
+// 只在 useEffect 里跳 `/<locale>/dashboard`，其 chunk 闭包里没有任何 __CCH_BOOTSTRAP__ 的读取方，
+// 故“没注入”不产生后果。而 locale / 路由壳要渲染 UiSessionGate，缺引导数据就退到回退探针，
+// 属真缺陷，必须继续以 warn 报出。二者不可一并降级。
+//
+// 夹具刻意按**生产形态**造：根壳是片段（无 <html>/<head>/</head>）。既有 testAssets 的根壳
+// 带 </head>（能正常注入），照它测不出本判定——那正是这条误报长期未被发现的原因。
+func TestBootstrapExemptOnlyAppliesToRootShell(t *testing.T) {
+	assets := fstest.MapFS{
+		"assets/.gitkeep":         &fstest.MapFile{},
+		"assets/BUILD_ID":         &fstest.MapFile{Data: []byte("build-test01\n")},
+		"assets/index.html":       &fstest.MapFile{Data: []byte(`<script src="/_next/static/chunks/a.js"></script><div hidden=""></div></body></html>`)},
+		"assets/zh-CN/index.html": &fstest.MapFile{Data: []byte("<!doctype html><html><head><title>zh</title></head><body>zh-shell</body></html>")},
+		// 非根壳且既无标记也无 </head>：模拟一个结构坏掉的页面壳。
+		"assets/broken/index.html": &fstest.MapFile{Data: []byte("<html><body>broken-shell</body></html>")},
+	}
+
+	var logged bytes.Buffer
+	handler, err := newHandler(assets, assetsRoot, Options{
+		Locales:  testLocales,
+		Logger:   logx.New(&logged),
+		Sessions: adminResolver(nil),
+	})
+	if err != nil {
+		t.Fatalf("建处理器失败: %v", err)
+	}
+
+	// 1) 根壳：不得报 warn，且留下可观测的 debug 痕迹。
+	root := do(handler, http.MethodGet, "/", nil)
+	if root.Code != http.StatusOK {
+		t.Fatalf("根壳应答 200，实际 %d", root.Code)
+	}
+	if strings.Contains(root.Body.String(), "__CCH_BOOTSTRAP__") {
+		t.Error("根壳按设计不注入引导数据")
+	}
+	if !strings.Contains(root.Body.String(), "_next/static/chunks/a.js") {
+		t.Errorf("根壳正文应原样返回，实际 %q", root.Body.String())
+	}
+	if strings.Contains(logged.String(), "uiapp_shell_injection_point_missing") {
+		t.Errorf("根壳缺注入点不应报 warn（误报），日志：%s", logged.String())
+	}
+	if !strings.Contains(logged.String(), "uiapp_shell_bootstrap_exempt") {
+		t.Errorf("根壳应留一条 debug 痕迹，日志：%s", logged.String())
+	}
+
+	// 2) 非根壳：仍须报 warn（真缺陷不得被这次降级连带放过）。
+	logged.Reset()
+	broken := do(handler, http.MethodGet, "/broken", nil)
+	if broken.Code != http.StatusOK {
+		t.Fatalf("坏壳仍应照原样应答 200，实际 %d", broken.Code)
+	}
+	if !strings.Contains(broken.Body.String(), "broken-shell") {
+		t.Errorf("坏壳正文应原样返回，实际 %q", broken.Body.String())
+	}
+	if !strings.Contains(logged.String(), "uiapp_shell_injection_point_missing") {
+		t.Errorf("非根壳缺注入点必须仍报 warn，日志：%s", logged.String())
+	}
+	if strings.Contains(logged.String(), "uiapp_shell_bootstrap_exempt") {
+		t.Errorf("豁免只适用于根壳，日志：%s", logged.String())
 	}
 }
 

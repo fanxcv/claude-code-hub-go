@@ -447,7 +447,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	body, etag := plainBody, file.etag
 	if file.shell {
-		if injected, ok := h.inject(request.Context(), request, plainBody, locale); ok {
+		if injected, ok := h.inject(request.Context(), request, plainBody, locale, key); ok {
 			body = injected
 			sum := sha256.Sum256(injected)
 			etag = formatETag(sum[:16])
