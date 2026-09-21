@@ -109,6 +109,15 @@ type Request struct {
 	// guard 依赖本包——本包反向依赖立即成环。这与 AffinityLookup 的注入缝同一模式：
 	// 由 guard 适配器（已握有会话身份）填进来。空串表示无会话（不判定冷却，回落到渠道级降权）。
 	SessionID string
+	// SessionBinding 是本次请求的会话绑定快照（会话存在时非 nil）。
+	//
+	// ProviderID != 0 时优先于前缀亲和（会话粘性第一优先级）；ProviderID == 0 表示
+	// 空绑定（新会话），仍从最小的 effectivePriority 档开始选（设计稿裁决 D）。
+	// nil 表示本次无会话身份，跳过会话绑定层。
+	//
+	// 它是「会话级粘性」的注入缝：绑定读取在 session 包，本包只消费快照
+	// （route 不得 import session：session → guard → route 成环）。
+	SessionBinding *SessionBindingSnapshot
 }
 
 // Result 是一次选路的结果与留痕。
@@ -246,8 +255,7 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 	})
 	dc := filtered.context
 
-	// 亲和提名优先于加权随机（Node：显式 session 绑定 > 亲和 > 加权随机；
-	// 会话绑定属接线波次，本包只做亲和与加权随机两级）。
+	// 亲和与会话绑定提名优先于加权随机（Node：显式 session 绑定 > 亲和 > 加权随机）。
 	//
 	// 故障转移路径整段跳过：此时 lookup / writeback / identity 一概为 nil——既不提名，
 	// 也不产生终态写回事实（那会带上 generation 做 CAS），更不做命中续期。
@@ -258,8 +266,38 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		affinityIdentity *AffinityIdentity
 		nominated        bool
 	)
+	// 会话绑定层（第一优先级）：会话存在且已有非空绑定时短路，不查前缀、不跑加权随机。
+	//
+	// 为何在 filtered 之后：绑定候选必须通过全套硬校验（熔断、停用、分组、模型、端点、
+	// 冷却等），而 applyFilters 正是那份校验的产物——在它之前短路等于绕开全部校验。
+	// 候选不在 healthy 池时**不短路**，继续走后续层级（设计稿 §4：熔断是暂时的，
+	// 绑定保留待恢复，但本次不钉死在它上面）。
 	if withAffinity {
-		nominate, lookup, writeback, affinityIdentity, nominated = s.nominateByAffinity(ctx, req, excluded)
+		if bound, ok := s.nominateBySessionBinding(ctx, req, excluded); ok {
+			selectedPriority := resolveEffectivePriority(bound, req.Group, penalties)
+			survivors := affinitySurvivors(filtered.healthy, bound.ID, req.Group, penalties)
+			dc.SurvivingCandidates = survivors
+			dc.ConsideredCandidates = consideredFromSurvivors(survivors)
+			dc.PriorityLevels = []int{selectedPriority}
+			dc.SelectedPriority = selectedPriority
+			dc.CandidatesAtPriority = []Candidate{{
+				ID:             bound.ID,
+				Name:           bound.Name,
+				Weight:         bound.Weight,
+				CostMultiplier: bound.CostMultiplier,
+			}}
+			return Result{
+				Provider:     &bound,
+				Context:      dc,
+				Method:       MethodSessionReuse,
+				Reason:       ReasonSelectedInitial,
+				CircuitState: s.circuitState(ctx, bound.ID),
+				timestamp:    nowMS,
+			}, nil
+		}
+		if req.SessionID == "" {
+			nominate, lookup, writeback, affinityIdentity, nominated = s.nominateByAffinity(ctx, req, excluded)
+		}
 	}
 	if nominated {
 		// 留痕「因亲和短路而未参与竞争」的那批候选。必须在短路返回之前记下：此后

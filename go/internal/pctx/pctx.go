@@ -127,6 +127,8 @@ type Context struct {
 	settlement *Settlement
 	// affinity 是亲和终态写回能力（见 affinity.go）；nil 表示本次不写亲和。
 	affinity AffinityWriteback
+	// sessionBinding 是会话绑定终态写回能力（见 session_binding.go）；nil 表示本次不写会话绑定。
+	sessionBinding SessionBindingWriteback
 	// affinityIdentity 是本次请求的亲和身份事实（仅两个字符串，不是 route 的类型）：
 	// 请求日志的 session_identity_kind 靠它判定「前缀亲和」还是「客户端会话」。
 	affinityIdentity    AffinityIdentity
