@@ -21,6 +21,20 @@ const (
 	emptyConfiguredGroupsCacheTTL = 5 * time.Second
 )
 
+// DebugLogger 与 InfoLogger 是**可选**的日志级面：pubstatus.Logger 只要求 Warn（装配方与既有
+// 替身都只实现它），而快照不可用的上报需要「持续期间」与「恢复」两个更低/更高一级的级别。
+//
+// 与 terminal.DebugLogger 同一手法：可选断言，缺失即该级不发——绝不为此把 Logger 的必需集
+// 加宽（那会让所有既有替身与装配点编译失败）。
+type DebugLogger interface {
+	Debug(event string, fields map[string]any)
+}
+
+// InfoLogger 见 DebugLogger 的说明。
+type InfoLogger interface {
+	Info(event string, fields map[string]any)
+}
+
 // RollupGroupSource 给出「当前已配置的公开分组」。
 //
 // 名字带 Rollup 前缀：本包另有一个 `GroupSource`（配置发布侧的分组来源，字段形态不同），
@@ -45,6 +59,8 @@ type SnapshotGroupSource struct {
 	cached    []ConfiguredGroup
 	expiresAt time.Time
 	loaded    bool
+	// unavailable 记录上一次加载是否落在「快照读不到」分支，供状态转移上报用（受 mu 保护）。
+	unavailable bool
 }
 
 // NewSnapshotGroupSource 建分组来源；store 为 nil 时永远返回「未就绪」。
@@ -77,14 +93,17 @@ func (s *SnapshotGroupSource) Groups(ctx context.Context) ([]ConfiguredGroup, bo
 	snapshot := ReadInternalConfigSnapshot(ctx, s.store, s.prefix)
 	if snapshot == nil {
 		// 读不到（未发布/Redis 抖动）：短 TTL 后再试，避免每请求都打 Redis，又不会长期卡住。
+		//
+		// 上报按**状态转移**而非按次：读不到是稳定态与真抖动共用的返回值，按次 warn 在稳定态下
+		// 会以 emptyConfiguredGroupsCacheTTL 的节奏刷屏（部署实测 11 条/分钟），把真信号淹没。
 		s.mu.Lock()
 		s.cached = nil
 		s.loaded = true
 		s.expiresAt = s.now().Add(emptyConfiguredGroupsCacheTTL)
+		entered := !s.unavailable
+		s.unavailable = true
 		s.mu.Unlock()
-		if s.logger != nil {
-			s.logger.Warn("public_status_rollup_groups_unavailable", map[string]any{"prefix": s.prefix})
-		}
+		s.reportUnavailable(entered)
 		return nil, false
 	}
 
@@ -98,8 +117,47 @@ func (s *SnapshotGroupSource) Groups(ctx context.Context) ([]ConfiguredGroup, bo
 	s.cached = groups
 	s.loaded = true
 	s.expiresAt = s.now().Add(ttl)
+	recovered := s.unavailable
+	s.unavailable = false
 	s.mu.Unlock()
+	if recovered {
+		s.reportRecovered()
+	}
 	return groups, true
+}
+
+// reportUnavailable 上报「快照读不到」：首次进入记 warn 一次，持续期间只留 debug 足迹。
+//
+// 为什么首次必须仍是 warn：读不到有两种成因——实现上无周期性重发（稳定态），以及 Redis 抖动或
+// 快照键被清（真故障）。前者不该刷 warn，后者不能静默；合并成「进入时一条 warn + 持续期 debug +
+// 恢复时一条 info」的转移序列后，只看 warn 的告警面读到的仍是「发生过几次不可用」这个真信号，
+// 而不再是「每 5 秒一次」。
+func (s *SnapshotGroupSource) reportUnavailable(entered bool) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	if entered {
+		s.logger.Warn("public_status_rollup_groups_unavailable", map[string]any{"prefix": s.prefix})
+		return
+	}
+	if debugger, ok := s.logger.(DebugLogger); ok {
+		debugger.Debug("public_status_rollup_groups_unavailable", map[string]any{
+			"prefix": s.prefix,
+			"state":  "still_unavailable",
+		})
+	}
+}
+
+// reportRecovered 上报「从读不到回到读得到」，每个不可用期只报一次。
+//
+// 缺 Info 面的 logger 直接跳过（与 Debug 同一手法）：恢复是好消息，不该为了让它可见而走 warn。
+func (s *SnapshotGroupSource) reportRecovered() {
+	if s == nil || s.logger == nil {
+		return
+	}
+	if infoLogger, ok := s.logger.(InfoLogger); ok {
+		infoLogger.Info("public_status_rollup_groups_recovered", map[string]any{"prefix": s.prefix})
+	}
 }
 
 // RollupRecorder 把终态事件折算成桶增量并写入。

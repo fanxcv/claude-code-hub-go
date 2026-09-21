@@ -212,6 +212,140 @@ func (discardWriter) ApplyBatch(context.Context, string, string, string, []Rollu
 	return nil
 }
 
+// recordingLevelLogger 记录三级的调用，供状态转移上报用例断言。
+//
+// 刻意实现 Warn/Debug/Info 三个方法：生产 logger（logx.Logger）三个都有，而 pubstatus.Logger
+// 只要求 Warn——可选面正是靠类型断言接上。
+type recordingLevelLogger struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *recordingLevelLogger) record(level, event string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, level+":"+event)
+}
+
+func (l *recordingLevelLogger) Warn(event string, _ map[string]any)  { l.record("warn", event) }
+func (l *recordingLevelLogger) Debug(event string, _ map[string]any) { l.record("debug", event) }
+func (l *recordingLevelLogger) Info(event string, _ map[string]any)  { l.record("info", event) }
+
+func (l *recordingLevelLogger) snapshot() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.events...)
+}
+
+// TestSnapshotGroupSourceReportsUnavailableByTransition 钉住快照不可用的**状态转移**上报：
+// 进入时报一次 warn，持续期间只留 debug 足迹，恢复时报一次 info，之后再次不可用会再报一次。
+//
+// 为什么必顶：这条 warn 在生产以 emptyConfiguredGroupsCacheTTL（5s）的节奏刷屏（实测 11 条/分钟），
+// 而读不到本身就分「本仓无周期性重发」与「Redis 抖动/快照键被清」两种成因，直接降成 debug
+// 会把后者一并埋掉。
+func TestSnapshotGroupSourceReportsUnavailableByTransition(t *testing.T) {
+	store := &fakeGroupStore{} // internalRaw 为空 = 快照读不到
+	base := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
+	clock := base
+	logger := &recordingLevelLogger{}
+	source := NewSnapshotGroupSource(store, "", func() time.Time { return clock }, logger)
+
+	// 第 1 次：进入不可用，应报 warn。
+	if _, ok := source.Groups(context.Background()); ok {
+		t.Fatal("快照缺失时应返回不可用")
+	}
+	if got := logger.snapshot(); len(got) != 1 || got[0] != "warn:public_status_rollup_groups_unavailable" {
+		t.Fatalf("首次不可用应报一次 warn，实际 %v", got)
+	}
+
+	// 持续期：跨过 5s 空缓存 TTL 再调两次，只应有 debug 足迹，不得再加 warn。
+	for i := 0; i < 2; i++ {
+		clock = clock.Add(emptyConfiguredGroupsCacheTTL + time.Second)
+		if _, ok := source.Groups(context.Background()); ok {
+			t.Fatal("快照仍缺失时应保持不可用")
+		}
+	}
+	got := logger.snapshot()
+	warns := 0
+	debugs := 0
+	for _, event := range got {
+		switch event {
+		case "warn:public_status_rollup_groups_unavailable":
+			warns++
+		case "debug:public_status_rollup_groups_unavailable":
+			debugs++
+		}
+	}
+	if warns != 1 || debugs != 2 {
+		t.Fatalf("持续期应只留 debug（warn=1 debug=2），实际 %v", got)
+	}
+
+	// 恢复：快照可读 -> 报一次 info，且不得再报 warn。
+	store.mu.Lock()
+	store.internalRaw = recorderTestInternalSnapshot
+	store.mu.Unlock()
+	clock = clock.Add(emptyConfiguredGroupsCacheTTL + time.Second)
+	groups, ok := source.Groups(context.Background())
+	if !ok || len(groups) != 1 {
+		t.Fatalf("恢复后应读到 1 个分组，实际 ok=%v groups=%d", ok, len(groups))
+	}
+	got = logger.snapshot()
+	if got[len(got)-1] != "info:public_status_rollup_groups_recovered" {
+		t.Fatalf("恢复时应报一次 info，实际末尾 %q，全量 %v", got[len(got)-1], got)
+	}
+
+	// 再次不可用属新一期：应再报一次 warn（不是「整进程只报一次」）。
+	store.mu.Lock()
+	store.internalRaw = ""
+	store.mu.Unlock()
+	clock = clock.Add(configuredGroupsCacheTTL + time.Second)
+	if _, ok := source.Groups(context.Background()); ok {
+		t.Fatal("快照再次缺失时应报不可用")
+	}
+	got = logger.snapshot()
+	lastWarn := 0
+	for _, event := range got {
+		if event == "warn:public_status_rollup_groups_unavailable" {
+			lastWarn++
+		}
+	}
+	if lastWarn != 2 {
+		t.Fatalf("再次进入不可用应另报一次 warn（合计 2），实际 %d：%v", lastWarn, got)
+	}
+}
+
+// TestSnapshotGroupSourceLevelsAreOptional 钉住「只实现 Warn 的 logger 不会崩、也不会降级走 warn」。
+//
+// 生产上 pubstatus.Logger 的必需集就是 Warn，而 terminal.RollupRecorder 之外还有别的既有替身；
+// 若为此把必需集加宽，所有只实现 Warn 的组装点会编译失败。
+type warnOnlyLogger struct{ warns int }
+
+func (l *warnOnlyLogger) Warn(string, map[string]any) { l.warns++ }
+
+func TestSnapshotGroupSourceLevelsAreOptional(t *testing.T) {
+	store := &fakeGroupStore{}
+	clock := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
+	logger := &warnOnlyLogger{}
+	source := NewSnapshotGroupSource(store, "", func() time.Time { return clock }, logger)
+
+	for i := 0; i < 3; i++ {
+		clock = clock.Add(emptyConfiguredGroupsCacheTTL + time.Second)
+		if _, ok := source.Groups(context.Background()); ok {
+			t.Fatal("快照缺失时应返回不可用")
+		}
+	}
+	store.mu.Lock()
+	store.internalRaw = recorderTestInternalSnapshot
+	store.mu.Unlock()
+	clock = clock.Add(emptyConfiguredGroupsCacheTTL + time.Second)
+	if _, ok := source.Groups(context.Background()); !ok {
+		t.Fatal("恢复后应读到分组")
+	}
+	if logger.warns != 1 {
+		t.Fatalf("缺 Debug/Info 面时不得回落 warn，也不得多报：warns=%d", logger.warns)
+	}
+}
+
 // TestSnapshotGroupSourceConcurrentGroups 钉住「分组来源并发调用无数据竞争」。
 //
 // 生产形态：本实例是单例（dataplane 装配一次），终态结算路径可并发调用。
