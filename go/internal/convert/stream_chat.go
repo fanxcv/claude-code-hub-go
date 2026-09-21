@@ -2,6 +2,7 @@ package convert
 
 import (
 	"strconv"
+	"strings"
 )
 
 // openai-chat · 流式编解码
@@ -33,6 +34,21 @@ type chatStreamDecoder struct {
 	// toolBlocks 是「上游 tool_calls index → 枢纽 blockIndex」。
 	toolBlocks map[int]int
 
+	// emitted 是已作为**正文增量**发出的字节。
+	//
+	// 为什么需要：上游存在「声明式」形态（尾帧 `delta` 或 `message` 载累计全文、而非新增片段），
+	// 无对账就会把整篇二次放出——客户端看到「前半 == 后半」，且 usage 只计一份。
+	// 与 responses 线的 responsesDecodedBlock.emitted 同义（stream_responses.go:27-28）。
+	emitted string
+	// emittedParts 是「当前块内已发过几个正文帧」，用于消歧「本帧文本恰等于已发内容」：
+	// 详见 chatReconcile 的「已知边界」。
+	emittedParts int
+	// toolArgsEmitted 是「上游 tool_calls index → 已作为参数增量发出的字节」，用于同一类对账。
+	// 不做则累计型 arguments 会产出 `{...}{...}` 非法 JSON。
+	toolArgsEmitted map[int]string
+	// toolArgsParts 语义同 emittedParts，按 tool index 分别计。
+	toolArgsParts map[int]int
+
 	usage      *Usage
 	stopReason *StopReason
 }
@@ -43,7 +59,13 @@ type chatOpenBlock struct {
 }
 
 func newChatStreamDecoder(ctx ConvertCtx) StreamDecoder {
-	return &chatStreamDecoder{ctx: ctx, lastToolIndex: -1, toolBlocks: map[int]int{}}
+	return &chatStreamDecoder{
+		ctx:             ctx,
+		lastToolIndex:   -1,
+		toolBlocks:      map[int]int{},
+		toolArgsEmitted: map[int]string{},
+		toolArgsParts:   map[int]int{},
+	}
 }
 
 func (d *chatStreamDecoder) Push(chunk []byte) []Chunk {
@@ -107,9 +129,16 @@ func (d *chatStreamDecoder) consumeFrame(frame SSEFrame, out *[]Chunk) {
 
 func (d *chatStreamDecoder) consumeChoice(choice *Value, out *[]Chunk) {
 	delta := choice.ObjectField("delta")
+	// fromMessage 记录正文取自 `message` 字段：那是**声明式**（OpenAI 规范里 message 是整条
+	// 消息的载体，不是增量片），与 `delta` 的增量语义不同，对账策略也不一样。
+	fromMessage := false
 	if delta == nil {
 		delta = choice.ObjectField("message")
+		fromMessage = true
 	}
+	// finish_reason 非空的帧是**末帧**：它携带的正文按声明式处理（上游常在末帧回放累计全文）。
+	_, hasFinish := stringField(choice, "finish_reason")
+	declared := fromMessage || hasFinish
 	if delta != nil {
 		// 工具调用分两趟：先落「已打开块的参数续片」，再处理会关闭当前块的推理/正文，
 		// 最后才开新工具块。上游在同一帧里同时带正文与工具参数续片是合法形态（工具调用
@@ -118,18 +147,18 @@ func (d *chatStreamDecoder) consumeChoice(choice *Value, out *[]Chunk) {
 		calls := d.collectToolCalls(delta)
 		for _, call := range calls {
 			if _, opened := d.toolBlocks[call.index]; opened {
-				d.consumeToolCall(call, out)
+				d.consumeToolCall(call, declared, out)
 			}
 		}
 
 		if reasoning, ok := decodeChatReasoning(delta); ok && len(reasoning) > 0 {
 			d.emitReasoning(reasoning, out)
 		}
-		d.emitContent(fieldOrNil(delta, "content"), out)
+		d.emitContent(fieldOrNil(delta, "content"), out, declared)
 
 		for _, call := range calls {
 			if _, opened := d.toolBlocks[call.index]; !opened {
-				d.consumeToolCall(call, out)
+				d.consumeToolCall(call, declared, out)
 			}
 		}
 	}
@@ -140,13 +169,13 @@ func (d *chatStreamDecoder) consumeChoice(choice *Value, out *[]Chunk) {
 	}
 }
 
-func (d *chatStreamDecoder) emitContent(content *Value, out *[]Chunk) {
+func (d *chatStreamDecoder) emitContent(content *Value, out *[]Chunk, declared bool) {
 	if content == nil {
 		return
 	}
 	if text, ok := content.String(); ok {
 		if len(text) > 0 {
-			d.emitText(text, out)
+			d.emitText(text, out, declared)
 		}
 		return
 	}
@@ -157,7 +186,7 @@ func (d *chatStreamDecoder) emitContent(content *Value, out *[]Chunk) {
 		for _, part := range content.Items() {
 			if part.IsObject() {
 				if text, ok := part.StringField("text"); ok {
-					d.emitText(text, out)
+					d.emitText(text, out, declared)
 					continue
 				}
 			}
@@ -166,15 +195,29 @@ func (d *chatStreamDecoder) emitContent(content *Value, out *[]Chunk) {
 	}
 }
 
-func (d *chatStreamDecoder) emitText(text string, out *[]Chunk) {
+func (d *chatStreamDecoder) emitText(text string, out *[]Chunk, declared bool) {
 	if len(text) == 0 {
 		return
 	}
-	if d.openBlock == nil || d.openBlock.kind != chatBlockText {
+	newBlock := d.openBlock == nil || d.openBlock.kind != chatBlockText
+	// 对账只在**同一块内**做：新块没有已发内容可比，emitted 随开块重置。
+	if !newBlock {
+		tail, isReplay := chatReconcile(d.emitted, text, declared, d.emittedParts)
+		if isReplay {
+			text = tail
+		}
+	}
+	if len(text) == 0 {
+		// 本帧内容已全发过（完整回放）：一个字节都不该再发。
+		return
+	}
+	if newBlock {
 		d.closeBlock(out)
 		index := d.nextBlockIndex
 		d.nextBlockIndex++
 		d.openBlock = &chatOpenBlock{index: index, kind: chatBlockText}
+		d.emitted = ""
+		d.emittedParts = 0
 		*out = append(*out, Chunk{
 			Kind:       ChunkBlockStart,
 			BlockIndex: intPtr(index),
@@ -182,11 +225,55 @@ func (d *chatStreamDecoder) emitText(text string, out *[]Chunk) {
 		})
 	}
 	d.textStarted = true
+	d.emitted += text
+	d.emittedParts++
 	*out = append(*out, Chunk{
 		Kind:       ChunkBlockDelta,
 		BlockIndex: intPtr(d.openBlock.index),
 		TextDelta:  stringPtr(text),
 	})
+}
+
+// chatReconcile 判定本帧文本是否已在之前发过，并算出应发的差额（返回 isReplay 为真时 text 已被改写）。
+//
+// declared 为真表示本帧是**声明式**（`message` 字段帧，或 `finish_reason` 非空的末帧）：
+//   - message 字段在 OpenAI 规范里承载**整条消息**，不是增量片；
+//   - 末帧常被上游用来回放累计全文（生产 chat 线实测重复即属此类）。
+//
+// emittedParts 是已发内容跨了几个帧，只用于消歧「本帧文本恰等于已发内容」。
+//
+// 判据（按已发内容与本帧文本的前缀关系分档）：
+//
+//	本帧是严格扩展（text 比 emitted 长且以其为前缀）→ 只发差额（累计型上游）
+//	两相等（text == emitted）且（声明式 或 emitted 跨多帧）→ 一字不发（完整回放）
+//	emitted 以 text 为前缀（本帧更短）且声明式           → 一字不发（声明里无新字节）
+//	其余                                                  → 按普通增量放行
+//
+// 「严格扩展」一档**不分声明与否**都生效，因为它是唯一在两类帧上都安全的前缀关系。
+//
+// 已知边界（ponytail: 有意留的口，换的是不再重复）：非声明式帧携带「恰等于已发内容」的文本时，
+// 字节上与「合法重复」不可区分——模型输出「哈哈」就是两个 `哈` 增量（emitted=`哈`、text=`哈`），
+// 而混合型上游（实测的 delta_cum_mid 形态：中间一帧突然发累计全文）也表现为 text == emitted。
+// 二者的判据取「已发内容是否由多个帧拼成」：单个帧的相等只能是合法重复（放行，不静默丢字）；
+// 多帧拼出的整段被原样重发，则按回放丢弃。这是启发式，不是恒真定理——取舍依仓内既有优先级
+// 「宁可重复、不静默丢字」与生产实测（chat 线 37% 重复均为整段回放）共同定的。
+func chatReconcile(emitted string, text string, declared bool, emittedParts int) (string, bool) {
+	if emitted == "" {
+		return "", false
+	}
+	if strings.HasPrefix(text, emitted) {
+		if len(text) > len(emitted) {
+			return text[len(emitted):], true
+		}
+		if declared || emittedParts > 1 {
+			return "", true
+		}
+		return "", false
+	}
+	if declared && strings.HasPrefix(emitted, text) {
+		return "", true
+	}
+	return "", false
 }
 
 func (d *chatStreamDecoder) emitReasoning(text string, out *[]Chunk) {
@@ -255,7 +342,10 @@ func (d *chatStreamDecoder) toolCallIndexOf(raw *Value) int {
 
 // consumeToolCall 处理一项工具调用：首次见到该下标时先发带 id/name 的块起始事件，
 // 再发参数分片（顺序契约：参数分片到达前必须先有块起始）。
-func (d *chatStreamDecoder) consumeToolCall(call chatToolCallEntry, out *[]Chunk) {
+//
+// declared 为真表示本帧是声明式（累计型 arguments 的常见位置），按 chatDeclaredTail 对账；
+// 无此对账时，累计型 arguments 会产出 `{...}{...}` 非法 JSON。
+func (d *chatStreamDecoder) consumeToolCall(call chatToolCallEntry, declared bool, out *[]Chunk) {
 	raw := call.raw
 	fn := raw.ObjectField("function")
 	if fn == nil {
@@ -284,14 +374,28 @@ func (d *chatStreamDecoder) consumeToolCall(call chatToolCallEntry, out *[]Chunk
 				Name: d.ctx.fromWireName(wireName),
 			},
 		})
+		if _, opened := d.toolBlocks[call.index]; !opened {
+			d.toolArgsEmitted[call.index] = ""
+			d.toolArgsParts[call.index] = 0
+		}
 	}
 
 	if args, ok := stringField(fn, "arguments"); ok && len(args) > 0 {
-		*out = append(*out, Chunk{
-			Kind:       ChunkBlockDelta,
-			BlockIndex: intPtr(blockIndex),
-			ArgsDelta:  stringPtr(args),
-		})
+		emitted := d.toolArgsEmitted[call.index]
+		if emitted != "" {
+			if tail, isReplay := chatReconcile(emitted, args, declared, d.toolArgsParts[call.index]); isReplay {
+				args = tail
+			}
+		}
+		if len(args) > 0 {
+			d.toolArgsEmitted[call.index] = emitted + args
+			d.toolArgsParts[call.index]++
+			*out = append(*out, Chunk{
+				Kind:       ChunkBlockDelta,
+				BlockIndex: intPtr(blockIndex),
+				ArgsDelta:  stringPtr(args),
+			})
+		}
 	}
 }
 
