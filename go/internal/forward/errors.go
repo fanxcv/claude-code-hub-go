@@ -178,7 +178,12 @@ type Failure struct {
 	ProviderName string
 	EndpointID   int64
 	EndpointURL  string
-	Attempt      int
+	// ProbeSlow 为真表示本次尝试因**中途低速探测**被主动判废：首字节已到，但自首字节起
+	// 超过探测阈值仍未产出可提交内容。它不是传输故障，而是「这家在磨」的实测结论。
+	ProbeSlow bool
+	// ProbeElapsedMS 是自首字节起、直到判废的时长（毫秒）；ProbeSlow 为假时无意义。
+	ProbeElapsedMS int
+	Attempt        int
 
 	// Err 是底层错误，保留 errors.Is 链路。
 	Err error

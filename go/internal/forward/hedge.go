@@ -536,10 +536,17 @@ func (r *hedgeRace) runGateOrFirstChunk(
 ) (*streamAttempt, *Failure) {
 	family, gated := r.options.gateFamily(attempt.provider)
 	if gated && r.options.shouldGate(response.Header, plan) {
-		result, err := r.runGate(attemptCtx, response, plan, outcome, family)
+		var firstByteAt time.Time
+		result, err := r.runGate(attemptCtx, response, plan, outcome, family, &firstByteAt)
 		if err != nil {
 			_ = response.Body.Close()
-			return nil, r.deps.gateFailure(err, plan, outcome)
+			failure := r.deps.gateFailure(err, plan, outcome)
+			// 与串行路径同款：中途探测判废时标出真实死因与自首字节起的时长。
+			if failure != nil && isProbeFailure(err) && !firstByteAt.IsZero() {
+				failure.ProbeSlow = true
+				failure.ProbeElapsedMS = int(r.options.now().Sub(firstByteAt).Milliseconds())
+			}
+			return nil, failure
 		}
 		return result, nil
 	}
@@ -609,12 +616,16 @@ func (r *hedgeRace) runGateOrFirstChunk(
 }
 
 // runGate 复用串行路径的门控执行。
+//
+// firstByteAt 是出参：首字节到达时刻（未到达则为零值）。中途探测判废要靠它算
+// 「自首字节起等了多久」——而失败路径拿不到 streamAttempt，故必须单独回传。
 func (r *hedgeRace) runGate(
 	ctx context.Context,
 	response *dial.Response,
 	plan *Plan,
 	outcome *AttemptOutcome,
 	family gate.Family,
+	firstByteAt *time.Time,
 ) (*streamAttempt, error) {
 	startedAt := r.options.now()
 	// 与 stream.go 同口径：first_byte_ms 取**上游**首个非空 chunk 的到达时刻，
@@ -623,6 +634,7 @@ func (r *hedgeRace) runGate(
 	result, err := gate.Run(ctx, response.Body, r.options.gateOptions(family, outcome, func() {
 		upstreamFirstByteAt = r.options.now()
 	}))
+	*firstByteAt = upstreamFirstByteAt
 	if err != nil {
 		return nil, err
 	}

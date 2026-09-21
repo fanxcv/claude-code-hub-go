@@ -63,6 +63,12 @@ const (
 	FailPrebufferOverflow FailReason = "prebuffer_overflow"
 	// FailIdleTimeout 表示门控等待期读间隔超过静默上限。
 	FailIdleTimeout FailReason = "idle_timeout"
+	// FailSlowProbe 表示首字节已到，但自首字节起的中途探测阈值内仍未提交内容。
+	//
+	// 与 FailIdleTimeout 的区别是分母：那条看**读间隔**（上游一个字节都不发就会命中），
+	// 本条看**自首个非空 chunk 起**的时长（上游即使一直在发中性帧也会命中）。两者都可
+	// 同时成立，谁先到期即归因给谁。
+	FailSlowProbe FailReason = "slow_probe"
 )
 
 // PrecommitError 是门控 precommit 失败。
@@ -187,6 +193,11 @@ type Options struct {
 	// IdleTimeout 是门控等待期的读间隔静默上限（<=0 表示不启用），
 	// 对齐提交后响应处理阶段的静默超时。
 	IdleTimeout time.Duration
+	// ProbeAfterFirstByte 是自首个非空 chunk 起算的中途探测阈值（<=0 表示不启用）。
+	//
+	// 到期仍未提交内容即判 FailSlowProbe（首字后低速探测的换家判据）。它与 IdleTimeout
+	// 是两条独立的分母，取**较小者**作为本次读的超时，故先到期的那个决定归因。
+	ProbeAfterFirstByte time.Duration
 	// CaptureCommitMarker 决定是否记录触发提交的帧信息（高并发模式下可关闭以省开销）。
 	CaptureCommitMarker bool
 	// Budget 是进程级共享前缀预算；生产路径必须传入，单元测试可省略。
@@ -245,6 +256,8 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 	framesSeen := 0
 	chunkIndex := 0
 	firstByteSeen := false
+	// firstByteAt 是首个非空 chunk 的到达时刻（零值表示尚未到达），探测阈值的起点。
+	var firstByteAt time.Time
 	var lease *Lease
 	leaseTransferred := false
 
@@ -335,8 +348,14 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 
 	buffer := make([]byte, readChunkBytes)
 	for {
-		n, readErr := readWithIdleTimeout(ctx, source, buffer, opts.IdleTimeout)
+		// 两条超时取较小者：探测阈值（自首字节起）与读间隔静默上限。哪个到期即归因给哪个，
+		// 故这里要记住「本次用的超时是否由探测阈值决定」。
+		readTimeout, probeDecidesTimeout := probeReadTimeout(opts, firstByteAt, time.Now())
+		n, readErr := readWithIdleTimeout(ctx, source, buffer, readTimeout)
 		if errors.Is(readErr, errIdleTimeout) {
+			if probeDecidesTimeout {
+				return fail(FailSlowProbe, "", false)
+			}
 			return fail(FailIdleTimeout, "", false)
 		}
 		if readErr != nil && !errors.Is(readErr, io.EOF) {
@@ -348,6 +367,8 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 			chunk := buffer[:n]
 			if !firstByteSeen {
 				firstByteSeen = true
+				// 首字节时刻是探测阈值的起点（与 OnFirstByte 的「首字节而非首内容」语义同源）。
+				firstByteAt = time.Now()
 				if opts.OnFirstByte != nil {
 					opts.OnFirstByte()
 				}
@@ -481,6 +502,27 @@ func newOutcome(result Result, err error) *gateOutcome {
 // readWithIdleTimeout 让单次读取与静默计时器竞速（TS 的 readWithIdleTimeout）。
 //
 // 计时器或 ctx 胜出时挂起的读由调用方随后的关闭/取消收尾：本函数不关闭 source。
+// probeReadTimeout 给出本次读应使用的超时，以及它是否由中途探测阈值决定。
+//
+// 三个分支的理由：
+//   - 探测未启用（阈值 <=0）或首字节未到：探测还没开始计时，只能用读间隔上限；
+//   - 探测阈值剩余 <=0：已过期，用一个极小正超时让读立即以 errIdleTimeout 返回，
+//     调用方据 probeDecidesTimeout 归因为 FailSlowProbe（不能传 0，那是「不启用超时」）；
+//   - 两者都有：取较小者，并如实报告是谁决定了它。
+func probeReadTimeout(opts Options, firstByteAt time.Time, now time.Time) (time.Duration, bool) {
+	if opts.ProbeAfterFirstByte <= 0 || firstByteAt.IsZero() {
+		return opts.IdleTimeout, false
+	}
+	remaining := opts.ProbeAfterFirstByte - now.Sub(firstByteAt)
+	if remaining <= 0 {
+		return time.Nanosecond, true
+	}
+	if opts.IdleTimeout > 0 && opts.IdleTimeout < remaining {
+		return opts.IdleTimeout, false
+	}
+	return remaining, true
+}
+
 func readWithIdleTimeout(
 	ctx context.Context,
 	source io.Reader,

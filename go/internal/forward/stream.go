@@ -95,6 +95,12 @@ type StreamOptions struct {
 	// IdleTimeoutFor 返回某供应商的流式静默超时（对应 provider.streamingIdleTimeoutMs，
 	// 默认 0 = 不限制）。它同时作用于门控等待期与提交后的正文读取期。
 	IdleTimeoutFor func(providerID int64) time.Duration
+	// ProbeAfterFirstByteFor 返回某供应商的中途探测阈值T（秒）；<=0 或未装配即不探测。
+	//
+	// 为什么只传秒数而不传整个 slowrate.ProbeParams：门控侧只需要 T（它判的是时间），
+	// 而 token 与系数两个门只属于写样本时的判定（在那里连同基线一起由 slowrate 包评估）。
+	// 这样 forward 不引入对 slowrate 的依赖，接缝面最小。
+	ProbeAfterFirstByteFor func(providerID int64) int
 	// StartedAt 是请求开始时刻，用于 TTFT；零值取 ForwardStream 的当前时刻。
 	StartedAt time.Time
 	// HeadBytes / TailBytes 是观测窗口容量；0 取默认（默认刻意小，见 observe.go）。
@@ -124,6 +130,18 @@ func (o StreamOptions) idleTimeout(providerID int64) time.Duration {
 		return 0
 	}
 	return o.IdleTimeoutFor(providerID)
+}
+
+// probeAfterFirstByte 把探测阈值折成时长；未装配或渠道未配置（<=0）即 0（不探测）。
+func (o StreamOptions) probeAfterFirstByte(providerID int64) time.Duration {
+	if o.ProbeAfterFirstByteFor == nil {
+		return 0
+	}
+	seconds := o.ProbeAfterFirstByteFor(providerID)
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // 门控默认上限，对齐 STREAM_GATE_PREBUFFER_* 的默认量级。
@@ -305,7 +323,14 @@ func (d Deps) gateStreamAttempt(
 	if err != nil {
 		// 门控失败时上游正文所有权仍在我们手里：关闭它，客户端一个字节都还没收到。
 		_ = response.Body.Close()
-		return nil, d.gateFailure(err, plan, outcome)
+		failure := d.gateFailure(err, plan, outcome)
+		// 中途探测判废：标出这次尝试的真实死因与「首字节起已等了多久」，
+		// 供终态层写中途慢样本（口径见 slowrate.Facts.MidStream）。
+		if failure != nil && isProbeFailure(err) && !upstreamFirstByteAt.IsZero() {
+			failure.ProbeSlow = true
+			failure.ProbeElapsedMS = int(options.now().Sub(upstreamFirstByteAt).Milliseconds())
+		}
+		return nil, failure
 	}
 
 	// 门控提交：前缀与上游正文都交给调用方，租约随之一并转移。
@@ -354,6 +379,7 @@ func (o StreamOptions) gateOptions(
 		PrebufferEventCap:   eventCap,
 		PrebufferByteCap:    byteCap,
 		IdleTimeout:         o.idleTimeout(outcome.ProviderID),
+		ProbeAfterFirstByte: o.probeAfterFirstByte(outcome.ProviderID),
 		CaptureCommitMarker: o.CaptureCommitMarker,
 		OnFirstByte:         onFirstByte,
 		Budget:              o.Budget,
@@ -386,11 +412,20 @@ func (d Deps) gateFailure(err error, plan *Plan, outcome *AttemptOutcome) *Failu
 		Attempt:       outcome.Attempt,
 		Err:           err,
 	}
-	if precommit.Reason == gate.FailIdleTimeout {
+	if precommit.Reason == gate.FailIdleTimeout || precommit.Reason == gate.FailSlowProbe {
 		failure.Category = CategoryProviderError
 		failure.StatusCode = statusUpstreamTimeout
 	}
 	return failure
+}
+
+// isProbeFailure 判断门控失败是否来自中途探测阈值（而非读间隔静默、解码错误等）。
+func isProbeFailure(err error) bool {
+	var precommit *gate.PrecommitError
+	if !errors.As(err, &precommit) {
+		return false
+	}
+	return precommit.Reason == gate.FailSlowProbe
 }
 
 // gateStatusForPrecommit 复刻 Node 的状态码推断：错误帧文本里能识别出的 4xx 才用，否则 502。
