@@ -23,18 +23,18 @@ import (
 // 与文件字节等价的前提由 `TestMigrationFilesAreValidUTF8` 钉住）；块数与 when 取自本仓
 // journal 条目。idx0/idx62 两条仍是 Node 亲算的原始值，不可由本仓推导。
 const (
-	nodeMigrationCount       = 131
-	nodeStatementCount       = 455
+	nodeMigrationCount       = 132
+	nodeStatementCount       = 456
 	nodeHashIdx0             = "4928849ae51d0159c1e638acb9ee6dc4def51f1cfd27edc7d6506b2b9534e539"
 	nodeHashIdx0Tag          = "0000_legal_brother_voodoo"
 	nodeHashIdx0Stmts        = 26
 	nodeHashIdx62            = "bdfcc41b9451c8dafb551464734692ccf42abcfd49515e0d5fd975f7d21781da"
 	nodeHashIdx62Tag         = "0062_aromatic_taskmaster"
 	nodeHashIdx62Stmts       = 1
-	nodeHashIdxLast          = "4d9929f6b69ae25bb8f703daf0e4ead173f0cc64b09a082f4e55c6abe95ec1f9"
-	nodeHashLastTag          = "0130_slow_rate_probe_columns"
-	nodeHashLastStmts        = 2
-	nodeLastWhen       int64 = 1789998000000
+	nodeHashIdxLast          = "d7f74f5cc30e9fd30651ae20274cb893948fd9da452e27f8cac2cc7074024a78"
+	nodeHashLastTag          = "0131_session_sticky_default"
+	nodeHashLastStmts        = 1
+	nodeLastWhen       int64 = 1790001600000
 )
 
 func TestLoadMatchesNodeGolden(t *testing.T) {
