@@ -170,14 +170,10 @@ describe("反引号路径提取", () => {
     expect(extractBacktickedPaths("`src/types/provider.ts:293`")).toEqual([
       "src/types/provider.ts",
     ]);
-    expect(extractBacktickedPaths("`drizzle/0000_x.sql:46-68`")).toEqual([
-      "drizzle/0000_x.sql",
-    ]);
+    expect(extractBacktickedPaths("`drizzle/0000_x.sql:46-68`")).toEqual(["drizzle/0000_x.sql"]);
     // 关键反证：剥行号**不得**把不存在的路径变成「查不到」而静默放过——
     // 路径仍被提取，因而仍会进存在性检查（若写进文档，就是红的）。
-    expect(extractBacktickedPaths("`src/nope/ghost.ts:12`")).toEqual([
-      "src/nope/ghost.ts",
-    ]);
+    expect(extractBacktickedPaths("`src/nope/ghost.ts:12`")).toEqual(["src/nope/ghost.ts"]);
     // 行号尾之外的一切照旧：通配、占位符、URL、命令仍跳过。
     expect(extractBacktickedPaths("`src/**/*.ts:1`")).toEqual([]);
     expect(extractBacktickedPaths("`src/<name>.ts:1`")).toEqual([]);
