@@ -550,11 +550,12 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			RecordSuccess: recordSuccess,
 		},
 		Stream: forward.StreamOptions{
-			Budget:              budget,
-			Logger:              logger,
-			Now:                 options.Now,
-			IdleTimeoutFor:      idles,
-			CaptureCommitMarker: false,
+			Budget:                 budget,
+			Logger:                 logger,
+			Now:                    options.Now,
+			IdleTimeoutFor:         idles,
+			ProbeAfterFirstByteFor: idleTimeouts.probeAfterFirstByte,
+			CaptureCommitMarker:    false,
 		},
 		BodyOptions: guard.BodyAccessOptions{Ingress: ingress.DefaultOptions()},
 		ClientIP:    options.ClientIP,
@@ -665,16 +666,25 @@ func buildGates(options StoreOptions) (route.Gates, bool) {
 // 「每 chunk 一次 SQL」。TTL 沿用 providers 域的失效周期，容量等于启用态供应商数。
 type idleTimeoutCache struct {
 	pools  *store.Pools
-	ttl    *cfgsync.TTLMap[int64, int]
+	ttl    *cfgsync.TTLMap[int64, providerTimeouts]
 	logger *logx.Logger
 	now    func() time.Time
+}
+
+// providerTimeouts 是超时缓存的一条值：一次查库同时取回静默超时与首字后停滞探测阈值。
+//
+// 为什么合并两个口径：两者都在热路径上被逐次询问（静默超时每发起一次上游读问一次，
+// 探测阈值每进一次门控问一次），分两个缓存会把同一次查库做两遍。
+type providerTimeouts struct {
+	idleMS       int
+	probeSeconds int
 }
 
 // newIdleTimeoutCache 建静默超时缓存。
 func newIdleTimeoutCache(pools *store.Pools, logger *logx.Logger, now func() time.Time) *idleTimeoutCache {
 	return &idleTimeoutCache{
 		pools:  pools,
-		ttl:    cfgsync.NewTTLMap[int64, int](cfgsync.Spec(cfgsync.DomainProviders).TTL, idleTimeoutCacheSize),
+		ttl:    cfgsync.NewTTLMap[int64, providerTimeouts](cfgsync.Spec(cfgsync.DomainProviders).TTL, idleTimeoutCacheSize),
 		logger: logger,
 		now:    now,
 	}
@@ -682,11 +692,31 @@ func newIdleTimeoutCache(pools *store.Pools, logger *logx.Logger, now func() tim
 
 // lookup 返回某供应商的流式静默超时；0 表示不限制（与 Node 的默认一致）。
 func (c *idleTimeoutCache) lookup(providerID int64) time.Duration {
-	if c == nil || providerID == 0 {
+	timeouts, ok := c.resolve(providerID)
+	if !ok {
 		return 0
 	}
+	return time.Duration(timeouts.idleMS) * time.Millisecond
+}
+
+// probeAfterFirstByte 返回某供应商的首字后停滞探测阈值 T（秒）；0 或未配置表示不探测。
+//
+// 它与静默超时同源（同一行 providers，同一次查库）——列 NULL 即机制关闭，绝无出厂兜底。
+func (c *idleTimeoutCache) probeAfterFirstByte(providerID int64) int {
+	timeouts, ok := c.resolve(providerID)
+	if !ok {
+		return 0
+	}
+	return timeouts.probeSeconds
+}
+
+// resolve 取缓存或查库，一次解出两个超时口径；ok 为假表示查不到（两口径都按「不限制」处理）。
+func (c *idleTimeoutCache) resolve(providerID int64) (providerTimeouts, bool) {
+	if c == nil || providerID == 0 {
+		return providerTimeouts{}, false
+	}
 	if value, ok := c.ttl.Get(providerID); ok {
-		return time.Duration(value) * time.Millisecond
+		return value, true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -698,10 +728,14 @@ func (c *idleTimeoutCache) lookup(providerID int64) time.Duration {
 				"error":      err.Error(),
 			})
 		}
-		return 0
+		return providerTimeouts{}, false
 	}
-	c.ttl.Set(providerID, row.StreamingIdleTimeoutMS)
-	return time.Duration(row.StreamingIdleTimeoutMS) * time.Millisecond
+	value := providerTimeouts{idleMS: row.StreamingIdleTimeoutMS}
+	if row.SlowRateProbeAfterFirstByteSeconds != nil {
+		value.probeSeconds = *row.SlowRateProbeAfterFirstByteSeconds
+	}
+	c.ttl.Set(providerID, value)
+	return value, true
 }
 
 // 编译期断言：未使用的辅助函数与错误值在此显式保留，避免误删。
