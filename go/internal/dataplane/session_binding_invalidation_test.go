@@ -23,6 +23,7 @@ import (
 // recordingSessionBinding 记录会话绑定写回实际调用了哪个方法（不碰 Redis）。
 type recordingSessionBinding struct {
 	clearCount int
+	clearIDs   []int64
 	cooldowns  []int64
 	winners    []int64
 }
@@ -37,8 +38,9 @@ func (r *recordingSessionBinding) CooldownOnFailure(_ context.Context, providerI
 	return true
 }
 
-func (r *recordingSessionBinding) ClearBinding(_ context.Context) bool {
+func (r *recordingSessionBinding) ClearBinding(_ context.Context, providerID int64) bool {
 	r.clearCount++
+	r.clearIDs = append(r.clearIDs, providerID)
 	return true
 }
 
@@ -63,6 +65,81 @@ func (alwaysCommitWriter) UpdateWinnerCost(_ context.Context, _ int64, _ string,
 
 func (alwaysCommitWriter) FindModelPrice(_ context.Context, _ string) (*store.ModelPrice, error) {
 	return nil, nil
+}
+
+// TestClientAbortWritesPrefixTombstoneOnly 是 P1-2 的**跨包**钉子：真实的流式指令产出喂给
+// 真实的终态写回。
+//
+// 为何必须跨包：把 TombstoneKind 那一行摘掉时，「指令产出」与「写回分流」两半的单测全绿，
+// 而客户端按停会重新落到默认种类（= 供应商故障）⇒ 给一家健康渠道写 60 秒冷却。
+// 本用例同时以静默超时为对照，证明这不是「一律跳过」，而是确实按种类分流。
+func TestClientAbortWritesPrefixTombstoneOnly(t *testing.T) {
+	cases := []struct {
+		name         string
+		kind         forward.TerminalKind
+		wantKind     terminal.AffinityTombstoneKind
+		wantCooldown []int64
+	}{
+		{
+			name:     "客户端主动中断：只写前缀墓碑，会话侧零动作",
+			kind:     forward.TerminalClientAborted,
+			wantKind: terminal.AffinityTombstonePrefixOnly,
+		},
+		{
+			// 对照组：静默超时是设计稿 §4 明列的 provider_error，照旧写冷却。
+			name:         "静默超时仍写冷却",
+			kind:         forward.TerminalIdleTimeout,
+			wantKind:     terminal.AffinityTombstoneProviderError,
+			wantCooldown: []int64{9},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pc, err := pctx.New(pctx.Init{Method: "POST", Path: "/v1/chat/completions"})
+			if err != nil {
+				t.Fatalf("构造上下文失败: %v", err)
+			}
+			if err := pc.SetMessageRequestID(78); err != nil {
+				t.Fatalf("写入行标识失败: %v", err)
+			}
+			recorder := &recordingSessionBinding{}
+			pc.SetSessionBindingWriteback(recorder)
+
+			directive := affinityDirectiveForStream(forward.StreamOutcome{
+				Kind: tc.kind, StatusCode: 499, Provider: forward.Provider{ID: 9},
+				ClientAbort: tc.kind == forward.TerminalClientAborted,
+			})
+			if directive.TombstoneProviderID != 9 {
+				t.Fatalf("前缀墓碑仍应写出（Node 对齐），收到 %+v", directive)
+			}
+			if directive.TombstoneKind != tc.wantKind {
+				t.Fatalf("墓碑种类 = %d，期望 %d", directive.TombstoneKind, tc.wantKind)
+			}
+
+			if _, err := terminal.New(alwaysCommitWriter{}, terminal.Options{}).SettleContext(
+				context.Background(), pc,
+				terminal.Settlement{StatusCode: 499, Affinity: directive},
+				nil,
+			); err != nil {
+				t.Fatalf("终态结算失败: %v", err)
+			}
+
+			if len(recorder.clearIDs) != 0 {
+				t.Errorf("不得清绑定，收到 %v", recorder.clearIDs)
+			}
+			if len(recorder.cooldowns) != len(tc.wantCooldown) {
+				t.Fatalf("冷却 = %v，期望 %v（客户端按停不得冷却健康渠道）", recorder.cooldowns, tc.wantCooldown)
+			}
+			for i := range tc.wantCooldown {
+				if recorder.cooldowns[i] != tc.wantCooldown[i] {
+					t.Errorf("冷却的供应商 = %v，期望 %v", recorder.cooldowns, tc.wantCooldown)
+				}
+			}
+			if len(recorder.winners) != 0 {
+				t.Errorf("墓碑路径不该有 CompareAndSet，实得 %v", recorder.winners)
+			}
+		})
+	}
 }
 
 func TestSessionBindingInvalidationFollowsFailureKind(t *testing.T) {

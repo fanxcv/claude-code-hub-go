@@ -22,8 +22,12 @@ type SessionBindingWriteback interface {
 	// ClearBinding 在「资源/配置类失效」时清空绑定且**不写冷却**。
 	//
 	// 设计稿 §4：模型不支持、渠道停用属配置决策而非故障，不该染污「低速」语义。
+	//
+	// providerID 是**期望的当前绑定**（即失效的那一家）：只清「绑定恰好指向它」的情形，
+	// 与 CooldownOnFailure 同一 fence 语义。不能传 0——0 在 Lua 里表示「期望空绑定」，
+	// 已有绑定时必得 provider_mismatch 而清不掉（2026-09-22 修的正是这个）。
 	// 返回 false 表示未写（被 generation fence 拒绝、或 Redis 失败）。
-	ClearBinding(ctx context.Context) bool
+	ClearBinding(ctx context.Context, providerID int64) bool
 }
 
 // SetSessionBindingWriteback 装入本次请求的会话绑定写回能力（会话守卫步骤调用）。

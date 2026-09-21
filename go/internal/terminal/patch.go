@@ -100,6 +100,12 @@ const (
 	AffinityTombstoneProviderError AffinityTombstoneKind = iota
 	// AffinityTombstoneResourceNotFound 是资源/配置类失效（上游 404：该家没有这个模型）。
 	AffinityTombstoneResourceNotFound
+	// AffinityTombstonePrefixOnly 是「只写前缀墓碑、会话绑定侧不动」的终态：客户端主动中断
+	// （forward.TerminalClientAborted）即此类。供应商没出错，用户只是按了停；若照默认种类走，
+	// 会把一家健康渠道记成「故障」并冷却 60 秒，下一请求无故换家、丢粘性与缓存。
+	//
+	// 前缀侧仍写墓碑：这次请求确实没成，同前缀的后续请求该绕开它（Node 对齐）。
+	AffinityTombstonePrefixOnly
 )
 
 // ErrIncompleteTerminalPatch 表示终态 patch 会写出残缺的终态：要么没有状态码，

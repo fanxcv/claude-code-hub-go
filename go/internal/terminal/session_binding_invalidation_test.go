@@ -14,6 +14,7 @@ import (
 // stubSessionBinding 只记录被调用了哪个方法，不做任何 IO。
 type stubSessionBinding struct {
 	clearCount int
+	clearIDs   []int64
 	cooldowns  []int64
 	winners    []int64
 }
@@ -28,8 +29,9 @@ func (s *stubSessionBinding) CooldownOnFailure(_ context.Context, providerID int
 	return true
 }
 
-func (s *stubSessionBinding) ClearBinding(_ context.Context) bool {
+func (s *stubSessionBinding) ClearBinding(_ context.Context, providerID int64) bool {
 	s.clearCount++
+	s.clearIDs = append(s.clearIDs, providerID)
 	return true
 }
 
@@ -39,6 +41,7 @@ func TestSessionBindingWritebackSplitsByTombstoneKind(t *testing.T) {
 		directive    AffinityDirective
 		committed    bool
 		wantClear    int
+		wantClearIDs []int64
 		wantCooldown []int64
 		wantWinner   []int64
 	}{
@@ -46,6 +49,8 @@ func TestSessionBindingWritebackSplitsByTombstoneKind(t *testing.T) {
 			name:      "资源类墓碑只清绑定、不写冷却",
 			directive: AffinityDirective{TombstoneProviderID: 9, TombstoneKind: AffinityTombstoneResourceNotFound},
 			wantClear: 1,
+			// 清绑定必须带上失效的那一家：传 0 会被 Lua 当成「期望空绑定」而清不掉。
+			wantClearIDs: []int64{9},
 		},
 		{
 			name:         "故障墓碑写冷却、不清绑定",
@@ -57,6 +62,12 @@ func TestSessionBindingWritebackSplitsByTombstoneKind(t *testing.T) {
 			directive:  AffinityDirective{WinnerProviderID: 7},
 			committed:  true,
 			wantWinner: []int64{7},
+		},
+		{
+			// 客户端主动中断：前缀墓碑照写（Node 对齐），但会话绑定侧一个动作都不发——
+			// 供应商没出错，冷却一家健康渠道会让下一请求无故换家、丢粘性与缓存。
+			name:      "只写前缀的墓碑不发任何会话动作",
+			directive: AffinityDirective{TombstoneProviderID: 9, TombstoneKind: AffinityTombstonePrefixOnly},
 		},
 		{
 			name:      "成功但未赢得终态提交时不写 CAS",
@@ -90,6 +101,15 @@ func TestSessionBindingWritebackSplitsByTombstoneKind(t *testing.T) {
 				if recorder.cooldowns[i] != tc.wantCooldown[i] {
 					t.Errorf("冷却的供应商 = %v，期望 %v", recorder.cooldowns, tc.wantCooldown)
 				}
+			}
+			for i := range tc.wantClearIDs {
+				if i >= len(recorder.clearIDs) || recorder.clearIDs[i] != tc.wantClearIDs[i] {
+					t.Errorf("清除的供应商 = %v，期望 %v", recorder.clearIDs, tc.wantClearIDs)
+					break
+				}
+			}
+			if len(recorder.clearIDs) != len(tc.wantClearIDs) {
+				t.Errorf("清除的供应商个数 = %v，期望 %v", recorder.clearIDs, tc.wantClearIDs)
 			}
 			for i := range tc.wantWinner {
 				if recorder.winners[i] != tc.wantWinner[i] {

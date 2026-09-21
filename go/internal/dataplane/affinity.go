@@ -49,6 +49,14 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 	if success && outcome.Kind == forward.TerminalCompleted {
 		return terminal.AffinityDirective{WinnerProviderID: outcome.Provider.ID}
 	}
+	// 客户端主动中断不是供应商故障：前缀墓碑照写（Node 对齐），但会话绑定侧不得动作——
+	// 否则用户按停就会给一家健康渠道写 60 秒冷却，下一请求无故换家。
+	if outcome.Kind == forward.TerminalClientAborted {
+		return terminal.AffinityDirective{
+			TombstoneProviderID: outcome.Provider.ID,
+			TombstoneKind:       terminal.AffinityTombstonePrefixOnly,
+		}
+	}
 	return terminal.AffinityDirective{TombstoneProviderID: outcome.Provider.ID}
 }
 

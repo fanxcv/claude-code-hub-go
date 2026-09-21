@@ -99,18 +99,46 @@ func (w *sessionBindingWriteback) CooldownOnFailure(ctx context.Context, provide
 //
 // 与 CooldownOnFailure 分开：故障该冷却，配置变更不该——冷却会把一家只是被停用的渠道
 // 记成「慢」，等它再启用时会白背一段冷却。
-func (w *sessionBindingWriteback) ClearBinding(ctx context.Context) bool {
-	if w == nil {
+//
+// expectedProviderID 必须取**失效的那一家**。传 0 在 Lua 里表示「期望空绑定」
+// （clear-session-binding.lua 直接拿它与当前 provider_id 逐字比对），
+// 于是已有绑定时必得 provider_mismatch、清不掉——正好与用途相反。
+func (w *sessionBindingWriteback) ClearBinding(ctx context.Context, providerID int64) bool {
+	if w == nil || providerID <= 0 {
 		return false
 	}
 	result, err := w.binder.Clear(
-		ctx, w.sessionID, w.keyID, w.generation, 0, 0, 0, w.ttlSeconds(),
+		ctx, w.sessionID, w.keyID, w.generation, providerID, 0, 0, w.ttlSeconds(),
 	)
 	if err != nil {
 		w.warn("session.binding.clear_failed", err)
 		return false
 	}
-	return result.OK
+	if !result.OK {
+		// 冲突分两类留痕：fence 按设计拒绍（并发请求已改绑定/生成号、或本来就没绑定）
+		// 不是故障，记 skipped；其余（键形制损坏、镜像不一致、键属于别的 key）记 conflict。
+		// 不能一律静默：本次缺陷就是「清不掉却不报」被长久漏过的。
+		if sessionClearBenignConflicts[result.ConflictReason] {
+			w.warn("session.binding.clear_skipped", nil, "conflictReason", result.ConflictReason)
+			return false
+		}
+		w.warn("session.binding.clear_conflict", nil, "conflictReason", result.ConflictReason)
+		return false
+	}
+	return true
+}
+
+// sessionClearBenignConflicts 是「清绑定」里属正常 fenced 语义的冲突原因。
+//
+//   - canonical_missing：本来就没有绑定（幂等重放，或绑定已过期）——无可清。
+//   - provider_mismatch：绑定此刻指向别家（并发请求已改），或已无 provider。
+//   - generation_mismatch：并发请求已推进生成号，fence 按设计拒绍迟到写入。
+//
+// 三者都不是数据异常，记成故障只会把正常并发噪声成 warn。
+var sessionClearBenignConflicts = map[string]bool{
+	"canonical_missing":   true,
+	"provider_mismatch":   true,
+	"generation_mismatch": true,
 }
 
 func (w *sessionBindingWriteback) ttlSeconds() int {

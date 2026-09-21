@@ -26,6 +26,7 @@ type sessionBindingRecorder struct {
 	events      []string
 	casIDs      []int64
 	cooldownIDs []int64
+	clearIDs    []int64
 	ctxErrs     []error
 }
 
@@ -47,12 +48,20 @@ func (r *sessionBindingRecorder) CooldownOnFailure(ctx context.Context, provider
 	return true
 }
 
-func (r *sessionBindingRecorder) ClearBinding(ctx context.Context) bool {
+func (r *sessionBindingRecorder) ClearBinding(ctx context.Context, providerID int64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, "binding_clear")
+	r.clearIDs = append(r.clearIDs, providerID)
 	r.ctxErrs = append(r.ctxErrs, ctx.Err())
 	return true
+}
+
+// clearedIDs 单开一个取数口，不改 snapshot 的返回形状（它有 11 处调用点）。
+func (r *sessionBindingRecorder) clearedIDs() []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]int64(nil), r.clearIDs...)
 }
 
 func (r *sessionBindingRecorder) snapshot() (events []string, casIDs []int64, cooldownIDs []int64, ctxErrs []error) {
@@ -190,6 +199,10 @@ func TestSyncSessionBindingWritebackStaysOncePerTerminal(t *testing.T) {
 		{name: "成功且提交", directive: AffinityDirective{WinnerProviderID: 7}, committed: true, want: "binding_cas"},
 		{name: "成功但未提交", directive: AffinityDirective{WinnerProviderID: 7}, committed: false, want: ""},
 		{name: "失败写冷却", directive: AffinityDirective{TombstoneProviderID: 9}, committed: true, want: "binding_cooldown"},
+		{name: "客户端中断只写前缀不发会话动作", directive: AffinityDirective{
+			TombstoneProviderID: 9,
+			TombstoneKind:       AffinityTombstonePrefixOnly,
+		}, committed: true, want: ""},
 		{name: "资源类失效只清绑定", directive: AffinityDirective{
 			TombstoneProviderID: 9,
 			TombstoneKind:       AffinityTombstoneResourceNotFound,
@@ -302,6 +315,42 @@ func TestSessionBindingWritebackSkippedWhenNotWired(t *testing.T) {
 }
 
 // 无请求上下文（Settle 路径）时同样整段跳过：不得因取写回句柄而空指针。
+// 异步 + 客户端主动中断（PrefixOnly）：**一个会话动作都不许发**——入队处与 flush 之后都不得有。
+//
+// 这条钉住 P1：客户端按停不是供应商故障，而这条失败半在 f1ce0bf 之后才在异步（生产）路径
+// 首次真正可达。若照默认种类走，用户按一次停就会给一家健康渠道写 60 秒冷却，
+// 下一请求无故换家、丢粘性与缓存。
+func TestAsyncSessionBindingClientAbortFiresNothing(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: false}}}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 8, FlushInterval: time.Hour,
+	})
+	recorder := &sessionBindingRecorder{}
+	pc := newSessionBindingContext(t, recorder, 61)
+
+	settlement := okSettlement(nil)
+	settlement.Affinity = AffinityDirective{
+		TombstoneProviderID: 9,
+		TombstoneKind:       AffinityTombstonePrefixOnly,
+	}
+	if _, err := settler.SettleContext(context.Background(), pc, settlement, nil); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	if events, _, _, _ := recorder.snapshot(); len(events) != 0 {
+		t.Fatalf("客户端中断不得在入队处发会话动作，收到 %v", events)
+	}
+
+	flushQueue(t, queue)
+
+	events, _, cooldownIDs, _ := recorder.snapshot()
+	if len(events) != 0 || len(cooldownIDs) != 0 {
+		t.Fatalf("客户端中断不得发任何会话动作（flush 后也不得），收到 %v（冷却 %v）", events, cooldownIDs)
+	}
+	if ids := recorder.clearedIDs(); len(ids) != 0 {
+		t.Fatalf("客户端中断不得清绑定，收到 %v", ids)
+	}
+}
+
 func TestSessionBindingWritebackToleratesNilContext(t *testing.T) {
 	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: true}}}
 	settlement := okSettlement(nil)

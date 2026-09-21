@@ -102,10 +102,15 @@ func TestAffinityDirectiveForStream(t *testing.T) {
 			want: terminal.AffinityDirective{TombstoneProviderID: 7},
 		},
 		{
-			name: "客户端中断写墓碑（Node 的 499/CLIENT_ABORTED 分支）",
+			name: "客户端中断只写前缀墓碑（Node 的 499/CLIENT_ABORTED 分支）",
 			outcome: forward.StreamOutcome{Kind: forward.TerminalClientAborted, StatusCode: 200,
 				Provider: forward.Provider{ID: 7}, ClientAbort: true},
-			want: terminal.AffinityDirective{TombstoneProviderID: 7},
+			// 前缀墓碑照写（Node 对齐：这次请求确实没成，同前缀后续该绕开它），
+			// 但会话绑定侧不得动作：供应商没出错，冷却一家健康渠道会让下一请求无故换家。
+			want: terminal.AffinityDirective{
+				TombstoneProviderID: 7,
+				TombstoneKind:       terminal.AffinityTombstonePrefixOnly,
+			},
 		},
 		{
 			name: "静默超时写墓碑",

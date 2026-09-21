@@ -428,7 +428,7 @@ func (s *Settler) sessionBindingWriteback(
 	defer cancel()
 	if phase == sessionBindingFailure {
 		if directive.TombstoneKind == AffinityTombstoneResourceNotFound {
-			writeback.ClearBinding(writeCtx)
+			writeback.ClearBinding(writeCtx, directive.TombstoneProviderID)
 			return
 		}
 		writeback.CooldownOnFailure(writeCtx, directive.TombstoneProviderID)
@@ -452,7 +452,9 @@ const (
 func sessionBindingApplies(directive AffinityDirective, phase sessionBindingPhase, committed bool) bool {
 	switch phase {
 	case sessionBindingFailure:
-		return directive.TombstoneProviderID > 0
+		// PrefixOnly 类（客户端主动中断）只写前缀墓碑：供应商没出错，不得给它写冷却。
+		return directive.TombstoneProviderID > 0 &&
+			directive.TombstoneKind != AffinityTombstonePrefixOnly
 	case sessionBindingWinner:
 		return directive.WinnerProviderID > 0 && committed
 	default:
