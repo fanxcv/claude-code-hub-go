@@ -43,6 +43,13 @@ type chatStreamDecoder struct {
 	// emittedParts 是「当前块内已发过几个正文帧」，用于消歧「本帧文本恰等于已发内容」：
 	// 详见 chatReconcile 的「已知边界」。
 	emittedParts int
+	// messageText 是**整条消息**已作为正文交付的全部字节：跨块累加，**不随开块重置**。
+	//
+	// 为什么另立一份：emitted 是块级的（块一关就清），而生产实测的整段回放恰好落在块边界之后
+	// （tool_calls 关掉文本块、随后同形帧重发全篇），块级记账比不到它——见 messageReplay。
+	messageText string
+	// messageTextParts 是拼成 messageText 的帧数，用于消歧「本帧恰等于全篇」。
+	messageTextParts int
 	// toolArgsEmitted 是「上游 tool_calls index → 已作为参数增量发出的字节」，用于同一类对账。
 	// 不做则累计型 arguments 会产出 `{...}{...}` 非法 JSON。
 	toolArgsEmitted map[int]string
@@ -199,6 +206,11 @@ func (d *chatStreamDecoder) emitText(text string, out *[]Chunk, declared bool) {
 	if len(text) == 0 {
 		return
 	}
+	// 消息级回放：块边界（tool_calls / thinking）之后重发的整段文本。
+	// 块内那一份由下面的 chatReconcile 管，但块一关它的记账就归零，这条补的是跨块那一段。
+	if messageReplay(d.messageText, d.messageTextParts, text) {
+		return
+	}
 	newBlock := d.openBlock == nil || d.openBlock.kind != chatBlockText
 	// 对账只在**同一块内**做：新块没有已发内容可比，emitted 随开块重置。
 	if !newBlock {
@@ -227,6 +239,8 @@ func (d *chatStreamDecoder) emitText(text string, out *[]Chunk, declared bool) {
 	d.textStarted = true
 	d.emitted += text
 	d.emittedParts++
+	d.messageText += text
+	d.messageTextParts++
 	*out = append(*out, Chunk{
 		Kind:       ChunkBlockDelta,
 		BlockIndex: intPtr(d.openBlock.index),

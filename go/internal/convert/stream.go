@@ -413,6 +413,25 @@ func declaredTextTail(emitted string, declared string) string {
 	return ""
 }
 
+// messageReplay 判定一段即将交付的文本是否属「**跨块**整段回放」。
+//
+// 为什么需要消息级、而不只是块级：两条线的解码器都把「已发内容」按**块**记账，块边界一到就归零：
+//
+//   - chat 线：tool_calls / thinking 帧关闭文本块时就清 emitted，随后同形帧既无从比对、
+//     又被当作新块的首帧原样下发；
+//   - responses 线：声明式收尾（completed 的 output[] / item.done）按**数组下标**反推块键，
+//     与流式期的 output_index 不一致时 startBlock 会建出一个 emitted 为空的新块，
+//     声明全文于是被当成新内容补发（生产实测的 2x 重复即此）。
+//
+// 判据只取最保守的一条：本帧文本与消息级已发全文**逐字相等**，且该全文由**多个帧**拼成。
+// 余下一律放行——「宁可重复、不静默丢字」。
+//
+// 不做「严格扩展」（本帧以全篇为前缀且更长）一档：消息级基线很长，合法续写里出现
+// 「以全篇为前缀」的概率远高于块内，按前缀截断会静默吃掉合法首段。
+func messageReplay(messageText string, messageParts int, text string) bool {
+	return text != "" && messageParts > 1 && text == messageText
+}
+
 func cloneUsage(usage *Usage) *Usage {
 	if usage == nil {
 		return &Usage{}

@@ -66,6 +66,15 @@ type responsesStreamDecoder struct {
 
 	byKey      map[string]*responsesDecodedBlock
 	openBlocks []*responsesDecodedBlock
+
+	// messageText 是**整条响应**已作为正文交付的全部字节：跨块累加，不随块关闭 / 重建重置。
+	//
+	// 为什么另立一份：块级的 emitted 在两种情况下认不出回放——块被 tool item 关掉后同形帧又来，
+	// 或声明式收尾按 output[] 数组下标反推出与流式期不同的块键（此时新块 emitted 为空）。
+	// 见 messageReplay。
+	messageText string
+	// messageTextParts 是拼成 messageText 的帧数，用于消歧「本帧恰等于全篇」。
+	messageTextParts int
 }
 
 func newResponsesStreamDecoder(ctx ConvertCtx) StreamDecoder {
@@ -198,6 +207,8 @@ func (d *responsesStreamDecoder) emitDeltaChunk(out *[]Chunk, decoded *responses
 	switch decoded.kind {
 	case responsesKindText:
 		chunk.TextDelta = stringPtr(delta)
+		d.messageText += delta
+		d.messageTextParts++
 	case responsesKindToolCall:
 		chunk.ArgsDelta = stringPtr(delta)
 	default:
@@ -332,6 +343,10 @@ func (d *responsesStreamDecoder) handleDelta(out *[]Chunk, eventType string, pay
 	case "response.output_text.delta", "response.refusal.delta":
 		kind = responsesKindText
 	}
+	// 消息级回放：tool item 关掉文本块之后，上游再发一条「累计全文」式增量时，块级记账比不到它。
+	if kind == responsesKindText && messageReplay(d.messageText, d.messageTextParts, delta) {
+		return
+	}
 	outputIndex := intOrDefault(payload, "output_index", 0)
 	itemID, _ := stringField(payload, "item_id")
 	if itemID == "" {
@@ -397,6 +412,12 @@ func (d *responsesStreamDecoder) releaseSuspended(out *[]Chunk, decoded *respons
 // 悬置内容留给 closeBlock 的兜底，绝不凭猜测交付。
 func (d *responsesStreamDecoder) reconcile(out *[]Chunk, decoded *responsesDecodedBlock, declared string) {
 	if len(declared) == 0 {
+		return
+	}
+	// 消息级回放：声明式收尾按 output[] **数组下标**反推块键（见 recoverTerminalOutput），
+	// 与流式期的 output_index 不一致时会建出一个 emitted 为空的新块；此时块级差额算不出来，
+	// 只有消息级记账能认出这段「声明全文」其实是已发全篇。
+	if decoded.kind == responsesKindText && messageReplay(d.messageText, d.messageTextParts, declared) {
 		return
 	}
 	decoded.pending = ""
