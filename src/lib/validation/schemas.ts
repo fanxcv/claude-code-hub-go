@@ -1179,7 +1179,9 @@ export const UpdateSystemSettingsSchema = z
     streamGateMode: z
       .enum(["off", "shadow", "enforce"], { message: "不支持的流式门控模式" })
       .optional(),
-    // 忽略客户端 Session ID（可选）
+    // 亲和总闸（可选）
+    affinityEnabled: z.boolean().optional(),
+    // 忽略客户端 Session ID（可选；模式开关，与总闸无关）
     affinityIgnoreClientSessionId: z.boolean().optional(),
     // F2 Replay 响应缓存与复用（可选；null = 跟随环境变量）
     replayEnabled: z.boolean().nullable().optional(),

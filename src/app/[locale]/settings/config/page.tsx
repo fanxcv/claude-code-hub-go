@@ -100,6 +100,7 @@ function SettingsConfigContent() {
               settings.allowNonConversationEndpointProviderFallback,
             fakeStreamingWhitelist: settings.fakeStreamingWhitelist,
             streamGateMode: settings.streamGateMode,
+            affinityEnabled: settings.affinityEnabled,
             affinityIgnoreClientSessionId: settings.affinityIgnoreClientSessionId,
             replayEnabled: settings.replayEnabled,
             replayCacheTtlMinutes: settings.replayCacheTtlMinutes,

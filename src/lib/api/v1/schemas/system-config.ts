@@ -229,10 +229,15 @@ export const SystemSettingsSchema = z
       .describe(
         "Stream content gate mode for ordinary requests: buffer until the first valid content frame and fail over on error or empty streams (enforce), observe divergence only (shadow), or disable (off). Replay owners always retain the pre-content safety gate."
       ),
+    affinityEnabled: z
+      .boolean()
+      .describe(
+        "Master switch for provider affinity as a whole (session binding and prefix fingerprint). When false, neither layer participates in routing. Additive to Node: Node overloaded affinityIgnoreClientSessionId as both the master switch and the mode flag, which made session-level stickiness impossible without disabling affinity entirely."
+      ),
     affinityIgnoreClientSessionId: z
       .boolean()
       .describe(
-        "Whether fingerprintable requests force longest-prefix affinity for provider stickiness, skipping client session id binding."
+        "Mode switch: whether fingerprintable requests force longest-prefix affinity for provider stickiness, skipping client session id binding. It does not control whether affinity is enabled at all (see affinityEnabled)."
       ),
     replayEnabled: z
       .boolean()

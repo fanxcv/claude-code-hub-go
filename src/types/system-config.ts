@@ -156,9 +156,15 @@ export interface SystemSettings {
   // enforce：首个有效内容帧前缓冲，错误/空流时自动切换供应商；shadow：仅旁路统计分歧
   streamGateMode: StreamGateSettingMode;
 
-  // 忽略客户端 Session ID（默认开启）
+  // 亲和总闸（默认开启）
+  // 关闭时整套亲和（会话绑定与前缀指纹）都不参与选路
+  // 注意：它是 2026-09-21 新增的独立开关；此前总闸与下面的「忽略客户端 Session ID」
+  // 挤在同一字段，导致「会话粘性生效」与「保持亲和可用」不可兼得
+  affinityEnabled: boolean;
+
+  // 忽略客户端 Session ID（默认关闭）
   // 开启后：可指纹化的请求强制使用最长前缀亲和做供应商粘性（跳过客户端 Session ID 绑定），
-  // 不可指纹化的请求仍走会话复用
+  // 不可指纹化的请求仍走会话复用。它是**模式**开关，关不掉亲和本身（那是 affinityEnabled）
   affinityIgnoreClientSessionId: boolean;
 
   // F2 Replay（响应缓存与上游连接复用）开关覆写
@@ -297,6 +303,9 @@ export interface UpdateSystemSettingsInput {
 
   // F1 流式内容门控模式（可选）
   streamGateMode?: StreamGateSettingMode;
+
+  // 亲和总闸（可选）
+  affinityEnabled?: boolean;
 
   // 忽略客户端 Session ID（可选）
   affinityIgnoreClientSessionId?: boolean;

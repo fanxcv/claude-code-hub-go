@@ -165,8 +165,10 @@
         "leaseCapZero": "Lease cap is 0. This may cause the per-lease budget to be 0."
       }
     },
+    "affinityEnabled": "Affinity master switch",
+    "affinityEnabledDesc": "When off, provider affinity as a whole (session binding and prefix fingerprint) no longer participates in routing. It is independent of the 'Ignore Client Session ID' setting below. Default on.",
     "affinityIgnoreClientSessionId": "Ignore Client Session ID",
-    "affinityIgnoreClientSessionIdDesc": "When enabled, fingerprintable requests are forced to use longest-prefix affinity for provider stickiness (skipping client Session ID binding); non-fingerprintable requests still use session reuse. Default on.",
+    "affinityIgnoreClientSessionIdDesc": "When enabled, fingerprintable requests are forced to use longest-prefix affinity for provider stickiness (skipping client Session ID binding); non-fingerprintable requests still use session reuse. This is a mode switch and cannot disable affinity itself. Default off.",
     "streamGateMode": "Stream Content Gate",
     "streamGateModeDesc": "Controls the first-valid-content gate for ordinary requests: enabled mode fails over on error frames or empty streams, shadow mode only records divergence, and off mode forwards directly. Replay owners always retain the pre-content safety gate regardless of this setting. Default enabled.",
     "streamGateModeOptions": {

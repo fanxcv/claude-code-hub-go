@@ -104,6 +104,7 @@ interface SystemSettingsFormProps {
     | "allowNonConversationEndpointProviderFallback"
     | "fakeStreamingWhitelist"
     | "streamGateMode"
+    | "affinityEnabled"
     | "affinityIgnoreClientSessionId"
     | "replayEnabled"
     | "replayCacheTtlMinutes"
@@ -225,6 +226,7 @@ export function SystemSettingsForm({
   const [streamGateMode, setStreamGateMode] = useState<StreamGateSettingMode>(
     initialSettings.streamGateMode
   );
+  const [affinityEnabled, setAffinityEnabled] = useState(initialSettings.affinityEnabled);
   const [affinityIgnoreClientSessionId, setAffinityIgnoreClientSessionId] = useState(
     initialSettings.affinityIgnoreClientSessionId
   );
@@ -432,6 +434,7 @@ export function SystemSettingsForm({
         allowNonConversationEndpointProviderFallback,
         fakeStreamingWhitelist: sanitizedFakeStreamingWhitelist,
         streamGateMode,
+        affinityEnabled,
         affinityIgnoreClientSessionId,
         replayEnabled,
         replayCacheTtlMinutes: Number(replayCacheTtlMinutes),
@@ -502,6 +505,7 @@ export function SystemSettingsForm({
           }))
         );
         setStreamGateMode(result.data.streamGateMode);
+        setAffinityEnabled(result.data.affinityEnabled);
         setAffinityIgnoreClientSessionId(result.data.affinityIgnoreClientSessionId);
         setReplayEnabled(result.data.replayEnabled ?? null);
         setReplayCacheTtlMinutes(String(result.data.replayCacheTtlMinutes));
@@ -1236,6 +1240,26 @@ export function SystemSettingsForm({
               </SelectContent>
             </Select>
           </div>
+        </div>
+
+        {/* Affinity: master switch */}
+        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between hover:bg-white/[0.04] transition-colors">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 shrink-0">
+              <Route className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">{t("affinityEnabled")}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">{t("affinityEnabledDesc")}</p>
+            </div>
+          </div>
+          <Switch
+            id="affinity-enabled"
+            aria-label={t("affinityEnabled")}
+            checked={affinityEnabled}
+            onCheckedChange={(checked) => setAffinityEnabled(checked)}
+            disabled={isPending}
+          />
         </div>
 
         {/* Affinity: Ignore Client Session ID */}
