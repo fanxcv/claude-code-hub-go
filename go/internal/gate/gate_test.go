@@ -82,6 +82,33 @@ func TestRunCommitsWithNeutralPrefix(t *testing.T) {
 	}
 }
 
+// TestRunCommitsOnNonIncrementalMessageFrames 钉住「逐块发完整 message、一条 delta 都没有」的上游。
+//
+// 这是 502 的复现形：`message` 族的帧原先全被归中性帧，帧数超过事件上限即烧穿预缓冲
+// → prebuffer_overflow → 客户端 502 且供应商被熔断。首帧刻意只带 role，顺带钉住
+// 「role 宣告帧不得当内容提交」。
+func TestRunCommitsOnNonIncrementalMessageFrames(t *testing.T) {
+	options := newOptions(FamilyOpenAIChat)
+	roleFrame := "data: {\"choices\":[{\"message\":{\"role\":\"assistant\"}}]}\n\n"
+	contentFrame := "data: {\"choices\":[{\"message\":{\"content\":\"x\"}}]}\n\n"
+	var builder strings.Builder
+	builder.WriteString(roleFrame)
+	// 帧数刻意超过事件上限：修复前这些帧全算中性，必然烧穿。
+	for index := 0; index < options.PrebufferEventCap+6; index++ {
+		builder.WriteString(contentFrame)
+	}
+	result, err := Run(context.Background(), strings.NewReader(builder.String()), options)
+	if err != nil {
+		t.Fatalf("非增量 message 流应提交，不得 prebuffer_overflow: %v", err)
+	}
+	if result.FramesSeen != 2 {
+		t.Fatalf("应在第 2 帧提交（首帧只带 role 仍为中性），得到 %d", result.FramesSeen)
+	}
+	if !strings.Contains(string(result.PrefixBytes()), contentFrame) {
+		t.Fatalf("前缀应含提交帧的上游字节: %q", result.PrefixBytes())
+	}
+}
+
 func TestRunCommitsOnTrailingFrameAtEOF(t *testing.T) {
 	// 无结尾空行：帧只能由 EOF 冲刷产出，故提交时已读到上游 EOF。
 	body := "event: content_block_delta\ndata: {\"delta\":{\"text\":\"tail\"}}"

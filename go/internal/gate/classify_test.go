@@ -109,6 +109,80 @@ func TestClassifyPerFamily(t *testing.T) {
 			want:   VerdictNeutral,
 		},
 		{
+			// 回归钉子：上游一条 delta 都不发、只发完整 message 对象。
+			// 缺这条路径时整条流被判「全中性帧」→ 预缓冲烧穿 → prebuffer_overflow → 502。
+			name:   "chat 非增量完整 message 帧算内容",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"content":"hi"}}]}`,
+			want:   VerdictContent,
+		},
+		{
+			name:   "chat message 工具参数算内容",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"tool_calls":[{"function":{"arguments":"{\"a\":1}"}}]}}]}`,
+			want:   VerdictContent,
+		},
+		{
+			// 与 anthropic content_block_start 同口径：id/name 不足以交付可执行 input
+			name:   "chat message 仅工具 id/name 为中性",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"tool_calls":[{"id":"call_1","function":{"name":"f"}}]}}]}`,
+			want:   VerdictNeutral,
+		},
+		{
+			name:   "chat 空 message.content 为中性",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"content":""}}]}`,
+			want:   VerdictNeutral,
+		},
+		{
+			// role 宣告帧：只有 role 而无任何 payload，不得当内容提交
+			name:   "chat 仅 role 的 message 帧为中性",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"role":"assistant"}}]}`,
+			want:   VerdictNeutral,
+		},
+		{
+			name:   "chat message reasoning_content 别名算内容",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"reasoning_content":"r"}}]}`,
+			want:   VerdictContent,
+		},
+		{
+			name:   "chat message 裸 reasoning 别名算内容",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"reasoning":"r"}}]}`,
+			want:   VerdictContent,
+		},
+		{
+			name:   "chat message refusal 算内容",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"refusal":"no"}}]}`,
+			want:   VerdictContent,
+		},
+		{
+			name:   "chat message 音频 data 算内容",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"audio":{"data":"AAA"}}}]}`,
+			want:   VerdictContent,
+		},
+		{
+			name:   "chat message 音频 transcript 算内容",
+			family: FamilyOpenAIChat,
+			event:  "",
+			data:   `{"choices":[{"message":{"audio":{"transcript":"t"}}}]}`,
+			want:   VerdictContent,
+		},
+		{
 			name:   "chat DONE 哨兵",
 			family: FamilyOpenAIChat,
 			event:  "",

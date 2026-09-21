@@ -139,6 +139,26 @@ var streamSignals = map[Family]streamSignal{
 					"choices.#.delta.audio.transcript",
 				},
 			},
+			{
+				// 非增量式上游：有的在流里直接发完整 message 对象（或返回非流式体），一条 delta 都没有。
+				// 漏掉这一族即让整条流被判为「全中性帧」，预缓冲预算（64 帧 / 4MiB）烧穿 →
+				// prebuffer_overflow → 502 → 供应商熔断（与上面 reasoning 别名漏项同一失效链）。
+				//
+				// 为什么与 delta 族逐项对齐却**不含** type/id/name：本族只收「已可交付的 payload」。
+				// tool_calls 只给 id/name 时 arguments 缺失或为空，天然不命中；这与 anthropic
+				// content_block_start 的口径一致（id 与 name 不足以交付可执行 input）。
+				// 空 message（只有 role）与 content: "" 同理不命中，故 role 宣告帧仍是中性帧。
+				anyPaths: []string{
+					"choices.#.message.content",
+					"choices.#.message.reasoning_content",
+					"choices.#.message.reasoning",
+					"choices.#.message.tool_calls.#.function.arguments",
+					"choices.#.message.function_call.arguments",
+					"choices.#.message.refusal",
+					"choices.#.message.audio.data",
+					"choices.#.message.audio.transcript",
+				},
+			},
 		},
 		errorRules: []frameRule{
 			// data: {"error":{...}} 可出现在流中任意位置
