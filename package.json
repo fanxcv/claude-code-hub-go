@@ -1,6 +1,6 @@
 {
   "name": "claude-code-hub-go",
-  "version": "1.9.14",
+  "version": "1.9.15",
   "private": true,
   "engines": {
     "node": ">=22.19.0"
