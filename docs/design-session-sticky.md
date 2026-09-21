@@ -192,11 +192,11 @@ if result.SessionBinding != nil && result.SelectedProviderID != 0 {
 | DB 默认值 | `drizzle/0112_complex_sabra.sql` | 56 | `DEFAULT true` → `DEFAULT false` **（需新迁移）** |
 | Go 读处 | `store/read.go` | 63-64 | 逻辑反转：`ignoreSession := settings.AffinityIgnoreClientSessionId`; 使用处改为 `!ignoreSession` |
 | 管理面白名单 | `adminapi/system_settings.go` | 1335 | `AffinityIgnoreClientSessionId: true` → `false` |
-| 前端表单 | `src/components/settings/config/_components/system-settings-form.tsx` | 1249-1259 | 复选框 label 改为"忽略客户端会话 ID（强制前缀粘性）" |
+| 前端表单 | `src/app/[locale]/settings/config/_components/system-settings-form.tsx` | 1249-1259 | 复选框 label 改为"忽略客户端会话 ID（强制前缀粘性）" |
 | zh 词条 | `messages/zh-CN/settings/config.json` | 109-110 | `"affinityIgnoreClientSessionId"` / `"affinityIgnoreClientSessionIdDescription"` 文案改为"勾选后忽略会话 ID，强制使用前缀指纹粘性（兼容旧客户端）" |
 | en 词条 | `messages/en/settings/config.json` | 168-169 | 同上英文版 |
 
-**新迁移**（`drizzle/0XXX_session_sticky.sql`）：
+**新迁移**（`drizzle/<NNNN>_session_sticky.sql`，编号待实施时按 journal 现状分配；本仓当前水位见 `drizzle/meta/_journal.json`）：
 ```sql
 -- 反转 affinity_ignore_client_session_id 默认值
 ALTER TABLE system_settings
@@ -290,7 +290,7 @@ ALTER TABLE system_settings
 
 ### 需要的 migration
 
-**一条新迁移**（`drizzle/0XXX_session_sticky.sql`）：
+**一条新迁移**（`drizzle/<NNNN>_session_sticky.sql`）：
 ```sql
 -- 1. 反转 affinity_ignore_client_session_id 默认值
 ALTER TABLE system_settings
@@ -349,7 +349,7 @@ ALTER TABLE system_settings
 | ③ 配置与开关 | `config/env.go` (+20)、`store/read.go` (+10)、`adminapi/system_settings.go` (+5) | ~35 行 | 可与 ① ② 并行 |
 | ④ 前端与 i18n | `system-settings-form.tsx` (+10)、`messages/zh-CN/*.json` (+4)、`messages/en/*.json` (+4) | ~18 行 | 可与 ② 并行 |
 | ⑤ F3b 供数 | `dataplane/cachescore.go` (+20)、`terminal/cachescore.go`（若需改 +10） | ~30 行 | 可与 ② 并行 |
-| ⑥ 迁移与文档 | `drizzle/0XXX_session_sticky.sql` (+10)、`docs/design-session-sticky.md`（本文档）、`go/env-parity.txt`（重新生成） | ~10 行 SQL | 最后 |
+| ⑥ 迁移与文档 | `drizzle/<NNNN>_session_sticky.sql` (+10)、`docs/design-session-sticky.md`（本文档）、`go/env-parity.txt`（重新生成） | ~10 行 SQL | 最后 |
 
 **总量级**：约 **300 行代码改动 + 1 条迁移 + 本设计文档**。
 
@@ -470,7 +470,7 @@ ALTER TABLE system_settings
   - 停用/不支持模型 → 清空绑定
 
 **④ 需要改的迁移/触发器清单**
-- 迁移：1 条（`drizzle/0XXX_session_sticky.sql`）—— 反转 `system_settings.affinity_ignore_client_session_id` 默认值 `true` → `false`
+- 迁移：1 条（`drizzle/<NNNN>_session_sticky.sql`）—— 反转 `system_settings.affinity_ignore_client_session_id` 默认值 `true` → `false`
 - 触发器：**无需改**（`trigger.sql` 监视的三列 `affinity_scope_tag` 等保留供 F3b，但会话粘性不写它们；生产已全 NULL，改后仍全 NULL）
 - `terminal/columns.go` 的 37 列清单：**无需改**
 

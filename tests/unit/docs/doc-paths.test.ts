@@ -96,7 +96,14 @@ function extractBacktickedPaths(markdown: string): string[] {
     const raw = (match[1] ?? "").trim();
     if (!raw) continue;
     // 去掉紧贴在末尾的标点（中文顿号、逗号、句号等）。
-    const candidate = raw.replace(/[，、。；：,.;:]+$/u, "").replace(/\/+$/u, "");
+    let candidate = raw.replace(/[，、。；：,.;:]+$/u, "").replace(/\/+$/u, "");
+    // 剥掉「文件:行号」形态的行号尾（`src/foo.ts:12`、`src/foo.ts:12-34`）。
+    //
+    // 行号是引用的**精度修饰**，不是路径的一部分：文档要求「引用给 file:line」，
+    // 而 `:NN` 后缀会让 existsSync 去查一个带冒号的假路径，必然误报。剥掉之后
+    // **路径本身照旧做存在性检查**，所以对「路径写错」的钉力不降——只是不再因行号而误红。
+    // 行号是否落在文件范围内不在本测试射程内（文档是快照，行号会随代码漂移）。
+    candidate = candidate.replace(/:\d+(?:-\d+)?$/u, "");
     if (!candidate) continue;
     if (/\s/u.test(candidate)) continue; // 命令、提交信息、多词短语
     if (/[*?]/u.test(candidate)) continue; // 通配
@@ -157,6 +164,26 @@ for (const { file, markdown } of documents) {
 
 const agentsMarkdown = readFileSync(path.join(ROOT, "AGENTS.md"), "utf8");
 const mentionedPaths = extractBacktickedPaths(agentsMarkdown);
+
+describe("反引号路径提取", () => {
+  test("剥行号尾，但路径本身照旧提出（对写错路径的钉力不降）", () => {
+    expect(extractBacktickedPaths("`src/types/provider.ts:293`")).toEqual([
+      "src/types/provider.ts",
+    ]);
+    expect(extractBacktickedPaths("`drizzle/0000_x.sql:46-68`")).toEqual([
+      "drizzle/0000_x.sql",
+    ]);
+    // 关键反证：剥行号**不得**把不存在的路径变成「查不到」而静默放过——
+    // 路径仍被提取，因而仍会进存在性检查（若写进文档，就是红的）。
+    expect(extractBacktickedPaths("`src/nope/ghost.ts:12`")).toEqual([
+      "src/nope/ghost.ts",
+    ]);
+    // 行号尾之外的一切照旧：通配、占位符、URL、命令仍跳过。
+    expect(extractBacktickedPaths("`src/**/*.ts:1`")).toEqual([]);
+    expect(extractBacktickedPaths("`src/<name>.ts:1`")).toEqual([]);
+    expect(extractBacktickedPaths("`https://example.com/a.ts:1`")).toEqual([]);
+  });
+});
 
 describe("全仓文档的引用完整性", () => {
   test("解析量达标（防空跑：遍历或正则失效时不能静默变绿）", () => {
