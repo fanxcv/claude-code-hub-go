@@ -381,6 +381,14 @@ func parseSSEStream(body string) ParsedResponse {
 			// OpenAI：choices[].delta.content
 		}
 		if choices, ok := obj["choices"].([]any); ok {
+			// completeTexts 收「完整正文」形态的帧内容（choices[].message.content /
+			// choices[].text）。有的上游在流里**不发一条 delta**，只在末帧给完整 message。
+			// 漏读即把这类上游解析成空正文 ⇒ 探测误报不可用。
+			//
+			// 为何走兜底而非直接进 texts：同一段内容若既逐块发 delta 又整块发 message，
+			// 两者都进 texts 会把它算两遍（累计型上游在仓内已实证存在）。兜底只在
+			// 「一条 delta 都没收到」时生效，故对常规上游零行为变化。
+			completeTexts := make([]string, 0, len(choices))
 			for _, choice := range choices {
 				choiceMap, ok := choice.(map[string]any)
 				if !ok {
@@ -391,7 +399,21 @@ func parseSSEStream(body string) ParsedResponse {
 						texts = append(texts, content)
 					}
 				}
+				// 取值优先级与非流式分支（parseOpenAIResponse）逐字对齐：
+				// message.content 优先，空则回退 choices[].text。
+				complete := ""
+				if message, ok := choiceMap["message"].(map[string]any); ok {
+					complete, _ = message["content"].(string)
+				}
+				if complete == "" {
+					complete, _ = choiceMap["text"].(string)
+				}
+				if complete != "" {
+					completeTexts = append(completeTexts, complete)
+				}
 			}
+			// 优先级 5：低于既有四级（1~4），同一帧上后者不会被本项顶掉。
+			assignFallback(5, completeTexts)
 		}
 		// Codex：response.output_text.delta（delta 是字符串）
 		if eventType == "response.output_text.delta" {

@@ -111,6 +111,70 @@ func TestParseSSEFallbackChainWhenNoDeltas(t *testing.T) {
 	}
 }
 
+// TestParseSSECompleteMessageWithoutDeltas 钉住「流里不发 delta、只给完整正文」的上游。
+//
+// 为何必须有它：非流式分支（parseOpenAIResponse）读 choices[].message.content 与
+// choices[].text，SSE 分支此前只读 choices[].delta.content ⇒ 同一类上游在探测里被解析成
+// **空正文**，被误报为不可用。
+func TestParseSSECompleteMessageWithoutDeltas(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			"choices[].message.content",
+			"data: {\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"pong\"}}]}\n\n",
+			"pong",
+		},
+		{
+			"choices[].text",
+			"data: {\"choices\":[{\"text\":\"pong\"}]}\n\n",
+			"pong",
+		},
+		{
+			// 累计型：每帧 message 都是完整正文，取末帧（同优先级覆盖），不叠加。
+			"末帧完整 message 覆盖前帧",
+			"data: {\"choices\":[{\"message\":{\"content\":\"po\"}}]}\n\ndata: {\"choices\":[{\"message\":{\"content\":\"pong\"}}]}\n\n",
+			"pong",
+		},
+		{
+			// delta 与完整 message 并存：正文取 delta，不得把同一段内容算两遍。
+			"delta 与 message 并存不重复计数",
+			"data: {\"choices\":[{\"delta\":{\"content\":\"po\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ng\"}}]}\n\ndata: {\"choices\":[{\"message\":{\"content\":\"pong\"}}]}\n\n",
+			"pong",
+		},
+	}
+	for _, testCase := range cases {
+		parsed := ParseResponse(TypeOpenAICompatible, testCase.body, "text/event-stream")
+		if !parsed.IsStreaming {
+			t.Errorf("%s: 应判为流式", testCase.name)
+		}
+		if parsed.Content != testCase.want {
+			t.Errorf("%s: 正文应为 %q，实际 %q", testCase.name, testCase.want, parsed.Content)
+		}
+	}
+}
+
+// TestParseSSEEmptyMessageStaysEmpty 钉住空值陷阱：role 宣告帧与空 content 不得被当成正文
+// （否则会把「上游什么都没给」误判成「有有效内容」）。
+func TestParseSSEEmptyMessageStaysEmpty(t *testing.T) {
+	bodies := []string{
+		// 只有 role 的宣告帧
+		"data: {\"choices\":[{\"message\":{\"role\":\"assistant\"}}]}\n\n",
+		// content 为空串
+		"data: {\"choices\":[{\"message\":{\"content\":\"\"}}]}\n\n",
+		// role + 空 content + finish_reason，仍无正文
+		"data: {\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n",
+	}
+	for _, body := range bodies {
+		parsed := ParseResponse(TypeOpenAICompatible, body, "text/event-stream")
+		if parsed.Content != "" {
+			t.Errorf("空 message 不应产生正文，实际 %q（body=%s）", parsed.Content, body)
+		}
+	}
+}
+
 func TestParseGeminiAndRawFallback(t *testing.T) {
 	body := `{"candidates":[{"content":{"parts":[{"text":"po"},{"text":"ng"}]}}],"usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":2},"modelVersion":"gemini-2.5-flash"}`
 	parsed := ParseResponse(TypeGemini, body, "application/json")
