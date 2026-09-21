@@ -304,7 +304,9 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 					Method:       MethodSessionReuse,
 					Reason:       ReasonSelectedInitial,
 					CircuitState: s.circuitState(ctx, bound.ID),
-					timestamp:    nowMS,
+					// F3b 供数：会话粘性不写前缀键，但五列仍需指纹链纯计算的事实（设计稿裁决 C）。
+					AffinityWriteback: s.f3bCacheScoreFacts(req),
+					timestamp:         nowMS,
 				}, nil
 			}
 		}

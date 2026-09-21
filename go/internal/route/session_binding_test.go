@@ -231,3 +231,52 @@ func TestSessionIDSuppressesPrefixAffinity(t *testing.T) {
 		t.Error("跳过前缀层后不应带回 lookup")
 	}
 }
+
+// TestSessionBindingStillSuppliesF3bFacts 会话粘性短路时仍交出 F3b 事实（设计稿裁决 C）。
+//
+// 为何必须钉：F3b 五列靠指纹链**纯计算**供数，而指纹链原先只在前缀提名里算。
+// 会话绑定短路返回时若不带事实，五列全空 ⇒ 缓存效果报表失去会话粘性下的全部样本，
+// 而这条退化没有任何告警（与「写回静默失效」同型）。
+// 反证面：同一短路下 AffinityWriteback 的 store 必须为 nil——本路径**不得**写任何亲和键。
+func TestSessionBindingStillSuppliesF3bFacts(t *testing.T) {
+	bound := baseProvider(7, convert.ProviderClaude)
+	other := baseProvider(8, convert.ProviderClaude)
+	body := claudeBody(t, `{"messages": [{"role": "user", "content": "hi"}]}`)
+
+	selector := NewSelector(Options{
+		Source: &stubSource{
+			providers: []Provider{bound, other},
+			byID:      map[int64]Provider{7: bound, 8: other},
+		},
+		Affinity: NewAffinityStore(AffinityOptions{Window: 8}),
+		Rand:     (&scriptedRand{values: []float64{0}}).next,
+	})
+
+	request := sessionBindingRequest(bound.ID)
+	request.KeyID = 42
+	request.AffinityBody = body
+	result, err := selector.Select(context.Background(), request)
+	if err != nil {
+		t.Fatalf("选路失败: %v", err)
+	}
+	if result.Method != MethodSessionReuse {
+		t.Fatalf("前置条件不成立：本次应走会话绑定短路，实际 %q", result.Method)
+	}
+	if result.AffinityWriteback == nil {
+		t.Fatal("会话粘性短路必须交出 F3b 事实（否则五列全空且无告警）")
+	}
+	scopeTag, matchedFP, tipFP, tipPrefixBytes, hasTip := result.AffinityWriteback.CacheScoreFacts()
+	if scopeTag == "" {
+		t.Error("F3b 事实的 ScopeTag 不得为空")
+	}
+	if !hasTip || tipFP == "" {
+		t.Errorf("F3b 事实应有 tip 指纹（否则 theoretical_cache_tokens 会写 NULL），实得 hasTip=%v tipFP=%q", hasTip, tipFP)
+	}
+	if tipPrefixBytes <= 0 {
+		t.Errorf("F3b 事实应有正的 tip 前缀字节数，实得 %d", tipPrefixBytes)
+	}
+	// 会话粘性不看前缀，故没有「命中的指纹」；留空让 cachescore 侧回落 tip。
+	if matchedFP != "" {
+		t.Errorf("会话粘性下不应有命中的指纹，实得 %q", matchedFP)
+	}
+}

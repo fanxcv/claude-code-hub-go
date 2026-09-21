@@ -25,6 +25,34 @@ type SessionBindingSnapshot struct {
 // 与前缀亲和的差别只有「拿谁当候选」——候选一律走 validateAffinityCandidate 的全套硬校验
 // （熔断、停用、粘性 opt-out、分组、模型/格式、端点、客户端名单、活动时段、会话冷却），
 // 因此熔断中的绑定不会把会话钉死在一家坏渠道上（设计稿 §8 风险二的缓解）。
+// f3bCacheScoreFacts 为会话粘性路径供 F3b 缓存模拟列的事实。
+//
+// 为何需要它：F3b 的五列靠指纹链纯计算供数（设计稿裁决 C），而指纹链原先只在前缀提名里算。
+// 会话粘性短路返回时本不带 AffinityWriteback，五列会全空——缓存效果报表随之失去会话粘性下
+// 的全部样本。这里只做**纯本地计算**（Fingerprint 不碰 Redis），不造写回能力
+// （store 留 nil ⇒ RecordWinner / TombstoneOnFailure 均 no-op），故不会多写任何亲和键。
+//
+// 返回 nil 表示本次无法供数（未装配亲和 / 不可指纹化）——调用方照旧不写那五列。
+func (s *Selector) f3bCacheScoreFacts(req Request) *AffinityWriteback {
+	if s.opts.Affinity == nil || req.KeyID == 0 || req.AffinityBody == nil || req.Format == "" {
+		return nil
+	}
+	chain, ok := Fingerprint(req.AffinityBody, req.Format, s.opts.Affinity.window)
+	if !ok {
+		return nil
+	}
+	tip := chain.Tip()
+	return &AffinityWriteback{
+		ScopeTag: ScopeTag(req.KeyID, req.Format, req.Model),
+		TipFP:    tip.FP,
+		TipDepth: tip.Depth,
+		// 会话粘性没有「命中的指纹」（粘性不看前缀）：留空后 cachescore 侧按既有优先级
+		// 回落到 TipFingerprint 组兼容键，与设计稿 ⑤ 的描述一致。
+		MatchedFP:      "",
+		TipPrefixBytes: tip.PrefixBytes,
+	}
+}
+
 func (s *Selector) nominateBySessionBinding(
 	ctx context.Context,
 	req Request,
