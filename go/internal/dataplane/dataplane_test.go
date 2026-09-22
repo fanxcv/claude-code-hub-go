@@ -185,6 +185,19 @@ func (f *fakeSettler) settleCount() int {
 // newTestHandler 造一个不依赖数据库的数据面。
 func newTestHandler(t *testing.T, upstreamURL string, auth guard.AuthResolver) (*Handler, *fakeSettler, *fakeMessageWriter) {
 	t.Helper()
+	// 门控预留按「最坏前缀」计，预算太小会让尝试直接失败（ErrReservationExceedsBudget）。
+	// 测试用进程级默认预算，与生产装配一致（见 assemble.go 的 gate.DefaultBudget()）。
+	return newTestHandlerWithStream(t, upstreamURL, auth, forward.StreamOptions{Budget: gate.DefaultBudget()})
+}
+
+// newTestHandlerWithStream 同 newTestHandler，但允许指定流式选项（判慢探测等）。
+func newTestHandlerWithStream(
+	t *testing.T,
+	upstreamURL string,
+	auth guard.AuthResolver,
+	stream forward.StreamOptions,
+) (*Handler, *fakeSettler, *fakeMessageWriter) {
+	t.Helper()
 	dialClient, err := dial.New(dial.Options{})
 	if err != nil {
 		t.Fatalf("拨号器构造失败: %v", err)
@@ -207,11 +220,7 @@ func newTestHandler(t *testing.T, upstreamURL string, auth guard.AuthResolver) (
 			return settler
 		},
 		Forward: forward.Deps{Dial: dialClient},
-		Stream: forward.StreamOptions{
-			// 门控预留按「最坏前缀」计，预算太小会让尝试直接失败（ErrReservationExceedsBudget）。
-			// 测试用进程级默认预算，与生产装配一致（见 assemble.go 的 gate.DefaultBudget()）。
-			Budget: gate.DefaultBudget(),
-		},
+		Stream:  stream,
 	})
 	if err != nil {
 		t.Fatalf("数据面构造失败: %v", err)

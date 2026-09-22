@@ -679,6 +679,12 @@ func (h *Handler) forward(
 		// 全部尝试耗尽：终态已由 forward 的结算缝落库，这里只把最后归因翻成响应。
 		failure := errorFailure(&result.Result, err)
 		status, message := h.failoverStatusFor(requestCtx, failure)
+		// 最终失败确因判慢（所有候选都被判慢或判慢后无替代可换）：客户端仍是零字节，
+		// 改回可重试的 503 + 重试头，触发 agent 自行重试。其余失败不进这条。
+		retryResponse, slowRateAbort := slowRateRetryResponse(state, failure)
+		if slowRateAbort {
+			status = retryResponse.Status
+		}
 		// 没走到交付路径也要记归因码：否则 response.after 的 meta 会缺 statusCode，
 		// 详情页会把「失败的请求」显示成「没有响应」。
 		h.recordFailureStatus(state, status)
@@ -687,6 +693,10 @@ func (h *Handler) forward(
 		// 而不是笼统的「上游失败」——客户端据此才能分辨该退避还是该换 key。
 		if block, ok := saturationRateLimitBlock(failure); ok {
 			h.writeGuardResponse(writer, state, guard.BuildRateLimitError(block))
+			return
+		}
+		if slowRateAbort {
+			h.writeGuardResponse(writer, state, retryResponse)
 			return
 		}
 		h.writeGuardResponse(writer, state, guard.BuildError(status, message, ""))

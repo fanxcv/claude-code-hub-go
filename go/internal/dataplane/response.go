@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/forward"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/guard"
 )
@@ -277,6 +278,77 @@ func saturationRateLimitBlock(failure *forward.Failure) (guard.RateLimitBlock, b
 		Current:   float64(failure.ConcurrencyCurrent),
 		Limit:     float64(failure.ConcurrencyLimit),
 	}, true
+}
+
+// slowRateRetryMessage 是「判慢导致最终失败」时给客户端的通用文案。
+//
+// 故意只描述事实：这条正文原样交给 API 客户端，不得出现渠道名、上游 URL、IP 或凭据。
+const slowRateRetryMessage = "上游长时间无响应或速率过低，已中断本次请求，请重试"
+
+// slowRateErrorEnvelope 是判慢终局的错误信封，按入口协议取两种形状：
+//
+//	Anthropic（/v1/messages）：{"type":"error","error":{"type":"overloaded_error","message":"..."}}
+//	OpenAI（/v1/chat/completions、/v1/responses）：{"error":{"code":"server_is_overloaded","message":"..."}}
+//
+// 两家客户端会解析正文决定是否重试，故形状必须是各自协议认得的那一种；omitempty 让同一个
+// 信封产出两种形状，而不是维护两份结构。
+type slowRateErrorEnvelope struct {
+	Type  string        `json:"type,omitempty"`
+	Error slowRateRetry `json:"error"`
+}
+
+type slowRateRetry struct {
+	Type    string `json:"type,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message"`
+}
+
+// slowRateRetryResponse 把「最终失败确因判慢」翻成客户端可识别的可重试错误。
+//
+// 为什么与 failoverStatus 分开：这几个字只有在这一档才成立——判慢发生在提交前，客户端仍是
+// 零字节，状态码与头部都还可改；而「让 agent 自己重试」需要三样同时到位：5xx（取 503，
+// 不用 429——Codex 默认不重试 429）、retry-after: 0（超过 60s 的退避会被 pi 放弃）、
+// x-should-retry: true。返回 false 表示这条失败不是判慢，调用方必须走原有分支，
+// 其余失败的状态码与正文逐字不变。
+func slowRateRetryResponse(state *RequestState, failure *forward.Failure) (*guard.Response, bool) {
+	if failure == nil || failure.Category != forward.CategorySlowRate {
+		return nil, false
+	}
+	response, err := slowRateRetryBody(clientFormatOf(state), slowRateRetryMessage)
+	if err != nil {
+		// 结构固定，正常取不到错误；真有的话宁可退回通用 503 形状，也不发一份客户端解析不了的正文。
+		response = guard.BuildError(http.StatusServiceUnavailable, slowRateRetryMessage, "")
+	}
+	return response.WithHeader("retry-after", "0").WithHeader("x-should-retry", "true"), true
+}
+
+// slowRateRetryBody 按入口协议给错误体形状。
+//
+// Gemini 入口（gemini / gemini-cli）没有已核实的形状，故走通用 503 形状：状态码与两个重试头
+// 仍然到位，客户端至少能按 5xx 重试。**该形状未经验证**，见报告。
+func slowRateRetryBody(format convert.ClientFormat, message string) (*guard.Response, error) {
+	switch format {
+	case convert.FormatClaude:
+		payload := slowRateErrorEnvelope{Type: "error"}
+		payload.Error.Type = "overloaded_error"
+		payload.Error.Message = message
+		return guard.JSONResponse(http.StatusServiceUnavailable, payload)
+	case convert.FormatOpenAI, convert.FormatResponse:
+		payload := slowRateErrorEnvelope{}
+		payload.Error.Code = "server_is_overloaded"
+		payload.Error.Message = message
+		return guard.JSONResponse(http.StatusServiceUnavailable, payload)
+	default:
+		return guard.BuildError(http.StatusServiceUnavailable, message, ""), nil
+	}
+}
+
+// clientFormatOf 取本次请求的入站格式；无请求状态时返回空串（走通用形状）。
+func clientFormatOf(state *RequestState) convert.ClientFormat {
+	if state == nil {
+		return ""
+	}
+	return state.Format
 }
 
 // errorFailure 从转发的返回值里取最终归因。
