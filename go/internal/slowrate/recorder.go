@@ -318,6 +318,9 @@ func (r *Recorder) recordClean(
 	// 零流量时计数不增长、惩罚因此不被清除，但惩罚会随滑窗自然归零（样本滑出窗后读侧的
 	// 活窗计数低于阈值），最迟一个窗长——这是既有行为，不额外处理。
 	pipe.Expire(ctx, streakKey, ttl)
+	// 滑窗成员数与 INCR 同一 pipeline 取（零新增往返）：它是下面 WATCH 之内复核「期间有没有
+	// 慢样本落盘」的第二个不变式——慢样本必然 ZADD 本键，故它的成员数变了就说明有并发写。
+	samples := pipe.ZCard(ctx, windowKey)
 	if _, err := pipe.Exec(ctx); err != nil {
 		r.warn("slowrate.streak_write_failed", facts, err)
 		return
@@ -332,17 +335,27 @@ func (r *Recorder) recordClean(
 	// 渠道被**错误恢复**，直到下一条慢样本重建状态。
 	//
 	// 修法：WATCH 三个键 + 单次 MULTI。慢样本写会同时改这三个键（ZADD window / DEL streak /
-	// HSet state），故只要期间有慢样本落盘，EXEC 必失败（TxFailedErr）——此时**放弃删除**
-	// 就是正确行为：让下一个干净样本重新累计。
+	// HSet state），故「复核窗口内」有慢样本落盘时放弃删除——让下一个干净样本重新累计。
+	//
+	// 注意 WATCH 的**盲区**：它只挡它建立**之后**的写。若慢样本恰好落在「上面那条 INCR
+	// pipeline 提交」与「下面 WATCH 发出」之间，它写的三键会被 WATCH 当作基线快照纳入，
+	// DEL 于是照常提交、慢样本被抹掉。故 WATCH 之内必须再复核一次自己的 INCR 成果仍原样
+	// （见 resetAfterRecovery），单靠 WATCH 挡不住这段。
 	//
 	// 为何不引入 Lua：本修法零新文件、零新部署面（Lua 要双副本 + MANIFEST + 黄金样本对拍），
 	// 而 WATCH/MULTI 是客户端标准能力，且这段只在「连续 N 个干净样本」后走一次（非热路径）。
-	if err := r.resetAfterRecovery(ctx, facts, windowKey, stateKey, streakKey); err != nil {
+	if err := r.resetAfterRecovery(
+		ctx, facts, windowKey, stateKey, streakKey, streak.Val(), samples.Val(),
+	); err != nil {
 		r.warn("slowrate.recovery_reset_failed", facts, err)
 	}
 }
 
 // resetAfterRecovery 在事务保护下删除三个键，并把解除的降权量记入低速日志。
+//
+// expectedStreak / expectedSamples 是调用方刚由那条 INCR/ZCARD pipeline 读到的**自己的成果值**。
+// 它们必须由调用方传入而不是在这里重读：本函数进来时 WATCH 才建立，此时读到的值已经是
+// 「可能被并发慢样本改过」的快照，拿它自比恒相等、等于没复核。
 //
 // 返回 redis.TxFailedErr 表示期间有并发写入（慢样本）——调用方按 warn 记，但那是**预期**
 // 的放弃而不是故障；两种情形都不影响结算。
@@ -352,8 +365,38 @@ func (r *Recorder) resetAfterRecovery(
 	windowKey string,
 	stateKey string,
 	streakKey string,
+	expectedStreak int64,
+	expectedSamples int64,
 ) error {
 	err := r.redis.Watch(ctx, func(tx *redis.Tx) error {
+		// 复核一：连续干净计数仍是本条 INCR 刚写下的值。
+		//
+		// 为什么必须有这一步：WATCH 只挡它建立**之后**的写。慢样本若落在「INCR pipeline 提交」
+		// 与「本 WATCH 发出」之间，它 DEL 掉的 streak 会被 WATCH 当作基线快照纳入，
+		// 随后的 DEL 照常提交 ⇒ 刚落盘的那条慢样本被抹掉、渠道被错误解除降权，
+		// 且证据一并销毁。读到的值与预期不等（或键已不在，读到 redis.Nil）即判定有并发写。
+		current, err := tx.Get(ctx, streakKey).Int64()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return err
+		}
+		if errors.Is(err, redis.Nil) || current != expectedStreak {
+			// 预期内的放弃：不计故障、不记 warn（下一个干净样本会重新累计）。
+			return nil
+		}
+		// 复核二：滑窗成员数也没变。
+		//
+		// 为什么还需要第二个不变式：慢样本对 streak 的写法是 DEL，而另一条并发**干净**样本
+		// 会让 streak 从 N 涨到 N+1（不等于预期，复核一已能拦）。真正的剩余盲区是
+		// 「慢样本 DEL 之后紧接另一条干净样本 INCR 回同一个 N」（N=1 时最容易凑），
+		// 此时复核一会误判相等。而慢样本必 ZADD 本键，故成员数比预期多了就说明期间有慢样本。
+		// 注：并发**干净**样本不会加成员（干净样本不写滑窗），故本条不误伤正常路径。
+		count, err := tx.ZCard(ctx, windowKey).Result()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return err
+		}
+		if count != expectedSamples {
+			return nil
+		}
 		// 旧惩罚值在事务**之外**读、WATCH **之内**取：WATCH 保证读到之后再无并发写，
 		// 故这个值就是本次删除真正解除掉的那个。
 		previousRaw := tx.HGet(ctx, stateKey, StateFieldPenalty).Val()
