@@ -273,7 +273,7 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 		"enteredAt", at,
 	)
 	statePipe.Expire(ctx, stateKey, ttl)
-	if _, err := statePipe.Exec(ctx); err != nil {
+	if _, err := statePipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
 		r.warn("slowrate.state_write_failed", facts, err)
 		return
 	}

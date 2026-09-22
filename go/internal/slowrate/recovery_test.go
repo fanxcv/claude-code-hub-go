@@ -10,6 +10,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
 )
 
 // 本文件钉住恢复策略（用户 2026-09-22 需求）：连续 N 个**可判定样本**都不慢，即重置该组合的
@@ -359,4 +360,39 @@ func TestRecoveryLeavesSessionCooldown(t *testing.T) {
 	if !h.exists(cooldown) {
 		t.Fatal("重置不应清会话冷却键（已知残留：键含会话身份无法枚举，等 60 秒 TTL）")
 	}
+}
+
+// TestFirstThresholdCrossingRecordsPenaltyUpLog 钉住「首次跨阈」那一档的升档日志确实落盘。
+//
+// 为什么单独立一条：慢分支的 state pipeline 里 HGet（取旧惩罚值）在**首次**跨阈时必然未命中，
+// go-redis 的 pipeline Exec 会因此返回 redis.Nil；若把它当致命错误提前返回，首次跨阈会静默丢掉
+// 三件事——会话冷却键、升档日志、并被误报一条 state_write_failed。冷却键已由
+// TestRecoveryLeavesSessionCooldown 钉住，本用例钉日志这一面（它是用户在弹窗里最该看到的一条）。
+func TestFirstThresholdCrossingRecordsPenaltyUpLog(t *testing.T) {
+	// N 取大值，避免恢复策略在三次样本内就把状态清掉。
+	h := newRecoveryHarness(t, 9105, 10)
+	ctx := context.Background()
+	slow := h.slowFactsFor(501)
+	for i := int64(1); i <= 3; i++ {
+		facts := slow
+		facts.RequestID = 500 + i
+		h.recorder.Record(ctx, facts)
+	}
+	events, err := slowlog.NewReader(h.client, nil).Recent(ctx, h.provider, 10)
+	if err != nil {
+		t.Fatalf("读低速日志失败: %v", err)
+	}
+	for _, event := range events {
+		if event.Kind != slowlog.KindPenaltyUp {
+			continue
+		}
+		if event.PenaltyFrom == nil || event.PenaltyTo == nil {
+			t.Fatalf("升档事件应带前后值: %+v", event)
+		}
+		if *event.PenaltyFrom != 0 || *event.PenaltyTo != 10 {
+			t.Fatalf("首次跨阈应为 0 -> 10，得到 %d -> %d", *event.PenaltyFrom, *event.PenaltyTo)
+		}
+		return
+	}
+	t.Fatalf("首次跨阈应记一条 penalty_up 日志，实际 %d 条事件: %+v", len(events), events)
 }
