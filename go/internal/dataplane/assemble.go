@@ -333,7 +333,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		// 故进程被杀后的残留最长留 1 小时（与 Node 同形）。
 		providerConcurrency = &providerConcurrencyGate{
 			tracker:         limit.NewSessionTracker(scriptClient, 0, logger),
-			trackingEnabled: options.ProviderConcurrencyTracking,
+			trackingEnabled: providerConcurrencyTrackingFor(options, adapters.Settings),
 			logger:          logger,
 		}
 		binder := session.NewBinder(scriptClient)
@@ -866,5 +866,38 @@ func affinitySwitchesFor(options StoreOptions, settings guard.SettingsSource) fu
 			Enabled:     envEnabled || snapshot.AffinityEnabled,
 			ForcePrefix: snapshot.AffinityIgnoreClientSessionID,
 		}
+	}
+}
+
+// providerConcurrencyTrackingFor 给出逐请求读「供应商并发统计」显示面开关的注入缝。
+//
+// 它**只管页面是否显示并发数**（以及前端是否 5s 轮询），**不管执法**：执法只看渠道自己
+// 有没有设并发上限（见 provider_concurrency.go 的 acquire 闸门说明）。
+//
+// 为什么逐请求读：构造期快照会让「管理面返回 200 且广播失效、运行中的读写侧却不变」
+// （affinityIgnoreClientSessionId 踩过这个坑，见上一条注释）。
+// 读的是 cfgsync 的 system_settings 快照（60s TTL + 失效广播），不是每请求一次真库查询
+// ——与 affinitySwitchesFor、wsEligibility 同一手法；管理面 PUT 会发
+// cfgsync.DomainSystemSettings 失效，故改完下一次请求即生效。
+//
+// 读取失败时按**关**处理（fail-closed 到「不登记显示用的计数」）：统计是可选增值面，
+// 读不到开关时宁可不报数——与 admin 展示侧 providers_health.go 的同名读取同一口径。
+// 它**不影响执法**：配了上限的渠道照常判定（那条闸门看的是 providerLimit > 0）。
+func providerConcurrencyTrackingFor(
+	options StoreOptions,
+	settings guard.SettingsSource,
+) func(context.Context) bool {
+	if options.ProviderConcurrencyTracking != nil {
+		return options.ProviderConcurrencyTracking
+	}
+	return func(ctx context.Context) bool {
+		if settings == nil {
+			return false
+		}
+		snapshot, err := settings.FindSystemSettings(ctx)
+		if err != nil || snapshot == nil {
+			return false
+		}
+		return snapshot.ProviderLiveStatsEnabled
 	}
 }

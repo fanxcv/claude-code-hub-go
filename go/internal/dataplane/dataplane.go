@@ -268,16 +268,16 @@ type Options struct {
 	// 而「已交付客户端但终态未落库」的计数必须等到队列 flush 完成才能归零——
 	// 退出序列正是靠它判断能否安全关连接池。
 	SettlementBarrier SettlementBarrier
-	// ProviderConcurrencyTracking 是全局并发统计开关（逐请求调用）。
+	// ProviderConcurrencyTracking 是「供应商并发统计」的**显示面开关**（逐请求调用）。
 	//
-	// 期望接线（给 leader 合并对齐）：读 `system_settings` 的
-	// `concurrency_tracking_enabled boolean NOT NULL DEFAULT false` 列
-	// （Go 侧 `store.SystemSettings.ConcurrencyTrackingEnabled *bool`，json tag 同名），
-	// 逐请求经 cfgsync 的 system_settings 快照——手法照 assemble.go 的 affinitySwitchesFor。
+	// 已接线：读 `system_settings.provider_live_stats_enabled boolean NOT NULL DEFAULT false`
+	// （Go 侧 `store.SystemSettings.ProviderLiveStatsEnabled`），逐请求经 cfgsync 的
+	// system_settings 快照——手法照 assemble.go 的 affinitySwitchesFor，见
+	// providerConcurrencyTrackingFor。nil 表示未接线（或调用方显式注入替身）。
 	//
-	// nil 表示未接线：**统计**整段跳过（零 Redis 命令）。但**上限判定不受它约束**——
-	// 配了 providers.limit_concurrent_sessions 的渠道照常判定（见 provider_concurrency.go
-	// 的 acquire 闸门说明：把判定挂在展示面开关上，会让「配了上限」继续不生效）。
+	// 它**只管页面是否显示并发数**（以及前端是否 5s 轮询），**不管执法**：执法只取决于
+	// 渠道自己有没有设 providers.limit_concurrent_sessions（见 provider_concurrency.go
+	// 的 acquire 闸门说明）。
 	ProviderConcurrencyTracking func(ctx context.Context) bool
 	// providerConcurrency 由本包装配（见 assemble）：nil 表示未接线，转发层整段跳过。
 	providerConcurrency *providerConcurrencyGate
@@ -621,7 +621,8 @@ func (h *Handler) forward(
 	}
 	fwd.Facts = h.planFacts(pc, spec, body)
 	// 供应商并发名额的登记缝（每请求一份：会话身份是每请求事实）。
-	// 未接线时为 nil，forward 整段跳过——「关上零开销」在这一行上成立。
+	// 未接线时为 nil，forward 整段跳过；**不按统计开关短路**——执法与开关无关，
+	// 而这里还不知道本次会落到哪家（见 provider_concurrencyForRequest 的注释）。
 	fwd.ProviderInFlight = h.providerConcurrencyForRequest(state)
 	// 整流器审计的落点：与 responses `input` 归一共用同一份条目集合，终态一次追加（见
 	// specialSettingsAppendEntries）。用回调而不是让 forward 依赖请求状态，保持转发层

@@ -41,6 +41,9 @@ type providerConcurrencyGate struct {
 	//
 	// 为什么必须逐请求读而不是构造期快照：构造期快照会让「管理面改了开关、进程重启才生效」，
 	// 而本仓对同类开关（affinitySwitchesFor / wsEligibility）已定下逐请求读的口径。
+	//
+	// 它**只管统计（页面显示）**，不管执法：执法只看渠道自己有没有设并发数
+	// （见 acquire 的闸门说明）。故它关着也不会让「配了上限的渠道」漏判。
 	trackingEnabled func(ctx context.Context) bool
 	logger          *logx.Logger
 }
@@ -59,12 +62,17 @@ func (g *providerConcurrencyGate) inFlight(
 
 // acquire 登记一次在飞占用，并按上限判定是否放行。
 //
-// 闸门（两条都不满足时**连一次 Redis 命令都不发**，这是「关上零开销」的判据）：
+// 闸门（两条都不满足时**连一次 Redis 命令都不发**）：
 //
-//  1. 该渠道配了并发上限（providerLimit > 0）——必须判定。「配了上限就要生效」是用户
-//     本次问的第一件事，把判定挂在**展示面**的统计开关上会让它继续不生效。
+//  1. 该渠道配了并发上限（providerLimit > 0）——**必须判定，与统计开关无关**。
+//     执法只取决于渠道自己有没有设并发数（用户 2026-09-22 明确：「渠道设置大于 0 的并发数，
+//     就需要控制这个渠道的并发情况，跟我开不开统计开关有啥关系」）。把判定挂在展示面开关上
+//     会让「配了上限」继续不生效——那正是本次要修的 bug。
 //  2. 全局统计开关开启——必须登记，但**不判上限**（Lua 的 `limit > 0` 闸门关着）：
-//     这是「打开才统计显示」的那一半。
+//     这一半纯粹为页面显示（读面四态与前端 5s 轮询都由它门控）。
+//
+// 故「关上完全不占用资源」的准确含义：**没有任何渠道设上限**且开关关着时零 Redis 命令、
+// 零 429、页面不显示；而只要某渠道设了上限，执法所必需的那次登记照发（开关状态不影响）。
 //
 // 判定与统计共用同一次 Lua 调用（check-and-track-session.lua 本来就是「检查 + 追踪」一体），
 // 故两者不会互相放大开销。
@@ -129,6 +137,9 @@ func (g *providerConcurrencyGate) release(providerID int64, sessionID string) {
 }
 
 // providerConcurrencyForRequest 取本请求的登记缝；未接线时返回 nil（forward 整段跳过）。
+//
+// 为何不能在这里按统计开关短路：执法与开关无关（见 acquire 的闸门说明），而本函数只知道
+// 「本请求」、不知道「本次会落到哪家渠道配没配上限」——在这里跳过会让配了上限的渠道漏判。
 func (h *Handler) providerConcurrencyForRequest(state *RequestState) func(context.Context, int64, int) forward.ProviderInFlightResult {
 	gate := h.options.providerConcurrency
 	if gate == nil {

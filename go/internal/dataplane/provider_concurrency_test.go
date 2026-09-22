@@ -16,7 +16,10 @@ import (
 
 // 本文件钉住并发名额缝的**闸门**与**上限判定**语义：
 // 两条闸门都不满足时连一条 Redis 命令都不发（「关上零开销」的判据），
-// 而配了上限的渠道即使统计关着也必须判定（否则「设了上限不生效」这个 bug 会原样留下）。
+// 而配了上限的渠道**即使统计开关关着也必须判定**——执法只看渠道自己有没有设并发数，
+// 与显示面开关无关（否则「设了上限不生效」这个 bug 会原样留下）。
+//
+// 开关只管显示面的那一半、以及装配行本身，见 provider_concurrency_switch_test.go。
 
 const testRedisEnv = "CCH_TEST_REDIS_URL"
 
@@ -56,8 +59,13 @@ func (h *countingHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis
 	}
 }
 
+// alwaysTrackingEnabled 是「开关恒开」的替身：真开关的逐请求读由
+// providerConcurrencyTrackingFor 的用例覆盖，开关翻转由 switch flips 用例覆盖。
+func alwaysTrackingEnabled(context.Context) bool { return true }
+
 // unreachableGate 造一个指向不可达地址的 gate：命令会被计数，但一条都到不了 Redis。
-func unreachableGate(t *testing.T, switchOn bool) (*providerConcurrencyGate, *countingHook) {
+// switchFn 为 nil 表示「未接线或开关关闭」。
+func unreachableGate(t *testing.T, switchFn func(context.Context) bool) (*providerConcurrencyGate, *countingHook) {
 	t.Helper()
 	hook := &countingHook{}
 	rdb := redis.NewClient(&redis.Options{
@@ -77,13 +85,9 @@ func unreachableGate(t *testing.T, switchOn bool) (*providerConcurrencyGate, *co
 	if err != nil {
 		t.Fatalf("组装脚本调用层失败: %v", err)
 	}
-	var enabled func(context.Context) bool
-	if switchOn {
-		enabled = func(context.Context) bool { return true }
-	}
 	return &providerConcurrencyGate{
 		tracker:         limit.NewSessionTracker(client, 0, nil),
-		trackingEnabled: enabled,
+		trackingEnabled: switchFn,
 		logger:          logx.New(nil),
 	}, hook
 }
@@ -91,7 +95,7 @@ func unreachableGate(t *testing.T, switchOn bool) (*providerConcurrencyGate, *co
 // TestProviderConcurrencyGateMakesZeroRedisCallsWhenDisabled 是零开销闸门的主判据：
 // 既没开统计、渠道也没配上限时，一条 Redis 命令都不该发。
 func TestProviderConcurrencyGateMakesZeroRedisCallsWhenDisabled(t *testing.T) {
-	gate, hook := unreachableGate(t, false)
+	gate, hook := unreachableGate(t, nil)
 	result := gate.acquire(context.Background(), 167, 0, "sess-1")
 	if !result.Allowed {
 		t.Fatal("未接线时应放行")
@@ -107,7 +111,7 @@ func TestProviderConcurrencyGateMakesZeroRedisCallsWhenDisabled(t *testing.T) {
 // TestProviderConcurrencyGateTracksWithoutLimitWhenSwitchOn：统计开关打开时，
 // 即使渠道没配上限也要登记（Lua 的 limit<=0 分支只登记不拒绝）。
 func TestProviderConcurrencyGateTracksWithoutLimitWhenSwitchOn(t *testing.T) {
-	gate, hook := unreachableGate(t, true)
+	gate, hook := unreachableGate(t, alwaysTrackingEnabled)
 	result := gate.acquire(context.Background(), 167, 0, "sess-1")
 	if !result.Allowed {
 		t.Fatal("Redis 不可达时必须 Fail Open（放行）")
@@ -118,9 +122,12 @@ func TestProviderConcurrencyGateTracksWithoutLimitWhenSwitchOn(t *testing.T) {
 }
 
 // TestProviderConcurrencyGateEnforcesLimitWithoutSwitch：配了上限就必须判定，
-// 与展示面的统计开关无关——「设了上限不生效」正是本次要修的 bug。
+// 与显示面的统计开关无关——「设了上限不生效」正是本次要修的 bug。
+//
+// 用户口径（2026-09-22）：「渠道设置大于 0 的并发数，就需要控制这个渠道的并发情况，
+// 跟我开不开统计开关有啥关系」。
 func TestProviderConcurrencyGateEnforcesLimitWithoutSwitch(t *testing.T) {
-	gate, hook := unreachableGate(t, false)
+	gate, hook := unreachableGate(t, nil)
 	result := gate.acquire(context.Background(), 167, 20, "sess-1")
 	if !result.Allowed {
 		t.Fatal("Redis 不可达时必须 Fail Open（放行）")
@@ -133,7 +140,7 @@ func TestProviderConcurrencyGateEnforcesLimitWithoutSwitch(t *testing.T) {
 // TestProviderConcurrencyGateSkipsRequestsWithoutSession：无会话身份的请求不占名额
 // （名额按会话计，空身份会把所有这类请求压成同一个成员，造成假满）。
 func TestProviderConcurrencyGateSkipsRequestsWithoutSession(t *testing.T) {
-	gate, hook := unreachableGate(t, true)
+	gate, hook := unreachableGate(t, alwaysTrackingEnabled)
 	for _, sessionID := range []string{"", " "} {
 		result := gate.acquire(context.Background(), 167, 20, sessionID)
 		if !result.Allowed {
@@ -169,8 +176,9 @@ func TestProviderConcurrencyGateAgainstRealRedis(t *testing.T) {
 		t.Fatalf("组装脚本调用层失败: %v", err)
 	}
 	gate := &providerConcurrencyGate{
-		tracker: limit.NewSessionTracker(client, 0, nil),
-		logger:  logx.New(nil),
+		tracker:         limit.NewSessionTracker(client, 0, nil),
+		trackingEnabled: alwaysTrackingEnabled,
+		logger:          logx.New(nil),
 	}
 
 	const providerID = int64(900001)
@@ -245,7 +253,11 @@ func TestProviderConcurrencyReleaseIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("组装脚本调用层失败: %v", err)
 	}
-	gate := &providerConcurrencyGate{tracker: limit.NewSessionTracker(client, 0, nil), logger: logx.New(nil)}
+	gate := &providerConcurrencyGate{
+		tracker:         limit.NewSessionTracker(client, 0, nil),
+		trackingEnabled: alwaysTrackingEnabled,
+		logger:          logx.New(nil),
+	}
 
 	const providerID = int64(900002)
 	ctx := context.Background()
