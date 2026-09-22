@@ -158,7 +158,7 @@ func TestStateFieldNamesMirrorWriteSide(t *testing.T) {
 		readSide  string
 	}{
 		{"penalty", slowrate.StateFieldPenalty, route.SlowRateStateFieldPenalty},
-		{"windowSeconds", slowrate.StateFieldWindowSeconds, route.SlowRateStateFieldWindowSeconds},
+		{"windowMinutes", slowrate.StateFieldWindowMinutes, route.SlowRateStateFieldWindowMinutes},
 		{"triggerCount", slowrate.StateFieldTriggerCount, route.SlowRateStateFieldTriggerCount},
 		{"penaltyStep", slowrate.StateFieldPenaltyStep, route.SlowRateStateFieldPenaltyStep},
 		{"penaltyMax", slowrate.StateFieldPenaltyMax, route.SlowRateStateFieldPenaltyMax},

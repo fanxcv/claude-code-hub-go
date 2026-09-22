@@ -42,9 +42,17 @@ type Facts struct {
 
 // Params 是一个渠道生效的低速监控参数（渠道覆写优先，缺省取 DefaultParams）。
 type Params struct {
-	WindowSeconds   int
-	TriggerCount    int
-	RatioPerMille   int
+	// WindowMinutes 是**判定滑窗**的分钟数（列 slow_rate_window_minutes）。
+	//
+	// 为何是分钟：用户 2026-09-22 裁决该单位由秒改分钟——运维调参时说的都是「30 分钟」
+	// 而不是「1800 秒」。旧列 slow_rate_window_seconds 已废弃（见 0134 迁移）。
+	WindowMinutes int
+	TriggerCount  int
+	// Ratio 是低速系数（列 slow_rate_ratio，numeric(5,4)），**0-1 小数**。
+	//
+	// 为何是小数：旧列 slow_rate_ratio_per_mille 存千分比整数（300 = 0.3），
+	// 用户 2026-09-22 裁决改为 0-1 小数（默认 0.3）——与设计稿 §3 的写法一致。
+	Ratio           float64
 	PenaltyStep     int
 	PenaltyMax      int
 	CooldownSeconds int
@@ -57,17 +65,17 @@ type Params struct {
 // 它与 slow_rate_min_samples（**基线样本下限**，默认 100，只由 B3 基线定时任务读，
 // 决定能否发布基线）是两件事，故拆作两列；本包只读前者。
 //
-// WindowSeconds 是**判定滑窗**（30 分钟），与基线主窗（slow_rate_baseline_window_seconds，
+// WindowMinutes 是**判定滑窗**（默认 30 分钟），与基线主窗（slow_rate_baseline_window_days，
 // 默认 3 天）不同尺度。用户 2026-09-21 定的取值：判定窗 30 分钟、系数 0.3。
 func DefaultParams() Params {
 	return Params{
-		WindowSeconds: 1800,
+		WindowMinutes: 30,
 		// 触发阈值：窗内低速达到 3 条即进一档（设计稿 §5 / §6）。
 		TriggerCount: 3,
-		// 系数 0.3：速率低于基线的 30% 即算低速（1000 为千分比满值）。
-		RatioPerMille: 300,
-		PenaltyStep:   10,
-		PenaltyMax:    30,
+		// 系数 0.3：速率低于基线的 30% 即算低速（0-1 小数）。
+		Ratio:       0.3,
+		PenaltyStep: 10,
+		PenaltyMax:  30,
 		// 冷却期不在 providers 表里（表内没有它），故取常量。
 		CooldownSeconds: 60,
 	}
@@ -76,14 +84,17 @@ func DefaultParams() Params {
 // normalize 把零值与越界值收敛到可用区间：渠道列可空，NULL 即取出厂默认。
 func (p Params) normalize() Params {
 	def := DefaultParams()
-	if p.WindowSeconds <= 0 {
-		p.WindowSeconds = def.WindowSeconds
+	if p.WindowMinutes <= 0 {
+		p.WindowMinutes = def.WindowMinutes
 	}
 	if p.TriggerCount <= 0 {
 		p.TriggerCount = def.TriggerCount
 	}
-	if p.RatioPerMille <= 0 {
-		p.RatioPerMille = def.RatioPerMille
+	// 系数的闸门写成**正向合取**而不是 `<= 0`：小数域里 0 是合法下界、1 是合法上界，
+	// 而 NaN 与任何值比较都为假——用 `<= 0` 会漏掉 NaN（它既非 >0 也非 <=0 的比较结果），
+	// 让 NaN 一路乘进低速线，使判定静默恒假（永不标慢）。正向写法把 NaN 与越界一并收敛。
+	if !(p.Ratio > 0 && p.Ratio <= 1) {
+		p.Ratio = def.Ratio
 	}
 	if p.PenaltyStep <= 0 {
 		p.PenaltyStep = def.PenaltyStep
@@ -189,8 +200,8 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 	windowKey := samplesKey(facts.ProviderID, facts.ModelKey)
 	stateKey := stateKey(facts.ProviderID, facts.ModelKey)
 	at := r.now().UnixMilli()
-	windowMS := int64(params.WindowSeconds) * 1000
-	ttl := time.Duration(params.WindowSeconds*2) * time.Second
+	windowMS := int64(params.WindowMinutes) * 60 * 1000
+	ttl := time.Duration(params.WindowMinutes*2) * time.Minute
 
 	pipe := r.redis.Pipeline()
 	pipe.ZAdd(ctx, windowKey, redis.Z{Score: float64(at), Member: strconv.FormatInt(facts.RequestID, 10)})
@@ -222,7 +233,7 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 	statePipe := r.redis.Pipeline()
 	statePipe.HSet(ctx, stateKey,
 		StateFieldPenalty, penalty,
-		StateFieldWindowSeconds, params.WindowSeconds,
+		StateFieldWindowMinutes, params.WindowMinutes,
 		StateFieldTriggerCount, params.TriggerCount,
 		StateFieldPenaltyStep, params.PenaltyStep,
 		StateFieldPenaltyMax, params.PenaltyMax,
@@ -306,8 +317,11 @@ func generationRate(facts Facts) (float64, bool) {
 }
 
 // isSlow 判定速率是否低于低速线（基线 × 系数）。
+//
+// 系数是 0-1 小数（见 Params.Ratio），故直接相乘、不除 1000。**它与 jobs 包算低速线的那处
+// 各写一遍，改单位时必须同时改**（两边都是 `基线 × 系数`，只改一处会让低速线差 1000 倍且静默）。
 func isSlow(rate, baseline float64, params Params) bool {
-	return rate < baseline*float64(params.RatioPerMille)/1000
+	return rate < baseline*params.Ratio
 }
 
 func (r *Recorder) warn(event string, facts Facts, err error) {
@@ -333,9 +347,13 @@ func scopeTag(providerID int64, modelKey string) string {
 // 由 route_test 的镜像钉子（slowrate_keys_mirror_test.go）逐字比对——改这里必改那里。
 //
 // 后四项是**生效参数**（已应用渠道覆写），读侧据它们把滑窗计数折成惩罚。
+//
+// 窗长字段是**分钟**（与 Params.WindowMinutes 同单位）：它是随状态一起落的瞬时缓存，
+// 状态键 TTL 只有 2 倍窗长，故改名不需要迁移；旧字段窗口期内的状态键会被读侧判成
+// 「参数缺失」而回退读快照（fail-open），上限一个 TTL。
 const (
 	StateFieldPenalty       = "penalty"
-	StateFieldWindowSeconds = "windowSeconds"
+	StateFieldWindowMinutes = "windowMinutes"
 	StateFieldTriggerCount  = "triggerCount"
 	StateFieldPenaltyStep   = "penaltyStep"
 	StateFieldPenaltyMax    = "penaltyMax"

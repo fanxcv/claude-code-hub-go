@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 // 本文件钉住 slow_rate_window_seconds 的**一列两语义**缺陷修复（2026-09-21，方案 A）。
 //
 // 缺陷形态：该列同时被两处按不同尺度读——
-//   - B2 判定滑窗（slowrate.DefaultParams().WindowSeconds，分钟级）；
+//   - B2 判定滑窗（slowrate.DefaultParams().WindowMinutes，分钟级）；
 //   - B3 基线主窗 W1（本包，天级）。
 //
 // 用户把 wb 的 slow_rate_window_seconds 设成 1800（本意「统计窗口 30 分钟」），B3 便改按
@@ -20,39 +21,43 @@ import (
 // 修法：新增 slow_rate_baseline_window_seconds 专供 B3，判定滑窗仍走原列。本文件钉住
 // 「B3 只看基线列」这一条，因为它是本次缺陷能被静默放过的地方：两列都叫 window，读错了
 // 功能照跑、测试照绿（历史上就是这么漏过去的）。
+//
+// 2026-09-22 单位拆分（用户裁决）：判定窗改**分钟**（slow_rate_window_minutes）、
+// 基线窗改**天**（slow_rate_baseline_window_days）。拆列的本意不变，只是列名与单位对齐了
+// 名字与语义——旧名都带 `_seconds` 却各自不同尺度，正是本条缺陷的根源之一。
 
 // TestBaselineWindowIgnoresSamplingWindow 是本次缺陷的**直接回归**。
 //
-// 变异反证：把 groupProviderConfigsByWindow 改回读 config.WindowSeconds → 本用例必红。
+// 变异反证：把 groupProviderConfigsByWindow 改回读 config.WindowMinutes → 本用例必红。
 func TestBaselineWindowIgnoresSamplingWindow(t *testing.T) {
-	// 判定滑窗给一个「不像默认」的值：1800s（生产 wb 的实际取值，本意 30 分钟统计窗）。
-	samplingOnly := 1800
-	// 基线窗给另一个明确值：7200s（2 小时）。
-	baselineOnly := 7200
+	// 判定滑窗给一个「不像默认」的值：30（分钟，生产 wb 的实际取值）。
+	samplingOnly := 30
+	// 基线窗给另一个明确值：2（天）。
+	baselineOnly := 2
 
 	configs := []store.SlowRateProviderConfig{
 		// 这条只设了判定滑窗：基线窗未设 ⇒ 必须落**默认 3 天**那组，
-		// 绝不能因 1800 而落进 1800 那组（那就是缺陷本身）。
-		{ProviderID: 1, WindowSeconds: &samplingOnly},
-		// 这条只设了基线窗：必须落 7200 那组。
-		{ProviderID: 2, BaselineWindowSeconds: &baselineOnly},
+		// 绝不能因 30 而落进 30 那组（那就是缺陷本身）。
+		{ProviderID: 1, WindowMinutes: &samplingOnly},
+		// 这条只设了基线窗：必须落 2 那组。
+		{ProviderID: 2, BaselineWindowDays: &baselineOnly},
 	}
 	groups := groupProviderConfigsByWindow(configs)
 
-	defaultWindow := int(slowRateBaselineW1Span / time.Second)
+	defaultWindow := slowRateBaselineW1Days
 	if len(groups) != 2 {
-		t.Fatalf("应分成 2 组（默认天级 + 7200s），实得 %d 组：%v", len(groups), groups)
+		t.Fatalf("应分成 2 组（默认天级 + 2 天），实得 %d 组：%v", len(groups), groups)
 	}
 
 	if got := groups[defaultWindow]; len(got) != 1 || got[0].ProviderID != 1 {
-		t.Fatalf("只设判定滑窗(1800) 的渠道应落默认窗(%ds)那组，实得 %v", defaultWindow, got)
+		t.Fatalf("只设判定滑窗(30) 的渠道应落默认窗(%d 天)那组，实得 %v", defaultWindow, got)
 	}
 	if got := groups[baselineOnly]; len(got) != 1 || got[0].ProviderID != 2 {
-		t.Fatalf("设基线窗(7200) 的渠道应落 7200 组，实得 %v", got)
+		t.Fatalf("设基线窗(2 天) 的渠道应落 2 组，实得 %v", got)
 	}
-	// 反面：绝不允许出现「按判定滑窗 1800 分组」的组。
+	// 反面：绝不允许出现「按判定滑窗 30 分组」的组。
 	if _, exists := groups[samplingOnly]; exists {
-		t.Fatalf("出现了按判定滑窗(%d) 分组的组：B3 又在读 slow_rate_window_seconds 了（本次缺陷复发）", samplingOnly)
+		t.Fatalf("出现了按判定滑窗(%d) 分组的组：B3 又在读判定窗列了（本次缺陷复发）", samplingOnly)
 	}
 }
 
@@ -60,9 +65,9 @@ func TestBaselineWindowIgnoresSamplingWindow(t *testing.T) {
 //
 // 与上面互补：上面钉「分组用哪列」，这里钉「跨度算出来是多大」——两处都读对才算修好。
 func TestEffectiveW1SpanTakesBaselineValue(t *testing.T) {
-	twoHours := 7200
-	if got := effectiveW1Span(twoHours); got != 2*time.Hour {
-		t.Fatalf("effectiveW1Span(%d) = %v，期望 2h", twoHours, got)
+	twoDays := 2
+	if got := effectiveW1Span(twoDays); got != 48*time.Hour {
+		t.Fatalf("effectiveW1Span(%d) = %v，期望 48h", twoDays, got)
 	}
 	// nil / 非正一律回落默认 3 天（与「没设」同义）。
 	for _, zero := range []int{0, -1} {
@@ -72,26 +77,33 @@ func TestEffectiveW1SpanTakesBaselineValue(t *testing.T) {
 	}
 	// 非正基线窗列也要回落默认（NULL 与 0 是「没设」的等价写法）。
 	zero := 0
-	groups := groupProviderConfigsByWindow([]store.SlowRateProviderConfig{{ProviderID: 9, BaselineWindowSeconds: &zero}})
-	defaultWindow := int(slowRateBaselineW1Span / time.Second)
+	groups := groupProviderConfigsByWindow([]store.SlowRateProviderConfig{{ProviderID: 9, BaselineWindowDays: &zero}})
+	defaultWindow := slowRateBaselineW1Days
 	if len(groups[defaultWindow]) != 1 {
 		t.Fatalf("基线窗 0 应回落默认窗，实得 %v", groups)
 	}
 }
 
-// TestBaselineDefaultRatioPerMilleIsThreeTenths 钉住系数默认值（用户 2026-09-21 定 0.3）。
-func TestBaselineDefaultRatioPerMilleIsThreeTenths(t *testing.T) {
-	if slowRateBaselineDefaultRatioPerMille != 300 {
-		t.Fatalf("低速线系数默认 %d，应为 300（0.3）", slowRateBaselineDefaultRatioPerMille)
+// TestBaselineDefaultRatioIsThreeTenths 钉住系数默认值（用户 2026-09-21 定 0.3；
+// 2026-09-22 由千分比改为 0-1 小数）。
+func TestBaselineDefaultRatioIsThreeTenths(t *testing.T) {
+	if slowRateBaselineDefaultRatio != 0.3 {
+		t.Fatalf("低速线系数默认 %v，应为 0.3", slowRateBaselineDefaultRatio)
 	}
 	// 回落路径要用的是**新**默认，不是旧字面量。
-	if got := effectiveRatioPerMille(nil); got != 300 {
-		t.Fatalf("effectiveRatioPerMille(nil) = %d，应为 300", got)
+	if got := effectiveRatio(nil); got != 0.3 {
+		t.Fatalf("effectiveRatio(nil) = %v，应为 0.3", got)
 	}
 	// 逐渠道覆写仍优先。
-	custom := 250
-	if got := effectiveRatioPerMille(&custom); got != 250 {
-		t.Fatalf("effectiveRatioPerMille(&250) = %d，覆写未生效", got)
+	custom := 0.25
+	if got := effectiveRatio(&custom); got != 0.25 {
+		t.Fatalf("effectiveRatio(&0.25) = %v，覆写未生效", got)
+	}
+	// 非法值（0 / 负 / >1 / NaN）一律回落默认，防 NaN 绕过比较。
+	for _, invalid := range []float64{0, -0.5, 1.5, math.NaN()} {
+		if got := effectiveRatio(&invalid); got != 0.3 {
+			t.Fatalf("effectiveRatio(&%v) = %v，应回落 0.3", invalid, got)
+		}
 	}
 	// 低速线 = 中位数 × 系数：400 × 0.3 = 120。
 	if got := SlowLine(400, 0); got != 120 {

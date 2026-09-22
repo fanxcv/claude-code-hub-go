@@ -112,6 +112,7 @@ func TestProviderSummaryCarriesSlowRateColumns(t *testing.T) {
 
 	required := []string{
 		"slowRateMonitorEnabled",
+		// 字段名沿旧（用户 2026-09-22 裁决），只是值改存新单位。
 		"slowRateWindowSeconds",
 		"slowRateBaselineWindowSeconds",
 		"slowRateMinSamples",
@@ -119,6 +120,7 @@ func TestProviderSummaryCarriesSlowRateColumns(t *testing.T) {
 		"slowRateRatioPerMille",
 		"slowRatePenaltyStep",
 		"slowRatePenaltyMax",
+		"slowRateRecoveryRequests",
 		// 首字后停滞探测阈值（0130）：与上面七列同一条链，同样必须出现在响应里。
 		"slowRateProbeAfterFirstByteSeconds",
 	}

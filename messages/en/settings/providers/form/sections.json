@@ -498,14 +498,14 @@
         "desc": "Samples and demotion apply only to providers with this on."
       },
       "windowSeconds": {
-        "label": "Sampling window (seconds)",
-        "desc": "Sliding window used for judging: demotion starts once this many slow samples land in it. Leave empty for the default of 1800 (30 minutes). It does not affect the baseline window.",
-        "placeholder": "1800"
+        "label": "Sampling window (minutes)",
+        "desc": "Sliding window used for judging: demotion starts once this many slow samples land in it. Leave empty for the default of 30 minutes. It does not affect the baseline window.",
+        "placeholder": "30"
       },
       "baselineWindowSeconds": {
-        "label": "Baseline window (seconds)",
-        "desc": "How much history is aggregated when computing the baseline median. Leave empty for the default of 259200 (3 days). It only affects the baseline range, not the judging window above.",
-        "placeholder": "259200"
+        "label": "Baseline window (days)",
+        "desc": "How much history is aggregated when computing the baseline median. Leave empty for the default of 3 days. It only affects the baseline range, not the judging window above.",
+        "placeholder": "3"
       },
       "minSamples": {
         "label": "Baseline sample floor",
@@ -518,9 +518,9 @@
         "placeholder": "3"
       },
       "ratioPerMille": {
-        "label": "Slow threshold ratio (per mille)",
-        "desc": "A response counts as slow when below baseline x ratio. 300 = 0.3. Leave empty for the default of 300.",
-        "placeholder": "300"
+        "label": "Slow threshold ratio (0-1)",
+        "desc": "A response counts as slow when below baseline x ratio. 0.3 means below 30% of the baseline. Leave empty for the default of 0.3.",
+        "placeholder": "0.3"
       },
       "penaltyStep": {
         "label": "Penalty per level",
@@ -536,6 +536,11 @@
         "label": "Stall probe threshold after first byte (seconds)",
         "desc": "Counted from first byte arrival; once reached with no content frame produced yet, this provider is aborted and a retry is made on another. Leave empty to leave this mechanism off.",
         "placeholder": "30"
+      },
+      "recoveryRequests": {
+        "label": "Recovery threshold (requests)",
+        "desc": "Demotion for this provider/model resets as soon as this many consecutive judgeable requests are all not slow. Leave empty for the default of 10.",
+        "placeholder": "10"
       }
     }
   },

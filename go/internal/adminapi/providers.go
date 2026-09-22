@@ -99,16 +99,23 @@ type providerSummary struct {
 	// 「库里写了、接口不回」——表单读不到已有配置，用户看到空白。本字段组在 1.9.11
 	// 首次上线时就踩过这一条（store 层登了、这里漏了），故与上面对阶梯字段的注释同例。
 	SlowRateMonitorEnabled bool `json:"slowRateMonitorEnabled"`
-	// SlowRateWindowSeconds 是判定滑窗（默认 1800s）；SlowRateBaselineWindowSeconds 是基线主窗
-	// （默认 3 天）。两列尺度不同（分钟 vs 天），不可混用。
-	SlowRateWindowSeconds         *int `json:"slowRateWindowSeconds"`
-	SlowRateBaselineWindowSeconds *int `json:"slowRateBaselineWindowSeconds"`
+	// SlowRateWindowMinutes 是判定滑窗（默认 30 **分钟**）；SlowRateBaselineWindowDays 是基线主窗
+	// （默认 3 **天**）。两列尺度不同，不可混用。
+	//
+	// **JSON 名沿旧**（用户 2026-09-22 裁决）：`slowRateWindowSeconds` / `slowRateBaselineWindowSeconds`
+	// / `slowRateRatioPerMille` 三个名字保持不变以免断外部调用方，但**值存新单位**
+	// （分钟 / 天 / 0-1 小数）——看名字的人须留意这一点。
+	SlowRateWindowMinutes      *int `json:"slowRateWindowSeconds"`
+	SlowRateBaselineWindowDays *int `json:"slowRateBaselineWindowSeconds"`
 	// SlowRateMinSamples 是基线样本下限；SlowRateTriggerCount 是触发阈值。两者语义不同。
-	SlowRateMinSamples    *int `json:"slowRateMinSamples"`
-	SlowRateTriggerCount  *int `json:"slowRateTriggerCount"`
-	SlowRateRatioPerMille *int `json:"slowRateRatioPerMille"`
-	SlowRatePenaltyStep   *int `json:"slowRatePenaltyStep"`
-	SlowRatePenaltyMax    *int `json:"slowRatePenaltyMax"`
+	SlowRateMinSamples   *int `json:"slowRateMinSamples"`
+	SlowRateTriggerCount *int `json:"slowRateTriggerCount"`
+	// SlowRateRatio 是低速系数（0-1 小数，默认 0.3）；JSON 名沿旧 slowRateRatioPerMille。
+	SlowRateRatio       *float64 `json:"slowRateRatioPerMille"`
+	SlowRatePenaltyStep *int     `json:"slowRatePenaltyStep"`
+	SlowRatePenaltyMax  *int     `json:"slowRatePenaltyMax"`
+	// SlowRateRecoveryRequests 是恢复策略阈值（默认 10）。
+	SlowRateRecoveryRequests *int `json:"slowRateRecoveryRequests"`
 	// SlowRateProbeAfterFirstByteSeconds 是首字后停滞探测阈值 T（秒）；NULL = 不探测（机制默认关闭）。
 	SlowRateProbeAfterFirstByteSeconds *int `json:"slowRateProbeAfterFirstByteSeconds"`
 
@@ -1126,14 +1133,15 @@ func providerSummaryPayload(provider store.AdminProvider, statistics *providerSt
 		CircuitMaxOpenCount:      provider.CircuitMaxOpenCount,
 
 		SlowRateMonitorEnabled: provider.SlowRateMonitorEnabled,
-		SlowRateWindowSeconds:  provider.SlowRateWindowSeconds,
+		SlowRateWindowMinutes:  provider.SlowRateWindowMinutes,
 		// 基线主窗与判定滑窗是两列（尺度差三个数量级），故两行都得写。
-		SlowRateBaselineWindowSeconds: provider.SlowRateBaselineWindowSeconds,
-		SlowRateMinSamples:            provider.SlowRateMinSamples,
-		SlowRateTriggerCount:          provider.SlowRateTriggerCount,
-		SlowRateRatioPerMille:         provider.SlowRateRatioPerMille,
-		SlowRatePenaltyStep:           provider.SlowRatePenaltyStep,
-		SlowRatePenaltyMax:            provider.SlowRatePenaltyMax,
+		SlowRateBaselineWindowDays: provider.SlowRateBaselineWindowDays,
+		SlowRateMinSamples:         provider.SlowRateMinSamples,
+		SlowRateTriggerCount:       provider.SlowRateTriggerCount,
+		SlowRateRatio:              provider.SlowRateRatio,
+		SlowRatePenaltyStep:        provider.SlowRatePenaltyStep,
+		SlowRatePenaltyMax:         provider.SlowRatePenaltyMax,
+		SlowRateRecoveryRequests:   provider.SlowRateRecoveryRequests,
 		// 探测阈值也得写：这条链正是 1.9.11 事故处（读投影登了、本结构漏登 ⇒ 接口不回）。
 		SlowRateProbeAfterFirstByteSeconds: provider.SlowRateProbeAfterFirstByteSeconds,
 

@@ -50,19 +50,19 @@ type Provider struct {
 	BlockedClients json.RawMessage `json:"blocked_clients"`
 	// 低速降级（逐渠道开关，默认全关）。选路侧只读，不参与本包判定。
 	SlowRateMonitorEnabled bool `json:"slow_rate_monitor_enabled"`
-	// SlowRateWindowSeconds 是判定滑窗（默认 1800s）。
-	SlowRateWindowSeconds *int `json:"slow_rate_window_seconds"`
-	// SlowRateBaselineWindowSeconds 是基线主窗（默认 3 天，B3 基线任务读）。它是**本包不读**的列：
-	// 选路只需知道「这家开没开监控」，基线口径全在 jobs 侧。此处仍映射，是为了让模拟器/前端
-	// 拿到与库一致的行形（与其余六列同例），不是选路判定需要。
-	SlowRateBaselineWindowSeconds *int `json:"slow_rate_baseline_window_seconds"`
+	// SlowRateWindowMinutes 是判定滑窗（默认 30 分钟）；SlowRateBaselineWindowDays 是基线主窗
+	// （默认 3 天）。JSON 名沿旧（`slow_rate_window_seconds` 等），值存新单位。
+	SlowRateWindowMinutes      *int `json:"slow_rate_window_seconds"`
+	SlowRateBaselineWindowDays *int `json:"slow_rate_baseline_window_seconds"`
 	// SlowRateMinSamples 是基线样本下限（默认 100，基线任务读）。
 	SlowRateMinSamples *int `json:"slow_rate_min_samples"`
 	// SlowRateTriggerCount 是触发阈值（默认 3，样本写入器读）。两列语义不同，不可混用。
-	SlowRateTriggerCount  *int `json:"slow_rate_trigger_count"`
-	SlowRateRatioPerMille *int `json:"slow_rate_ratio_per_mille"`
-	SlowRatePenaltyStep   *int `json:"slow_rate_penalty_step"`
-	SlowRatePenaltyMax    *int `json:"slow_rate_penalty_max"`
+	SlowRateTriggerCount *int     `json:"slow_rate_trigger_count"`
+	SlowRateRatio        *float64 `json:"slow_rate_ratio_per_mille"`
+	SlowRatePenaltyStep  *int     `json:"slow_rate_penalty_step"`
+	SlowRatePenaltyMax   *int     `json:"slow_rate_penalty_max"`
+	// SlowRateRecoveryRequests 是恢复策略阈值（默认 10）。
+	SlowRateRecoveryRequests *int `json:"slow_rate_recovery_requests"`
 	// SlowRateProbeAfterFirstByteSeconds 是首字后停滞探测阈值 T（秒）；NULL = 不探测。
 	SlowRateProbeAfterFirstByteSeconds *int `json:"slow_rate_probe_after_first_byte_seconds"`
 	// CostLimits 是供应商级金额限额（Node 的 filterByLimits 判定）。
@@ -234,13 +234,14 @@ func providerFromStore(row store.Provider) Provider {
 		AllowedClients:                     row.AllowedClients,
 		BlockedClients:                     row.BlockedClients,
 		SlowRateMonitorEnabled:             row.SlowRateMonitorEnabled,
-		SlowRateWindowSeconds:              row.SlowRateWindowSeconds,
-		SlowRateBaselineWindowSeconds:      row.SlowRateBaselineWindowSeconds,
+		SlowRateWindowMinutes:              row.SlowRateWindowMinutes,
+		SlowRateBaselineWindowDays:         row.SlowRateBaselineWindowDays,
 		SlowRateMinSamples:                 row.SlowRateMinSamples,
 		SlowRateTriggerCount:               row.SlowRateTriggerCount,
-		SlowRateRatioPerMille:              row.SlowRateRatioPerMille,
+		SlowRateRatio:                      row.SlowRateRatio,
 		SlowRatePenaltyStep:                row.SlowRatePenaltyStep,
 		SlowRatePenaltyMax:                 row.SlowRatePenaltyMax,
+		SlowRateRecoveryRequests:           row.SlowRateRecoveryRequests,
 		SlowRateProbeAfterFirstByteSeconds: row.SlowRateProbeAfterFirstByteSeconds,
 		CostLimits: ProviderCostLimits{
 			Limit5hUSD:       numberPtr(row.Limit5hUSD),

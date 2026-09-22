@@ -186,11 +186,13 @@ func slowRateStateValue(t *testing.T, penalty int) string {
 }
 
 // slowRateStateValueWithParams 构造带生效参数的状态键值（当前写侧的形态）。
-func slowRateStateValueWithParams(t *testing.T, penalty, windowSeconds, triggerCount, step, max int) string {
+//
+// 窗长单位是**分钟**（与写侧 StateFieldWindowMinutes 同单位）。
+func slowRateStateValueWithParams(t *testing.T, penalty, windowMinutes, triggerCount, step, max int) string {
 	t.Helper()
 	raw, err := json.Marshal(map[string]string{
 		SlowRateStateFieldPenalty:       strconv.Itoa(penalty),
-		SlowRateStateFieldWindowSeconds: strconv.Itoa(windowSeconds),
+		SlowRateStateFieldWindowMinutes: strconv.Itoa(windowMinutes),
 		SlowRateStateFieldTriggerCount:  strconv.Itoa(triggerCount),
 		SlowRateStateFieldPenaltyStep:   strconv.Itoa(step),
 		SlowRateStateFieldPenaltyMax:    strconv.Itoa(max),
@@ -333,7 +335,7 @@ func TestSlowRateRoundTripsDoNotScaleWithCandidates(t *testing.T) {
 		values := map[string]string{}
 		for index := 1; index <= count; index++ {
 			providers = append(providers, slowRateProvider(int64(index)))
-			values[SlowRateStateKey(int64(index), "m1")] = slowRateStateValueWithParams(t, 0, 1800, 3, 10, 30)
+			values[SlowRateStateKey(int64(index), "m1")] = slowRateStateValueWithParams(t, 0, 30, 3, 10, 30)
 			values[SlowRateBaselineKey(int64(index), "m1")] = slowRateBaselineValue(t, "primary")
 		}
 		redisClient := &slowRateRedis{values: values}
@@ -360,7 +362,7 @@ func TestSlowRateCountsSamplesByRangeNotByFetch(t *testing.T) {
 	for _, members := range []int{1, 500} {
 		redisClient := &slowRateRedis{
 			values: map[string]string{
-				SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 0, 1800, 3, 10, 30),
+				SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 0, 30, 3, 10, 30),
 				SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
 			},
 			zsets: map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): slowRateSamples(members, 60_000)},
@@ -398,7 +400,7 @@ func TestSlowRatePenaltyEquivalenceWithMixedWindow(t *testing.T) {
 			members := append(slowRateSamples(tc.live, 60_000), slowRateSamples(tc.expired, 1_900_000)...)
 			redisClient := &slowRateRedis{
 				values: map[string]string{
-					SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 999, 1800, 3, 10, 30),
+					SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 999, 30, 3, 10, 30),
 					SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
 				},
 				zsets: map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): members},
@@ -456,7 +458,7 @@ func TestSlowRatePenaltyRequiresUsableBaseline(t *testing.T) {
 	// 生产形态的状态：带生效参数，惩罚由滑窗活计数当场派生（9 条 / 阈值 3 × 步长 10 = 30）。
 	stateValues := func() map[string]string {
 		return map[string]string{
-			SlowRateStateKey(9, "m1"): slowRateStateValueWithParams(t, 30, 600, 3, 10, 30),
+			SlowRateStateKey(9, "m1"): slowRateStateValueWithParams(t, 30, 10, 3, 10, 30),
 		}
 	}
 	samples := func() map[string][]redis.Z {
@@ -556,7 +558,7 @@ func TestSlowRatePenaltyDecaysWithWindow(t *testing.T) {
 	reader := newSlowRateReaderAt(&slowRateRedis{
 		values: map[string]string{
 			// 状态里留着陈旧的惩罚 30，且带齐生效参数。
-			SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 30, 1800, 3, 10, 30),
+			SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 30, 30, 3, 10, 30),
 			SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
 		},
 		zsets: map[string][]redis.Z{},
@@ -585,10 +587,10 @@ func TestSlowRatePenaltyDerivesFromLiveWindow(t *testing.T) {
 		t.Run(strconv.Itoa(tc.count), func(t *testing.T) {
 			reader := newSlowRateReaderAt(&slowRateRedis{
 				values: map[string]string{
-					SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 999, 1800, 3, 10, 30),
+					SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 999, 30, 3, 10, 30),
 					SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
 				},
-				// 全部成员都在 1800s 窗内（距基准时刻 1 分钟）。
+				// 全部成员都在 30 分钟窗内（距基准时刻 1 分钟）。
 				zsets: map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): slowRateSamples(tc.count, 60_000)},
 			})
 
@@ -607,11 +609,11 @@ func TestSlowRatePenaltyDerivesFromLiveWindow(t *testing.T) {
 //
 // 反证：把内层过滤改成「不过滤」（相当于无区间地数成员），本用例变红。
 func TestSlowRatePenaltyIgnoresExpiredSamples(t *testing.T) {
-	// 3 条在 1800s 窗内，3 条已过期（最早的在 1900s 之前）。
+	// 3 条在 30 分钟窗内，3 条已过期（最早的在 30 分钟之前）。
 	members := append(slowRateSamples(3, 60_000), slowRateSamples(3, 1_900_000)...)
 	reader := newSlowRateReaderAt(&slowRateRedis{
 		values: map[string]string{
-			SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 30, 1800, 3, 10, 30),
+			SlowRateStateKey(9, "m1"):    slowRateStateValueWithParams(t, 30, 30, 3, 10, 30),
 			SlowRateBaselineKey(9, "m1"): slowRateBaselineValue(t, "primary"),
 		},
 		zsets: map[string][]redis.Z{SlowRateSamplesKey(9, "m1"): members},

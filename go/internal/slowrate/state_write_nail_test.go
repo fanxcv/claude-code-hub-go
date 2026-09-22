@@ -20,7 +20,7 @@ func TestStateWriteCarriesEveryEffectiveParam(t *testing.T) {
 	}
 	for _, want := range []string{
 		"StateFieldPenalty, penalty,",
-		"StateFieldWindowSeconds, params.WindowSeconds,",
+		"StateFieldWindowMinutes, params.WindowMinutes,",
 		"StateFieldTriggerCount, params.TriggerCount,",
 		"StateFieldPenaltyStep, params.PenaltyStep,",
 		"StateFieldPenaltyMax, params.PenaltyMax,",

@@ -125,14 +125,17 @@ var providerWriteSamplePayload = map[string]string{
 
 	// 低速降级：开关给 true（非空分支），各参数给真实值而不是 null（可空列的 null 分支
 	// 另有覆盖，这里走非空分支——事故恰恰出在非空分支）。判定窗与基线窗是两列。
+	//
+	// 单位已改（用户 2026-09-22）：分钟 / 天 / 0-1 小数。
 	"slow_rate_monitor_enabled":         `true`,
-	"slow_rate_window_seconds":          `1800`,
-	"slow_rate_baseline_window_seconds": `259200`,
+	"slow_rate_window_seconds":          `30`,
+	"slow_rate_baseline_window_seconds": `3`,
 	"slow_rate_min_samples":             `100`,
 	"slow_rate_trigger_count":           `3`,
-	"slow_rate_ratio_per_mille":         `300`,
+	"slow_rate_ratio_per_mille":         `0.3`,
 	"slow_rate_penalty_step":            `10`,
 	"slow_rate_penalty_max":             `30`,
+	"slow_rate_recovery_requests":       `10`,
 	// 首字后停滞探测阈值列（0130），同样走非空分支。
 	"slow_rate_probe_after_first_byte_seconds": `30`,
 }

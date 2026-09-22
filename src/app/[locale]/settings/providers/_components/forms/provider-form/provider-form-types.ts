@@ -51,10 +51,11 @@ export interface BasicInfoState {
 
 export interface SlowRateParams {
   // 低速降级（实验特性，默认关闭）：仅开启的供应商参与低速监控与降级。
-  // 参数均 null 时取代码默认值（30m / 3 天 / 100 条 / 3 次 / 300 千分比 / 10 / 30）。
+  // 参数均 null 时取代码默认值（30 分钟 / 3 天 / 100 条 / 3 次 / 0.3 / 10 / 30 / 10）。
   slowRateMonitorEnabled: boolean;
-  // slowRateWindowSeconds 是**判定滑窗**（默认 1800s）；slowRateBaselineWindowSeconds 是
-  // **基线主窗**（默认 259200s = 3 天）。两者尺度差三个数量级，曾是同一列，故拆开。
+  // **单位（用户 2026-09-22 改）**：slowRateWindowSeconds 存的是**分钟**（默认 30）；
+  // slowRateBaselineWindowSeconds 存的是**天**（默认 3）；slowRateRatioPerMille 存的是
+  // **0-1 小数**（默认 0.3）。字段名保留旧形（API 契约不破坏），但名字与单位已不符。
   slowRateWindowSeconds: number | null;
   slowRateBaselineWindowSeconds: number | null;
   slowRateMinSamples: number | null;
@@ -62,6 +63,8 @@ export interface SlowRateParams {
   slowRateRatioPerMille: number | null;
   slowRatePenaltyStep: number | null;
   slowRatePenaltyMax: number | null;
+  // 恢复策略阈值：连续这么多个可判定请求都不慢即重置降权（默认 10）。
+  slowRateRecoveryRequests: number | null;
   // 首字后停滞探测阈值 T（秒）：null = 不探测（机制默认关闭）。
   slowRateProbeAfterFirstByteSeconds: number | null;
 }
