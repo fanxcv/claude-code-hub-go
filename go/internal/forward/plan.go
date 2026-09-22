@@ -76,6 +76,9 @@ type Provider struct {
 	FirstByteTimeoutStreamingMS int
 	// ModelRedirects 是供应商级模型重定向规则（数组形态或旧的 map 形态）。
 	ModelRedirects json.RawMessage
+	// LimitConcurrentSessions 是该供应商的并发会话上限（providers.limit_concurrent_sessions）；
+	// 0 表示不限。转发层只把它原样交给并发名额缝（Deps.ProviderInFlight），不自作判定。
+	LimitConcurrentSessions int
 
 	// 以下列是**供应商级参数覆写偏好**（Node 的 provider.codex*/anthropic*/gemini* 族）。
 	//
@@ -236,6 +239,11 @@ type Plan struct {
 	ClientStream bool
 	// RequestTimeout 是本次尝试的总超时；0 表示不限。
 	RequestTimeout time.Duration
+	// LimitConcurrentSessions 是本次尝试所用供应商的并发会话上限（0 表示不限）。
+	//
+	// 为何由计划携带而不是让拨号层回查：上限来自选路已经读过的那一行供应商
+	// （见 dataplane 的 candidateSource.fromStore），逐尝试回查会把热路径变成「每次尝试一次 SQL」。
+	LimitConcurrentSessions int
 	// OverrideSpecialSettings 是本次尝试中供应商级参数覆写产生的审计条目
 	// （Node 的 provider_parameter_override / gemini_google_search_override）。
 	//
@@ -314,6 +322,8 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		Protocol:     targetProtocol,
 		Headers:      http.Header{},
 		ClientStream: ClientStreamRequestedFor(in.Client.Path, in.Client.Query, in.Client.Body),
+		// 并发名额缝的唯一输入：见 Provider.LimitConcurrentSessions 与 Deps.ProviderInFlight。
+		LimitConcurrentSessions: provider.LimitConcurrentSessions,
 	}
 	if provider.RequestTimeoutNonStreamingMS > 0 {
 		plan.RequestTimeout = time.Duration(provider.RequestTimeoutNonStreamingMS) * time.Millisecond
@@ -475,6 +485,8 @@ func buildGeminiPassthroughPlan(in PlanInput, baseURL string) (*Plan, error) {
 		Protocol:     convert.ProtocolGemini,
 		Headers:      http.Header{},
 		ClientStream: ClientStreamRequestedFor(in.Client.Path, in.Client.Query, in.Client.Body),
+		// gemini 原生透传同走并发名额缝：漏了这一支，gemini 供应商的上限就静默不生效。
+		LimitConcurrentSessions: in.Target.Provider.LimitConcurrentSessions,
 	}
 	if in.Target.Provider.RequestTimeoutNonStreamingMS > 0 {
 		plan.RequestTimeout = time.Duration(in.Target.Provider.RequestTimeoutNonStreamingMS) * time.Millisecond

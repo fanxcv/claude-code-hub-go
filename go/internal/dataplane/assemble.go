@@ -166,6 +166,11 @@ type StoreOptions struct {
 	// CircuitAlerts 是熔断初次开闸的告警回调（health.Options 的同名回调）。
 	// 零值表示不告警：熔断照常开闸与恢复，只是不发 webhook。
 	CircuitAlerts CircuitAlerts
+	// ProviderConcurrencyTracking 是全局并发统计开关（逐请求调用）；nil 表示未接线。
+	//
+	// 语义与接线约定写在 Options.ProviderConcurrencyTracking 的注释上（本字段只是把它
+	// 从调用方搬到装配处）。
+	ProviderConcurrencyTracking func(ctx context.Context) bool
 	// Now 可注入时钟；nil 时用 time.Now。
 	Now func() time.Time
 }
@@ -297,6 +302,11 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		return nil, fmt.Errorf("dataplane: 守卫适配器构造失败: %w", err)
 	}
 
+	// 供应商并发名额缝（见 provider_concurrency.go）：nil 表示未接线，转发层整段跳过。
+	//
+	// 为何必须在这里建而不是让调用方注入：它需要与 limit 包同一份脚本层（ratelimit.Client）
+	// 与同一条 Redis；两处各建一份只会在将来改键名时静默分叉。
+	var providerConcurrency *providerConcurrencyGate
 	// 会话绑定：与 Node 共用同一套 Redis 键与 Lua 脚本（切换期间两侧互相看得见），
 	// 脚本注册表取自 ratelimit 的内嵌清单——会话包只经 EvalConst 按常量名调用，不另存一份脚本。
 	var sessionBinder guard.SessionBinder
@@ -315,6 +325,16 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		scriptClient, scriptErr := ratelimit.New(options.Redis, registry)
 		if scriptErr != nil {
 			return nil, fmt.Errorf("dataplane: 会话绑定脚本层构造失败: %w", scriptErr)
+		}
+		// 供应商并发名额与会话绑定共用同一份脚本层与同一条 Redis。
+		//
+		// TTL 传 0（limit 包取 DefaultSessionTTL=300s，与 Node 的 SESSION_TTL 默认值一致）：
+		// 它是「陈旧成员」的剪枝窗口，而 Lua 另把键的 EXPIRE 下限抬到 3600s，
+		// 故进程被杀后的残留最长留 1 小时（与 Node 同形）。
+		providerConcurrency = &providerConcurrencyGate{
+			tracker:         limit.NewSessionTracker(scriptClient, 0, logger),
+			trackingEnabled: options.ProviderConcurrencyTracking,
+			logger:          logger,
 		}
 		binder := session.NewBinder(scriptClient)
 		sessionBinder = session.NewSessionBinderAdapter(session.BinderOptions{
@@ -535,6 +555,9 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		ResponseFix: ResponseFixWiring{
 			AppendSpecialSettings: options.Pools.AppendSpecialSettings,
 		},
+		// 全局并发统计开关透传（nil = 未接线，见 Options 的字段注释）。
+		ProviderConcurrencyTracking: options.ProviderConcurrencyTracking,
+		providerConcurrency:         providerConcurrency,
 		Settlers: func(state *RequestState) Settler {
 			return &storeSettler{
 				settler: settler,

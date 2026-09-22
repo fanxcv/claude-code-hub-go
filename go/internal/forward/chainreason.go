@@ -51,6 +51,16 @@ const (
 	ReasonUnsupported = "unsupported"
 	// ReasonLocalOverload 是本进程过载（本地准入拒绝）。
 	ReasonLocalOverload = "local_overload"
+	// ReasonConcurrentLimitFailed 是「该供应商的并发会话额度已满」——本次尝试**没有发出**。
+	//
+	// 为什么复用这个词而不是自造一个：它已在两个跨语言消费者里登记——`pubstatus` 的
+	// excludedReasons 把它算作容量类**排除**（而不是失败），`terminal` 的 finalizedChainReasons
+	// 把它当终态。自造新词会让「被并发上限挡下」被算成供应商故障、污染可用率
+	// （教训见本文件开头：Go 曾自造 `success` 让可用率恒 0）。
+	//
+	// 与 Key/User 并发上限共用同一个词不产生歧义：那两维的拒绝发生在守卫链的限流步骤，
+	// 属**拦截**而不是尝试，不会在 provider_chain 上留条目；故链上出现本词必为供应商维度。
+	ReasonConcurrentLimitFailed = "concurrent_limit_failed"
 	// ReasonVendorTypeAllTimeout 是供应商类型全端点超时（触发 vendor-type 临时熔断）。
 	ReasonVendorTypeAllTimeout = "vendor_type_all_timeout"
 

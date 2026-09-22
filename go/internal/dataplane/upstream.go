@@ -188,6 +188,9 @@ func (s *candidateSource) fromStore(
 			CustomHeaders:                store.DecodeCustomHeaders(row.CustomHeaders),
 			MaxRetryAttempts:             row.MaxRetryAttempts,
 			RequestTimeoutNonStreamingMS: row.RequestTimeoutNonStreamingMS,
+			// 并发会话上限（providers.limit_concurrent_sessions）：列可空，nil 折叠为 0（不限）。
+			// 转发层拿它只为「占名额时判不判上限」，不在此处做任何判定。
+			LimitConcurrentSessions: limitConcurrentSessions(row.LimitConcurrentSessions),
 			// 首字节阈值是流式竞速的准入条件之一（0 表示这家不参与竞速）：不映射它，
 			// 竞速在真实进程里永远不会开——单测手填字段是看不出来的，故这里必须有。
 			FirstByteTimeoutStreamingMS: row.FirstByteTimeoutStreamingMS,
@@ -267,6 +270,17 @@ func (s *candidateSource) fromStore(
 func preferenceValue(value *string) string {
 	if value == nil {
 		return ""
+	}
+	return *value
+}
+
+// limitConcurrentSessions 把可空的并发上限列折成 int；nil 与负值一律归为 0（不限）。
+//
+// 为何把负值也归 0：列由管理面写入，历史上没有取值下限校验；负数在「占名额」缝里
+// 会被当成「有上限」而使每个请求都被拒——一个脏值不该把一条渠道彻底打停。
+func limitConcurrentSessions(value *int) int {
+	if value == nil || *value < 0 {
+		return 0
 	}
 	return *value
 }

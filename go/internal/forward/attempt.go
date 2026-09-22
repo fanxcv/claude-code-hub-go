@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
@@ -65,6 +67,20 @@ type PlanFacts struct {
 	UserAgentModified bool
 }
 
+// ProviderInFlightResult 是一次在飞登记的结果。
+//
+// 为什么带上读数：被拒时客户端要拿到 Node 同形的七字段信封（`current` / `limit` 两字段），
+// 而名额读数只存在于实现侧（Redis Lua 的返回值）；让实现把读数一并交回，
+// 转发层就不需要为了一个文案再问一次 Redis。
+type ProviderInFlightResult struct {
+	// Allowed 为假表示该渠道已满：本次尝试不得拨号。
+	Allowed bool
+	// Current 是该渠道登记后的并发会话数（被拒时为拒绝当时的读数）。
+	Current int
+	// Release 非 nil 时必须在本尝试结束时恰好调用一次。
+	Release func()
+}
+
 // Deps 是转发主干的外部依赖。除 Dial 外都可为空，空的语义见各字段。
 type Deps struct {
 	// Dial 是上游拨号器，必填。
@@ -112,6 +128,25 @@ type Deps struct {
 	// recordSuccess 承担半开计数与闭态清零，见 src/lib/circuit-breaker.ts:640）。
 	// endpointID <= 0 表示本次尝试没有端点（端点级记账由接线层跳过）。
 	RecordSuccess func(ctx context.Context, providerID int64, endpointID int64)
+	// ProviderInFlight 在**每次上游尝试**（串行、同家重试、切换供应商、竞速的每个 attempt）
+	// 向某渠道拨号**之前**登记一次在飞占用。
+	//
+	// 契约：
+	//   - `Allowed` 为假表示该渠道已满：调用方**不得拨号**，按「供应商饱和」失败处理
+	//     （同家不重试、换家，见 CategoryProviderSaturated）；
+	//   - `Release` 非 nil 时必须在本尝试结束时**恰好调用一次**，实现侧必须自备幂等
+	//     （同一释放函数可能因 body 被重复 Close 而重入）；
+	//   - `limit` 是该渠道的并发会话上限（providers.limit_concurrent_sessions），
+	//     0 表示不限；统计开启而上限为 0 时实现侧仍应登记（只统计不拒绝）；
+	//   - 实现侧的任何错误必须 Fail Open（放行且不登记）——Redis 故障不得变成 429。
+	//
+	// 为什么缝在这里而不是守卫链的限流步骤：那一步（见 guard.go 的预设顺序）排在 provider 步
+	// **之前**，此刻还不知道本次会落到哪一家；而并发额度是按供应商计的，只有拨号点才既知道
+	// 渠道、又能在同一次原子调用里「判定 + 占名额」。这也是唯一能同时覆盖串行、重试、切换
+	// 与竞速（hedge 的每个 attempt 都经本函数拨号）的位置。
+	//
+	// nil 表示未接线（或全局统计开关关闭）：整段跳过，**零 Redis 命令**。
+	ProviderInFlight func(ctx context.Context, providerID int64, limit int) ProviderInFlightResult
 	// Settle 对最终结果做一次终态入账；nil 时跳过（数据面未接线时使用）。
 	//
 	// 调用纪律：整次 Forward **只调用一次**，且只在产生最终结果的路径上（成功、或已放弃的
@@ -714,6 +749,8 @@ func reasonForCategory(category Category, statusCode int) string {
 		return ReasonResourceNotFound
 	case CategoryProviderUnsupportedInput:
 		return ReasonUnsupported
+	case CategoryProviderSaturated:
+		return ReasonConcurrentLimitFailed
 	case CategoryLocalOverload:
 		return ReasonLocalOverload
 	default:
@@ -737,6 +774,9 @@ type attemptResponse struct {
 // streaming 为真时不施加非流式总超时：流式请求的边界由首字节/静默超时与客户端生命周期
 // 决定，一个总时限会把长回答腰斩（Node 侧 provider.requestTimeout 同样只作用于非流式）。
 // 返回的 cancel 非 nil 时必须由调用方调用，它是非流式总超时的取消函数。
+//
+// 本函数是**唯一的上游拨号口**（串行流式、串行非流式、竞速的每个 attempt 都经此），
+// 故供应商并发名额的登记与释放都缝在这里：先占名额再拨号，名额随 body 关闭归还。
 func (d Deps) dialAttempt(
 	ctx context.Context,
 	plan *Plan,
@@ -749,12 +789,74 @@ func (d Deps) dialAttempt(
 		attemptCtx, cancel = context.WithTimeout(ctx, plan.RequestTimeout)
 	}
 
+	// 先占名额再拨号（与 Node 同序）：只有先占，上游失败后的回退决策才是原子的；
+	// 反过来靠 TTL 兜底，会在渠道故障时瞬间堆满 active_sessions。
+	var release func()
+	if d.ProviderInFlight != nil {
+		acquired := d.ProviderInFlight(attemptCtx, outcome.ProviderID, plan.LimitConcurrentSessions)
+		if !acquired.Allowed {
+			cancel()
+			return nil, func() {}, d.saturatedFailure(plan, outcome, acquired.Current)
+		}
+		release = acquired.Release
+	}
+
 	response, err := d.Dial.RoundTrip(attemptCtx, plan.Request())
 	if err != nil {
+		// 拨号失败没有 body 可挂：名额必须**就地**还回去，否则这条渠道的名额会被永久占住
+		// （只能等 TTL 过期）。这是本任务里最容易漏的一条泄漏路径。
+		if release != nil {
+			release()
+		}
 		cancel()
 		return nil, func() {}, d.transportFailure(err, plan, outcome, attemptCtx)
 	}
+	if release != nil {
+		// 释放挂在 body 上：正文的所有权在调用方手里（流式路径会持有到客户端读完），
+		// 而关闭是**所有**结局（读完、读错、客户端中断、静默超时、竞速输家被取消）
+		// 唯一都会经过的动作。
+		response.Body = &providerInFlightBody{ReadCloser: response.Body, release: release}
+	}
 	return response, cancel, nil
+}
+
+// providerInFlightBody 在正文关闭时归还供应商并发名额。
+//
+// 为何用 sync.Once：多条路径都会 Close（正常读完、错误分支的 defer、竞速裁决时的强制关闭），
+// 而释放必须恰好一次——重复释放会把别的在飞尝试的名额提前抹掉（引用计数被多减）。
+type providerInFlightBody struct {
+	io.ReadCloser
+	release func()
+	once    sync.Once
+}
+
+func (b *providerInFlightBody) Close() error {
+	err := b.ReadCloser.Close()
+	b.once.Do(b.release)
+	return err
+}
+
+// saturatedFailure 是「该渠道并发额度已满、本次尝试未发出」的归因。
+//
+// Internal 为真：没有上游参与，状态码留 0（本进程按名额读数自答）。
+// ConcurrencyCurrent / ConcurrencyLimit 供终态把「全部候选都满员」翻成 429 信封。
+func (d Deps) saturatedFailure(plan *Plan, outcome *AttemptOutcome, current int) *Failure {
+	target := outcome.ProviderName
+	if target == "" {
+		target = fmt.Sprintf("provider#%d", outcome.ProviderID)
+	}
+	return &Failure{
+		Category:           CategoryProviderSaturated,
+		Internal:           true,
+		ProviderID:         outcome.ProviderID,
+		ProviderName:       outcome.ProviderName,
+		EndpointID:         outcome.EndpointID,
+		EndpointURL:        plan.URL,
+		Attempt:            outcome.Attempt,
+		Message:            fmt.Sprintf("%s 的并发会话数已达上限 %d", target, plan.LimitConcurrentSessions),
+		ConcurrencyCurrent: current,
+		ConcurrencyLimit:   plan.LimitConcurrentSessions,
+	}
 }
 
 // executeAttempt 发起一次上游调用并读回正文；返回 (成功响应, 失败归因)，两者恰有一个非 nil。

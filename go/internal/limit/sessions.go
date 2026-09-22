@@ -221,10 +221,12 @@ type ProviderSessionResult struct {
 //
 // 先占再转发是刻意的：只有这样，上游失败后的回退决策才是原子的（否则要靠 TTL 兜底，
 // 供应商故障时会瞬间堆满 active_sessions）。
+//
+// limit <= 0 表示**只登记不判定**（Lua 的 `limit > 0` 闸门），不再短路返回：
+// 调用方（转发层的并发名额缝）已经在闸门处判过「本次要不要登记」，
+// 而「只统计不拒绝」正是统计侧的唯一用法——在这里短路会让它拿不到登记。
+// 完全不需要登记的场景（既无上限也未开统计）由调用方在更外层跳过，不会走到这里。
 func (t *SessionTracker) CheckAndTrackProviderSession(ctx context.Context, providerID int64, sessionID string, limit int) (ProviderSessionResult, error) {
-	if limit <= 0 {
-		return ProviderSessionResult{Allowed: true}, nil
-	}
 	if !t.Ready() {
 		t.log.Warn("limit.sessions.redis_unavailable", map[string]any{"note": "供应商并发检查 Fail Open"})
 		return ProviderSessionResult{Allowed: true}, nil

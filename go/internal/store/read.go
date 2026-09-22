@@ -143,6 +143,12 @@ type Provider struct {
 	CircuitBreakerFailureThreshold         *int            `json:"circuit_breaker_failure_threshold"`
 	CircuitBreakerOpenDuration             *int            `json:"circuit_breaker_open_duration"`
 	CircuitBreakerHalfOpenSuccessThreshold *int            `json:"circuit_breaker_half_open_success_threshold"`
+	// LimitConcurrentSessions 是该供应商的并发会话上限（列可空且无默认，nil 即不限）。
+	//
+	// 为何必须在读取视图上：数据面要拿它做「占名额时判不判上限」（见 forward.Provider 的
+	// 同名字段与 dataplane 的 limitConcurrentSessions），而本视图是选路/转发唯一的那次
+	// 供应商读取（`SELECT *`，加字段不需要改 SQL）。
+	LimitConcurrentSessions *int `json:"limit_concurrent_sessions"`
 	// 供应商级参数覆写偏好：数据面要拿它们改写上游正文（见 forward 的 ProviderOverrideApplier），
 	// 而本视图是选路/转发唯一的那次供应商读取（`SELECT *`，加字段不需要改 SQL）。
 	// 列可空且无默认，故一律用指针：nil 与 `inherit` 同义（均表示「遵循客户端」）。

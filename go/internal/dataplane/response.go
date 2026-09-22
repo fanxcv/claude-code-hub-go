@@ -180,6 +180,13 @@ func failoverStatus(failure *forward.Failure) (int, string) {
 			message = "上游超时"
 		}
 		return http.StatusGatewayTimeout, message
+	case failure.Category == forward.CategoryProviderSaturated:
+		// 全部候选都因并发上限满员：没有上游状态码可透传，按限流语义回 429
+		// （信封由 saturationRateLimitBlock 另行构造，这里只保证结算口径一致）。
+		if message == "" {
+			message = "供应商并发会话数已达上限"
+		}
+		return http.StatusTooManyRequests, message
 	default:
 		if message == "" {
 			message = "上游请求失败（" + category + "）"
@@ -241,6 +248,35 @@ func (h *Handler) passThroughUpstreamErrorMessage(ctx context.Context) bool {
 		return true
 	}
 	return settings.PassThroughUpstreamErrorMessage
+}
+
+// saturationRateLimitBlock 把「全部候选都因并发上限满员」的终态归因翻成限流信封。
+//
+// 为什么单独一支而不是并进 failoverStatus：客户端对并发上限的处理依赖 Node 同形的七字段
+// 信封（type / message / code / limit_type / current / limit / reset_time）与 429 状态码，
+// 而 failoverStatus 只产出「状态码 + 文案」——混在一起会让既有 502/503 路径也跟着变形状。
+//
+// limit_type 取 provider_concurrent_sessions：与 Key/User 维度的 concurrent_sessions 区分开，
+// 运维一眼就能分出「是渠道满了」还是「这个 key 的并发满了」。
+//
+// reset_time 留空（信封里是 null）：并发名额没有窗口重置时刻，它随在飞请求结束而归还；
+// 编造一个「此刻」当重置时刻会让客户端按固定时刻重试。
+func saturationRateLimitBlock(failure *forward.Failure) (guard.RateLimitBlock, bool) {
+	if failure == nil || failure.Category != forward.CategoryProviderSaturated {
+		return guard.RateLimitBlock{}, false
+	}
+	message := failure.Message
+	if message == "" {
+		message = "供应商并发会话数已达上限"
+	}
+	return guard.RateLimitBlock{
+		Status:    http.StatusTooManyRequests,
+		Message:   message,
+		ErrorType: "rate_limit_error",
+		LimitType: "provider_concurrent_sessions",
+		Current:   float64(failure.ConcurrencyCurrent),
+		Limit:     float64(failure.ConcurrencyLimit),
+	}, true
 }
 
 // errorFailure 从转发的返回值里取最终归因。

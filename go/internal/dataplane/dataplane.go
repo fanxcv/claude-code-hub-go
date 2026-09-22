@@ -268,6 +268,19 @@ type Options struct {
 	// 而「已交付客户端但终态未落库」的计数必须等到队列 flush 完成才能归零——
 	// 退出序列正是靠它判断能否安全关连接池。
 	SettlementBarrier SettlementBarrier
+	// ProviderConcurrencyTracking 是全局并发统计开关（逐请求调用）。
+	//
+	// 期望接线（给 leader 合并对齐）：读 `system_settings` 的
+	// `concurrency_tracking_enabled boolean NOT NULL DEFAULT false` 列
+	// （Go 侧 `store.SystemSettings.ConcurrencyTrackingEnabled *bool`，json tag 同名），
+	// 逐请求经 cfgsync 的 system_settings 快照——手法照 assemble.go 的 affinitySwitchesFor。
+	//
+	// nil 表示未接线：**统计**整段跳过（零 Redis 命令）。但**上限判定不受它约束**——
+	// 配了 providers.limit_concurrent_sessions 的渠道照常判定（见 provider_concurrency.go
+	// 的 acquire 闸门说明：把判定挂在展示面开关上，会让「配了上限」继续不生效）。
+	ProviderConcurrencyTracking func(ctx context.Context) bool
+	// providerConcurrency 由本包装配（见 assemble）：nil 表示未接线，转发层整段跳过。
+	providerConcurrency *providerConcurrencyGate
 }
 
 // SettlementBarrier 是异步终态写队列的等待面（由 terminal.WriteQueue 实现）。
@@ -607,6 +620,9 @@ func (h *Handler) forward(
 		return next, nil
 	}
 	fwd.Facts = h.planFacts(pc, spec, body)
+	// 供应商并发名额的登记缝（每请求一份：会话身份是每请求事实）。
+	// 未接线时为 nil，forward 整段跳过——「关上零开销」在这一行上成立。
+	fwd.ProviderInFlight = h.providerConcurrencyForRequest(state)
 	// 整流器审计的落点：与 responses `input` 归一共用同一份条目集合，终态一次追加（见
 	// specialSettingsAppendEntries）。用回调而不是让 forward 依赖请求状态，保持转发层
 	// 只做协议与重试。
@@ -646,11 +662,18 @@ func (h *Handler) forward(
 	}
 	if err != nil {
 		// 全部尝试耗尽：终态已由 forward 的结算缝落库，这里只把最后归因翻成响应。
-		status, message := h.failoverStatusFor(requestCtx, errorFailure(&result.Result, err))
+		failure := errorFailure(&result.Result, err)
+		status, message := h.failoverStatusFor(requestCtx, failure)
 		// 没走到交付路径也要记归因码：否则 response.after 的 meta 会缺 statusCode，
 		// 详情页会把「失败的请求」显示成「没有响应」。
 		h.recordFailureStatus(state, status)
 		h.recordUpstream(state, planViewOf(&result.Result), result.Headers)
+		// 全部候选都因并发上限满员时回 Node 同形的限流信封（429 + 七字段），
+		// 而不是笼统的「上游失败」——客户端据此才能分辨该退避还是该换 key。
+		if block, ok := saturationRateLimitBlock(failure); ok {
+			h.writeGuardResponse(writer, state, guard.BuildRateLimitError(block))
+			return
+		}
 		h.writeGuardResponse(writer, state, guard.BuildError(status, message, ""))
 		return
 	}

@@ -41,6 +41,17 @@ const (
 	// 同家重试只是把同一份输反复送上去，而候选池里另一家可能本来就支持该形态。也不计熔断器
 	// ——供应商拒绝一种它不支持的输入形态，不是它的健康度问题。
 	CategoryProviderUnsupportedInput
+	// CategoryProviderSaturated 表示该供应商的并发会话额度已满（providers.limit_concurrent_sessions）：
+	// 本次尝试**没有发出去**，名额没占上（见 limit.CheckAndTrackProviderSession 的原子判定）。
+	//
+	// 属性：**不在同一家重试、但换家**。判据是「这家此刻就是满的」——立刻重试还是满的，
+	// 而别家可能还有空位；不计熔断器，因为「满」是容量事实、不是健康度问题，
+	// 记成故障会把健康渠道的熔断器打开（与 Node 对并发拒绝不惩罚供应商的口径一致）。
+	//
+	// 为什么**不能**复用 CategoryLocalOverload：那一档的语义是「问题在本进程」，
+	// 而它的 SwitchesProvider() 为假（见下）且 hedge 会在该类失败时立刻收束整场竞速
+	// （见 hedge.go 的收束分支）——正好把「换一家」这个唯一正确的动作掐掉。
+	CategoryProviderSaturated
 )
 
 // String 返回与 Node 侧错误分类同名的英文标识，供日志与落链使用。
@@ -64,6 +75,8 @@ func (c Category) String() string {
 		return ReasonUnsupported
 	case CategoryLocalOverload:
 		return "local_overload"
+	case CategoryProviderSaturated:
+		return ReasonConcurrentLimitFailed
 	default:
 		return "unknown"
 	}
@@ -82,7 +95,8 @@ func (c Category) RetriesSameProvider() bool {
 // SwitchesProvider 报告该分类在重试耗尽后是否切换到下一个供应商。
 func (c Category) SwitchesProvider() bool {
 	switch c {
-	case CategoryProviderError, CategorySystemError, CategoryResourceNotFound, CategoryProviderUnsupportedInput:
+	case CategoryProviderError, CategorySystemError, CategoryResourceNotFound, CategoryProviderUnsupportedInput,
+		CategoryProviderSaturated:
 		return true
 	default:
 		return false
@@ -178,6 +192,11 @@ type Failure struct {
 	ProviderName string
 	EndpointID   int64
 	EndpointURL  string
+	// ConcurrencyCurrent / ConcurrencyLimit 只在 CategoryProviderSaturated 上有值：
+	// 前者是拒绝当时的并发会话读数，后者是该渠道配的上限。终态用它拼 429 信封的
+	// current / limit 两字段（见 dataplane 的 saturationRateLimitBlock）。
+	ConcurrencyCurrent int
+	ConcurrencyLimit   int
 	// ProbeSlow 为真表示本次尝试因**中途低速探测**被主动判废：首字节已到，但自首字节起
 	// 超过探测阈值仍未产出可提交内容。它不是传输故障，而是「这家在磨」的实测结论。
 	ProbeSlow bool
