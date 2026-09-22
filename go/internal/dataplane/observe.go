@@ -199,16 +199,59 @@ func (t *sessionTelemetry) storePhaseSnapshots(
 		{"response", "after", artifacts.ResponseAfter},
 	}
 	for _, entry := range entries {
-		if fields := t.binder.StoreSessionPhaseSnapshot(
+		fields := t.binder.StoreSessionPhaseSnapshot(
 			ctx, lease.SessionID, lease.Sequence, lease.KeyID,
 			entry.kind, entry.phase, entry.snapshot, options,
-		); len(fields) == 0 {
-			t.logger.Warn("dataplane.session_phase_snapshot_empty", map[string]any{
-				"kind":  entry.kind,
-				"phase": entry.phase,
-			})
+		)
+		if len(fields) > 0 {
+			continue
 		}
+		t.reportPhaseSnapshotEmpty(entry.kind, entry.phase, entry.snapshot)
 	}
+}
+
+// reportPhaseSnapshotEmpty 上报「相位快照一个字段都没写进去」。
+//
+// 空结果有三类成因，只有前两类是真异常（见 phaseSnapshotHasContent）：
+//   - Binder 未就绪（Redis 不可用）——整套会话观测都在降级，必须可见；
+//   - 相位**有内容**却没写进去——写侧对超限字段是**删键**（数据丢失），写失败也返回空；
+//   - 相位**没有内容**可写——设计内的正常结果：写侧只在「入参里有该字段」时才写，四个字段
+//     全空时一个键都不写。客户端在建连上游之前断开就是这一类的常见来源：request.after 的
+//     upstreamURL/method、response.before 的响应头、response.after 的已交付头此时都为空。
+//
+// 故判据是「有没有内容可写」而不是「是不是客户端中断」：中断只是「无内容」的来源之一，
+// 守卫拒绝、选路失败、拨号失败同样会让后续相位无内容——按中断打闸既漏它们，也会把「中断时
+// 本就有内容的相位」误当正常。无内容的一类降为 debug 并带 state 字段，真异常仍走 warn。
+func (t *sessionTelemetry) reportPhaseSnapshotEmpty(
+	kind, phase string, snapshot session.SessionDetailPhaseSnapshot,
+) {
+	state := "no_content"
+	switch {
+	case !t.binder.Ready():
+		state = "binder_not_ready"
+	case phaseSnapshotHasContent(snapshot):
+		state = "content_dropped"
+	}
+	fields := map[string]any{"kind": kind, "phase": phase, "state": state}
+	if state == "no_content" {
+		t.logger.Debug("dataplane.session_phase_snapshot_empty", fields)
+		return
+	}
+	t.logger.Warn("dataplane.session_phase_snapshot_empty", fields)
+}
+
+// phaseSnapshotHasContent 判定一份相位快照是否有内容可写。
+//
+// 镜像 session 包内 StoreSessionPhaseSnapshot 的四个入参判空（含 zeroSessionDetailMeta 的
+// 四指针判空）。之所以镜像而不复用：那些判定是 session 包的私有实现细节，本包不得为此改其
+// 导出面（同 session_binding.go 里镜像型的既有说明）。
+func phaseSnapshotHasContent(snapshot session.SessionDetailPhaseSnapshot) bool {
+	if snapshot.Body != nil || snapshot.HasMessages || len(snapshot.Headers) > 0 {
+		return true
+	}
+	meta := snapshot.Meta
+	return meta.ClientURL != nil || meta.UpstreamURL != nil ||
+		meta.Method != nil || meta.StatusCode != nil
 }
 
 // finishTelemetry 收尾会话观测。
