@@ -307,7 +307,10 @@ func (b *Binder) TerminateProviderSessionsBatch(ctx context.Context, providerIDs
 		if command.Err() != nil {
 			continue
 		}
-		for _, sessionID := range command.Val() {
+		for _, member := range command.Val() {
+			// 成员是「会话身份 + 尝试 token」（见 ProviderAttemptMember）：取回会话身份，
+			// 否则后续按会话终止会拿 token 去查绑定、静默失效。
+			sessionID := SessionIDFromProviderAttemptMember(member)
 			if strings.TrimSpace(sessionID) == "" {
 				continue
 			}

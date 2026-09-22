@@ -29,7 +29,7 @@ func (f *fakeObservedSessions) ObservedSessionIdentities(_ context.Context) ([]s
 	return f.identities, f.err
 }
 
-func (f *fakeObservedSessions) ProviderSessionCounts(
+func (f *fakeObservedSessions) ProviderInFlightCounts(
 	_ context.Context,
 	providerIDs []int64,
 ) (map[int64]int, error) {

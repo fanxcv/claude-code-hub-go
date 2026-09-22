@@ -283,6 +283,76 @@ func TestHedgeFirstValidContentWinsAndLoserCancelled(t *testing.T) {
 	}
 }
 
+// TestHedgeLoserReleasePairsWithAcquire 钉住竞速**输家**的名额配对：每个 attempt（胜者与输家）
+// 各登记一次，且都必须归还一次。
+//
+// 为何单独钉这条：输家在裁决时被 Cancel，其正文永远不会被客户端读完，故释放只能靠
+// 裁决路径对 body 的强制关闭（hedge.go 的 verdictLoserCancel → content.Source.Close）。
+// 这是四条异常路径里最容易泄名额的一条：它不经过拨号失败、也不经过正常读尽。
+func TestHedgeLoserReleasePairsWithAcquire(t *testing.T) {
+	// 首供应商：挂起不出内容，等竞速裁决后成为输家。
+	blocked := make(chan struct{})
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		<-blocked
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}))
+	t.Cleanup(func() {
+		close(blocked)
+		first.Close()
+	})
+	second := streamServer(t, "text/event-stream", claudeStreamChunks(), true)
+
+	harness := newHedgeHarness(t)
+	spy := newInFlightSpy()
+	harness.deps.ProviderInFlight = spy.acquire
+	initial := sseCandidate(1, "供应商甲", first.URL, 1)
+	harness.setSelect([]*Candidate{sseCandidate(2, "供应商乙", second.URL, 0)})
+
+	type outcome struct {
+		result *StreamResult
+		err    error
+	}
+	outCh := make(chan outcome, 1)
+	go func() {
+		result, err := ForwardStreamHedge(context.Background(), harness.pc,
+			initial, harness.deps, harness.options, harness.cfg)
+		outCh <- outcome{result, err}
+	}()
+
+	timer := <-harness.timerCh
+	timer.fire()
+	<-harness.selectCalls
+
+	out := <-outCh
+	if out.err != nil {
+		t.Fatalf("ForwardStreamHedge 失败: %v", out.err)
+	}
+	if out.result.Provider.ID != 2 {
+		t.Fatalf("胜者供应商 = %d，期望 2（备选先出内容）", out.result.Provider.ID)
+	}
+	received, _ := consumeStream(t, out.result.Stream)
+	if !strings.Contains(string(received), "message_stop") {
+		t.Fatalf("胜者流内容异常: %q", received)
+	}
+
+	// 两个 attempt 各登记一次；输家的释放可能在后台 drain 后稍晚，故轮询到底。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		acquires, releases := spy.counts()
+		if acquires == 2 && releases == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("登记/归还 = %d/%d，应为 2/2（竞速输家路径泄漏名额）", acquires, releases)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // TestHedgeLoserBilledExactlyOnce 败者 drain 计费被累加且不重复：输家已产生内容并
 // 开启计费时，后台 drain 正文拿回用量并恰好计费一次。
 func TestHedgeLoserBilledExactlyOnce(t *testing.T) {

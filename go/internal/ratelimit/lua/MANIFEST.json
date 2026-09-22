@@ -23,9 +23,9 @@
   {
     "constName": "CHECK_AND_TRACK_SESSION",
     "file": "check-and-track-session.lua",
-    "sha256": "ceac11ca31b3fa779e5e854b32c15bf6d01780f3d8c37b11b8f47551d874e940",
-    "bytes": 2185,
-    "keysArityNote": "KEYS[1]=provider:{id}:active_sessions，KEYS[2]=provider:{id}:active_session_refs；ARGV[1]=sessionId，ARGV[2]=limit，ARGV[3]=now(ms)，ARGV[4]=ttlMs(可选,默认 300000)。返回 {allowed,count,tracked,referenced}。"
+    "sha256": "732282488dea3f3aafffa6946a76da001a61a009ae77dc80bed70669901f2cb6",
+    "bytes": 2043,
+    "keysArityNote": "KEYS[1]=provider:{id}:active_sessions，KEYS[2]=provider:{id}:active_session_refs；ARGV[1]=**尝试 token**（每次在飞尝试唯一，不是 sessionId），ARGV[2]=limit，ARGV[3]=now(ms)，ARGV[4]=ttlMs(可选,默认 300000)。返回 {allowed,count,tracked,referenced}；count 是**在飞尝试数**。"
   },
   {
     "constName": "CLEAR_SESSION_BINDING",

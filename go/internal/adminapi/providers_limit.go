@@ -126,7 +126,7 @@ func (api *providersLimitAPI) handleProviderLimit(writer http.ResponseWriter, re
 	}
 
 	now := api.now()
-	sessionCounts, err := api.sessions.ProviderSessionCounts(request.Context(), []int64{providerID})
+	sessionCounts, err := api.sessions.ProviderInFlightCounts(request.Context(), []int64{providerID})
 	if err != nil {
 		// Node 单条会话计数是 fail-open（记日志、计 0），不牵连整条端点。
 		api.logger.Warn("admin_providers_limit_session_count_failed", map[string]any{
@@ -193,7 +193,7 @@ func (api *providersLimitAPI) handleProviderLimitBatch(writer http.ResponseWrite
 		return
 	}
 	now := api.now()
-	sessionCounts, err := api.sessions.ProviderSessionCounts(request.Context(), selectedIDs)
+	sessionCounts, err := api.sessions.ProviderInFlightCounts(request.Context(), selectedIDs)
 	if err != nil {
 		api.logger.Warn("admin_providers_limit_session_counts_failed", map[string]any{
 			"providers": len(selectedIDs),

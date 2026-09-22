@@ -210,23 +210,29 @@ func (t *SessionTracker) activeSessionCount(
 // ProviderSessionResult 是供应商并发判定的结果。
 type ProviderSessionResult struct {
 	Allowed bool
-	Count   int
-	// Tracked 为 true 表示本次是新增追踪（ZSET 里原来没有这个会话）。
+	// Count 是登记后的在飞尝试数（被拒时为拒绝当时的读数）。
+	Count int
+	// Tracked 为 true 表示本次是新增追踪（ZSET 里原来没有这个成员）。
 	Tracked bool
 	// Referenced 为 true 表示本次拿到了一个释放引用。
 	Referenced bool
 }
 
-// CheckAndTrackProviderSession 复刻 checkAndTrackProviderSession：转发前先占住供应商并发额度。
+// CheckAndTrackProviderAttempt 占住供应商的一个并发额度：**每次在飞尝试一个额度**。
 //
 // 先占再转发是刻意的：只有这样，上游失败后的回退决策才是原子的（否则要靠 TTL 兜底，
 // 供应商故障时会瞬间堆满 active_sessions）。
+//
+// 成员是「会话身份 + 尝试 token」（session.ProviderAttemptMember）：**计数按成员个数**，
+// 即「在飞尝试数」（用户 2026-09-22 裁决）。按会话计数会让同一会话的并行请求、竞速与
+// 重叠尝试只占一个额度，从而绕过渠道并发上限。会话身份随成员携带是给终止路径取回的
+// （见 session.TerminateProviderSessionsBatch）。
 //
 // limit <= 0 表示**只登记不判定**（Lua 的 `limit > 0` 闸门），不再短路返回：
 // 调用方（转发层的并发名额缝）已经在闸门处判过「本次要不要登记」，
 // 而「只统计不拒绝」正是统计侧的唯一用法——在这里短路会让它拿不到登记。
 // 完全不需要登记的场景（既无上限也未开统计）由调用方在更外层跳过，不会走到这里。
-func (t *SessionTracker) CheckAndTrackProviderSession(ctx context.Context, providerID int64, sessionID string, limit int) (ProviderSessionResult, error) {
+func (t *SessionTracker) CheckAndTrackProviderAttempt(ctx context.Context, providerID int64, member string, limit int) (ProviderSessionResult, error) {
 	if !t.Ready() {
 		t.log.Warn("limit.sessions.redis_unavailable", map[string]any{"note": "供应商并发检查 Fail Open"})
 		return ProviderSessionResult{Allowed: true}, nil
@@ -234,7 +240,7 @@ func (t *SessionTracker) CheckAndTrackProviderSession(ctx context.Context, provi
 
 	values, err := t.eval(ctx, "CHECK_AND_TRACK_SESSION",
 		[]string{ProviderActiveSessionsKey(providerID), ProviderSessionRefsKey(providerID)},
-		[]any{sessionID, limit, nowMillis(), t.ttl.Milliseconds()},
+		[]any{member, limit, nowMillis(), t.ttl.Milliseconds()},
 	)
 	if err != nil {
 		t.log.Error("limit.sessions.provider_check_failed", map[string]any{"error": err.Error(), "providerId": providerID})
@@ -258,14 +264,17 @@ func (t *SessionTracker) CheckAndTrackProviderSession(ctx context.Context, provi
 	return result, nil
 }
 
-// ReleaseProviderSession 复刻 releaseProviderSession：一个引用归零才真正释放并发额度。
-func (t *SessionTracker) ReleaseProviderSession(ctx context.Context, providerID int64, sessionID string) (removed int, remainingRefs int, err error) {
-	if providerID <= 0 || sessionID == "" || !t.Ready() {
+// ReleaseProviderAttempt 归还一次在飞尝试的额度。
+//
+// 成员是「会话身份 + 尝试 token」，与 CheckAndTrackProviderAttempt 传入的同一值配对；
+// 释放引用归零才真正从并发集合里摘除（见 release-provider-session.lua）。
+func (t *SessionTracker) ReleaseProviderAttempt(ctx context.Context, providerID int64, member string) (removed int, remainingRefs int, err error) {
+	if providerID <= 0 || member == "" || !t.Ready() {
 		return 0, 0, nil
 	}
 	values, evalErr := t.eval(ctx, "RELEASE_PROVIDER_SESSION",
 		[]string{ProviderActiveSessionsKey(providerID), ProviderSessionRefsKey(providerID)},
-		[]any{sessionID},
+		[]any{member},
 	)
 	if evalErr != nil {
 		t.log.Error("limit.sessions.release_failed", map[string]any{"error": evalErr.Error(), "providerId": providerID})
@@ -277,15 +286,41 @@ func (t *SessionTracker) ReleaseProviderSession(ctx context.Context, providerID 
 	return int(values[0]), int(values[1]), nil
 }
 
-// ForceTerminateProviderSession 复刻 forceTerminateProviderSession：清掉某物理会话在供应商上的
-// 全部引用（终态清理路径）。
-func (t *SessionTracker) ForceTerminateProviderSession(ctx context.Context, providerID int64, sessionID string) (removedSession int, removedRefs int, err error) {
+// ForceTerminateProviderAttempts 清掉某**会话身份**在该供应商上的全部在飞尝试（终态清理路径）。
+//
+// 需要先枚举成员：成员是「会话身份 + 尝试 token」，而 token 对调用方不可知。
+// 这是强制终止面的代价，不在热路径上（热路径是 CheckAndTrack/Release）。
+func (t *SessionTracker) ForceTerminateProviderAttempts(ctx context.Context, providerID int64, sessionID string) (removedSession int, removedRefs int, err error) {
 	if providerID <= 0 || sessionID == "" || !t.Ready() {
+		return 0, 0, nil
+	}
+	members, err := t.client.Raw().ZRange(ctx, ProviderActiveSessionsKey(providerID), 0, -1).Result()
+	if err != nil {
+		t.log.Error("limit.sessions.force_terminate_range_failed", map[string]any{"error": err.Error(), "providerId": providerID})
+		return 0, 0, err
+	}
+	for _, member := range members {
+		if session.SessionIDFromProviderAttemptMember(member) != sessionID {
+			continue
+		}
+		removedMember, removedRef, evalErr := t.ForceTerminateProviderAttempt(ctx, providerID, member)
+		if evalErr != nil {
+			return removedSession, removedRefs, evalErr
+		}
+		removedSession += removedMember
+		removedRefs += removedRef
+	}
+	return removedSession, removedRefs, nil
+}
+
+// ForceTerminateProviderAttempt 清掉某成员在供应商上的全部引用（终态清理路径）。
+func (t *SessionTracker) ForceTerminateProviderAttempt(ctx context.Context, providerID int64, member string) (removedSession int, removedRefs int, err error) {
+	if providerID <= 0 || member == "" || !t.Ready() {
 		return 0, 0, nil
 	}
 	values, evalErr := t.eval(ctx, "FORCE_TERMINATE_PROVIDER_SESSION",
 		[]string{ProviderActiveSessionsKey(providerID), ProviderSessionRefsKey(providerID)},
-		[]any{sessionID},
+		[]any{member},
 	)
 	if evalErr != nil {
 		t.log.Error("limit.sessions.force_terminate_failed", map[string]any{"error": evalErr.Error(), "providerId": providerID})

@@ -189,16 +189,16 @@ func TestProviderConcurrencyGateAgainstRealRedis(t *testing.T) {
 		_ = rdb.Del(context.Background(), key, refs).Err()
 	})
 
-	// 上限 1：第一个会话放行并占住名额。
+	// 上限 1：第一个尝试放行并占住名额。
 	first := gate.acquire(ctx, providerID, 1, "sess-a")
 	if !first.Allowed || first.Release == nil {
-		t.Fatalf("首个会话应放行并拿到释放函数: %+v", first)
+		t.Fatalf("首个尝试应放行并拿到释放函数: %+v", first)
 	}
 	if got := rdb.ZCard(ctx, key).Val(); got != 1 {
 		t.Fatalf("登记后计数 = %d，应为 1", got)
 	}
 
-	// 第二个会话被拒，且读数与上限一致（429 信封的两个字段就来自这里）。
+	// 另一个尝试被拒，且读数与上限一致（429 信封的两个字段就来自这里）。
 	second := gate.acquire(ctx, providerID, 1, "sess-b")
 	if second.Allowed {
 		t.Fatal("上限已满时应拒绝")
@@ -207,26 +207,37 @@ func TestProviderConcurrencyGateAgainstRealRedis(t *testing.T) {
 		t.Fatalf("被拒时的读数 = %d，应为 1", second.Current)
 	}
 
-	// 同一会话重复登记不涨计数（成员按 sessionID 去重，引用计数只在释放时才归零）。
+	// **同一会话的第二个在飞尝试也占一个额度、也同样被拒**（用户 2026-09-22 的裁决：
+	// 「在飞请求数（每尝试计）」）。旧实现按会话计数并豁免已在集合的会话，
+	// 使同会话并行请求/竞速绕过上限——这条断言是那条语义的反向钉子。
 	same := gate.acquire(ctx, providerID, 1, "sess-a")
-	if !same.Allowed {
-		t.Fatal("同一会话重复登记应放行（已占名额者不该被自己锁死）")
+	if same.Allowed {
+		t.Fatal("同一会话的第二个在飞尝试也应被上限拒绝")
 	}
 	if got := rdb.ZCard(ctx, key).Val(); got != 1 {
-		t.Fatalf("重复登记后计数 = %d，应为 1", got)
+		t.Fatalf("被拒的尝试不得登记，计数 = %d，应为 1", got)
 	}
 
-	// 释放到引用归零才真正摘除，随后被拒的会话可以进来。
+	// 上限提到 2：同会话的第二个尝试这时才放行，且计数真的变 2。
+	same = gate.acquire(ctx, providerID, 2, "sess-a")
+	if !same.Allowed || same.Release == nil {
+		t.Fatalf("上限 2 时同会话第二个尝试应放行: %+v", same)
+	}
+	if same.Current != 2 {
+		t.Fatalf("上限 2 时读数 = %d，应为 2", same.Current)
+	}
+
+	// 每个尝试自带一个引用，释放一次即摘除。
 	first.Release()
 	if got := rdb.ZCard(ctx, key).Val(); got != 1 {
-		t.Fatalf("释放一个引用后计数 = %d，应为 1（引用计数未生效）", got)
+		t.Fatalf("释放一个尝试后计数 = %d，应为 1", got)
 	}
 	same.Release()
 	if got := rdb.ZCard(ctx, key).Val(); got != 0 {
-		t.Fatalf("引用全部归还后计数 = %d，应为 0（名额泄漏）", got)
+		t.Fatalf("全部尝试归还后计数 = %d，应为 0（名额泄漏）", got)
 	}
 	if again := gate.acquire(ctx, providerID, 1, "sess-b"); !again.Allowed {
-		t.Fatal("名额归还后新会话应能进来")
+		t.Fatal("名额归还后新尝试应能进来")
 	} else {
 		again.Release()
 	}
@@ -267,11 +278,14 @@ func TestProviderConcurrencyReleaseIsIdempotent(t *testing.T) {
 		_ = rdb.Del(context.Background(), key, refs).Err()
 	})
 
-	// 两个会话各占一个引用；其中之一的释放被调用两次，另一个的名额不得被连带抹掉。
+	// 两个尝试各占一个额度；其中之一的释放被调用两次，另一个的名额不得被连带抹掉。
 	a := gate.acquire(ctx, providerID, 2, "sess-a")
-	b := gate.acquire(ctx, providerID, 2, "sess-b")
+	b := gate.acquire(ctx, providerID, 2, "sess-a")
 	if !a.Allowed || !b.Allowed || a.Release == nil || b.Release == nil {
-		t.Fatalf("两个会话都应放行: a=%+v b=%+v", a, b)
+		t.Fatalf("同会话的两个尝试都应放行: a=%+v b=%+v", a, b)
+	}
+	if got := rdb.ZCard(ctx, key).Val(); got != 2 {
+		t.Fatalf("同会话两个在飞尝试应计 2，实为 %d", got)
 	}
 	a.Release()
 	a.Release()

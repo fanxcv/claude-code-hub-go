@@ -123,7 +123,7 @@ func (stub *providersLimitStubSessions) ObservedSessionCount(context.Context) (i
 	return 0, nil
 }
 
-func (stub *providersLimitStubSessions) ProviderSessionCounts(
+func (stub *providersLimitStubSessions) ProviderInFlightCounts(
 	_ context.Context,
 	providerIDs []int64,
 ) (map[int64]int, error) {

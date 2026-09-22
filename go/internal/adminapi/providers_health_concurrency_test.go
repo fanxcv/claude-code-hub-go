@@ -26,7 +26,7 @@ import (
 // 假读面计数调用次数，以此断言「没查」（比断言结果更硬：结果为 0 也可能是查了但没数据）。
 // 熔断面走真 Redis 替身（`circuitTestRedis`）——它是本端点的先决条件，用假替身会缺 Pipeline。
 
-// countingObservedSessions 是计数替身：记录本进程内 ProviderSessionCounts 被调用的次数。
+// countingObservedSessions 是计数替身：记录本进程内 ProviderInFlightCounts 被调用的次数。
 type countingObservedSessions struct {
 	calls        int
 	providerWise map[int64]int
@@ -41,7 +41,7 @@ func (f *countingObservedSessions) ObservedSessionIdentities(_ context.Context) 
 	return nil, f.err
 }
 
-func (f *countingObservedSessions) ProviderSessionCounts(
+func (f *countingObservedSessions) ProviderInFlightCounts(
 	_ context.Context,
 	providerIDs []int64,
 ) (map[int64]int, error) {

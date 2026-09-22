@@ -125,6 +125,10 @@ function buildScenarios(): Record<string, { collected: Scenario[]; uncollected: 
     member,
   ];
 
+  // attempt 造一个「会话身份 + 尝试 token」成员（与本仓 session.ProviderAttemptMember 同形）。
+  // 用 US（\u001f）分隔：会话身份可能来自客户端，可见分隔符有被内容撞上的风险。
+  const attempt = (sessionID: string, token: string): string => `${sessionID}\u001f${token}`;
+
   return {
     DELETE_LEGACY_PROVIDER_IF_VALUE: {
       collected: [
@@ -143,26 +147,26 @@ function buildScenarios(): Record<string, { collected: Scenario[]; uncollected: 
     CHECK_AND_TRACK_SESSION: {
       collected: [
         {
-          id: "fresh-session-tracked",
+          id: "fresh-attempt-tracked",
           keys: [providerSessions, providerRefs],
-          argv: ["session-a", "10", String(NOW), "300000"],
+          argv: [attempt("session-a", "atk-1"), "10", String(NOW), "300000"],
         },
         {
-          id: "already-tracked-with-refs",
+          id: "same-session-second-attempt-counts",
           keys: [providerSessions, providerRefs],
-          argv: ["session-a", "10", String(NOW), "300000"],
-          setup: [zset(providerSessions, "session-a", NOW), ["HINCRBY", providerRefs, "session-a", "1"]],
+          argv: [attempt("session-a", "atk-2"), "1", String(NOW), "300000"],
+          setup: [zset(providerSessions, attempt("session-a", "atk-1"), NOW)],
         },
         {
           id: "limit-reached-rejects-new",
           keys: [providerSessions, providerRefs],
-          argv: ["session-b", "1", String(NOW), "300000"],
-          setup: [zset(providerSessions, "session-other", NOW)],
+          argv: [attempt("session-b", "atk-1"), "1", String(NOW), "300000"],
+          setup: [zset(providerSessions, attempt("session-other", "atk-1"), NOW)],
         },
         {
           id: "invalid-ttl-falls-back",
           keys: [providerSessions, providerRefs],
-          argv: ["session-c", "10", String(NOW), "0"],
+          argv: [attempt("session-c", "atk-1"), "10", String(NOW), "0"],
         },
       ],
       uncollected: [],

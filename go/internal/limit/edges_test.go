@@ -129,7 +129,7 @@ func TestSessionTrackerWithoutRedisFailsOpen(t *testing.T) {
 	if err != nil || !keyUser.Allowed {
 		t.Errorf("无 Redis 时 Key/User 并发应 Fail Open: %+v err=%v", keyUser, err)
 	}
-	provider, err := tracker.CheckAndTrackProviderSession(ctx, 1, "sess", 1)
+	provider, err := tracker.CheckAndTrackProviderAttempt(ctx, 1, "sess\x1fatk", 1)
 	if err != nil || !provider.Allowed {
 		t.Errorf("无 Redis 时供应商并发应 Fail Open: %+v err=%v", provider, err)
 	}
@@ -137,10 +137,10 @@ func TestSessionTrackerWithoutRedisFailsOpen(t *testing.T) {
 	if unlimited, err := tracker.CheckAndTrackKeyUserSession(ctx, 1, 2, "sess", 0, 0); err != nil || !unlimited.Allowed || unlimited.TrackedKey {
 		t.Errorf("无上限时应直接放行: %+v err=%v", unlimited, err)
 	}
-	if _, _, err := tracker.ReleaseProviderSession(ctx, 0, ""); err != nil {
+	if _, _, err := tracker.ReleaseProviderAttempt(ctx, 0, ""); err != nil {
 		t.Errorf("非法参数释放应是空操作: %v", err)
 	}
-	if _, _, err := tracker.ForceTerminateProviderSession(ctx, 1, ""); err != nil {
+	if _, _, err := tracker.ForceTerminateProviderAttempts(ctx, 1, ""); err != nil {
 		t.Errorf("空会话 id 终止应是空操作: %v", err)
 	}
 	if _, err := tracker.ForceTerminateKeyUserSession(ctx, 0, 2, "sess"); err != nil {

@@ -42,7 +42,7 @@ const (
 	// ——供应商拒绝一种它不支持的输入形态，不是它的健康度问题。
 	CategoryProviderUnsupportedInput
 	// CategoryProviderSaturated 表示该供应商的并发会话额度已满（providers.limit_concurrent_sessions）：
-	// 本次尝试**没有发出去**，名额没占上（见 limit.CheckAndTrackProviderSession 的原子判定）。
+	// 本次尝试**没有发出去**，名额没占上（见 limit.CheckAndTrackProviderAttempt 的原子判定）。
 	//
 	// 属性：**不在同一家重试、但换家**。判据是「这家此刻就是满的」——立刻重试还是满的，
 	// 而别家可能还有空位；不计熔断器，因为「满」是容量事实、不是健康度问题，

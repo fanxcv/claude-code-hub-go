@@ -317,7 +317,7 @@ func (api *dashboardAPI) providerSlotItems(
 		ids = append(ids, provider.ID)
 	}
 
-	counts, err := api.sessions.ProviderSessionCounts(ctx, ids)
+	counts, err := api.sessions.ProviderInFlightCounts(ctx, ids)
 	if err != nil {
 		return nil, err
 	}

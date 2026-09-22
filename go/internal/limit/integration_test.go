@@ -300,14 +300,14 @@ func TestIntegrationKeyUserConcurrentSessions(t *testing.T) {
 	}
 }
 
-func TestIntegrationProviderSessionRefsGateConcurrency(t *testing.T) {
+func TestIntegrationProviderAttemptsGateConcurrency(t *testing.T) {
 	client := integrationClient(t)
 	ctx := context.Background()
 	tracker := NewSessionTracker(client, 300*time.Second, nil)
 	providerID := uniqueID(t) + 7
 	cleanupKeys(t, client, ProviderActiveSessionsKey(providerID), ProviderSessionRefsKey(providerID))
 
-	first, err := tracker.CheckAndTrackProviderSession(ctx, providerID, "sess-1", 1)
+	first, err := tracker.CheckAndTrackProviderAttempt(ctx, providerID, member("sess-1", "a1"), 1)
 	if err != nil {
 		t.Fatalf("供应商并发检查失败: %v", err)
 	}
@@ -315,54 +315,73 @@ func TestIntegrationProviderSessionRefsGateConcurrency(t *testing.T) {
 		t.Fatalf("首次应放行并取得引用: %+v", first)
 	}
 
-	second, err := tracker.CheckAndTrackProviderSession(ctx, providerID, "sess-2", 1)
+	second, err := tracker.CheckAndTrackProviderAttempt(ctx, providerID, member("sess-2", "b1"), 1)
 	if err != nil {
 		t.Fatalf("供应商并发检查失败: %v", err)
 	}
 	if second.Allowed {
-		t.Fatalf("第二个会话应被供应商并发上限拒绝: %+v", second)
+		t.Fatalf("第二个在飞尝试应被供应商并发上限拒绝: %+v", second)
 	}
 
-	// 同一会话再次占用：已是追踪态，计数不变，但会再拿一个引用（重试/hedge 场景）。
-	again, err := tracker.CheckAndTrackProviderSession(ctx, providerID, "sess-1", 1)
+	// **同一会话**的第二个在飞尝试也应占一个额度（用户 2026-09-22 的裁决：「在飞请求数（每尝试计）」）。
+	// 旧实现豁免「已在集合里的会话」，使同会话的并行请求/竞速绕过上限，本用例是那条语义的反向钉子。
+	sameSession, err := tracker.CheckAndTrackProviderAttempt(ctx, providerID, member("sess-1", "a2"), 1)
 	if err != nil {
-		t.Fatalf("同会话再次占用失败: %v", err)
+		t.Fatalf("同会话第二个尝试检查失败: %v", err)
 	}
-	if !again.Allowed || again.Tracked || again.Count != 1 {
-		t.Fatalf("同会话再次占用不应增加并发计数: %+v", again)
+	if sameSession.Allowed {
+		t.Fatalf("同一会话的第二个在飞尝试也应被上限拒绝: %+v", sameSession)
 	}
 
-	removed, remaining, err := tracker.ReleaseProviderSession(ctx, providerID, "sess-1")
+	// 上限提到 2：同会话的第二个尝试这时才该放行，且计数真的变 2。
+	sameSession, err = tracker.CheckAndTrackProviderAttempt(ctx, providerID, member("sess-1", "a2"), 2)
 	if err != nil {
-		t.Fatalf("释放失败: %v", err)
+		t.Fatalf("提高上限后同会话第二个尝试失败: %v", err)
 	}
-	if removed != 0 || remaining != 1 {
-		t.Fatalf("释放一次后仍有引用: removed=%d remaining=%d", removed, remaining)
+	if !sameSession.Allowed || !sameSession.Tracked || sameSession.Count != 2 {
+		t.Fatalf("上限 2 时同会话第二个尝试应放行且计数为 2: %+v", sameSession)
 	}
 
-	removed, remaining, err = tracker.ReleaseProviderSession(ctx, providerID, "sess-1")
+	removed, remaining, err := tracker.ReleaseProviderAttempt(ctx, providerID, member("sess-1", "a1"))
 	if err != nil {
 		t.Fatalf("释放失败: %v", err)
 	}
 	if removed != 1 || remaining != 0 {
-		t.Fatalf("引用归零时应移出并发集合: removed=%d remaining=%d", removed, remaining)
+		t.Fatalf("每个尝试自带一个引用，释放即摘除: removed=%d remaining=%d", removed, remaining)
 	}
 
-	// 释放后并发额度重新可用。
-	third, err := tracker.CheckAndTrackProviderSession(ctx, providerID, "sess-3", 1)
+	removed, remaining, err = tracker.ReleaseProviderAttempt(ctx, providerID, member("sess-1", "a1"))
+	if err != nil {
+		t.Fatalf("重复释放失败: %v", err)
+	}
+	if removed != 0 || remaining != 0 {
+		t.Fatalf("重复释放应是空操作: removed=%d remaining=%d", removed, remaining)
+	}
+
+	// 释放后并发额度重新可用（上限 2：此刻集合里只剩 sess-1 的第二个尝试）。
+	third, err := tracker.CheckAndTrackProviderAttempt(ctx, providerID, member("sess-3", "c1"), 2)
 	if err != nil {
 		t.Fatalf("释放后检查失败: %v", err)
 	}
-	if !third.Allowed {
-		t.Fatalf("释放后应放行: %+v", third)
+	if !third.Allowed || third.Count != 2 {
+		t.Fatalf("释放后应放行且计数为 2: %+v", third)
 	}
-	removedSession, removedRefs, err := tracker.ForceTerminateProviderSession(ctx, providerID, "sess-3")
+	// 强制终止按**会话身份**清掉该会话的全部在飞尝试（sess-1 的 a2 仍在）。
+	removedSession, removedRefs, err := tracker.ForceTerminateProviderAttempts(ctx, providerID, "sess-1")
 	if err != nil {
 		t.Fatalf("强制终止失败: %v", err)
 	}
 	if removedSession != 1 || removedRefs != 1 {
-		t.Errorf("强制终止结果不符: session=%d refs=%d", removedSession, removedRefs)
+		t.Errorf("强制终止应只清掉 sess-1 的最后一个尝试: session=%d refs=%d", removedSession, removedRefs)
 	}
+	if got := client.Raw().ZCard(ctx, ProviderActiveSessionsKey(providerID)).Val(); got != 1 {
+		t.Errorf("强制终止后应只剩 sess-3 的尝试: got=%d", got)
+	}
+}
+
+// member 造一个「会话身份 + 尝试 token」成员（与本仓 session.ProviderAttemptMember 同形）。
+func member(sessionID, token string) string {
+	return sessionID + "\x1f" + token
 }
 
 func TestIntegrationCheckBlocksConcurrentAndRPMLimits(t *testing.T) {

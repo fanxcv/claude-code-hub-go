@@ -41,8 +41,8 @@ var providerActiveSessionsPattern = regexp.MustCompile(`^provider:(\d+):active_s
 type ObservedSessionRuntime interface {
 	// ObservedSessionCount 复刻 SessionTracker.getObservedGlobalSessionCount。
 	ObservedSessionCount(ctx context.Context) (int, error)
-	// ProviderSessionCounts 复刻 getProviderSessionCount 的批量版本。
-	ProviderSessionCounts(ctx context.Context, providerIDs []int64) (map[int64]int, error)
+	// ProviderInFlightCounts 批量读各供应商的在飞尝试数（键口径见 session.ProviderAttemptMember）。
+	ProviderInFlightCounts(ctx context.Context, providerIDs []int64) (map[int64]int, error)
 	// ObservedSessionIdentities 复刻 getObservedActiveSessions：活跃会话的 identity 清单。
 	//
 	// 与计数同源、但用途不同（dashboard/realtime 的活动流要按 identity 查最近请求）。
@@ -87,27 +87,130 @@ func (r *redisSessionRuntime) ObservedSessionCount(ctx context.Context) (int, er
 	return r.countZSet(ctx, observedSessionsKey)
 }
 
-// ProviderSessionCounts 逐供应商计数（Node 侧是 Promise.all 的逐个计数，语义相同）。
-func (r *redisSessionRuntime) ProviderSessionCounts(
+// ProviderInFlightCounts 批量读各供应商的**在飞尝试数**。
+//
+// 口径：成员是「会话身份 + 尝试 token」（session.ProviderAttemptMember），故**成员个数**就是
+// 在飞尝试数——与写侧 limit.CheckAndTrackProviderAttempt 同一口径（用户 2026-09-22 裁决）。
+// 不再做「逐个成员 EXISTS session:{id}:info」的第二道校验：尝试不是会话，那个会话键
+// 对在飞请求数没有任何判定力，保留它只会把真实在飞数读小。
+//
+// 往返次数：旧实现逐个供应商串行调 countZSet（每空渠道 1 次、每活跃渠道 `TYPE`+过期扫描+
+// 裁剪+取成员+EXISTS pipeline），几十个渠道就把一次 5 秒轮询放大成几十至数百次**串行**往返。
+// 现改为三段 pipeline（往返次数固定为 3，与渠道数无关）：
+//
+//  1. 全渠道：取过期成员名 + 读键类型；
+//  2. 有过期成员的渠道：同步引用计数 HASH（HDEL）并摘除过期成员；
+//  3. 确为 zset 的渠道：取成员个数（即在飞尝试数）。
+//
+// 失败仍按既有口径 fail-open（记日志、计 0、不牵连整张列表）。
+func (r *redisSessionRuntime) ProviderInFlightCounts(
 	ctx context.Context,
 	providerIDs []int64,
 ) (map[int64]int, error) {
 	counts := make(map[int64]int, len(providerIDs))
-	for _, providerID := range providerIDs {
+	if len(providerIDs) == 0 {
+		return counts, nil
+	}
+	cutoff := strconv.FormatInt(time.Now().Add(-r.ttl).UnixMilli(), 10)
+
+	// 第 1 段：过期成员名（供第 2 段同步引用计数）+ 键类型（决定第 3 段要不要取数）。
+	// 键不存在时两个命令都是空/ none，不是错误。
+	probe := r.client.Pipeline()
+	expiredCommands := make([]*redis.StringSliceCmd, len(providerIDs))
+	typeCommands := make([]*redis.StatusCmd, len(providerIDs))
+	for i, providerID := range providerIDs {
 		key := providerActiveSessionsKey(providerID)
-		count, err := r.countZSet(ctx, key)
-		if err != nil {
-			// Node 侧单个供应商读失败是 fail-open（记日志、计 0），不牵连整张列表。
-			r.logger.Warn("dashboard_provider_session_count_failed", map[string]any{
-				"providerId": providerID,
-				"error":      err.Error(),
-			})
+		expiredCommands[i] = probe.ZRangeByScore(ctx, key, &redis.ZRangeBy{Min: "-inf", Max: cutoff})
+		typeCommands[i] = probe.Type(ctx, key)
+	}
+	if _, err := probe.Exec(ctx); err != nil && err != redis.Nil {
+		// 整段失败：键级错误已落在各自 Cmd 上，按渠道逐条判也救不回整批，整批 fail-open。
+		r.reportCountFailure(providerIDs, err)
+		return counts, nil
+	}
+
+	// 第 2 段：只对「确有过期成员」的渠道同步清理引用计数 HASH + 摘除过期成员。
+	// 非 zset 的历史遗留形态不在 ZSET 里、ZRangeByScore 会报类型错，故按 Cmd 判。
+	cleanup := r.client.Pipeline()
+	cleaned := 0
+	for i, providerID := range providerIDs {
+		command := expiredCommands[i]
+		if command.Err() != nil || len(command.Val()) == 0 {
+			continue
+		}
+		cleanup.HDel(ctx, providerRefsKey(providerActiveSessionsKey(providerID)), command.Val()...)
+		cleanup.ZRemRangeByScore(ctx, providerActiveSessionsKey(providerID), "-inf", cutoff)
+		cleaned++
+	}
+	if cleaned > 0 {
+		if _, err := cleanup.Exec(ctx); err != nil && err != redis.Nil {
+			// 清理失败不阻断读数：计数仍然正确（第 3 段的 ZCard 不受影响）。
+			r.logger.Warn("dashboard_provider_session_cleanup_failed", map[string]any{"error": err.Error()})
+		}
+	}
+
+	// 第 3 段：只对「键存在且是 zset」的渠道取成员个数。非 zset 是历史遗留形态
+	// （Node 的自愈动作是删键），一并当作 0 并顺手清掉，不让它把后续轮询永远卡在类型错误上。
+	active := make([]int64, 0, len(providerIDs))
+	for i, providerID := range providerIDs {
+		command := typeCommands[i]
+		if command.Err() != nil {
+			r.logCountFailure(providerID, command.Err())
 			counts[providerID] = 0
 			continue
 		}
-		counts[providerID] = count
+		switch command.Val() {
+		case "zset":
+			active = append(active, providerID)
+		case "none":
+			counts[providerID] = 0
+		default:
+			if delErr := r.client.Del(ctx, providerActiveSessionsKey(providerID)).Err(); delErr != nil {
+				r.logCountFailure(providerID, delErr)
+			}
+			counts[providerID] = 0
+		}
+	}
+	if len(active) == 0 {
+		return counts, nil
+	}
+
+	card := r.client.Pipeline()
+	cardCommands := make([]*redis.IntCmd, len(active))
+	for i, providerID := range active {
+		cardCommands[i] = card.ZCard(ctx, providerActiveSessionsKey(providerID))
+	}
+	if _, err := card.Exec(ctx); err != nil && err != redis.Nil {
+		r.reportCountFailure(active, err)
+		for _, providerID := range active {
+			counts[providerID] = 0
+		}
+		return counts, nil
+	}
+	for i, providerID := range active {
+		if command := cardCommands[i]; command.Err() != nil {
+			r.logCountFailure(providerID, command.Err())
+			counts[providerID] = 0
+			continue
+		}
+		counts[providerID] = int(cardCommands[i].Val())
 	}
 	return counts, nil
+}
+
+// reportCountFailure 记一批渠道的读数失败；整批失败时逐渠道留痕（与旧口径同形，便于排查）。
+func (r *redisSessionRuntime) reportCountFailure(providerIDs []int64, err error) {
+	for _, providerID := range providerIDs {
+		r.logCountFailure(providerID, err)
+	}
+}
+
+// logCountFailure 记单个渠道的读数失败（fail-open：调用方计 0，不牵连整张列表）。
+func (r *redisSessionRuntime) logCountFailure(providerID int64, err error) {
+	r.logger.Warn("dashboard_provider_session_count_failed", map[string]any{
+		"providerId": providerID,
+		"error":      err.Error(),
+	})
 }
 
 // providerActiveSessionsKey 与 session-tracker.ts:445 的字面量一致（无 hash tag）。
@@ -117,13 +220,17 @@ func providerActiveSessionsKey(providerID int64) string {
 
 // countZSet 复刻 countFromZSet：先摘过期成员，再只数「info 键仍存在」的成员。
 //
+// 仅供**观测集合**（{observed_sessions}:global）使用：那里的成员真的是会话身份，
+// 「info 键存在」是有效的活性校验。供应商维度的在飞尝试数走 ProviderInFlightCounts
+// （成员是尝试 token，info 校验对它没有判定力）。
+//
 // 顺序与 Node 逐条对齐：
 //  1. 键不存在 → 0（Node 的 `exists(key) !== 1`）。
 //  2. 类型不是 ZSET → 删除该键并返回 0（Node 对历史遗留的 Set 数据就是这么自愈的）。
 //  3. 取过期成员（供应商键才取，用于同步引用计数 HASH）→ 从 ZSET 摘除 → 从引用计数里删。
 //  4. 取全部成员 → 逐个 EXISTS session:{id}:info → 存在的才计数。
 //
-// 为什么第 4 步不能省：ZSET 的成员是「会话身份」，而会话本身可能已被终止而 info 键已删；
+// 为什么第 4 步不能省：观测集合的成员是「会话身份」，而会话本身可能已被终止而 info 键已删；
 // 不校验会把已终止的会话算成并发。
 func (r *redisSessionRuntime) countZSet(ctx context.Context, key string) (int, error) {
 	exists, err := r.client.Exists(ctx, key).Result()

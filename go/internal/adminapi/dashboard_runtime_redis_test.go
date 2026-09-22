@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,45 @@ import (
 // （与 auth_issue_redis_test.go 同一门控）。
 
 const dashboardRedisGate = "CCH_TEST_REDIS_URL"
+
+// dashboardCommandCounter 数发往 Redis 的**往返次数**（每个命令与整段 pipeline 各算一次）。
+//
+// 为什么数往返而不是命令条数：判据是「N 个渠道的往返次数 < N、与渠道数同阶」。
+// 命令条数看不出 pipeline 是否真的合并（逐渠道 pipeline 也是同样条数），而往返次数才是
+// 「一次 5 秒轮询会不会被放大成几百次网络往返」的直接量。桩替身证不了这一点。
+type dashboardCommandCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *dashboardCommandCounter) add(n int) {
+	c.mu.Lock()
+	c.n += n
+	c.mu.Unlock()
+}
+
+func (c *dashboardCommandCounter) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+func (c *dashboardCommandCounter) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (c *dashboardCommandCounter) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		c.add(1)
+		return next(ctx, cmd)
+	}
+}
+
+func (c *dashboardCommandCounter) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		// 整段 pipeline 算**一次**往返（这正是批量化要证的事）。
+		c.add(1)
+		return next(ctx, cmds)
+	}
+}
 
 func dashboardRedisRuntime(t *testing.T, ttlSeconds int64) (*redis.Client, ObservedSessionRuntime) {
 	t.Helper()
@@ -118,8 +158,12 @@ func TestObservedSessionCountOnRealRedis(t *testing.T) {
 	})
 }
 
-// TestProviderSessionCountsOnRealRedis 钉住供应商计数与引用计数 HASH 的同步清理。
-func TestProviderSessionCountsOnRealRedis(t *testing.T) {
+// TestProviderInFlightCountsOnRealRedis 钉住供应商在飞尝试数的口径与同步清理。
+//
+// 口径（用户 2026-09-22：「在飞请求数（每尝试计）」）：成员是「会话身份 + 尝试 token」，
+// 故**计数 = 成员个数**，同一会话的两个在飞尝试计 2；且不再做 session:{id}:info 校验
+// （尝试不是会话，那个键对在飞数没有判定力——本用例用「故意不建 info 键」反证这一点）。
+func TestProviderInFlightCountsOnRealRedis(t *testing.T) {
 	client, runtime := dashboardRedisRuntime(t, 300)
 	ctx := context.Background()
 	// 用远高于既有夹具的 id，避免与其它用例（或真实运行态）相撞。
@@ -129,33 +173,34 @@ func TestProviderSessionCountsOnRealRedis(t *testing.T) {
 	if refsKey == "" {
 		t.Fatal("供应商键应能推出引用计数键")
 	}
-	live, stale := "it-prov-live", "it-prov-stale"
+	liveFirst, liveSecond := "it-prov-live\x1fatk1", "it-prov-live\x1fatk2"
+	stale := "it-prov-stale\x1fatk1"
 	t.Cleanup(func() {
-		_ = client.Del(context.Background(), key, refsKey, "session:"+live+":info").Err()
+		_ = client.Del(context.Background(), key, refsKey).Err()
 	})
 
+	// 同一会话的两个在飞尝试 + 一个过期尝试；**故意不建 session:*:info**。
 	if err := client.ZAdd(ctx, key,
-		redis.Z{Score: float64(time.Now().UnixMilli()), Member: live},
+		redis.Z{Score: float64(time.Now().UnixMilli()), Member: liveFirst},
+		redis.Z{Score: float64(time.Now().UnixMilli()), Member: liveSecond},
 		redis.Z{Score: float64(time.Now().Add(-10 * time.Minute).UnixMilli()), Member: stale},
 	).Err(); err != nil {
-		t.Fatalf("写供应商观测集合失败: %v", err)
+		t.Fatalf("写供应商在飞集合失败: %v", err)
 	}
-	if err := client.HSet(ctx, refsKey, live, 1, stale, 2).Err(); err != nil {
+	if err := client.HSet(ctx, refsKey, liveFirst, 1, liveSecond, 1, stale, 1).Err(); err != nil {
 		t.Fatalf("写引用计数失败: %v", err)
 	}
-	if err := client.Set(ctx, "session:"+live+":info", "1", time.Minute).Err(); err != nil {
-		t.Fatalf("写 info 键失败: %v", err)
-	}
 
-	counts, err := runtime.ProviderSessionCounts(ctx, []int64{providerID, providerID + 1})
+	counts, err := runtime.ProviderInFlightCounts(ctx, []int64{providerID, providerID + 1})
 	if err != nil {
-		t.Fatalf("读供应商计数失败: %v", err)
+		t.Fatalf("读供应商在飞数失败: %v", err)
 	}
-	if counts[providerID] != 1 {
-		t.Errorf("只有活跃且 info 存在的成员计入（应 1），实际 %d", counts[providerID])
+	// 同一会话的两个尝试都计入（不按会话去重），过期的那个不计入。
+	if counts[providerID] != 2 {
+		t.Errorf("同一会话的两个在飞尝试应计 2（每尝试计），实际 %d", counts[providerID])
 	}
 	if counts[providerID+1] != 0 {
-		t.Errorf("没有观测集合的供应商应为 0，实际 %d", counts[providerID+1])
+		t.Errorf("没有在飞集合的供应商应为 0，实际 %d", counts[providerID+1])
 	}
 
 	refs, err := client.HGetAll(ctx, refsKey).Result()
@@ -163,10 +208,55 @@ func TestProviderSessionCountsOnRealRedis(t *testing.T) {
 		t.Fatalf("读引用计数失败: %v", err)
 	}
 	if _, present := refs[stale]; present {
-		t.Errorf("过期成员的引用计数应被删掉，实际 %+v", refs)
+		t.Errorf("过期尝试的引用计数应被删掉，实际 %+v", refs)
 	}
-	if _, present := refs[live]; !present {
-		t.Errorf("活跃成员的引用计数不该被删，实际 %+v", refs)
+	for _, member := range []string{liveFirst, liveSecond} {
+		if _, present := refs[member]; !present {
+			t.Errorf("未过期尝试的引用计数不该被删（%q），实际 %+v", member, refs)
+		}
+	}
+}
+
+// TestProviderInFlightCountsBatchesRoundTrips 钉住读面的**批量化**：N 个渠道的**往返次数**
+// 必须**少于**渠道数（三段 pipeline ⇒ 常数级），不随渠道数线性增长——旧实现是逐渠道串行
+// （每空渠道 1 次、每活跃渠道 5 次往返），几十个渠道会把一次 5 秒轮询放大成几百次串行往返。
+func TestProviderInFlightCountsBatchesRoundTrips(t *testing.T) {
+	client, runtime := dashboardRedisRuntime(t, 300)
+	ctx := context.Background()
+
+	baseID := time.Now().UnixNano() % 900000000
+	activeID := baseID + 7
+	key := providerActiveSessionsKey(activeID)
+	t.Cleanup(func() { _ = client.Del(context.Background(), key).Err() })
+	if err := client.ZAdd(ctx, key,
+		redis.Z{Score: float64(time.Now().UnixMilli()), Member: "it-batch\x1fatk1"}).Err(); err != nil {
+		t.Fatalf("写在飞成员失败: %v", err)
+	}
+
+	const providerCount = 30
+	ids := make([]int64, 0, providerCount)
+	for i := 0; i < providerCount; i++ {
+		ids = append(ids, baseID+int64(i))
+	}
+
+	hook := &dashboardCommandCounter{}
+	client.AddHook(hook)
+	before := hook.count()
+	counts, err := runtime.ProviderInFlightCounts(ctx, ids)
+	if err != nil {
+		t.Fatalf("批量读数失败: %v", err)
+	}
+	roundTrips := hook.count() - before
+	if counts[activeID] != 1 {
+		t.Fatalf("活跃渠道应读到 1，实际 %d", counts[activeID])
+	}
+	// 三段 pipeline ⇒ 3 次往返，与渠道数无关；必须严格少于渠道数（否则就是逐渠往返）。
+	if roundTrips >= providerCount {
+		t.Fatalf("%d 个渠道用了 %d 次 Redis 往返，应少于渠道数（三段 pipeline）",
+			providerCount, roundTrips)
+	}
+	if roundTrips > 3 {
+		t.Fatalf("三段 pipeline 应恰好 3 次往返，实际 %d", roundTrips)
 	}
 }
 

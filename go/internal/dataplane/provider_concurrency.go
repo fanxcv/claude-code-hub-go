@@ -2,6 +2,9 @@ package dataplane
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -9,6 +12,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/forward"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/limit"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
 )
 
 // 本文件是供应商并发名额的**生产接线面**：把 limit 包现成的 provider 维度机制
@@ -16,7 +20,7 @@ import (
 // 接到转发路径的**唯一拨号口**上（缝的契约见 forward.Deps.ProviderInFlight）。
 //
 // 为什么必须接：该机制此前**全套就位但零调用**——键、三个 Lua 脚本、三个 Go 方法
-// （CheckAndTrackProviderSession / ReleaseProviderSession / ForceTerminateProviderSession）
+// （CheckAndTrackProviderAttempt / ReleaseProviderAttempt / ForceTerminateProviderAttempts）
 // 都在，但全仓调用点只有测试；生产路径上对该 ZSET 的唯一动作是 session 包的**删**。
 // 后果就是用户看到的两个现象：providers.limit_concurrent_sessions 设了不生效，
 // 渠道并发 session 数恒为 0（展示面一直在读这个恒空的集合）。
@@ -52,6 +56,9 @@ type providerConcurrencyGate struct {
 //
 // sessionID 在构造期捕获：它是每请求事实（守卫链的会话步骤赋值，见 RequestState.sessionID），
 // 而 forward.Deps 跨请求共享（dataplane 每请求拷贝一份再填 Facts，这里同理）。
+//
+// 每个**尝试**（同一个请求会多次调用：重试、竞速的每个 attempt）都拿一个**唯一的尝试 token**，
+// 故同会话的并行尝试各占一个额度（用户 2026-09-22 的裁决：「在飞请求数（每尝试计）」）。
 func (g *providerConcurrencyGate) inFlight(
 	state *RequestState,
 ) func(context.Context, int64, int) forward.ProviderInFlightResult {
@@ -95,7 +102,10 @@ func (g *providerConcurrencyGate) acquire(
 		return forward.ProviderInFlightResult{Allowed: true}
 	}
 
-	result, err := g.tracker.CheckAndTrackProviderSession(ctx, providerID, sessionID, providerLimit)
+	// 每次调用构造一个**唯一成员**（会话身份 + 尝试 token）：一次调用 = 一个在飞尝试 = 一个额度。
+	// 按会话计的旧形制会让同会话的并行请求与竞速尝试只占一个额度，绕过上限。
+	member := session.ProviderAttemptMember(sessionID, newProviderAttemptToken())
+	result, err := g.tracker.CheckAndTrackProviderAttempt(ctx, providerID, member, providerLimit)
 	if err != nil {
 		// limit 层已把 Redis 故障 Fail Open 成 Allowed=true；这里再兜一层并留痕，
 		// 保证「登记失败」永远不会变成客户端可见的 429（限流判定的既有口径）。
@@ -108,12 +118,7 @@ func (g *providerConcurrencyGate) acquire(
 	if !result.Allowed {
 		return forward.ProviderInFlightResult{Current: result.Count}
 	}
-	if !result.Referenced {
-		// Lua 的 referenced=0 表示本次没有拿到释放引用（既有成员且引用已清零等形态）：
-		// 不得安排释放，否则会把别的在飞尝试的引用多减一次。
-		return forward.ProviderInFlightResult{Allowed: true, Current: result.Count}
-	}
-	registered := sync.OnceFunc(func() { g.release(providerID, sessionID) })
+	registered := sync.OnceFunc(func() { g.release(providerID, member) })
 	return forward.ProviderInFlightResult{
 		Allowed: true,
 		Current: result.Count,
@@ -124,16 +129,31 @@ func (g *providerConcurrencyGate) acquire(
 	}
 }
 
-// release 归还一次名额引用（一个引用归零才真正从并发集合里摘除，见 release-provider-session.lua）。
-func (g *providerConcurrencyGate) release(providerID int64, sessionID string) {
+// release 归还一次名额引用（本次尝试的成员恰好一个引用，释放即从并发集合里摘除）。
+func (g *providerConcurrencyGate) release(providerID int64, member string) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), providerInFlightReleaseTimeout)
 	defer cancel()
-	if _, _, err := g.tracker.ReleaseProviderSession(ctx, providerID, sessionID); err != nil {
+	if _, _, err := g.tracker.ReleaseProviderAttempt(ctx, providerID, member); err != nil {
 		g.logger.Warn("dataplane.provider_in_flight_release_failed", map[string]any{
 			"provider_id": providerID,
 			"error":       err.Error(),
 		})
 	}
+}
+
+// newProviderAttemptToken 造一个尝试 token，使**每次尝试的成员唯一**。
+//
+// 为何用随机而不是请求 id + 递增序号：本函数不知道调用方是第几次尝试、也不知道请求 id
+// （缝的签名只有 providerID 与 limit），而成员只需在「同一渠道的同一时间窗内」唯一。
+// 8 字节 16 hex 的碰撞概率在单渠道并发量级下可忽略；即使碰撞，后果也只是少算一个额度
+// （fail-open 方向，与全局 Fail Open 口径一致）。
+func newProviderAttemptToken() string {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		// 取不到随机数时退回时间纳秒：仍然唯一，不必让登记失败。
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 // providerConcurrencyForRequest 取本请求的登记缝；未接线时返回 nil（forward 整段跳过）。

@@ -516,7 +516,7 @@ func handleGetProvidersHealth(deps Deps) http.HandlerFunc {
 		var concurrencyCounts map[int64]int
 		concurrencyReadFailed := false
 		if liveStatsEnabled && deps.ObservedSessions != nil {
-			concurrencyCounts, readErr = deps.ObservedSessions.ProviderSessionCounts(request.Context(), ids)
+			concurrencyCounts, readErr = deps.ObservedSessions.ProviderInFlightCounts(request.Context(), ids)
 			if readErr != nil {
 				adminLoggerOf(deps).Warn("admin_providers_concurrency_read_failed", map[string]any{
 					"error": readErr.Error(),

@@ -146,6 +146,34 @@ func TestProviderConcurrencySwitchOnRegistersLimitlessChannel(t *testing.T) {
 	}
 }
 
+// TestProviderConcurrencyLimitlessRegistersEveryAttempt：没配上限（limit<=0）时**每次尝试**
+// 都登记（只登记不判定），且同会话的多个尝试各占一个成员——这是页面「在飞请求数」的口径。
+//
+// 为何单独钉：limit<=0 走的是 Lua 的「只登记不判定」分支，容易被当成「不做事」而写成早退，
+// 而那会让统计面在没配上限的渠道上恒为 0。
+func TestProviderConcurrencyLimitlessRegistersEveryAttempt(t *testing.T) {
+	gate, _, rdb := realRedisGate(t, alwaysTrackingEnabled)
+	const providerID = int64(900204)
+	ctx := context.Background()
+	key := limit.ProviderActiveSessionsKey(providerID)
+	t.Cleanup(func() { _ = rdb.Del(context.Background(), key, limit.ProviderSessionRefsKey(providerID)).Err() })
+
+	// 同一会话的两次尝试：都放行，且各占一个成员（计数 2）——limit<=0 不判定但登记。
+	first := gate.acquire(ctx, providerID, 0, "sess-same")
+	second := gate.acquire(ctx, providerID, 0, "sess-same")
+	if !first.Allowed || !second.Allowed || first.Release == nil || second.Release == nil {
+		t.Fatalf("没配上限时两个尝试都应放行并登记: first=%+v second=%+v", first, second)
+	}
+	if got := rdb.ZCard(ctx, key).Val(); got != 2 {
+		t.Fatalf("没配上限时同会话两个尝试应各占一个成员（计 2），实际 %d", got)
+	}
+	first.Release()
+	second.Release()
+	if got := rdb.ZCard(ctx, key).Val(); got != 0 {
+		t.Fatalf("全部释放后计数 = %d，应为 0", got)
+	}
+}
+
 // TestProviderConcurrencySwitchFlipsPerCallWithoutRebuild：开关逐请求读——同一个闸门实例，
 // 翻转开关即改变行为，不需要重建。构造期快照会让「管理面改了开关、进程重启才生效」。
 //
