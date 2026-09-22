@@ -29,7 +29,8 @@ vi.mock("next-intl", () => ({
 }));
 
 // react-query：由各用例替换返回值，避免真起 QueryClient。
-const useQueryMock = vi.fn();
+// 默认返回一个空 envelope：列表项内含的并发徽标会解构 `data`，桩返回 undefined 会在渲染时崩。
+const useQueryMock = vi.fn(() => ({ data: undefined, isLoading: false, isFetching: false }));
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
   useQuery: (options: unknown) => useQueryMock(options),
@@ -46,6 +47,8 @@ vi.mock("@/lib/api-client/v1/actions/providers", () => ({
   resetProviderCircuit: vi.fn(),
   resetProviderTotalUsage: vi.fn(),
   undoProviderDelete: vi.fn(),
+  // 列表项现在内含并发徽标（它自带 useQuery，引用了这个导出）；本文件不钉徽标，给个空实现即可。
+  getProvidersHealthStatus: vi.fn(async () => ({})),
 }));
 
 vi.mock("@/app/[locale]/settings/providers/_components/forms/provider-form", () => ({

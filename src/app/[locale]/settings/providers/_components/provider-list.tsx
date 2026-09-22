@@ -40,6 +40,8 @@ interface ProviderListProps {
   allGroups?: string[];
   userGroups?: string[];
   isAdmin?: boolean;
+  /** 全局实时并发统计开关（页面级设置），透传给列表项里的并发徽标。 */
+  liveStatsEnabled?: boolean;
 }
 
 export function ProviderList({
@@ -59,6 +61,7 @@ export function ProviderList({
   allGroups = EMPTY_STRING_ARRAY,
   userGroups = EMPTY_STRING_ARRAY,
   isAdmin = false,
+  liveStatsEnabled = false,
 }: ProviderListProps) {
   const t = useTranslations("settings.providers");
 
@@ -112,6 +115,7 @@ export function ProviderList({
             allGroups={allGroups}
             userGroups={userGroups}
             isAdmin={isAdmin}
+            liveStatsEnabled={liveStatsEnabled}
           />
         ))}
       </div>

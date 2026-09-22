@@ -74,6 +74,8 @@ interface ProviderManagerProps {
   loading?: boolean;
   refreshing?: boolean;
   addDialogSlot?: ReactNode;
+  /** 全局实时并发统计开关（页面级设置），透传给列表项里的并发徽标。 */
+  liveStatsEnabled?: boolean;
 }
 
 export function ProviderManager({
@@ -88,6 +90,7 @@ export function ProviderManager({
   loading = false,
   refreshing = false,
   addDialogSlot,
+  liveStatsEnabled = false,
 }: ProviderManagerProps) {
   const t = useTranslations("settings.providers.search");
   const tStrings = useTranslations("settings.providers");
@@ -692,6 +695,7 @@ export function ProviderManager({
               allGroups={allGroups}
               userGroups={userGroups}
               isAdmin={isAdmin}
+              liveStatsEnabled={liveStatsEnabled}
             />
           ) : (
             <ProviderVendorView

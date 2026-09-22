@@ -27,6 +27,8 @@ vi.mock("next-intl", () => ({
 
 vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  // 列表项现在内含并发徽标，它自带一个 useQuery；本文件不钉徽标，返回空数据即可（徽标因此不渲染）。
+  useQuery: () => ({ data: undefined, isLoading: false, isFetching: false }),
 }));
 
 vi.mock("sonner", () => ({
@@ -41,6 +43,8 @@ vi.mock("@/lib/api-client/v1/actions/providers", () => ({
   resetProviderCircuit: vi.fn(),
   resetProviderTotalUsage: vi.fn(),
   undoProviderDelete: vi.fn(),
+  // 并发徽标引用了这个导出（它自带 useQuery）；本文件不钉徽标，给个空实现即可。
+  getProvidersHealthStatus: vi.fn(async () => ({})),
 }));
 
 // 弹窗/表单类子组件：本文件断的是**行上**的徽标，与这些无关，换成轻量占位。

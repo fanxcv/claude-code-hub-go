@@ -47,6 +47,8 @@ const providersActionMocks = vi.hoisted(() => ({
   getUnmaskedProviderKey: vi.fn(async () => ({ ok: true, data: { key: "sk-test" } })),
   resetProviderCircuit: vi.fn(async () => ({ ok: true })),
   resetProviderTotalUsage: vi.fn(async () => ({ ok: true })),
+  // 并发徽标引用了这个导出（它自带 useQuery）；本文件不钉徽标，给个空实现即可。
+  getProvidersHealthStatus: vi.fn(async () => ({})),
 }));
 vi.mock("@/lib/api-client/v1/actions/providers", () => providersActionMocks);
 

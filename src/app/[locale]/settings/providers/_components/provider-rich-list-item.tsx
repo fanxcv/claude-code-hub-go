@@ -2,7 +2,6 @@
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  Activity,
   AlertTriangle,
   ArrowRightLeft,
   CheckCircle,
@@ -87,6 +86,7 @@ import { InlineEditPopover } from "./inline-edit-popover";
 import { invalidateProviderQueries } from "./invalidate-provider-queries";
 import { PriorityEditPopover } from "./priority-edit-popover";
 import { ProviderCircuitLogsDialog } from "./provider-circuit-logs-dialog";
+import { ProviderConcurrencyBadge } from "./provider-concurrency-badge";
 import { ProviderEndpointHover } from "./provider-endpoint-hover";
 import { ProviderFormDialogContent } from "./provider-form-dialog-content";
 import type { ProviderViewer } from "./provider-viewer";
@@ -117,6 +117,8 @@ interface ProviderRichListItemProps {
   allGroups?: string[];
   userGroups?: string[];
   isAdmin?: boolean;
+  /** 全局实时并发统计开关（页面级设置）；未传即当作关，并发徽标完全惰性。 */
+  liveStatsEnabled?: boolean;
 }
 
 function ProviderRichListItemInner({
@@ -139,6 +141,7 @@ function ProviderRichListItemInner({
   allGroups = [],
   userGroups = [],
   isAdmin = false,
+  liveStatsEnabled = false,
 }: ProviderRichListItemProps) {
   const queryClient = useQueryClient();
 
@@ -534,22 +537,9 @@ function ProviderRichListItemInner({
   const slowRateModelKey = healthStatus?.slowRate?.modelKey ?? null;
   const slowRateCombinations = healthStatus?.slowRate?.combinations ?? 0;
 
-  // 实时并发：只在统计开启且读得到时呈现。
-  //
-  // 三态各自有原因不占位：
-  //   - trackingEnabled 为假：统计根本没在跑（服务端也不会给数）；
-  //   - available 为假：开着但读不到（无值可报，不在这里编一个 0）；
-  //   - activeSessions 为 null：同上（与 available 同源的双保险）。
-  // 与 slowRate 徽标同一条纪律（showCircuitBadges）：停用渠道不报读数。
-  const concurrency = healthStatus?.concurrency ?? null;
-  const concurrencyActive =
-    concurrency?.trackingEnabled === true &&
-    concurrency.available &&
-    concurrency.activeSessions !== null
-      ? concurrency.activeSessions
-      : null;
-  const showConcurrencyBadge = showCircuitBadges && concurrencyActive !== null;
-  // 并发上限：渠道级配置，为 0（未设）时只显示分子，不显示一个假的「/0」。
+  // 实时并发徽标已下沉到 `ProviderConcurrencyBadge`（叶子组件、独占轮询订阅），
+  // 故本组件不再从 healthStatus 读 concurrency：那会让每 5 秒一次的重取把整列表重渲染。
+  // 并发上限仍在这里读（它是渠道级配置，来自 providers 查询，不参与轮询）。
   const concurrencyLimit = provider.limitConcurrentSessions ?? 0;
   const accentColor = hasKeyCircuitOpen
     ? "border-l-red-500"
@@ -692,23 +682,14 @@ function ProviderRichListItemInner({
                   })}
             </Badge>
           )}
-          {/* 实时并发数：需在系统设置里开启全局统计（关闭时服务端不报数、本页也不轮询）。
-              与并发上限一起报「用了几个 / 上限几个」；未设上限时只报分子。 */}
-          {showConcurrencyBadge && concurrencyActive !== null && (
-            <Badge
-              variant="outline"
-              className="flex items-center gap-1 bg-sky-50 text-sky-700 border-sky-300 hover:bg-sky-100 dark:bg-sky-950/40 dark:text-sky-400 dark:border-sky-800"
-              title={tList("concurrency.tooltip")}
-            >
-              <Activity className="h-3 w-3" />
-              {concurrencyLimit > 0
-                ? tList("concurrency.badgeWithLimit", {
-                    count: concurrencyActive,
-                    limit: concurrencyLimit,
-                  })
-                : tList("concurrency.badge", { count: concurrencyActive })}
-            </Badge>
-          )}
+          {/* 实时并发数：独立订阅轮询（见 ProviderConcurrencyBadge 的说明，那里解释了为何
+              不能由本组件接收 healthStatus 再层层传下来）。 */}
+          <ProviderConcurrencyBadge
+            providerId={provider.id}
+            limit={concurrencyLimit}
+            isEnabled={provider.isEnabled}
+            liveStatsEnabled={liveStatsEnabled}
+          />
           {/* Endpoint-level circuit badge */}
           {showCircuitBadges && endpointCircuitInfo?.some((ep) => ep.circuitState === "open") && (
             <Badge
@@ -993,22 +974,14 @@ function ProviderRichListItemInner({
                     })}
               </Badge>
             )}
-            {/* 实时并发数（桌面端同款，见那里的说明）。 */}
-            {showConcurrencyBadge && concurrencyActive !== null && (
-              <Badge
-                variant="outline"
-                className="flex items-center gap-1 flex-shrink-0 bg-sky-50 text-sky-700 border-sky-300 hover:bg-sky-100 dark:bg-sky-950/40 dark:text-sky-400 dark:border-sky-800"
-                title={tList("concurrency.tooltip")}
-              >
-                <Activity className="h-3 w-3" />
-                {concurrencyLimit > 0
-                  ? tList("concurrency.badgeWithLimit", {
-                      count: concurrencyActive,
-                      limit: concurrencyLimit,
-                    })
-                  : tList("concurrency.badge", { count: concurrencyActive })}
-              </Badge>
-            )}
+            {/* 实时并发数（移动端同款，见桌面端说明）。 */}
+            <ProviderConcurrencyBadge
+              providerId={provider.id}
+              limit={concurrencyLimit}
+              isEnabled={provider.isEnabled}
+              liveStatsEnabled={liveStatsEnabled}
+              className="flex-shrink-0"
+            />
             {/* Endpoint-level circuit badge */}
             {showCircuitBadges && endpointCircuitInfo?.some((ep) => ep.circuitState === "open") && (
               <Badge
@@ -1413,7 +1386,8 @@ export const ProviderRichListItem = memo(ProviderRichListItemInner, (prev, next)
     prev.activeGroupFilter === next.activeGroupFilter &&
     prev.allGroups === next.allGroups &&
     prev.userGroups === next.userGroups &&
-    prev.isAdmin === next.isAdmin
+    prev.isAdmin === next.isAdmin &&
+    prev.liveStatsEnabled === next.liveStatsEnabled
   );
 });
 
