@@ -534,8 +534,17 @@
       },
       "probeAfterFirstByteSeconds": {
         "label": "Stall probe threshold after first byte (seconds)",
-        "desc": "Counted from first byte arrival; once reached with no content frame produced yet, this provider is aborted and a retry is made on another. Leave empty to leave this mechanism off.",
+        "desc": "Counted from first byte arrival; once reached with no content frame produced yet, this provider is aborted and a retry is made on another. Leave empty for the default of 30 seconds (requires the slow-rate monitor above to be on); set 0 to disable the probe.",
         "placeholder": "30"
+      },
+      "precommitEnabled": {
+        "label": "Pre-commit rate gate",
+        "desc": "When on, a short prefix is buffered in the gateway and judged by its output rate: fast enough is released immediately, slow is aborted and retried on another provider before the client receives any byte. The cost is a first byte delayed by up to half a minute. Off by default, and never active while the monitor above is off."
+      },
+      "precommitMinBytesPerSecond": {
+        "label": "Rate threshold (bytes/second)",
+        "desc": "Leave empty to derive it from this provider's historical baseline (baseline median rate x slow ratio x 4 bytes/token). Setting 0 disables the gate.",
+        "placeholder": "Leave empty to auto-derive"
       },
       "recoveryRequests": {
         "label": "Recovery threshold (requests)",

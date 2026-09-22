@@ -242,11 +242,48 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 		return
 	}
 
-	count := int(zcard.Val())
+	r.advanceSlowState(ctx, slowFact{
+		ProviderID: facts.ProviderID,
+		ModelKey:   facts.ModelKey,
+		RequestID:  facts.RequestID,
+		SessionID:  facts.SessionID,
+		KeyID:      facts.KeyID,
+	}, params, stateKey, ttl, int(zcard.Val()), at)
+}
+
+// slowFact 是一条低速事实的**作用域与身份**：写 state、记降权日志、写会话冷却都要用它。
+//
+// 与 Facts / PrecommitFacts 分开：那两者是**输入**（成因各异：实测速率低于低速线 vs 提交前
+// 探测判定），而本结构是两条写入路径**汇合之后**的共同部分——汇合处必须只此一份，否则
+// 「同一档位两条路径算出不同惩罚」这类分叉会静默发生。
+type slowFact struct {
+	ProviderID int64
+	ModelKey   string
+	RequestID  int64
+	SessionID  string
+	KeyID      int64
+}
+
+// advanceSlowState 是慢状态推进的唯一实现点（终态速率样本与提交前判废共用）。
+func (r *Recorder) advanceSlowState(
+	ctx context.Context,
+	fact slowFact,
+	params Params,
+	stateKey string,
+	ttl time.Duration,
+	count int,
+	at int64,
+) {
 	// 判定门槛（设计稿 §5 边界：窗内计数不足阈值即**不推进状态**，fail-open）。
 	//
 	// 注意这**不是**「惩罚不衰减」：衰减由读侧当场派生实现（它数的是滑窗里的活成员，
 	// 见 route.deriveSlowRatePenalty），这里的提前返回只意味着「不把标记推得更重」。
+	//
+	// 为何 state 键只在此处创建（计数不足阈值就不创建）：读侧对某组合施惩罚前有一道
+	// **存在性闸门**——没有 state 键就连滑窗都不数（route 里的 `if !decoded[index].exists`）。
+	// 于是「state 键存在」与「该组合真的被计过惩罚」严格等价；若为未达阈值的样本也建键，
+	// 管理面 providers_health 的全库 SCAN（模式 `cch:slow:*:state`）会凭空多出一批惩罚为 0
+	// 的键——与「把连续干净计数放在独立键而非 state 的一个字段」是同一个理由。
 	if count < params.TriggerCount {
 		return
 	}
@@ -276,15 +313,90 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 	)
 	statePipe.Expire(ctx, stateKey, ttl)
 	if _, err := statePipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		r.warn("slowrate.state_write_failed", facts, err)
+		r.warnFact("slowrate.state_write_failed", fact, err)
 		return
 	}
 	// 惩罚档位变化记一条低速日志（旁路：失败只 warn，见 slowlog 包注释）。
 	// 与 state 同 pipeline 取旧值，故本调用不新增 Redis 往返。
 	slowlog.RecordPenaltyChange(
-		ctx, r.redis, r.logger, facts.ProviderID, facts.ModelKey, previousPenalty.Val(), penalty,
+		ctx, r.redis, r.logger, fact.ProviderID, fact.ModelKey, previousPenalty.Val(), penalty,
 	)
-	r.writeCooldown(ctx, facts, params)
+	r.writeCooldown(ctx, fact, params)
+}
+
+// PrecommitFacts 是一次「提交前判慢」的事实。
+//
+// 为何不重用 Facts：Facts 的每个判据都建立在**能算出的生成速率**上（status 200、输出 token
+// 够长、首字节比例达标、有基线），而提交前判废时流还没走完——没有权威 token 数，速率根本
+// 算不出来。可判废本身已经是「这家在磨」的实测结论，不需要再折算一次速率。
+type PrecommitFacts struct {
+	// ProviderID 是**被判废的那家**，不是作答的那家（判废后由别家作答时两者不同）。
+	ProviderID int64
+	SessionID  string
+	KeyID      int64
+	ModelKey   string
+	RequestID  int64
+}
+
+// RecordPrecommit 把一次「提交前判废」记成一条低速事实。
+//
+// 闭环背景：判废发生在 forward 的尝试层，而低速写侧只采**最终作答者**的终态样本（
+// terminal 的 recordSlowRateCommitted）。于是判废后由别家作答成功时，那条样本落在别家，
+// 被判废的慢家**不会因此被标慢**——闭环断在「检测到」与「标记慢」之间。本函数补上这一跳：
+// 判废事实**就地**写进慢家自己的作用域，不等任何终态采样。
+//
+// 语义：判废与实测慢样本**同权**——都是「这个组合在窗内又出了一次慢」。故它写同一个滑窗、
+// 打断同一个连续干净计数、走同一套「达阈值才推进 state」的判据（共用 advanceSlowState，
+// 惩罚分档与读侧同一个函数）。区别只在成因。
+//
+// 幂等：滑窗成员是**请求 id**（与终态样本逐字同形），故同一请求的多次判废（同家重试、多
+// attempt）只占一格；且「同一请求既被判废又被采样」也只算一次——成员相同，ZADD 不增员。
+//
+// 刻意不读基线：本事实不依赖「这家平时多快」。但需知读侧是否施惩罚仍由它自己的基线规则
+// （route.slowRateBaselineUsable）决定，故无可用基线的组合会记下事实却仍无惩罚——那是读侧
+// 既有口径，不在本函数改动范围。
+//
+// 失败一律只 warn：与 Record 同为纯旁路，不得影响结算。
+func (r *Recorder) RecordPrecommit(ctx context.Context, facts PrecommitFacts) {
+	if r == nil || facts.ProviderID <= 0 || facts.ModelKey == "" || facts.RequestID <= 0 {
+		return
+	}
+	// 零开销闸门：未开启监控的渠道就此返回，不做任何 Redis 读写。
+	params, enabled := r.config.SlowRateConfig(ctx, facts.ProviderID)
+	if !enabled {
+		return
+	}
+	params = params.normalize()
+
+	windowKey := samplesKey(facts.ProviderID, facts.ModelKey)
+	stateKey := stateKey(facts.ProviderID, facts.ModelKey)
+	streakKey := cleanStreakKey(facts.ProviderID, facts.ModelKey)
+	at := r.now().UnixMilli()
+	windowMS := int64(params.WindowMinutes) * 60 * 1000
+	ttl := time.Duration(params.WindowMinutes*2) * time.Minute
+
+	pipe := r.redis.Pipeline()
+	pipe.ZAdd(ctx, windowKey, redis.Z{Score: float64(at), Member: strconv.FormatInt(facts.RequestID, 10)})
+	pipe.ZRemRangeByScore(ctx, windowKey, "0", strconv.FormatInt(at-windowMS, 10))
+	pipe.Expire(ctx, windowKey, ttl)
+	zcard := pipe.ZCard(ctx, windowKey)
+	// 与慢样本同规矩：一条慢事实打断连续干净计数（理由见 Record 里那处 DEL 的说明）。
+	pipe.Del(ctx, streakKey)
+	if _, err := pipe.Exec(ctx); err != nil {
+		r.warnFact("slowrate.precommit_write_failed", slowFact{
+			ProviderID: facts.ProviderID,
+			ModelKey:   facts.ModelKey,
+			RequestID:  facts.RequestID,
+		}, err)
+		return
+	}
+	r.advanceSlowState(ctx, slowFact{
+		ProviderID: facts.ProviderID,
+		ModelKey:   facts.ModelKey,
+		RequestID:  facts.RequestID,
+		SessionID:  facts.SessionID,
+		KeyID:      facts.KeyID,
+	}, params, stateKey, ttl, int(zcard.Val()), at)
 }
 
 // recordClean 累计「连续干净样本」，达到恢复阈值即重置该组合的降权。
@@ -423,13 +535,13 @@ func (r *Recorder) resetAfterRecovery(
 // 键形制复用 session.ProviderCooldownKey，不另立——两处拼同一个键，拼错即静默失效。
 // 写侧不走 Binder.Clear：那是「带 CAS 清理绑定 + 顺带写冷却」的组合动作，而本处不打算清绑定
 // （清绑定会让会话重新走初选，正是要避免的）；直接 SETEX 只写冷却键，语义最小。
-func (r *Recorder) writeCooldown(ctx context.Context, facts Facts, params Params) {
-	if facts.SessionID == "" {
+func (r *Recorder) writeCooldown(ctx context.Context, fact slowFact, params Params) {
+	if fact.SessionID == "" {
 		return
 	}
-	key := session.ProviderCooldownKey(facts.SessionID, facts.KeyID, facts.ProviderID)
+	key := session.ProviderCooldownKey(fact.SessionID, fact.KeyID, fact.ProviderID)
 	if err := r.redis.Set(ctx, key, "slow", time.Duration(params.CooldownSeconds)*time.Second).Err(); err != nil {
-		r.warn("slowrate.cooldown_write_failed", facts, err)
+		r.warnFact("slowrate.cooldown_write_failed", fact, err)
 	}
 }
 
@@ -510,6 +622,19 @@ func (r *Recorder) warn(event string, facts Facts, err error) {
 		"providerId": facts.ProviderID,
 		"modelKey":   facts.ModelKey,
 		"requestId":  facts.RequestID,
+		"error":      err.Error(),
+	})
+}
+
+// warnFact 是 slowFact 路径的日志出口（与 warn 同一组字段，只是输入结构不同）。
+func (r *Recorder) warnFact(event string, fact slowFact, err error) {
+	if r.logger == nil {
+		return
+	}
+	r.logger.Warn(event, map[string]any{
+		"providerId": fact.ProviderID,
+		"modelKey":   fact.ModelKey,
+		"requestId":  fact.RequestID,
 		"error":      err.Error(),
 	})
 }

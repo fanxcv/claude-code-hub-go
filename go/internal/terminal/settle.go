@@ -343,6 +343,7 @@ func (s *Settler) SettleContext(
 		// 改道计数与墓碑同一口径：它不依赖是否赢得终态，而「唯一候选被会话冷却剔掉」
 		// 恰恰是**没有可提交账务**的那条 503——把它放在 winner 里会永远收不到。
 		s.recordSlowDiverts(ctx, settlement.SlowDiverts)
+		s.recordSlowPrecommit(ctx, settlement.SlowPrecommit)
 		return result, err
 	}
 	// 未入队（同步模式或队列满降级）：与接线前逐字一致——墓碑先、winner 后，且都在
@@ -350,6 +351,7 @@ func (s *Settler) SettleContext(
 	s.affinityWriteback(ctx, pc, settlement.Affinity, result.Committed)
 	s.recordSlowRateCommitted(ctx, settlement.SlowRate, result.Committed)
 	s.recordSlowDiverts(ctx, settlement.SlowDiverts)
+	s.recordSlowPrecommit(ctx, settlement.SlowPrecommit)
 	return result, err
 }
 

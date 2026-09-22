@@ -166,6 +166,13 @@ type BodyErrorDetector interface {
 }
 
 // Failure 是一次尝试失败的完整归因，承载重试决策与落链所需的全部事实。
+const (
+	// ProbeSlowKindStall 表示判慢来自「首字后停滞」探测：自首个非空 chunk 起 T 秒零内容。
+	ProbeSlowKindStall = "stall"
+	// ProbeSlowKindRate 表示判慢来自分级速率闸：有语义内容但速率不达标。
+	ProbeSlowKindRate = "rate"
+)
+
 type Failure struct {
 	// Category 是分类结果，决定重试与切换。
 	Category Category
@@ -197,12 +204,18 @@ type Failure struct {
 	// current / limit 两字段（见 dataplane 的 saturationRateLimitBlock）。
 	ConcurrencyCurrent int
 	ConcurrencyLimit   int
-	// ProbeSlow 为真表示本次尝试因**中途低速探测**被主动判废：首字节已到，但自首字节起
-	// 超过探测阈值仍未产出可提交内容。它不是传输故障，而是「这家在磨」的实测结论。
+	// ProbeSlow 为真表示本次尝试因**主动判慢**被丢弃：首字节已到，但自首字节起
+	// 超过探测阈值仍未产出可提交内容（stall），或已有内容但速率达不到分级速率闸的阈值（rate）。
+	// 它不是传输故障，而是「这家在磨」的实测结论。
 	ProbeSlow bool
+	// ProbeSlowKind 区分判慢来源：stall（首字后停滞）与 rate（分级速率闸）。
+	// ProbeSlow 为假时为空串。
+	ProbeSlowKind string
 	// ProbeElapsedMS 是自首字节起、直到判废的时长（毫秒）；ProbeSlow 为假时无意义。
 	ProbeElapsedMS int
-	Attempt        int
+	// ProbeSlowBytesPerSecond 是速率闸判慢时的实测速率（字节/秒）；非 rate 来源为 0。
+	ProbeSlowBytesPerSecond int
+	Attempt                 int
 
 	// Err 是底层错误，保留 errors.Is 链路。
 	Err error

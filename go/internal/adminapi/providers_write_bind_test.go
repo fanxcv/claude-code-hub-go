@@ -138,6 +138,9 @@ var providerWriteSamplePayload = map[string]string{
 	"slow_rate_recovery_requests":       `10`,
 	// 首字后停滞探测阈值列（0130），同样走非空分支。
 	"slow_rate_probe_after_first_byte_seconds": `30`,
+	// 提交前速率闸（0136）：闸给 true（非空布尔分支）、阈值给真实值（非空整数分支）。
+	"slow_rate_precommit_enabled":              `true`,
+	"slow_rate_precommit_min_bytes_per_second": `291`,
 }
 
 // TestProviderCreateFieldsBindToStoreTypes 覆盖创建入口：同一份表里除了 description

@@ -75,6 +75,14 @@ func TestSlowRateWriteBindingsUseNewColumnsWithLegacyPayloadNames(t *testing.T) 
 			}
 			continue
 		}
+		// 提交前速率闸的**闸本身**是可空布尔（NULL = 未覆盖 ⇒ false），不是 nullable_int：
+		// 它的默认值不是「数」而是「关」，且必须能分辨「未配」与「配成关」。
+		if field.Payload == "slow_rate_precommit_enabled" {
+			if field.Kind != providerNullableBoolKind {
+				t.Errorf("slow_rate_precommit_enabled 应是 nullable_bool kind（NULL = 未覆盖），得到 %v", field.Kind)
+			}
+			continue
+		}
 		if field.Payload == "slow_rate_ratio_per_mille" {
 			if field.Kind != providerNumericKind {
 				t.Errorf("slow_rate_ratio_per_mille 的系数是 numeric(5,4) 小数，kind 应为 numeric，得到 %v", field.Kind)

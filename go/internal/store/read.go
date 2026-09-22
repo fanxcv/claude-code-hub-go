@@ -193,8 +193,21 @@ type Provider struct {
 	// SlowRateRecoveryRequests 是**恢复策略阈值**（默认 10）：连续这么多个「可判定」请求都
 	// 不慢即重置降权。NULL = 取代码默认。
 	SlowRateRecoveryRequests *int `json:"slow_rate_recovery_requests"`
-	// SlowRateProbeAfterFirstByteSeconds 是**首字后停滞探测阈值**（秒）；NULL = 不探测（机制默认关闭）。
+	// SlowRateProbeAfterFirstByteSeconds 是**首字后停滞探测阈值**（秒）。
+	//
+	// NULL = **未覆盖**（不是「关闭」）：监控开关打开时取 slowrate.DefaultProbeAfterFirstByteSeconds。
+	// 真正的关闭由 SlowRateMonitorEnabled 承载。
 	SlowRateProbeAfterFirstByteSeconds *int `json:"slow_rate_probe_after_first_byte_seconds"`
+	// SlowRatePrecommitEnabled 是**提交前速率闸**的逐渠道总闸（默认全关）。
+	//
+	// NULL = 未覆盖 ⇒ 取默认 false。它改变的是**首字时延**：开启后内容先在门控里暂存、
+	// 看速率再决定提交或换家，故必须逐渠道显式打开，不得因监控开关打开而自动生效。
+	SlowRatePrecommitEnabled *bool `json:"slow_rate_precommit_enabled"`
+	// SlowRatePrecommitMinBytesPerSecond 是提交前速率闸的阈值（语义字节/秒）。
+	//
+	// NULL = 未覆盖 ⇒ 由该组合的基线推导（slowrate.DerivePrecommitMinBytesPerSecond）；
+	// 无可用基线即不启用（fail-open）。显式设值则不再推导。
+	SlowRatePrecommitMinBytesPerSecond *int `json:"slow_rate_precommit_min_bytes_per_second"`
 }
 
 // ProviderEndpoint 是 provider_endpoints 的读取视图（供应商厂级端点）。

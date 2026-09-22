@@ -354,6 +354,10 @@ function ProviderFormContent({
           slow_rate_recovery_requests: state.routing.slowRateRecoveryRequests,
           slow_rate_probe_after_first_byte_seconds:
             state.routing.slowRateProbeAfterFirstByteSeconds,
+          // 提交前速率闸：闸可空（null = 未覆盖 ⇒ false），阈值可空（null = 未覆盖 ⇒ 由基线推导）。
+          slow_rate_precommit_enabled: state.routing.slowRatePrecommitEnabled,
+          slow_rate_precommit_min_bytes_per_second:
+            state.routing.slowRatePrecommitMinBytesPerSecond,
           model_redirects:
             state.routing.modelRedirects.length > 0 ? state.routing.modelRedirects : null,
           allowed_models:

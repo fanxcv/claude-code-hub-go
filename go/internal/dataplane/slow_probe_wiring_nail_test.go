@@ -21,12 +21,42 @@ import (
 var slowProbeWiring = regexp.MustCompile(
 	`(?m)^\s*ProbeAfterFirstByteFor:\s+idleTimeouts\.probeAfterFirstByte,\s*$`)
 
-func TestStreamWiringPropagatesSlowProbeThreshold(t *testing.T) {
+// 提交前速率闸的两条接线同理：摘掉任何一行，配置面全部单测仍绿，而闸在真实请求上永不生效
+// （阈值恒为 0 ⇒ gate 认为「不启用」；影子开关恒为 false ⇒ 上线即改变首字时延，
+// 而三档阈值尚未标定）。故同样用源码发现钉死。
+var precommitRateWiring = regexp.MustCompile(
+	`(?m)^\s*PrecommitRateFor:\s+idleTimeouts\.precommitRate,\s*$`)
+
+var precommitShadowWiring = regexp.MustCompile(
+	`(?m)^\s*PrecommitShadow:\s+precommitShadowEnabled\(\),\s*$`)
+
+func TestStreamWiringPropagatesPrecommitRateGate(t *testing.T) {
+	source := readAssembleSource(t)
+	if !precommitRateWiring.Match(source) {
+		t.Fatalf("assemble.go 里找不到「providers.slow_rate_precommit_min_bytes_per_second → " +
+			"forward.StreamOptions.PrecommitRateFor」的接线：\n" +
+			"  期望形如 `PrecommitRateFor: idleTimeouts.precommitRate,`\n" +
+			"  该行缺失时，提交前速率闸在真实请求上永不触发（阈值恒为 0）。")
+	}
+	if !precommitShadowWiring.Match(source) {
+		t.Fatalf("assemble.go 里找不到影子开关的接线：\n" +
+			"  期望形如 `PrecommitShadow: precommitShadowEnabled(),`\n" +
+			"  该行缺失时默认值退化为 false ⇒ 上线即改变首字时延，跳过影子取证期。")
+	}
+}
+
+func readAssembleSource(t *testing.T) []byte {
+	t.Helper()
 	path := filepath.Join("assemble.go")
 	source, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("读取 %s 失败：%v", path, err)
 	}
+	return source
+}
+
+func TestStreamWiringPropagatesSlowProbeThreshold(t *testing.T) {
+	source := readAssembleSource(t)
 	if !slowProbeWiring.Match(source) {
 		t.Fatalf("assemble.go 里找不到「providers.slow_rate_probe_after_first_byte_seconds → " +
 			"forward.StreamOptions.ProbeAfterFirstByteFor」的接线：\n" +

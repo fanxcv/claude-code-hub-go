@@ -343,6 +343,9 @@ func (s *storeSettler) NonStream(
 		if len(result.Attempts) > 0 {
 			settlement.ProviderChain = s.providerChain(result.Attempts)
 		}
+		// 提交前判慢事实：与 provider_chain 同一处收——尝试留痕只在这两处可见，
+		// 而它正是「哪家被判废」的唯一来源。
+		settlement.SlowPrecommit = s.slowPrecommit(pc, result.Attempts)
 		// routing_trace：把本次真实跑过的路径与实测事件落库（Node 侧由 discovery/竞速子系统写）。
 		// 事实源全部来自 forward 层的测量；无真实留痕时返回 nil，列保持原值。
 		settlement.RoutingTrace = s.routingTrace(result.Attempts, result.EndedAt, result.StatusCode, settlement.TTFTMS, settlement.FirstByteMS)
@@ -444,6 +447,8 @@ func (s *storeSettler) Stream(ctx context.Context, pc *pctx.Context, outcome for
 	if len(outcome.Attempts) > 0 {
 		settlement.ProviderChain = s.providerChain(outcome.Attempts)
 	}
+	// 提交前判慢事实：同非流式口径，与 provider_chain 同一处收。
+	settlement.SlowPrecommit = s.slowPrecommit(pc, outcome.Attempts)
 	// routing_trace：同非流式口径（事实来自 forward 的实测留痕）。
 	settlement.RoutingTrace = s.routingTrace(outcome.Attempts, outcome.At, outcome.StatusCode, settlement.TTFTMS, settlement.FirstByteMS)
 	// 终态追加的审计：与信息式路径同一口径（取转换器产物而非二次推导）。
@@ -524,26 +529,94 @@ func (s *storeSettler) logSettle(_ context.Context, pc *pctx.Context, settlement
 //   - SessionID / KeyID 供会话级冷却键：会话身份来自本请求的会话步骤记录（state.sessionID），
 //     密钥 id 来自鉴权槽位。未接线时保持零值，slowrate 会只做渠道级统计。
 func (s *storeSettler) slowRateSample(pc *pctx.Context, settlement terminal.Settlement) terminal.SlowRateSample {
+	scope := s.slowScope(pc)
 	sample := terminal.SlowRateSample{
-		ModelKey:     pubstatus.ResolveSuccessRateModelKey(&s.state.Model, nil),
+		ModelKey:     scope.ModelKey,
 		StatusCode:   settlement.StatusCode,
 		DurationMS:   settlement.DurationMS,
 		FirstByteMS:  settlement.FirstByteMS,
 		OutputTokens: settlement.Usage.OutputTokens,
-		SessionID:    s.state.sessionID,
+		SessionID:    scope.SessionID,
+		KeyID:        scope.KeyID,
+		RequestID:    scope.RequestID,
 	}
 	if settlement.ProviderID != nil {
 		sample.ProviderID = *settlement.ProviderID
 	}
+	return sample
+}
+
+// slowScope 见 storeSettler.slowScope。
+type slowScope struct {
+	ModelKey  string
+	SessionID string
+	KeyID     int64
+	RequestID int64
+}
+
+// slowScope 是两类低速事实（终态速率样本、提交前判废）共同的**作用域原料**。
+//
+// 为何抽到一处：两者必须落到**同一把键**上。模型键或请求 id 任一不一致，写进的滑窗就
+// 不是读侧要数的那个（读侧按请求的模型键查 state 与滑窗），标记于是静默隐形——这正是
+// 本仓反复出现的一类缺陷（「已定义≠未接线」的同构形态：值算了但没落到读侧看的地方）。
+func (s *storeSettler) slowScope(pc *pctx.Context) slowScope {
+	scope := slowScope{
+		ModelKey: pubstatus.ResolveSuccessRateModelKey(&s.state.Model, nil),
+		// 会话身份来自本请求的会话步骤记录（state.sessionID），密钥 id 来自鉴权槽位；
+		// 未接线时保持零值，slowrate 会只做渠道级统计、不写会话冷却。
+		SessionID: s.state.sessionID,
+	}
 	if pc != nil {
 		if auth, ok := pc.Auth(); ok {
-			sample.KeyID = auth.KeyID
+			scope.KeyID = auth.KeyID
 		}
 		if id, ok := pc.MessageRequestID(); ok {
-			sample.RequestID = id
+			scope.RequestID = id
 		}
 	}
-	return sample
+	return scope
+}
+
+// slowPrecommit 取本次请求里「因提交前探测判废」的渠道。
+//
+// 为何要在这里收：判废事实本来只挂在尝试留痕上（forward.AttemptOutcome.ProbeSlow），而低速
+// 写侧只采**作答者**的终态样本——判废后由别家作答成功时，那条样本落在别家，被判废的慢家
+// 不会因此被标慢。本函数把该事实从尝试留痕里捞出来交给终态旁路，闭环才接上。
+//
+// 按渠道去重（同一请求对同一家可能多次尝试：重试、竞速），且**只认 ProbeSlow**：普通的
+// 尝试失败（超时、5xx、被竞速淘汰）不构成「这家慢」的结论。
+//
+// 两条终态路径都要调（非流式也不能漏）：闸门跑在 forward 的尝试处理里，当响应是 JSON 等
+// 非流形态且被 gated/ForceGate 命中时同样会走到探测，故 ProbeSlow 并非流式独有。
+func (s *storeSettler) slowPrecommit(pc *pctx.Context, attempts []forward.AttemptOutcome) []terminal.SlowPrecommit {
+	if s == nil || s.state == nil || len(attempts) == 0 {
+		return nil
+	}
+	scope := s.slowScope(pc)
+	// 模型键或请求 id 缺失就不写：请求 id 是滑窗成员的幂等键，没有它就无从保证
+	// 「同一请求只计一次」（与 slowrate.Record 的同一道前置）。
+	if scope.ModelKey == "" || scope.RequestID <= 0 {
+		return nil
+	}
+	seen := map[int64]struct{}{}
+	out := make([]terminal.SlowPrecommit, 0, 1)
+	for _, attempt := range attempts {
+		if !attempt.ProbeSlow || attempt.ProviderID <= 0 {
+			continue
+		}
+		if _, ok := seen[attempt.ProviderID]; ok {
+			continue
+		}
+		seen[attempt.ProviderID] = struct{}{}
+		out = append(out, terminal.SlowPrecommit{
+			ProviderID: attempt.ProviderID,
+			ModelKey:   scope.ModelKey,
+			RequestID:  scope.RequestID,
+			SessionID:  scope.SessionID,
+			KeyID:      scope.KeyID,
+		})
+	}
+	return out
 }
 
 // noProviderDivertedAll 从无可用供应商的归因里抽出「被低速会话冷却剔掉」的家。

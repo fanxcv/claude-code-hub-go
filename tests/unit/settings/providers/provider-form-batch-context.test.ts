@@ -263,7 +263,9 @@ describe("providerFormReducer - SET_SLOW_RATE_PARAMS / 基线窗字段", () => {
 // ---------------------------------------------------------------------------
 
 describe("providerFormReducer - SET_SLOW_RATE_PARAMS / 探测阈值", () => {
-  it("batch 初始态探测阈值回退为 null（即不启用该机制）", () => {
+  // 注意：null 的语义是「未覆盖」（监控开关打开时取出厂 30s），不是「不启用」。
+  // 真正的「不启用」是 slowRateMonitorEnabled=false，或显式填 0。
+  it("batch 初始态探测阈值为 null（未覆盖，于是取出厂值）", () => {
     const state = createInitialState("batch");
 
     expect(state.routing.slowRateProbeAfterFirstByteSeconds).toBeNull();
@@ -299,8 +301,66 @@ describe("providerFormReducer - SET_SLOW_RATE_PARAMS / 探测阈值", () => {
       payload: { slowRateProbeAfterFirstByteSeconds: null },
     });
 
-    // null 是「不探测」的明确取值（不是「取默认」），故必须能真的清空——
-    // 若被 reducer 当成「未提供」而保留旧值，管理员就永远关不掉这个机制。
+    // null 是「未覆盖」的取值，故必须能真的清空——
+    // 若被 reducer 当成「未提供」而保留旧值，管理员就永远改不回「取出厂值」。
     expect(cleared.routing.slowRateProbeAfterFirstByteSeconds).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 提交前速率闸：两个新字段的初始态与写入贯通（2026-09-22）
+// ---------------------------------------------------------------------------
+
+describe("providerFormReducer - SET_SLOW_RATE_PARAMS / 提交前速率闸", () => {
+  it("batch 与 create 初始态均为 null（未覆盖），不随监控开关自动打开", () => {
+    for (const mode of ["batch", "create"] as const) {
+      const state = createInitialState(mode);
+
+      // null = 未覆盖。后端据此取默认 false（闸关）——若前端默认写成 true，
+      // 管理员一打开监控开关就会连带把首字时延拖长。
+      expect(state.routing.slowRatePrecommitEnabled).toBeNull();
+      expect(state.routing.slowRatePrecommitMinBytesPerSecond).toBeNull();
+    }
+  });
+
+  it("闸与阈值可分别写入，互不扰动", () => {
+    const enabled = providerFormReducer(createInitialState("batch"), {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRatePrecommitEnabled: true },
+    });
+
+    expect(enabled.routing.slowRatePrecommitEnabled).toBe(true);
+    // 阈值仍为 null = 未覆盖 ⇒ 后端由基线推导；写开关不得顺手把阈值钉成某个数。
+    expect(enabled.routing.slowRatePrecommitMinBytesPerSecond).toBeNull();
+    // 且不得扰动同组的既有参数。
+    expect(enabled.routing.slowRateProbeAfterFirstByteSeconds).toBeNull();
+
+    const withThreshold = providerFormReducer(enabled, {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRatePrecommitMinBytesPerSecond: 291 },
+    });
+
+    expect(withThreshold.routing.slowRatePrecommitMinBytesPerSecond).toBe(291);
+    expect(withThreshold.routing.slowRatePrecommitEnabled).toBe(true);
+  });
+
+  it("阈值可清回 null（恢复「由基线推导」），与显式 0（不启用）区分", () => {
+    const withThreshold = providerFormReducer(createInitialState("batch"), {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRatePrecommitMinBytesPerSecond: 291 },
+    });
+
+    const cleared = providerFormReducer(withThreshold, {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRatePrecommitMinBytesPerSecond: null },
+    });
+    expect(cleared.routing.slowRatePrecommitMinBytesPerSecond).toBeNull();
+
+    const explicitZero = providerFormReducer(withThreshold, {
+      type: "SET_SLOW_RATE_PARAMS",
+      payload: { slowRatePrecommitMinBytesPerSecond: 0 },
+    });
+    // 0 是明确取值（后端读作「显式关闭这个闸」），不得被归并成 null。
+    expect(explicitZero.routing.slowRatePrecommitMinBytesPerSecond).toBe(0);
   });
 });

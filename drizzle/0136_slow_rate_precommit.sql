@@ -1,0 +1,24 @@
+-- 日期: 2026-09-22
+-- 功能: 提交前速率闸（进行中低速请求的止损）配置面
+--
+-- 为什么加列：用户诉求是「进行中判定慢就及时止损，别让客户端干等 100+ 秒」。既有机制只判
+-- **停滞**（首字后 T 秒无内容），抓不到「有内容但极慢」（生产实证：wb 的真实低速长尾 tok/s
+-- 中位仅 11~14，而基线 242.6）；而事后降权（slow_rate_monitor_enabled）是**请求结束后**才
+-- 生效，救不了当前这一条。故新增提交前速率闸：内容先在门控里暂存一小段，按产出速率在
+-- **客户端零字节**时决定放行还是换家。
+--
+-- 为什么两列都可空且**不设 DEFAULT**：NULL 的语义是「未覆盖 ⇒ 取默认」，与显式设值是两回事。
+--   - slow_rate_precommit_enabled NULL ⇒ false（**默认全关**：它改变首字时延，必须逐渠道显式打开）；
+--   - slow_rate_precommit_min_bytes_per_second NULL ⇒ 由该组合的基线推导
+--     （slowrate.DerivePrecommitMinBytesPerSecond：基线中位 tok/s × 慢速系数 × 近似 bytes/token）。
+-- 若给 DEFAULT false / 0，列上就分不清「运维没配」与「运维配成关闭/0」——排障时无从判断，
+-- 与 0127/0130 两批参数列同一条理由。
+--
+-- 粒度是**逐渠道**（providers 表），与既有 slow_rate_* 八列同族；作用范围裁定为
+-- 「通用能力 + 逐渠道开关 + 默认全关」，wb 先开。
+--
+-- 可回滚（两列纯新增，无回填、无 CHECK）：
+--   ALTER TABLE "providers" DROP COLUMN "slow_rate_precommit_enabled",
+--     DROP COLUMN "slow_rate_precommit_min_bytes_per_second";
+ALTER TABLE "providers" ADD COLUMN "slow_rate_precommit_enabled" boolean;--> statement-breakpoint
+ALTER TABLE "providers" ADD COLUMN "slow_rate_precommit_min_bytes_per_second" integer;

@@ -541,10 +541,14 @@ func (r *hedgeRace) runGateOrFirstChunk(
 		if err != nil {
 			_ = response.Body.Close()
 			failure := r.deps.gateFailure(err, plan, outcome)
-			// 与串行路径同款：中途探测判废时标出真实死因与自首字节起的时长。
-			if failure != nil && isProbeFailure(err) && !firstByteAt.IsZero() {
-				failure.ProbeSlow = true
-				failure.ProbeElapsedMS = int(r.options.now().Sub(firstByteAt).Milliseconds())
+			// 与串行路径同款：主动判慢时标出真实死因、种类与自首字节起的时长。
+			if failure != nil {
+				if kind, slow := probeSlowKind(err); slow {
+					failure.ProbeSlow = true
+					failure.ProbeSlowKind = kind
+					failure.ProbeElapsedMS = int(r.options.now().Sub(firstByteAt).Milliseconds())
+					failure.ProbeSlowBytesPerSecond = slowRateBytesPerSecond(asPrecommit(err))
+				}
 			}
 			return nil, failure
 		}

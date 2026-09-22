@@ -179,6 +179,9 @@ export function createInitialState(
         slowRateRecoveryRequests: null,
         // 探测阈值在批量模式下不暴露（同 slow rate 其余参数），回退默认值。
         slowRateProbeAfterFirstByteSeconds: null,
+        // 提交前速率闸同样不在批量模式下暴露（它改首字时延，不适合批量改）。
+        slowRatePrecommitEnabled: null,
+        slowRatePrecommitMinBytesPerSecond: null,
         modelRedirects:
           analysis.routing.modelRedirects.status === "uniform"
             ? analysis.routing.modelRedirects.value
@@ -398,6 +401,8 @@ export function createInitialState(
         slowRatePenaltyMax: null,
         slowRateRecoveryRequests: null,
         slowRateProbeAfterFirstByteSeconds: null,
+        slowRatePrecommitEnabled: null,
+        slowRatePrecommitMinBytesPerSecond: null,
         modelRedirects: [],
         allowedModels: [],
         allowedClients: [],
@@ -493,6 +498,9 @@ export function createInitialState(
       slowRateRecoveryRequests: sourceProvider?.slowRateRecoveryRequests ?? null,
       slowRateProbeAfterFirstByteSeconds:
         sourceProvider?.slowRateProbeAfterFirstByteSeconds ?? null,
+      slowRatePrecommitEnabled: sourceProvider?.slowRatePrecommitEnabled ?? null,
+      slowRatePrecommitMinBytesPerSecond:
+        sourceProvider?.slowRatePrecommitMinBytesPerSecond ?? null,
       modelRedirects: normalizeProviderModelRedirectRules(sourceProvider?.modelRedirects) ?? [],
       allowedModels: normalizeAllowedModelRules(sourceProvider?.allowedModels) ?? [],
       allowedClients: sourceProvider?.allowedClients ?? [],

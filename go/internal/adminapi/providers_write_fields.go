@@ -101,6 +101,8 @@ var providerPreimageFieldNames = map[string]string{
 	"slow_rate_penalty_max":                    "slowRatePenaltyMax",
 	"slow_rate_recovery_requests":              "slowRateRecoveryRequests",
 	"slow_rate_probe_after_first_byte_seconds": "slowRateProbeAfterFirstByteSeconds",
+	"slow_rate_precommit_enabled":              "slowRatePrecommitEnabled",
+	"slow_rate_precommit_min_bytes_per_second": "slowRatePrecommitMinBytesPerSecond",
 	"tpm": "tpm",
 	"rpm": "rpm",
 	"rpd": "rpd",
@@ -246,6 +248,26 @@ func providerBoolFieldSpec() providerDecodeSpec {
 			return nil, false
 		}
 		return *value, true
+	}}
+}
+
+// providerNullableBoolFieldSpec 复刻 `z.boolean().nullable().optional()`。
+//
+// null 绑定为 NULL：仅适用于**可空列**（NULL 语义是「未覆盖 ⇒ 取默认」，与显式 false 不同）。
+func providerNullableBoolFieldSpec() providerDecodeSpec {
+	return providerDecodeSpec{Decode: func(object *adminObject, payload string) (any, bool) {
+		raw, present := object.Raw(payload)
+		if !present {
+			return nil, false
+		}
+		if adminJSONTypeName(raw) == "null" {
+			return (*bool)(nil), true
+		}
+		value, present := object.Bool(payload)
+		if !present || value == nil {
+			return (*bool)(nil), true
+		}
+		return value, true
 	}}
 }
 
@@ -534,18 +556,22 @@ func providerCreateWriteSpecs() map[string]providerDecodeSpec {
 		"slow_rate_penalty_max":                    providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_recovery_requests":              providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_probe_after_first_byte_seconds": providerNullableIntFieldSpec(nil, nil),
-		"website_url":                              providerNullableFieldSpec(0),
-		"favicon_url":                              providerNullableFieldSpec(0),
-		"cache_ttl_preference":                     providerNullableEnumFieldSpec(providerCacheTTLPreferences),
-		"swap_cache_ttl_billing":                   providerBoolFieldSpec(),
-		"context_1m_preference":                    providerNullableEnumFieldSpec(providerContext1mPreferences),
-		"codex_reasoning_effort_preference":        providerNullableEnumFieldSpec(providerCodexReasoningEfforts),
-		"codex_reasoning_summary_preference":       providerNullableEnumFieldSpec(providerCodexReasoningSummaries),
-		"codex_text_verbosity_preference":          providerNullableEnumFieldSpec(providerCodexTextVerbosities),
-		"codex_parallel_tool_calls_preference":     providerNullableEnumFieldSpec(providerCodexBoolPreferences),
-		"codex_image_generation_preference":        providerNullableEnumFieldSpec(providerCodexImageGenerations),
-		"codex_service_tier_preference":            providerNullableEnumFieldSpec(providerCodexServiceTiers),
-		"codex_max_tokens_preference":              providerNullableFieldSpec(0),
+		// 提交前速率闸：闸可空（null = 未覆盖 ⇒ false——用可空 spec 才能把「清空」与「关」区分开），
+		// 阈值可空（null = 未覆盖 ⇒ 由基线推导）。
+		"slow_rate_precommit_enabled":              providerNullableBoolFieldSpec(),
+		"slow_rate_precommit_min_bytes_per_second": providerNullableIntFieldSpec(nil, nil),
+		"website_url":                          providerNullableFieldSpec(0),
+		"favicon_url":                          providerNullableFieldSpec(0),
+		"cache_ttl_preference":                 providerNullableEnumFieldSpec(providerCacheTTLPreferences),
+		"swap_cache_ttl_billing":               providerBoolFieldSpec(),
+		"context_1m_preference":                providerNullableEnumFieldSpec(providerContext1mPreferences),
+		"codex_reasoning_effort_preference":    providerNullableEnumFieldSpec(providerCodexReasoningEfforts),
+		"codex_reasoning_summary_preference":   providerNullableEnumFieldSpec(providerCodexReasoningSummaries),
+		"codex_text_verbosity_preference":      providerNullableEnumFieldSpec(providerCodexTextVerbosities),
+		"codex_parallel_tool_calls_preference": providerNullableEnumFieldSpec(providerCodexBoolPreferences),
+		"codex_image_generation_preference":    providerNullableEnumFieldSpec(providerCodexImageGenerations),
+		"codex_service_tier_preference":        providerNullableEnumFieldSpec(providerCodexServiceTiers),
+		"codex_max_tokens_preference":          providerNullableFieldSpec(0),
 		"anthropic_max_tokens_preference": providerNullablePreferenceSpec(
 			validateMaxTokensPreference, "inherit or a positive integer string"),
 		"anthropic_thinking_budget_preference": providerNullablePreferenceSpec(
@@ -1192,6 +1218,15 @@ func providerPreimageValue(name string, value any) (any, bool) {
 	case "bool":
 		flag, ok := value.(bool)
 		return flag, ok
+	case "nullable_bool":
+		if value == nil {
+			return (*bool)(nil), true
+		}
+		flag, ok := value.(bool)
+		if !ok {
+			return nil, false
+		}
+		return &flag, true
 	case "numeric":
 		if value == nil {
 			return (*float64)(nil), true
@@ -1221,6 +1256,9 @@ func providerWriteKindOf(name string) string {
 		"proxy_fallback_to_direct", "swap_cache_ttl_billing", "protocol_conversion_enabled",
 		"slow_rate_monitor_enabled":
 		return "bool"
+	case "slow_rate_precommit_enabled":
+		// NULL = 未覆盖（不是 false），故归 nullable_bool 而不是 bool。
+		return "nullable_bool"
 	case "weight", "priority", "circuit_breaker_failure_threshold",
 		"circuit_breaker_open_duration", "circuit_breaker_half_open_success_threshold",
 		"first_byte_timeout_streaming_ms", "streaming_idle_timeout_ms",
@@ -1233,7 +1271,8 @@ func providerWriteKindOf(name string) string {
 		"slow_rate_window_seconds", "slow_rate_baseline_window_seconds",
 		"slow_rate_min_samples", "slow_rate_trigger_count",
 		"slow_rate_penalty_step", "slow_rate_penalty_max", "slow_rate_recovery_requests",
-		"slow_rate_probe_after_first_byte_seconds":
+		"slow_rate_probe_after_first_byte_seconds",
+		"slow_rate_precommit_min_bytes_per_second":
 		return "nullable_int"
 	case "cost_multiplier", "limit_5h_usd", "limit_daily_usd", "limit_weekly_usd",
 		"limit_monthly_usd", "limit_total_usd",

@@ -1043,6 +1043,66 @@ export function OptionsSection({ subSectionRefs }: OptionsSectionProps) {
                         />
                       </SmartInputWrapper>
 
+                      {/* 提交前速率闸：它改变首字时延（内容先暂存再决定提交或换家），
+                          故单独一个开关、默认关闭，不随上方「低速监控」一并打开。 */}
+                      <ToggleRow
+                        label={t("sections.routing.slowRate.precommitEnabled.label")}
+                        description={t("sections.routing.slowRate.precommitEnabled.desc")}
+                      >
+                        <Switch
+                          id={
+                            isEdit
+                              ? "edit-slow-rate-precommit-enabled"
+                              : "slow-rate-precommit-enabled"
+                          }
+                          aria-label={t("sections.routing.slowRate.precommitEnabled.label")}
+                          checked={state.routing.slowRatePrecommitEnabled === true}
+                          onCheckedChange={(checked) =>
+                            dispatch({
+                              type: "SET_SLOW_RATE_PARAMS",
+                              payload: { slowRatePrecommitEnabled: checked },
+                            })
+                          }
+                          disabled={state.ui.isPending}
+                        />
+                      </ToggleRow>
+
+                      {state.routing.slowRatePrecommitEnabled === true && (
+                        <SmartInputWrapper
+                          label={t("sections.routing.slowRate.precommitMinBytesPerSecond.label")}
+                          description={t(
+                            "sections.routing.slowRate.precommitMinBytesPerSecond.desc"
+                          )}
+                        >
+                          <Input
+                            id={
+                              isEdit
+                                ? "edit-slow-rate-precommit-threshold"
+                                : "slow-rate-precommit-threshold"
+                            }
+                            type="number"
+                            value={state.routing.slowRatePrecommitMinBytesPerSecond ?? ""}
+                            onChange={(e) =>
+                              dispatch({
+                                type: "SET_SLOW_RATE_PARAMS",
+                                payload: {
+                                  slowRatePrecommitMinBytesPerSecond:
+                                    e.target.value === ""
+                                      ? null
+                                      : Math.max(0, parseInt(e.target.value, 10) || 0),
+                                },
+                              })
+                            }
+                            placeholder={t(
+                              "sections.routing.slowRate.precommitMinBytesPerSecond.placeholder"
+                            )}
+                            disabled={state.ui.isPending}
+                            min="0"
+                            step="1"
+                          />
+                        </SmartInputWrapper>
+                      )}
+
                       <SmartInputWrapper
                         label={t("sections.routing.slowRate.recoveryRequests.label")}
                         description={t("sections.routing.slowRate.recoveryRequests.desc")}

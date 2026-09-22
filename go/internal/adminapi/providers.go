@@ -116,8 +116,14 @@ type providerSummary struct {
 	SlowRatePenaltyMax  *int     `json:"slowRatePenaltyMax"`
 	// SlowRateRecoveryRequests 是恢复策略阈值（默认 10）。
 	SlowRateRecoveryRequests *int `json:"slowRateRecoveryRequests"`
-	// SlowRateProbeAfterFirstByteSeconds 是首字后停滞探测阈值 T（秒）；NULL = 不探测（机制默认关闭）。
+	// SlowRateProbeAfterFirstByteSeconds 是首字后停滞探测阈值 T（秒）。
+	//
+	// NULL = 未覆盖（不是「关闭」）：监控开关打开时取出厂 30s；关闭由 SlowRateMonitorEnabled 承载。
 	SlowRateProbeAfterFirstByteSeconds *int `json:"slowRateProbeAfterFirstByteSeconds"`
+	// SlowRatePrecommitEnabled 是提交前速率闸（默认全关）；NULL = 未覆盖 ⇒ false。
+	SlowRatePrecommitEnabled *bool `json:"slowRatePrecommitEnabled"`
+	// SlowRatePrecommitMinBytesPerSecond 是速率阈值（语义字节/秒）；NULL = 未覆盖 ⇒ 由基线推导。
+	SlowRatePrecommitMinBytesPerSecond *int `json:"slowRatePrecommitMinBytesPerSecond"`
 
 	ProxyURL              any  `json:"proxyUrl"`
 	ProxyFallbackToDirect bool `json:"proxyFallbackToDirect"`
@@ -1144,6 +1150,9 @@ func providerSummaryPayload(provider store.AdminProvider, statistics *providerSt
 		SlowRateRecoveryRequests:   provider.SlowRateRecoveryRequests,
 		// 探测阈值也得写：这条链正是 1.9.11 事故处（读投影登了、本结构漏登 ⇒ 接口不回）。
 		SlowRateProbeAfterFirstByteSeconds: provider.SlowRateProbeAfterFirstByteSeconds,
+		// 提交前速率闸两列同理：读投影登了就必须在本结构一并写，否则新列永远不回。
+		SlowRatePrecommitEnabled:           provider.SlowRatePrecommitEnabled,
+		SlowRatePrecommitMinBytesPerSecond: provider.SlowRatePrecommitMinBytesPerSecond,
 
 		ProxyURL:              providerRedactURLCredentialsNullable(provider.ProxyURL),
 		ProxyFallbackToDirect: provider.ProxyFallbackToDirect,

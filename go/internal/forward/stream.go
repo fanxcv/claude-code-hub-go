@@ -101,6 +101,22 @@ type StreamOptions struct {
 	// 而 token 与系数两个门只属于写样本时的判定（在那里连同基线一起由 slowrate 包评估）。
 	// 这样 forward 不引入对 slowrate 的依赖，接缝面最小。
 	ProbeAfterFirstByteFor func(providerID int64) int
+	// PrecommitRateFor 返回某供应商的分级速率闸阈值 θ（语义字节/秒）；<=0 或未装配即不启用。
+	//
+	// 启用后提交点后移（首个语义内容帧不再立即提交），详见 gate/progress.go 的三档判据。
+	// 与 ProbeAfterFirstByteFor 同形：只传一个整数，forward 不引入对 slowrate/route 的依赖。
+	PrecommitRateFor func(providerID int64) int
+	// PrecommitShadow 为真时速率闸**只观测不裁决**：门控照旧在首个语义内容帧提交
+	// （客户端时延与改造前完全一致），提交后仍采样并在 1s/3s/10s 落标定日志。
+	// 这是标定三档阈值的唯一数据来源（见 rate_sampler.go）。
+	PrecommitShadow bool
+	// OnPostCommitSlow 在二级闸判定「提交后掉速」时回调一次（渠道级，供后续请求避开）。
+	//
+	// nil 表示不处置（只落日志）：标记动作的持久化由接线层决定，forward 不假设存哪。
+	OnPostCommitSlow func(providerID int64, observedBytesPerSecond int)
+	// rateMarks 覆盖提交后采样的标定点序列，**仅供包内单测**缩到毫秒级；
+	// nil 时用出厂三档（1s/3s/10s）。生产路径不设。
+	rateMarks []rateMark
 	// StartedAt 是请求开始时刻，用于 TTFT；零值取 ForwardStream 的当前时刻。
 	StartedAt time.Time
 	// HeadBytes / TailBytes 是观测窗口容量；0 取默认（默认刻意小，见 observe.go）。
@@ -142,6 +158,23 @@ func (o StreamOptions) probeAfterFirstByte(providerID int64) time.Duration {
 		return 0
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+// precommitRate 取某供应商的分级速率闸阈值（字节/秒）。影子期返回 0：门控不得改变提交时机。
+func (o StreamOptions) precommitRate(providerID int64) int {
+	if o.PrecommitShadow || o.PrecommitRateFor == nil {
+		return 0
+	}
+	rate := o.PrecommitRateFor(providerID)
+	if rate <= 0 {
+		return 0
+	}
+	return rate
+}
+
+// rateSamplerEnabled 报告是否需要在提交后采样速率（二级闸与影子标定共用同一采样器）。
+func (o StreamOptions) rateSamplerEnabled(providerID int64) bool {
+	return o.precommitRate(providerID) > 0 || o.PrecommitShadow
 }
 
 // 门控默认上限，对齐 STREAM_GATE_PREBUFFER_* 的默认量级。
@@ -324,11 +357,15 @@ func (d Deps) gateStreamAttempt(
 		// 门控失败时上游正文所有权仍在我们手里：关闭它，客户端一个字节都还没收到。
 		_ = response.Body.Close()
 		failure := d.gateFailure(err, plan, outcome)
-		// 中途探测判废：标出这次尝试的真实死因与「首字节起已等了多久」，
+		// 主动判慢：标出这次尝试的真实死因、种类与「自首字节已等了多久」，
 		// 供终态层写中途慢样本（口径见 slowrate.Facts.MidStream）。
-		if failure != nil && isProbeFailure(err) && !upstreamFirstByteAt.IsZero() {
-			failure.ProbeSlow = true
-			failure.ProbeElapsedMS = int(options.now().Sub(upstreamFirstByteAt).Milliseconds())
+		if failure != nil {
+			if kind, slow := probeSlowKind(err); slow {
+				failure.ProbeSlow = true
+				failure.ProbeSlowKind = kind
+				failure.ProbeElapsedMS = int(options.now().Sub(upstreamFirstByteAt).Milliseconds())
+				failure.ProbeSlowBytesPerSecond = slowRateBytesPerSecond(asPrecommit(err))
+			}
 		}
 		return nil, failure
 	}
@@ -380,6 +417,7 @@ func (o StreamOptions) gateOptions(
 		PrebufferByteCap:    byteCap,
 		IdleTimeout:         o.idleTimeout(outcome.ProviderID),
 		ProbeAfterFirstByte: o.probeAfterFirstByte(outcome.ProviderID),
+		PrecommitRate:       o.precommitRate(outcome.ProviderID),
 		CaptureCommitMarker: o.CaptureCommitMarker,
 		OnFirstByte:         onFirstByte,
 		Budget:              o.Budget,
@@ -412,25 +450,54 @@ func (d Deps) gateFailure(err error, plan *Plan, outcome *AttemptOutcome) *Failu
 		Attempt:       outcome.Attempt,
 		Err:           err,
 	}
-	if precommit.Reason == gate.FailIdleTimeout || precommit.Reason == gate.FailSlowProbe {
+	if precommit.Reason == gate.FailIdleTimeout || precommit.Reason == gate.FailSlowProbe ||
+		precommit.Reason == gate.FailSlowRate {
 		failure.Category = CategoryProviderError
 		failure.StatusCode = statusUpstreamTimeout
 	}
 	return failure
 }
 
-// isProbeFailure 判断门控失败是否来自中途探测阈值（而非读间隔静默、解码错误等）。
-func isProbeFailure(err error) bool {
+// probeSlowKind 判断门控失败是否来自「主动判慢」，并给出可区分的种类。
+//
+// 两种来源：stall（首字后 T 秒零内容）与 rate（有内容但速率不达标）。两者都置
+// Failure.ProbeSlow 供终态层做「判慢即标慢」的闭环；种类用于区分归因与标定。
+func probeSlowKind(err error) (string, bool) {
 	var precommit *gate.PrecommitError
 	if !errors.As(err, &precommit) {
-		return false
+		return "", false
 	}
-	return precommit.Reason == gate.FailSlowProbe
+	switch precommit.Reason {
+	case gate.FailSlowProbe:
+		return ProbeSlowKindStall, true
+	case gate.FailSlowRate:
+		return ProbeSlowKindRate, true
+	default:
+		return "", false
+	}
+}
+
+// slowRateBytesPerSecond 把速率闸判慢时记下的实测字节数与时长折算成速率。
+// 时长非正、字节非正、或不是速率闸判慢（nil）时返回 0（不可折算）。
+func slowRateBytesPerSecond(precommit *gate.PrecommitError) int {
+	if precommit == nil || precommit.SlowElapsedMS <= 0 || precommit.SlowPayloadBytes <= 0 {
+		return 0
+	}
+	return precommit.SlowPayloadBytes * 1000 / precommit.SlowElapsedMS
+}
+
+// asPrecommit 取出 *gate.PrecommitError（不是该类型时返回 nil）。
+func asPrecommit(err error) *gate.PrecommitError {
+	var precommit *gate.PrecommitError
+	if !errors.As(err, &precommit) {
+		return nil
+	}
+	return precommit
 }
 
 // gateStatusForPrecommit 复刻 Node 的状态码推断：错误帧文本里能识别出的 4xx 才用，否则 502。
 func gateStatusForPrecommit(precommit *gate.PrecommitError) int {
-	if precommit.Reason == gate.FailIdleTimeout {
+	if precommit.Reason == gate.FailIdleTimeout || precommit.Reason == gate.FailSlowRate {
 		return statusUpstreamTimeout
 	}
 	if precommit.Reason == gate.FailGateError && precommit.FrameData != "" {
@@ -563,6 +630,8 @@ type Stream struct {
 
 	observer *Observer
 	pump     *Pump
+	// rateSampler 是提交后的速率采样器（影子标定与二级闸）；未启用时为 nil。
+	rateSampler *rateSampler
 
 	mu          sync.Mutex
 	prefixIndex int
@@ -614,10 +683,36 @@ func newStream(
 		Now:                 options.Now,
 	})
 
+	// 提交后速率采样器（影子标定与二级闸共用）。未启用或家族未知时不构造：
+	// 无分类器即无法计量语义 payload，硬上只会得到一堆零值样本。
+	if options.rateSamplerEnabled(provider.ID) {
+		stream.rateSampler = newRateSampler(RateSamplerConfig{
+			Family:       attempt.Family,
+			ProviderID:   provider.ID,
+			ProviderName: provider.Name,
+			Rate:         options.precommitRate(provider.ID),
+			Shadow:       options.PrecommitShadow,
+			marks:        options.rateMarks,
+			OnDegraded: func(sample RateSample) {
+				if options.OnPostCommitSlow != nil {
+					options.OnPostCommitSlow(sample.ProviderID, sample.BytesPerSecond)
+				}
+			},
+			RequestID: pc.MessageRequestID,
+			Model:     func() string { return stream.observer.Snapshot().Model },
+			Logger:    options.Logger,
+			Now:       options.Now,
+		})
+	}
+
 	// 门控前缀在提交前就已经到达：把它按到达顺序先喂给观测器，否则用量与终止标记
 	// 会随「第一次内容帧是否与其余帧同处一个读块」而丢失（前缀不再经过泵）。
+	// 速率采样器同理需要先吃前缀：首个语义内容帧就在前缀里，漏喂会让时钟起点偏晚。
 	for _, chunk := range attempt.Prefix {
 		stream.observer.Push(chunk)
+		if stream.rateSampler != nil {
+			stream.rateSampler.Observe(chunk)
+		}
 	}
 
 	source := attempt.Source
@@ -704,6 +799,9 @@ func (s *Stream) releaseLeaseLocked() {
 // 与 Node 的「计量完成即结束引流」同义：终态帧意味着上游不会再给新账单，
 // 继续挂在流上只是白占引流配额。
 func (s *Stream) observeChunk(chunk []byte) {
+	if s.rateSampler != nil {
+		s.rateSampler.Observe(chunk)
+	}
 	s.observer.Push(chunk)
 	if s.pump == nil || s.pump.State() != PumpDraining {
 		return

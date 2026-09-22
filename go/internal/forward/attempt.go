@@ -220,10 +220,14 @@ type AttemptOutcome struct {
 	Message string
 	// DurationMS 是本次尝试的耗时。
 	DurationMS int64
-	// ProbeSlow 为真表示本次尝试因中途低速探测被主动判废（见 Failure.ProbeSlow）。
+	// ProbeSlow 为真表示本次尝试因主动判慢被丢弃（见 Failure.ProbeSlow）。
 	ProbeSlow bool
+	// ProbeSlowKind 区分判慢来源（stall / rate），与 Failure.ProbeSlowKind 同义。
+	ProbeSlowKind string
 	// ProbeElapsedMS 是自首字节起、直到判废的时长（毫秒）。
 	ProbeElapsedMS int
+	// ProbeSlowBytesPerSecond 是速率闸判慢时的实测速率（字节/秒）。
+	ProbeSlowBytesPerSecond int
 	// StartedAt / FinishedAt 是本次尝试的**真实测量**起止时刻，供 routing_trace 用。
 	//
 	// 与 DurationMS 同源（同一对 now() 读数），但保留绝对时刻：`routing_trace` 的事件
@@ -612,7 +616,9 @@ func forwardLoop(
 			outcome.StartedAt = attemptStartedAt
 			outcome.FinishedAt = finishedAt
 			outcome.ProbeSlow = failure.ProbeSlow
+			outcome.ProbeSlowKind = failure.ProbeSlowKind
 			outcome.ProbeElapsedMS = failure.ProbeElapsedMS
+			outcome.ProbeSlowBytesPerSecond = failure.ProbeSlowBytesPerSecond
 			result.Attempts = append(result.Attempts, outcome)
 			deps.logger().Warn("forward: 尝试失败", map[string]any{
 				"provider_id":   failure.ProviderID,

@@ -8,15 +8,20 @@ import (
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/cfgsync"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowrate"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
-// 本文件钉住首字后停滞探测阈值的两条边界：**总闸约束**与**失效接线**。
+// 本文件钉住首字后停滞探测阈值的三条边界：**总闸约束**、**未覆盖⇒出厂值**、**失效接线**。
 //
 // 为什么必须有：
-//   - 总闸：该阈值原先是 `resolve` 里「列非 NULL 即生效」，不看 slow_rate_monitor_enabled；
-//     于是渠道关掉低速监控后探测仍在跑（同仓 slowrate.SnapshotConfig.SlowRateConfig 是查总闸的，
-//     两路语义分叉）。「列非 NULL 且总闸关」这个组合不会被任何单侧测试覆盖，只有跨到这一处才看得见。
+//   - 总闸：该阈值不得脱离 slow_rate_monitor_enabled 单独生效（同仓 slowrate.SnapshotConfig.SlowRateConfig
+//     是查总闸的，两路语义不得分叉）。「列非 NULL 且总闸关」这个组合不会被任何单侧测试覆盖。
+//   - 未覆盖⇒出厂值：**这是 2026-09-22 的缺陷修正**。先前实现是「列非 NULL 才赋值」，于是
+//     开关打开而列为 NULL 的渠道 probeSeconds 保持 0，整条探测链静默关闭，而界面上开关是开的
+//     （生产实证：wb 即如此）。本文件先前那条用例（总闸开+阈值为 NULL ⇒ 期望 0）把**错误行为
+//     钉成了契约**，故随修正一并改期望值——这是本仓反复缺陷④「测试替身比真依赖宽容」的近亲：
+//     测试把 bug 当规格。
 //   - 失效：缓存原先只靠 TTL 自愈（providers 域 30s），而管理面改供应商会广播 DomainProviders；
 //     不挂失效时「界面显示新值、数据面仍用旧值」可长达 30s。
 
@@ -74,7 +79,10 @@ func TestIdleTimeoutProbeRespectsSlowRateMasterGate(t *testing.T) {
 		wantIdleMS int
 	}{
 		{"总闸开+阈值已配", true, probeThresholdRef(threshold), threshold, 5000},
-		{"总闸开+阈值为NULL", true, nil, 0, 5000},
+		// 未覆盖（NULL）⇒ 取出厂值，不是 0。这条是缺陷修正的钉子。
+		{"总闸开+阈值为NULL(未覆盖)", true, nil, slowrate.DefaultProbeAfterFirstByteSeconds, 5000},
+		// 显式设 0 ⇒ 仍然不探测（存量「主动关掉」的渠道行为不变）。
+		{"总闸开+阈值显式设0", true, probeThresholdRef(0), 0, 5000},
 		{"总闸关+阈值已配", false, probeThresholdRef(threshold), 0, 5000},
 		{"总闸关+阈值为NULL", false, nil, 0, 5000},
 	}
@@ -82,7 +90,7 @@ func TestIdleTimeoutProbeRespectsSlowRateMasterGate(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			reader := newProbeGateRowReader()
 			reader.set(167, probeGateRow(testCase.monitor, testCase.threshold))
-			cache := newIdleTimeoutCache(reader, nil, logx.New(nil))
+			cache := newIdleTimeoutCache(reader, nil, nil, logx.New(nil))
 
 			if got := cache.probeAfterFirstByte(167); got != testCase.wantProbe {
 				t.Fatalf("探测阈值应为 %d，实得 %d（monitor=%v threshold=%v）",
@@ -103,7 +111,7 @@ func TestIdleTimeoutProbeRespectsSlowRateMasterGate(t *testing.T) {
 func TestIdleTimeoutCacheHoldsThenRefreshesAfterClear(t *testing.T) {
 	reader := newProbeGateRowReader()
 	reader.set(167, probeGateRow(true, probeThresholdRef(30)))
-	cache := newIdleTimeoutCache(reader, nil, logx.New(nil))
+	cache := newIdleTimeoutCache(reader, nil, nil, logx.New(nil))
 
 	if got := cache.probeAfterFirstByte(167); got != 30 {
 		t.Fatalf("首次应为 30，实得 %d", got)
@@ -140,7 +148,7 @@ func TestIdleTimeoutCacheClearedByProvidersDomainBroadcast(t *testing.T) {
 
 	reader := newProbeGateRowReader()
 	reader.set(167, probeGateRow(true, probeThresholdRef(30)))
-	cache := newIdleTimeoutCache(reader, registry, logx.New(nil))
+	cache := newIdleTimeoutCache(reader, nil, registry, logx.New(nil))
 
 	if got := cache.probeAfterFirstByte(167); got != 30 {
 		t.Fatalf("首次应为 30，实得 %d", got)

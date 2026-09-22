@@ -69,6 +69,12 @@ const (
 	// 本条看**自首个非空 chunk 起**的时长（上游即使一直在发中性帧也会命中）。两者都可
 	// 同时成立，谁先到期即归因给谁。
 	FailSlowProbe FailReason = "slow_probe"
+	// FailSlowRate 表示首字已到、也有语义内容，但自首个语义内容帧起的产出速率达不到分级
+	// 速率闸的阈值（见 progress.go 的三档检查点）。
+	//
+	// 与 FailSlowProbe 的区别是判据：那条只判「T 秒内零内容」（停滞），本条目判「有内容但
+	// 慢」（速率）。上游每隔几秒吐一两个 token 时不触发停滞探测，却正是本条目要抓的形态。
+	FailSlowRate FailReason = "slow_rate"
 )
 
 // PrecommitError 是门控 precommit 失败。
@@ -85,6 +91,11 @@ type PrecommitError struct {
 	BufferedBytes         int
 	EchoExcludedBytes     int
 	TerminalBeforeContent bool
+	// SlowPayloadBytes / SlowElapsedMS 只在 Reason == FailSlowRate 时有意义：
+	// 判慢当时的累计语义 payload 字节数与自首个语义内容帧起的时长。两者相除即实测速率，
+	// 是标定阈值与事后复盘的唯一直接证据（不靠推算）。
+	SlowPayloadBytes int
+	SlowElapsedMS    int
 }
 
 func (e *PrecommitError) Error() string {
@@ -110,6 +121,8 @@ func GateErrorBody(e *PrecommitError) string {
 			EchoExcludedBytes     int        `json:"echo_excluded_bytes,omitempty"`
 			TerminalBeforeContent *bool      `json:"terminal_before_content,omitempty"`
 			FramePreview          string     `json:"frame_preview,omitempty"`
+			SlowPayloadBytes      int        `json:"slow_payload_bytes,omitempty"`
+			SlowElapsedMS         int        `json:"slow_elapsed_ms,omitempty"`
 		} `json:"error"`
 	}
 	body.Error.Type = "stream_gate_precommit"
@@ -118,6 +131,8 @@ func GateErrorBody(e *PrecommitError) string {
 	body.Error.FramesSeen = e.FramesSeen
 	body.Error.BufferedBytes = e.BufferedBytes
 	body.Error.EchoExcludedBytes = e.EchoExcludedBytes
+	body.Error.SlowPayloadBytes = e.SlowPayloadBytes
+	body.Error.SlowElapsedMS = e.SlowElapsedMS
 	if e.Reason == FailEmptyStream {
 		terminalBeforeContent := e.TerminalBeforeContent
 		body.Error.TerminalBeforeContent = &terminalBeforeContent
@@ -174,6 +189,10 @@ type CommitMarker struct {
 	BufferedBytes int
 	// EchoExcludedBytes 是被排除出字节计数的请求回显帧字节数。
 	EchoExcludedBytes int
+	// LadderStage 是分级速率闸放开本次提交的档位（0/1/2）；未启用时为 -1。
+	LadderStage int
+	// LadderPayloadBytes 是提交时累计的语义 payload 字节数（未启用时为 0）。
+	LadderPayloadBytes int
 }
 
 // Options 是门控参数（TS 的 StreamGateOptions）。
@@ -200,6 +219,14 @@ type Options struct {
 	ProbeAfterFirstByte time.Duration
 	// CaptureCommitMarker 决定是否记录触发提交的帧信息（高并发模式下可关闭以省开销）。
 	CaptureCommitMarker bool
+	// PrecommitRate 是分级速率闸的阈值 θ（语义字节/秒）；<=0 表示不启用。
+	//
+	// 启用后提交点后移：首个语义内容帧不再立即提交，而是暂存内容按三档检查点裁决
+	// （见 progress.go）。判慢即返回 FailSlowRate，此时客户端仍零字节。
+	PrecommitRate int
+	// ladderStages 覆盖速率闸的检查点序列，**仅供包内单测**缩短检查点用；
+	// nil 时用出厂三档（1s/3s/10s）。生产路径不设。
+	ladderStages []ladderStage
 	// Budget 是进程级共享前缀预算；生产路径必须传入，单元测试可省略。
 	Budget *Budget
 	// OnBudgetWaitStart 在开始等待本地预算时回调（竞速路径用它暂停本地 hedge 阈值）。
@@ -261,6 +288,11 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 	var lease *Lease
 	leaseTransferred := false
 
+	// 分级速率闸：θ<=0 时为 nil，全部分支退回「首个内容帧即提交」的既有语义。
+	ladder := newLadderWithStages(opts.PrecommitRate, opts.ladderStages)
+	// ladderReleasedStage 记录是第几档放开提交的（-1 表示不是速率闸放开的），仅供提交标记。
+	ladderReleasedStage := -1
+
 	defer func() {
 		if leaseTransferred {
 			return
@@ -304,14 +336,50 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 		}
 		if opts.CaptureCommitMarker {
 			result.Marker = &CommitMarker{
-				FrameIndex:        framesSeen,
-				ChunkIndex:        chunkIndex,
-				EventName:         event,
-				BufferedBytes:     bufferedBytes,
-				EchoExcludedBytes: echoExcludedBytes,
+				FrameIndex:         framesSeen,
+				ChunkIndex:         chunkIndex,
+				EventName:          event,
+				BufferedBytes:      bufferedBytes,
+				EchoExcludedBytes:  echoExcludedBytes,
+				LadderStage:        ladderReleasedStage,
+				LadderPayloadBytes: ladder.PayloadBytes(),
 			}
 		}
 		return result, nil
+	}
+
+	// failRate 把速率闸的「判慢」落成 PrecommitError，并把实测速率写进报文。
+	failRate := func() (Result, error) {
+		return Result{}, &PrecommitError{
+			Reason:            FailSlowRate,
+			Family:            opts.Family,
+			ProviderID:        opts.ProviderID,
+			ProviderName:      opts.ProviderName,
+			FramesSeen:        framesSeen,
+			BufferedBytes:     bufferedBytes,
+			EchoExcludedBytes: echoExcludedBytes,
+			SlowPayloadBytes:  ladder.PayloadBytes(),
+			SlowElapsedMS:     int(time.Since(ladder.StartedAt()).Milliseconds()),
+		}
+	}
+
+	// decideLadder 在检查点到期时裁决；未启用、未启动或未到期返回 nil（继续缓冲）。
+	//
+	// 「未启动」的判据是首个**语义内容帧**而非首个非空字节：只有中性头帧 / 心跳时
+	// 不启动时钟，否则「先发 3 秒心跳再正常吐字」会被算成低速。
+	decideLadder := func(now time.Time) *gateOutcome {
+		if !ladder.Enabled() || !ladder.Started() {
+			return nil
+		}
+		switch ladder.Evaluate(now) {
+		case LadderCommit:
+			ladderReleasedStage = ladder.Stage()
+			return newOutcome(commit("", false))
+		case LadderSlow:
+			return newOutcome(failRate())
+		default:
+			return nil
+		}
 	}
 
 	// 豁免额度以 cap 为自身上限：伪装成回显的中性帧最多把缓冲总量抬到 2×cap。
@@ -347,12 +415,36 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 	}
 
 	buffer := make([]byte, readChunkBytes)
+	// pending 跨循环迭代保留挂起的那次读（见 pendingRead 的注释：检查点唤醒不是终态）。
+	pending := newPendingRead(source)
 	for {
-		// 两条超时取较小者：探测阈值（自首字节起）与读间隔静默上限。哪个到期即归因给哪个，
-		// 故这里要记住「本次用的超时是否由探测阈值决定」。
+		// 速率闸的检查点早于任何读超时：先裁决，不依赖「上游恰好又发了字节」才推进。
+		// 否则一条彻底停住的上游会既不提交也不判慢，直到探测/静默超时兜底。
+		if decided := decideLadder(time.Now()); decided != nil {
+			return decided.result, decided.err
+		}
+		// 三条超时取较小者：探测阈值（自首字节起）、速率闸下一档检查点、读间隔静默上限。
+		// 哪个到期即归因给哪个，故这里要记住「本次用的超时是否由探测阈值决定」。
 		readTimeout, probeDecidesTimeout := probeReadTimeout(opts, firstByteAt, time.Now())
-		n, readErr := readWithIdleTimeout(ctx, source, buffer, readTimeout)
+		ladderWakes := false
+		if deadline, ok := ladder.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining <= 0 {
+				// 正常路径已在循环顶部裁决；走到这里只可能是时钟跳变，用极小超时兜底。
+				remaining = time.Nanosecond
+			}
+			if readTimeout <= 0 || remaining < readTimeout {
+				readTimeout = remaining
+				ladderWakes = true
+				probeDecidesTimeout = false
+			}
+		}
+		n, readErr := pending.take(ctx, buffer, readTimeout)
 		if errors.Is(readErr, errIdleTimeout) {
+			if ladderWakes {
+				// 检查点唤醒不是失败：回循环顶部裁决（提交、判慢或进下一档）。
+				continue
+			}
 			if probeDecidesTimeout {
 				return fail(FailSlowProbe, "", false)
 			}
@@ -389,6 +481,23 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 				framesSeen++
 				switch Classify(opts.Family, frame.Event, frame.Data) {
 				case VerdictContent:
+					if ladder.Enabled() {
+						// 速率闸开启：先计量再裁决，本帧已在 chunks 里，故不提交也不丢字节。
+						ladder.Observe(SemanticPayloadBytes(opts.Family, frame.Event, frame.Data), time.Now())
+						if exceedsByteCap() {
+							// 内容把前缀上限撞满⇒直接提交，而**不是**报 prebuffer_overflow。
+							// 前缀上限的用途是挡中性帧洪泛（那仍然在上面的 neutral 分支报错），
+							// 而能撞满上限的内容本身就证明这家不慢；在旧的「首内容帧即提交」
+							// 语义下根本不会走到这里（那时早已提交），所以这里必须提交才不引入回归。
+							decided = newOutcome(commit(frame.Event, false))
+							return false
+						}
+						if decision := decideLadder(time.Now()); decision != nil {
+							decided = decision
+							return false
+						}
+						return true
+					}
 					if exceedsByteCap() {
 						decided = newOutcome(fail(FailPrebufferOverflow, "", false))
 					} else {
@@ -402,6 +511,15 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 					decided = newOutcome(fail(FailDecodeError, frame.Data, false))
 					return false
 				case VerdictTerminal:
+					if ladder.Started() {
+						// 短响应豁免：已见语义内容却先到终止帧（总长不够阈值）⇒ 直接提交。
+						if exceedsByteCap() {
+							decided = newOutcome(fail(FailPrebufferOverflow, "", false))
+						} else {
+							decided = newOutcome(commit(frame.Event, false))
+						}
+						return false
+					}
 					if opts.Family == FamilyOpenAIResponses &&
 						(IsCleanResponsesCompletion(frame.Event, frame.Data) ||
 							IsResponsesIncompleteCompletion(frame.Event, frame.Data)) {
@@ -451,6 +569,10 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 			framesSeen++
 			switch Classify(opts.Family, frame.Event, frame.Data) {
 			case VerdictContent:
+				if ladder.Enabled() {
+					// 上游在检查点前就结束：计量后直接提交（响应已完整，不再等档位）。
+					ladder.Observe(SemanticPayloadBytes(opts.Family, frame.Event, frame.Data), time.Now())
+				}
 				trailing = newOutcome(commit(frame.Event, true))
 				return false
 			case VerdictError:
@@ -485,6 +607,11 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 		if trailing != nil {
 			return trailing.result, trailing.err
 		}
+		if ladder.Started() {
+			// 已见语义内容且上游结束（含断流）：与「提交点在首个内容帧」的既有行为等价——
+			// 不再因为「终止帧没到」而把一段已有内容的响应判成空流。
+			return commit("", true)
+		}
 		// 无终止帧的 EOF 是供应商断流；终止帧先于内容则是请求作用域空结果。
 		return fail(FailEmptyStream, "", sawTerminal)
 	}
@@ -499,10 +626,9 @@ func newOutcome(result Result, err error) *gateOutcome {
 	return &gateOutcome{result: result, err: err}
 }
 
-// readWithIdleTimeout 让单次读取与静默计时器竞速（TS 的 readWithIdleTimeout）。
-//
-// 计时器或 ctx 胜出时挂起的读由调用方随后的关闭/取消收尾：本函数不关闭 source。
 // probeReadTimeout 给出本次读应使用的超时，以及它是否由中途探测阈值决定。
+//
+// 挂起的那次读如何收尾归 pendingRead：本函数只决定等多久。
 //
 // 三个分支的理由：
 //   - 探测未启用（阈值 <=0）或首字节未到：探测还没开始计时，只能用读间隔上限；
@@ -523,29 +649,59 @@ func probeReadTimeout(opts Options, firstByteAt time.Time, now time.Time) (time.
 	return remaining, true
 }
 
-func readWithIdleTimeout(
-	ctx context.Context,
-	source io.Reader,
-	buffer []byte,
-	idleTimeout time.Duration,
-) (int, error) {
-	if idleTimeout <= 0 {
-		return source.Read(buffer)
+// pendingRead 持有「一次挂起的源读取」。
+//
+// 为什么不能每次超时都新起一个 goroutine 去读：分级速率闸把「超时」从**终态**变成
+// 「回循环裁决」（检查点到期不提交也不失败）。若超时后丢弃那次读、下次另起一个，
+// 被丢下的 goroutine 仍会继续从 source 取字节并注入它的私有缓冲——那些字节就凭空消失，
+// 表现为上游恰好跨过检查点的那一帧内容丢失。故在这里只允许**一次**读在飞，结果经容量 1
+// 的 channel 交付一次，超时保留待取，下一次取到的是同一次读的结果。
+//
+// channel 带缓冲是必需的：即使调用方已放弃（提前返回），投递也不会阻塞读 goroutine。
+type pendingRead struct {
+	source  io.Reader
+	result  chan readOutcome
+	started bool
+}
+
+type readOutcome struct {
+	n   int
+	err error
+}
+
+func newPendingRead(source io.Reader) *pendingRead {
+	return &pendingRead{source: source, result: make(chan readOutcome, 1)}
+}
+
+// take 取一次读结果，超时返回 errIdleTimeout 并**保留**挂起的那次读。
+// buffer 必须在整个 Run 期间是同一块（挂起的 goroutine 已持有它）。
+func (p *pendingRead) take(ctx context.Context, buffer []byte, timeout time.Duration) (int, error) {
+	if !p.started {
+		p.started = true
+		go func() {
+			n, err := p.source.Read(buffer)
+			p.result <- readOutcome{n: n, err: err}
+		}()
 	}
-	type readResult struct {
-		n   int
-		err error
+	deliver := func() (int, error) {
+		outcome := <-p.result
+		p.started = false
+		return outcome.n, outcome.err
 	}
-	results := make(chan readResult, 1)
-	go func() {
-		n, err := source.Read(buffer)
-		results <- readResult{n: n, err: err}
-	}()
-	timer := time.NewTimer(idleTimeout)
+	if timeout <= 0 {
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		default:
+		}
+		return deliver()
+	}
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case result := <-results:
-		return result.n, result.err
+	case outcome := <-p.result:
+		p.started = false
+		return outcome.n, outcome.err
 	case <-timer.C:
 		return 0, errIdleTimeout
 	case <-ctx.Done():

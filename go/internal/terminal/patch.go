@@ -72,6 +72,13 @@ type Settlement struct {
 	// **根本没有作答者**，却最该被计（唯一候选被会话冷却剔掉）。
 	SlowDiverts []SlowDivert
 
+	// SlowPrecommit 是本次终态的**提交前判慢事实**：哪些渠道的尝试在提交前被探测判废。
+	//
+	// 与 SlowDiverts 同为「不进 patch、不写任何列」的副作用入参，且同一闸门口径（不受
+	// committed 约束）。它存在的理由是闭环：判废发生在尝试层，而速率样本只采**作答者**的
+	// 终态——不做这一步，判废后由别家作答成功时，被判废的慢家不会被标慢。
+	SlowPrecommit []SlowPrecommit
+
 	// LeaseSettlement 是本次终态的**租约结算事实**：判定时用过的切片（主体 id + 生效重置模式）。
 	// 与 Affinity 同规矩：不进 patch、不写任何列，只做「成本落库后发放的副作用」的入参
 	// （见 lease_settle.go）。零值表示本次不走租约结算（未装配，或该路径没有 pctx）。

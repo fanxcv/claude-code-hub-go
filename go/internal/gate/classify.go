@@ -422,15 +422,28 @@ func classifyStructuredInner(family Family, signal streamSignal, event string, p
 	return classifyParsedFrame(family, signal, event, inner)
 }
 
-func classifyParsedFrame(family Family, signal streamSignal, event string, parsed any) Verdict {
+// effectiveEventName 归一事件名：SSE 无 event 行时回退到载荷顶层 type 字段。
+//
+// 内容规则按事件名匹配（如 Anthropic 的 content_block_delta），而部分上游只在 JSON 里写 type。
+// 判定与计量必须用同一份归一结果，否则会出现「判为内容却量不到字节」的错位。
+func effectiveEventName(event string, parsed any) string {
 	effective := strings.TrimSpace(event)
-	if effective == "" {
-		if record, ok := parsed.(map[string]any); ok {
-			if typeField, ok := record["type"].(string); ok {
-				effective = typeField
-			}
-		}
+	if effective != "" {
+		return effective
 	}
+	record, ok := parsed.(map[string]any)
+	if !ok {
+		return ""
+	}
+	typeField, ok := record["type"].(string)
+	if !ok {
+		return ""
+	}
+	return typeField
+}
+
+func classifyParsedFrame(family Family, signal streamSignal, event string, parsed any) Verdict {
+	effective := effectiveEventName(event, parsed)
 
 	for _, rule := range signal.errorRules {
 		if frameRuleMatches(rule, effective, parsed) {

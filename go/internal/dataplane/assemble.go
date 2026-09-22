@@ -2,10 +2,12 @@ package dataplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/appversion"
@@ -25,6 +27,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/replay"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowrate"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/terminal"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/upws"
@@ -540,7 +543,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		Now:    options.Now,
 	})
 
-	idleTimeouts := newIdleTimeoutCache(asProviderRowReader(options.Pools), options.Registry, logger)
+	idleTimeouts := newIdleTimeoutCache(asProviderRowReader(options.Pools), options.Redis, options.Registry, logger)
 	idles := idleTimeouts.lookup
 
 	budget := gate.DefaultBudget()
@@ -602,6 +605,8 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			Now:                    options.Now,
 			IdleTimeoutFor:         idles,
 			ProbeAfterFirstByteFor: idleTimeouts.probeAfterFirstByte,
+			PrecommitRateFor:       idleTimeouts.precommitRate,
+			PrecommitShadow:        precommitShadowEnabled(),
 			CaptureCommitMarker:    false,
 		},
 		BodyOptions: guard.BodyAccessOptions{Ingress: ingress.DefaultOptions()},
@@ -707,7 +712,8 @@ func buildGates(options StoreOptions) (route.Gates, bool) {
 	return gates, false
 }
 
-// idleTimeoutCache 缓存 providers 的两个热路径口径：静默超时与首字后停滞探测阈值。
+// idleTimeoutCache 缓存 providers 的三个热路径口径：静默超时、首字后停滞探测阈值，
+// 与提交前速率闸阈值。
 //
 // 为什么必须缓存：Stream 每发起一次上游读都会问一次静默超时、每进一次门控都会问一次探测阈值，
 // 逐次查库会把热路径变成「每 chunk 一次 SQL」。TTL 沿用 providers 域的失效周期，容量等于启用态
@@ -715,18 +721,23 @@ func buildGates(options StoreOptions) (route.Gates, bool) {
 //
 // 读面用接口而非 *store.Pools：与同包 providerSlowRateSource 同一手法，按行造钉子不必连库。
 type idleTimeoutCache struct {
-	rows   providerRowReader
+	rows providerRowReader
+	// redis 只在「提交前速率闸的阈值需由基线推导」时读一次基线键；未开该闸的渠道一次不发。
+	redis  redis.UniversalClient
 	ttl    *cfgsync.TTLMap[int64, providerTimeouts]
 	logger *logx.Logger
 }
 
-// providerTimeouts 是超时缓存的一条值：一次查库同时取回静默超时与首字后停滞探测阈值。
+// providerTimeouts 是超时缓存的一条值：一次查库同时取回静默超时、首字后停滞探测阈值，
+// 与提交前速率闸阈值。
 //
-// 为什么合并两个口径：两者都在热路径上被逐次询问（静默超时每发起一次上游读问一次，
-// 探测阈值每进一次门控问一次），分两个缓存会把同一次查库做两遍。
+// 为什么合并三个口径：它们都在热路径上被逐次询问（静默超时每发起一次上游读问一次，
+// 探测阈值与速率闸阈值每进一次门控问一次），分三个缓存会把同一次查库做三遍。
 type providerTimeouts struct {
 	idleMS       int
 	probeSeconds int
+	// precommitRate 是提交前速率闸阈值（语义字节/秒）；0 表示不启用。
+	precommitRate int
 }
 
 // newIdleTimeoutCache 建静默超时缓存，并把缓存挂到 providers 域的失效广播上。
@@ -734,9 +745,10 @@ type providerTimeouts struct {
 // 为何必须挂失效：管理面改供应商（providers_write.go 等十余处）会广播 DomainProviders；不挂的话
 // 改探测阈值/静默超时要等一个 TTL（ProviderCacheTTL = 30s）才生效，运维在界面上看到新值而数据面
 // 仍用旧值。registry 为 nil（无订阅通道的部署与单测）时退化为只靠 TTL 自愈，与同包低速缓存同。
-func newIdleTimeoutCache(rows providerRowReader, registry *cfgsync.Registry, logger *logx.Logger) *idleTimeoutCache {
+func newIdleTimeoutCache(rows providerRowReader, redisClient redis.UniversalClient, registry *cfgsync.Registry, logger *logx.Logger) *idleTimeoutCache {
 	cache := &idleTimeoutCache{
 		rows:   rows,
+		redis:  redisClient,
 		ttl:    cfgsync.NewTTLMap[int64, providerTimeouts](cfgsync.Spec(cfgsync.DomainProviders).TTL, idleTimeoutCacheSize),
 		logger: logger,
 	}
@@ -762,14 +774,23 @@ func (c *idleTimeoutCache) lookup(providerID int64) time.Duration {
 
 // probeAfterFirstByte 返回某渠道的首字后停滞探测阈值 T（秒）；0 表示不探测。
 //
-// 它与静默超时同源（同一行 providers，同一次查库）——列 NULL 即机制关闭，绝无出厂兜底；
-// 另受低速监控总闸约束（见 timeoutsFromRow）。
+// 它与静默超时同源（同一行 providers，同一次查库）。关断由**监控开关**承载：开关关 ⇒ 0。
+// 列 NULL 只是「未覆盖」，此时取出厂值 DefaultProbeAfterFirstByteSeconds（见 timeoutsFromRow）。
 func (c *idleTimeoutCache) probeAfterFirstByte(providerID int64) int {
 	timeouts, ok := c.resolve(providerID)
 	if !ok {
 		return 0
 	}
 	return timeouts.probeSeconds
+}
+
+// precommitRate 返回某渠道的提交前速率闸阈值（语义字节/秒）；0 表示不启用。
+func (c *idleTimeoutCache) precommitRate(providerID int64) int {
+	timeouts, ok := c.resolve(providerID)
+	if !ok {
+		return 0
+	}
+	return timeouts.precommitRate
 }
 
 // resolve 取缓存或查库，一次解出两个超时口径；ok 为假表示查不到（两口径都按「不限制」处理）。
@@ -792,22 +813,164 @@ func (c *idleTimeoutCache) resolve(providerID int64) (providerTimeouts, bool) {
 		}
 		return providerTimeouts{}, false
 	}
-	value := timeoutsFromRow(row)
+	value := c.timeoutsFromRow(ctx, row)
 	c.ttl.Set(providerID, value)
 	return value, true
 }
 
-// timeoutsFromRow 把一行 providers 折成两个超时口径。
+// timeoutsFromRow 把一行 providers 折成三个超时口径。
 //
-// 探测阈值受低速监控总闸约束：总闸关即整条低速机制关闭，探测不得继续生效——与
+// 探测阈值与速率闸受低速监控总闸约束：总闸关即整条低速机制关闭，两者不得继续生效——与
 // slowrate.SnapshotConfig.SlowRateConfig 的闸门同口径（那边也是 !Enabled 即整段跳过）。
 // 静默超时**不受**该闸约束：它是另一件事，不属低速监控。
-func timeoutsFromRow(row *store.Provider) providerTimeouts {
+func (c *idleTimeoutCache) timeoutsFromRow(ctx context.Context, row *store.Provider) providerTimeouts {
 	value := providerTimeouts{idleMS: row.StreamingIdleTimeoutMS}
-	if row.SlowRateMonitorEnabled && row.SlowRateProbeAfterFirstByteSeconds != nil {
+	if !row.SlowRateMonitorEnabled {
+		return value
+	}
+	// 探测阈值：列 NULL = **未覆盖**（不是「关闭」），故取出厂值。
+	//
+	// 这里曾写成 `if col != nil { 赋值 }`，于是开关打开而列为 NULL 的渠道 probeSeconds 保持 0
+	// ⇒ 整条探测链静默关闭，而运维在界面上看到开关是开的（生产实证：wb 即如此）。
+	// 显式设值（含显式设 0 = 不要探测）仍覆盖出厂值，故存量行为不因本修正而变。
+	value.probeSeconds = slowrate.DefaultProbeAfterFirstByteSeconds
+	if row.SlowRateProbeAfterFirstByteSeconds != nil {
 		value.probeSeconds = *row.SlowRateProbeAfterFirstByteSeconds
 	}
+	value.precommitRate = c.precommitRateFromRow(ctx, row)
 	return value
+}
+
+// precommitRateFromRow 解出提交前速率闸阈值（语义字节/秒）；0 表示不启用。
+//
+// 三道前置，任一不满足即 0（宁可 fail-open，不凭猜测裁决）：
+//   - 闸必须**显式打开**（列 NULL = 未覆盖 ⇒ false）。它改变首字时延，不随监控开关自动生效；
+//   - 阈值来源：列显式设值优先，否则由该组合的基线推导；
+//   - 阈值必须为正。
+func (c *idleTimeoutCache) precommitRateFromRow(ctx context.Context, row *store.Provider) int {
+	if row.SlowRatePrecommitEnabled == nil || !*row.SlowRatePrecommitEnabled {
+		return 0
+	}
+	if row.SlowRatePrecommitMinBytesPerSecond != nil {
+		if *row.SlowRatePrecommitMinBytesPerSecond > 0 {
+			return *row.SlowRatePrecommitMinBytesPerSecond
+		}
+		return 0
+	}
+	modelKey := precommitModelKey(row)
+	baseline, ok := c.precommitBaseline(ctx, row.ID, modelKey)
+	if !ok {
+		return 0
+	}
+	return slowrate.DerivePrecommitMinBytesPerSecond(baseline, precommitRatio(row))
+}
+
+// precommitModelKey 取该渠道第一个「精确」允许模型，作为「渠道×模型」组合键的模型分量。
+//
+// 为何只能这样取：装配缝按 provider 粒度（与既有 ProbeAfterFirstByteFor 同形制），而基线与
+// 状态是 provider×model 粒度。需开启该闸的渠道目前只服务单一模型，故取第一个精确规则即可命中。
+// **已知限制**：多模型渠道可能取不中实际请求的那个模型 ⇒ 读不到基线 ⇒ 闸不启用（fail-open，
+// 只会少判不会误判）。待装配缝支持按请求模型取键时再收紧。
+func precommitModelKey(row *store.Provider) string {
+	if row == nil || len(row.AllowedModels) == 0 || string(row.AllowedModels) == "null" {
+		return ""
+	}
+	var items []any
+	if err := json.Unmarshal(row.AllowedModels, &items); err != nil {
+		return ""
+	}
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			if trimmed := strings.TrimSpace(text); trimmed != "" {
+				return trimmed
+			}
+			continue
+		}
+		record, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		// 只认精确规则：通配规则（prefix/suffix/contains）展开不出确定模型名。
+		matchType, _ := record["matchType"].(string)
+		pattern, _ := record["pattern"].(string)
+		if matchType != "exact" {
+			continue
+		}
+		if trimmed := strings.TrimSpace(pattern); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// precommitRatio 取该渠道的低速系数；未覆盖即出厂默认（0.3）。
+func precommitRatio(row *store.Provider) float64 {
+	if row.SlowRateRatio != nil && *row.SlowRateRatio > 0 {
+		return *row.SlowRateRatio
+	}
+	return slowrate.DefaultParams().Ratio
+}
+
+// precommitBaseline 读该组合的历史基线中位速率（tok/s）。读不到一律 false。
+//
+// 只认 primary / extended 两种来源（与 route 的 slowRateBaselineUsable 同口径）：
+// extended_stale 是「刚从故障/下线恢复、基线取自陈旧窗口」，设计稿明定它只做会话级降级、
+// 不做渠道级判定，故不算可用基线。
+func (c *idleTimeoutCache) precommitBaseline(ctx context.Context, providerID int64, modelKey string) (float64, bool) {
+	if c == nil || c.redis == nil || providerID <= 0 || modelKey == "" {
+		return 0, false
+	}
+	raw, err := c.redis.Get(ctx, route.SlowRateBaselineKey(providerID, modelKey)).Result()
+	if err != nil {
+		if !errors.Is(err, redis.Nil) {
+			c.logger.Debug("dataplane.precommit_baseline_read_failed", map[string]any{
+				"providerId": providerID, "modelKey": modelKey, "error": err.Error(),
+			})
+		}
+		return 0, false
+	}
+	var payload struct {
+		Median float64 `json:"median"`
+		Source string  `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		c.logger.Debug("dataplane.precommit_baseline_undecodable", map[string]any{
+			"providerId": providerID, "modelKey": modelKey, "error": err.Error(),
+		})
+		return 0, false
+	}
+	if payload.Source != "primary" && payload.Source != "extended" {
+		return 0, false
+	}
+	if payload.Median <= 0 {
+		return 0, false
+	}
+	return payload.Median, true
+}
+
+// PrecommitShadowDefault 是影子期的出厂取值（true = 只记录不裁决）。
+//
+// 为何默认影子：该闸会改变首字时延（内容先暂存再决定提交或换家），而三档阈值与速率口径
+// 尚未由生产数据标定（用户明示「阈值要加日志分析数据得出」）。故先只记录、不动行为；
+// 标定完成把 CCH_SLOW_PRECOMMIT_SHADOW 设为 0 即转入执法。
+const PrecommitShadowDefault = true
+
+// precommitShadowEnabled 读影子开关。
+//
+// 变量带 CCH_ 前缀且是 Go 独有开关，故不进 go/env-parity.txt 的对账清单
+// （与 internal/jobs 的 CCH_JOB_* 同一约定）。取值无法识别时回出厂值。
+func precommitShadowEnabled() bool {
+	raw, ok := os.LookupEnv("CCH_SLOW_PRECOMMIT_SHADOW")
+	if !ok {
+		return PrecommitShadowDefault
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "0", "false", "no", "off":
+		return false
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return PrecommitShadowDefault
 }
 
 // 编译期断言：未使用的辅助函数与错误值在此显式保留，避免误删。

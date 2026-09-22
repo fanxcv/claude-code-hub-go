@@ -14,6 +14,13 @@ import "time"
 // 成立，且窗口内拿不到权威 token 数（usage 只在收尾帧给）。2026-09-21 据此删去了原先的
 // token 闸与速率闸，连同 providers 表的 slow_rate_probe_min_tokens 列（迁移 0133）。
 //
+// 2026-09-22 追加（用户裁定「进行中止损」）：那条推理只否定「在原探测窗口里判速率」，
+// 而用户要的恰恰是**把窗口延长到首个内容帧之后**——先暂存一小段内容、看它的产出速率，
+// 快则立即放行、慢则在客户端零字节时换家。那是**另一条机制**（提交前速率闸），
+// 参数在 `Precommit*` 一节，与本文的停滞探测并列，两者互不替代：
+//   - 停滞探测抓「首字后完全没有内容」（速率恒 0 的退化形态）；
+//   - 提交前速率闸抓「有内容但极慢」。
+//
 // 与既有 IdleTimeout 的唯一区别是**分母**：
 //   - IdleTimeout 看**读间隔**：上游一直发中性帧（心跳/头帧）就永不触发；
 //   - 本判据看**自首字节起的绝对时长**：上游一直发中性帧而不产内容也会触发。
@@ -26,9 +33,32 @@ import "time"
 // fb/dur 中位生成窗为秒级），30 秒足够长到不会误杀「正常但输出很长」的请求，
 // 又足够短到用户不必干等一分钟才发现这家在卡。
 //
-// 「默认关闭」由**列的 NULL** 承载，而不是由本常量的取值承载：列 NULL ⇒ 渠道未配置 ⇒
-// 机制对该渠道关闭（产品承诺：默认不改既有行为）。本常量只在需要引用出厂阈值时使用。
+// 生效条件（2026-09-22 修正）：**低速监控开关打开**（providers.slow_rate_monitor_enabled）
+// 且该渠道未显式覆写该列时，取本出厂值。开关关闭 ⇒ 整条低速机制关闭，不探测（零开销）。
+//
+// 先前注释写「『默认关闭』由列的 NULL 承载」——那句已与实现不符：列的 NULL 只是「未覆盖」，
+// 不是「关闭」；真正的关闭由**监控开关**承载。列显式设值仍覆盖出厂值（兼容存量行为）。
 const DefaultProbeAfterFirstByteSeconds = 30
+
+// PrecommitBytesPerToken 是「语义字节 ⇒ token」的近似换算比。
+//
+// 为何需要换算：提交前拿不到权威 token 数（usage 只在收尾帧给），只能数字节；
+// 而基线是 tok/s。4 是英文文本与 JSON 的经验中值。**这是近似**：中文与 tool JSON 会明显
+// 偏离（中文约 1.5 B/token，JSON 可到 10+）。故它是**待标定项**，将由影子日志的实测
+// 分布替换（影子期只记录不裁决，见 forward.StreamOptions.PrecommitShadow）。
+const PrecommitBytesPerToken = 4
+
+// DerivePrecommitMinBytesPerSecond 由基线中位速率与该渠道的低速系数推导提交前速率闸
+// 阈值（语义字节/秒）。
+//
+// 语义与事后判定一致（`isSlow` 的 `rate < baseline × Ratio`），只是把单位从 tok/s 折成
+// 字节/秒。任一输入非正即返回 0（不启用）——没有基线就不能判慢，宁可 fail-open。
+func DerivePrecommitMinBytesPerSecond(baselineTokPerSecond, ratio float64) int {
+	if baselineTokPerSecond <= 0 || ratio <= 0 {
+		return 0
+	}
+	return int(baselineTokPerSecond*ratio*PrecommitBytesPerToken + 0.5)
+}
 
 // ProbeParams 是一个渠道生效的探测参数（渠道覆写优先，缺省取出厂值）。
 type ProbeParams struct {

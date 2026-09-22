@@ -65,8 +65,14 @@ export interface SlowRateParams {
   slowRatePenaltyMax: number | null;
   // 恢复策略阈值：连续这么多个可判定请求都不慢即重置降权（默认 10）。
   slowRateRecoveryRequests: number | null;
-  // 首字后停滞探测阈值 T（秒）：null = 不探测（机制默认关闭）。
+  // 首字后停滞探测阈值 T（秒）。
+  //
+  // null = **未覆盖**（不是「关闭」）：监控开关打开时取出厂值 30s；显式设 0 才是「不要探测」。
   slowRateProbeAfterFirstByteSeconds: number | null;
+  /** 提交前速率闸（默认全关）：null = 未覆盖 ⇒ false。 */
+  slowRatePrecommitEnabled: boolean | null;
+  /** 提交前速率闸阈值（语义字节/秒）：null = 未覆盖 ⇒ 由基线推导。 */
+  slowRatePrecommitMinBytesPerSecond: number | null;
 }
 
 export interface RoutingState extends SlowRateParams {

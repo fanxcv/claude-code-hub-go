@@ -112,8 +112,15 @@ type AdminProvider struct {
 	SlowRatePenaltyMax  *int     `json:"slowRatePenaltyMax"`
 	// SlowRateRecoveryRequests 是恢复策略阈值（默认 10）。
 	SlowRateRecoveryRequests *int `json:"slowRateRecoveryRequests"`
-	// SlowRateProbeAfterFirstByteSeconds 是首字后停滞探测阈值 T（秒）；NULL = 不探测（机制默认关闭）。
+	// SlowRateProbeAfterFirstByteSeconds 是首字后停滞探测阈值 T（秒）。
+	//
+	// NULL = 未覆盖（不是「关闭」）：监控开关打开时取 slowrate.DefaultProbeAfterFirstByteSeconds
+	// （30）；真正的关闭由 SlowRateMonitorEnabled 承载。
 	SlowRateProbeAfterFirstByteSeconds *int `json:"slowRateProbeAfterFirstByteSeconds"`
+	// SlowRatePrecommitEnabled 是提交前速率闸（默认全关）；NULL = 未覆盖 ⇒ false。
+	SlowRatePrecommitEnabled *bool `json:"slowRatePrecommitEnabled"`
+	// SlowRatePrecommitMinBytesPerSecond 是速率阈值（语义字节/秒）；NULL = 未覆盖 ⇒ 由基线推导。
+	SlowRatePrecommitMinBytesPerSecond *int `json:"slowRatePrecommitMinBytesPerSecond"`
 
 	TPM *int `json:"tpm"`
 	RPM *int `json:"rpm"`
@@ -188,6 +195,8 @@ const adminProviderColumns = `
 	slow_rate_penalty_max AS "slowRatePenaltyMax",
 	slow_rate_recovery_requests AS "slowRateRecoveryRequests",
 	slow_rate_probe_after_first_byte_seconds AS "slowRateProbeAfterFirstByteSeconds",
+	slow_rate_precommit_enabled AS "slowRatePrecommitEnabled",
+	slow_rate_precommit_min_bytes_per_second AS "slowRatePrecommitMinBytesPerSecond",
 	tpm, rpm, rpd, cc,
 	to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
 	to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "updatedAt"`

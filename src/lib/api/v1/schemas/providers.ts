@@ -206,7 +206,20 @@ export const ProviderSummarySchema = z
       .int()
       .nullable()
       .describe(
-        "Stall threshold T in seconds counted from first byte; null disables the probe (default off)."
+        "Stall threshold T in seconds counted from first byte; null means not overridden and falls back to the 30s factory value while the slow-rate monitor is on."
+      ),
+    slowRatePrecommitEnabled: z
+      .boolean()
+      .nullable()
+      .describe(
+        "Per-provider switch for the pre-commit rate gate (off by default); null means not overridden and falls back to false."
+      ),
+    slowRatePrecommitMinBytesPerSecond: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        "Pre-commit rate threshold in semantic bytes per second; null means not overridden and is derived from the provider x model baseline."
       ),
     todayTotalCostUsd: z
       .string()

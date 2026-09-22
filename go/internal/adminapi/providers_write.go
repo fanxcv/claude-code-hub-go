@@ -149,6 +149,7 @@ var providerCreateFieldNames = []string{
 	"slow_rate_trigger_count", "slow_rate_ratio_per_mille", "slow_rate_penalty_step", "slow_rate_penalty_max",
 	"slow_rate_recovery_requests",
 	"slow_rate_probe_after_first_byte_seconds",
+	"slow_rate_precommit_enabled", "slow_rate_precommit_min_bytes_per_second",
 }
 
 // providerUpdateFieldNames = 创建字段全集 + description（Node 的 ProviderUpdateSchema 是

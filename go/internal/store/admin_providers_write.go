@@ -39,6 +39,8 @@ const (
 	providerNullableIntKind
 	// providerBoolKind：非空 bool。
 	providerBoolKind
+	// providerNullableBoolKind：可空 bool（Go 值 *bool）；NULL = 未覆盖（取默认）。
+	providerNullableBoolKind
 	// providerNumericKind：numeric（Go 值 *float64）；Node 侧走 toString()，但 PG 侧仍是数值列。
 	providerNumericKind
 	// providerJSONKind：jsonb（Go 值 json.RawMessage；nil 写 NULL）。
@@ -92,8 +94,11 @@ var adminProviderWriteFields = []adminProviderWriteField{
 	{"slow_rate_penalty_max", "slow_rate_penalty_max", providerNullableIntKind},
 	// 恢复策略阈值是新字段（无旧名可用），payload 与列同名。
 	{"slow_rate_recovery_requests", "slow_rate_recovery_requests", providerNullableIntKind},
-	// 探测阈值：NULL = 不探测（机制关闭）。不得有 DEFAULT（见 0130 迁移的契约测试）。
+	// 探测阈值：NULL = 未覆盖（监控开关打开时取出厂 30s）。不得有 DEFAULT（见 0130 迁移的契约测试）。
 	{"slow_rate_probe_after_first_byte_seconds", "slow_rate_probe_after_first_byte_seconds", providerNullableIntKind},
+	// 提交前速率闸：闸本身可空（NULL = 未覆盖 ⇒ false），阈值可空（NULL = 未覆盖 ⇒ 由基线推导）。
+	{"slow_rate_precommit_enabled", "slow_rate_precommit_enabled", providerNullableBoolKind},
+	{"slow_rate_precommit_min_bytes_per_second", "slow_rate_precommit_min_bytes_per_second", providerNullableIntKind},
 	{"limit_5h_usd", "limit_5h_usd", providerNumericKind},
 	{"limit_5h_reset_mode", "limit_5h_reset_mode", providerTextKind},
 	{"limit_daily_usd", "limit_daily_usd", providerNumericKind},
@@ -234,6 +239,18 @@ func adminProviderBindValue(field adminProviderWriteField, value any) (any, erro
 			return nil, invalid()
 		}
 		return flag, nil
+	case providerNullableBoolKind:
+		if value == nil {
+			return nil, nil
+		}
+		flag, ok := value.(*bool)
+		if !ok {
+			return nil, invalid()
+		}
+		if flag == nil {
+			return nil, nil
+		}
+		return *flag, nil
 	case providerNumericKind:
 		if value == nil {
 			return nil, nil

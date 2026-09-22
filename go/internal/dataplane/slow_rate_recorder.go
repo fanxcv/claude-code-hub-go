@@ -214,6 +214,26 @@ func (a *slowRateAdapter) RecordSlowRate(ctx context.Context, sample terminal.Sl
 	})
 }
 
+// RecordSlowPrecommit 实现 terminal.SlowRateRecorder 的「提交前判慢」侧。
+//
+// 为何不走 RecordSlowRate：样本的每个判据都建立在**能算出的生成速率**上（状态码、输出 token
+// 下限、首字节比例），而判废时流还没走完、算不出速率；且样本受终态提交闸门约束，而判废家
+// 恰恰**不是**作答家（见 terminal 侧 recordSlowPrecommit 的说明）。
+func (a *slowRateAdapter) RecordSlowPrecommit(ctx context.Context, facts []terminal.SlowPrecommit) {
+	if a == nil || a.recorder == nil {
+		return
+	}
+	for _, fact := range facts {
+		a.recorder.RecordPrecommit(ctx, slowrate.PrecommitFacts{
+			ProviderID: fact.ProviderID,
+			SessionID:  fact.SessionID,
+			KeyID:      fact.KeyID,
+			ModelKey:   fact.ModelKey,
+			RequestID:  fact.RequestID,
+		})
+	}
+}
+
 // RecordSlowDiverts 实现 terminal.SlowDivertRecorder。
 //
 // 与样本分开走另一条路（而不是塞进 RecordSlowRate）：改道的键按**被挤掉的那家**，

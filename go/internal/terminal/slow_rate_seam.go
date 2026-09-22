@@ -43,13 +43,14 @@ type SlowRateSample struct {
 //     调用方也无所补救（设计稿 §4：样本与行同生同灭，丢了不影响钱）。
 //  2. **零开销闸门在实现里**：未开启监控的渠道必须在此返回，不做任何 Redis 读写
 //     （设计稿 §8 的「未开启渠道逐请求开销严格为零」是设计约束，不是优化）。
-//  3. **时机：终态提交之后**，与 affinity 写回同规矩——未提交就写样本会把「本次并没真正
-//     服务成功的速率」记进基线。
-//
-// 改道计数**不走本接口**：它计的是「被挤掉的那家」而非作答的那家，且 503 路径没有作答者，
-// 故它有独立的事实与闸门（见 SlowDivert 与 SetSlowDivertRecorder）。
+//  3. **时机：终态已定之后**，与 affinity 写回同规矩——未提交就写样本会把「本次并没真正
+//     服务成功的速率」记进基线。注意这是对 RecordSlowRate 而言：RecordSlowPrecommit 的
+//     事实是「某家被判废」，它**不**由「谁最终作答成功」决定，故调用侧不施加提交闸门
+//     （详见 SlowPrecommit 与 Settler.recordSlowPrecommit）。
 type SlowRateRecorder interface {
 	RecordSlowRate(ctx context.Context, sample SlowRateSample)
+	// RecordSlowPrecommit 收「提交前判慢」事实（一条或多条，见 SlowPrecommit）。
+	RecordSlowPrecommit(ctx context.Context, facts []SlowPrecommit)
 }
 
 // SlowDivert 是一次「因低速被改道」的事实：某渠道本会（或本可能）被选中，因低速机制而没轮到。
@@ -69,6 +70,22 @@ type SlowDivert struct {
 // 与 SlowRateRecorder 同三条约束（失败不影响结算、自降级、终态之后）。
 type SlowDivertRecorder interface {
 	RecordSlowDiverts(ctx context.Context, diverts []SlowDivert)
+}
+
+// SlowPrecommit 是一次「提交前判慢」的事实：某渠道的某次尝试在提交前被探测判废（流还没
+// 走完、客户端一个字节都没收到）。
+//
+// ProviderID 是**被判废的那家**，不是作答的那家——判废后由别家作答成功时两者不同，而
+// 要标慢的恰恰是前者。ModelKey 与 SlowRateSample 同口径（否则写进的滑窗不是读侧要数的那个）。
+//
+// RequestID 是 message_request 行 id，用作滑窗成员：与速率样本同形，故同一请求在本窗内
+// 只占一格（多次判废不重复计）。
+type SlowPrecommit struct {
+	ProviderID int64
+	ModelKey   string
+	RequestID  int64
+	SessionID  string
+	KeyID      int64
 }
 
 // recordSlowRate 是旁路的唯一执行点。未装配（nil）时整段跳过，行为与接线前逐字一致。
@@ -94,6 +111,20 @@ func (s *Settler) recordSlowRateCommitted(ctx context.Context, sample SlowRateSa
 		return
 	}
 	s.recordSlowRate(ctx, sample)
+}
+
+// recordSlowPrecommit 是「提交前判慢」事实的唯一执行点。未装配（nil）或本次无判废时整段跳过。
+//
+// **不受终态提交闸门约束**（与 recordSlowRateCommitted 相反、与 recordSlowDiverts 同口径）：
+// 判废家恰恰不是作答家（作答家在成功路径上另有样本），且「全部候选都被判废」那条 503 路径
+// 没有任何作答者却最该被标——把它挂在 committed 上会永远收不到。
+func (s *Settler) recordSlowPrecommit(ctx context.Context, facts []SlowPrecommit) {
+	if s.slowRate == nil || len(facts) == 0 {
+		return
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), slowRateTimeout)
+	defer cancel()
+	s.slowRate.RecordSlowPrecommit(writeCtx, facts)
 }
 
 // slowRateTimeout 是旁路写入的上界。
