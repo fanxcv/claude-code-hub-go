@@ -29,21 +29,26 @@ const (
 	// 否则「最近 24 小时」的求和会在每个整点刚过时少掉最老那一桶。
 	divertTTL = 25 * time.Hour
 	// divertKeyPrefix 是键前缀。**刻意不与 `cch:slow:` 同族**：管理面按 `cch:slow:*:state`
-	// 全库 SCAN 那族键，同族会让扫描多匹配一批键、还得再过滤。
+	// 全库 SCAN 那族键，同族会让扫描多匹配一批键、还得再过滤（本前缀不含那个冒号，故不匹配）。
 	divertKeyPrefix = "cch:slowdivert:"
 )
 
-// DivertKey 是一个渠道的改道计数键（按渠道，跨模型合计——弹窗本来就是按渠道开的）。
+// divertBucketKey 是「一小时桶 × 一个成因」的键：`cch:slowdivert:{<pid>}:<hourStart>:<cause>`。
 //
-// 花括号是 Redis Cluster 的 hash tag：该渠道的计数全落同一槽。
-func DivertKey(providerID int64) string {
-	return divertKeyPrefix + "{" + strconv.FormatInt(providerID, 10) + "}"
-}
-
-// DivertBucketField 是某小时桶里某成因的字段名。形制是存储契约的一部分：读侧要按同一形制
-// 反解桶起点，改名会让旧字段读不出来。
-func DivertBucketField(hourStart int64, cause route.DivertCause) string {
-	return strconv.FormatInt(hourStart, 10) + ":" + string(cause)
+// 一桶一键（而不是一个渠道一个 Hash + 字段）是为**严格有界**：Hash 只能靠「写时剪掉滑出窗口
+// 的那一桶」维护，而删除目标随当前整点**单向递增**，间断（尤其反复出现 24~25 小时的间断）
+// 会让漏删的桶**永不再被触及**，字段数照样无界——实测三轮「活跃 24h + 间断 24h」后攒到 140 项。
+// 一桶一键则每键自带 25 小时 TTL，键数自然上界 25h × 2 成因 = 50，且**不需要任何剪除逻辑**。
+// 代价是键数 ×48（每渠道 ≤ 50），读面由窗口推导 48 个键名、一次 MGET 取回。
+//
+// 花括号是 Redis Cluster 的 hash tag：该渠道的所有桶全落同一槽（MGET 因而不会触发 CROSSSLOT）。
+//
+// 旧形制（单 Hash `cch:slowdivert:{pid}`，字段名 `<hourStart>:<cause>`）**直接放弃、不回读**：
+// 本计数自 v1.9.21 上线起仅两小时、量极小，而回读旧形制要多养一套解析与兼容分支。故读到 0
+// 不是故障，是换形制的预期结果。
+func divertBucketKey(providerID int64, hourStart int64, cause route.DivertCause) string {
+	return divertKeyPrefix + "{" + strconv.FormatInt(providerID, 10) + "}:" +
+		strconv.FormatInt(hourStart, 10) + ":" + string(cause)
 }
 
 // DivertSnapshot 是一个渠道在窗口内的改道读数。
@@ -82,16 +87,17 @@ func NewDivertStore(client redis.UniversalClient, logger Logger) *DivertStore {
 // 不受「渠道是否开启低速监控」闸门约束：该渠道即便刚被关闭监控，它被冷却/降权挤掉的
 // 历史仍是真实发生过的，而闸门的意义是「不监控即不算慢」，不是「不算改道」。
 //
-// 写成本：HINCRBY + EXPIRE 同一次 pipeline = 一次往返。失败只 warn（本计数是旁路，
+// 写成本：INCR + EXPIRE 同一次 pipeline = 一次往返（与旧形制相同）。失败只 warn（本计数是旁路，
 // 与慢样本同样的纪律：绝不影响结算）。
 func (s *DivertStore) Record(ctx context.Context, providerID int64, cause route.DivertCause, at time.Time) {
 	if s == nil || s.client == nil || providerID <= 0 || cause == "" {
 		return
 	}
-	key := DivertKey(providerID)
-	field := DivertBucketField(hourStartUnix(at), cause)
+	key := divertBucketKey(providerID, hourStartUnix(at), cause)
 	pipe := s.client.Pipeline()
-	pipe.HIncrBy(ctx, key, field, 1)
+	pipe.Incr(ctx, key)
+	// 刷新本键 TTL：桶只在自己那一小时里收写，故「最后一次写 + 25h」就是该桶需要活到的最晚
+	// 时刻（读完窗内最老那桶还需 1 小时余量），不会无限续命。
 	pipe.Expire(ctx, key, divertTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
 		s.warn("slowrate.divert_write_failed", map[string]any{
@@ -117,50 +123,46 @@ func hourStartUnix(at time.Time) int64 {
 
 // ReadDivert 读一个渠道的窗口内改道读数（`/providers/{id}/slow-logs` 的 diverts 字段）。
 //
-// 用 HGETALL 一次取回整个 Hash（最多 24 桶 × 2 成因 = 48 个字段），在本地按桶起点求和。
-// 为什么不在 Redis 侧求和：字段名承载桶起点，求和需要「哪些字段在窗口内」这一判断，
-// 而那必须按数值比较——用 Lua 或 HGETALL 都行，但 HGETALL 少一次脚本部署与对拍成本，
-// 且该 Hash 尺寸有界（48 字段）。
+// 键名由窗口完全推导（24 桶 × 2 成因 = 48 个），故一次 pipeline（两条 MGET）取回、本地求和，
+// 缺失键（那小时没被改道过）按 0 计。为什么不在 Redis 侧求和：求和需要「哪些桶在窗口内」
+// 这一判断，而那由窗口直接决定，客户端推导比一次脚本部署与黄金对拍便宜。
 func (s *DivertStore) ReadDivert(ctx context.Context, providerID int64, now time.Time) (DivertSnapshot, error) {
 	snapshot := DivertSnapshot{WindowHours: divertBuckets}
 	if s == nil || s.client == nil || providerID <= 0 {
 		return snapshot, nil
 	}
-	fields, err := s.client.HGetAll(ctx, DivertKey(providerID)).Result()
-	if err != nil {
+	current := hourStartUnix(now)
+	cooldownKeys := make([]string, 0, divertBuckets)
+	penaltyKeys := make([]string, 0, divertBuckets)
+	for offset := divertBuckets - 1; offset >= 0; offset-- {
+		hourStart := current - int64(offset)*3600
+		cooldownKeys = append(cooldownKeys, divertBucketKey(providerID, hourStart, route.DivertCauseCooldown))
+		penaltyKeys = append(penaltyKeys, divertBucketKey(providerID, hourStart, route.DivertCausePenalty))
+	}
+	pipe := s.client.Pipeline()
+	cooldowns := pipe.MGet(ctx, cooldownKeys...)
+	penalties := pipe.MGet(ctx, penaltyKeys...)
+	if _, err := pipe.Exec(ctx); err != nil {
 		return snapshot, fmt.Errorf("读改道计数失败: %w", err)
 	}
-	oldest := hourStartUnix(now) - int64(divertBuckets-1)*3600
-	for field, raw := range fields {
-		hourStart, cause, ok := parseDivertBucket(field)
-		if !ok || hourStart < oldest {
-			continue
-		}
-		count, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			continue
-		}
-		switch cause {
-		case route.DivertCauseCooldown:
-			snapshot.Cooldown += count
-		case route.DivertCausePenalty:
-			snapshot.Penalty += count
-		}
-	}
+	snapshot.Cooldown = sumDivertBuckets(cooldowns.Val())
+	snapshot.Penalty = sumDivertBuckets(penalties.Val())
 	return snapshot, nil
 }
 
-// parseDivertBucket 反解桶字段名。形制不对即跳过（旧字段或脏数据不该让整个读数失败）。
-func parseDivertBucket(field string) (int64, route.DivertCause, bool) {
-	for index := len(field) - 1; index >= 0; index-- {
-		if field[index] != ':' {
+// sumDivertBuckets 求一次 MGET 结果的和。缺失键（nil）与脏值都按 0 计——脏数据不该让整个读数失败。
+func sumDivertBuckets(values []any) int64 {
+	var total int64
+	for _, raw := range values {
+		text, ok := raw.(string)
+		if !ok {
 			continue
 		}
-		hourStart, err := strconv.ParseInt(field[:index], 10, 64)
+		count, err := strconv.ParseInt(text, 10, 64)
 		if err != nil {
-			return 0, "", false
+			continue
 		}
-		return hourStart, route.DivertCause(field[index+1:]), true
+		total += count
 	}
-	return 0, "", false
+	return total
 }

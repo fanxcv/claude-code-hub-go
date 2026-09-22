@@ -2,11 +2,30 @@ package slowrate
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
+	"github.com/redis/go-redis/v9"
 )
+
+// divertBucketKeys 列出某渠道的全部桶键（一桶一键，故键数就是「该渠道占了多少存储项」）。
+func divertBucketKeys(t *testing.T, client redis.UniversalClient, providerID int64) ([]string, error) {
+	t.Helper()
+	pattern := divertKeyPrefix + "{" + strconv.FormatInt(providerID, 10) + "}:*"
+	return client.Keys(context.Background(), pattern).Result()
+}
+
+// divertBucketCount 是上条计数失败即 Fatal 的包装（多数用例只关心个数）。
+func divertBucketCount(t *testing.T, client redis.UniversalClient, providerID int64) int {
+	t.Helper()
+	keys, err := divertBucketKeys(t, client, providerID)
+	if err != nil {
+		t.Fatalf("列桶键失败: %v", err)
+	}
+	return len(keys)
+}
 
 // 本文件钉住「因低速被改道请求数」的存储面（用户 2026-09-22 需求）。
 //
@@ -113,12 +132,12 @@ func TestDivertBucketsAreHourAligned(t *testing.T) {
 	// 同一整点（10:05 与 10:55）应落同一个桶；11:05 属下一桶。
 	store.Record(ctx, 171, route.DivertCauseCooldown, time.Date(2026, 9, 22, 11, 5, 0, 0, time.UTC))
 
-	fields, err := store.client.HKeys(ctx, DivertKey(171)).Result()
+	fields, err := divertBucketKeys(t, store.client, 171)
 	if err != nil {
-		t.Fatalf("列字段失败: %v", err)
+		t.Fatalf("列桶键失败: %v", err)
 	}
 	if len(fields) != 2 {
-		t.Fatalf("三笔写入（两个整点）应只产生 2 个字段，实得 %d: %v", len(fields), fields)
+		t.Fatalf("三笔写入（两个整点）应只产生 2 个桶键，实得 %d: %v", len(fields), fields)
 	}
 	snapshot, _ := store.ReadDivert(ctx, 171, time.Date(2026, 9, 22, 11, 30, 0, 0, time.UTC))
 	if snapshot.Cooldown != 3 {
@@ -134,7 +153,8 @@ func TestDivertExpireLivesLongerThanWindow(t *testing.T) {
 	now := time.Now()
 	store.Record(ctx, 172, route.DivertCauseCooldown, now)
 
-	ttl, err := store.client.TTL(ctx, DivertKey(172)).Result()
+	bucket := divertBucketKey(172, hourStartUnix(now), route.DivertCauseCooldown)
+	ttl, err := store.client.TTL(ctx, bucket).Result()
 	if err != nil {
 		t.Fatalf("取 TTL 失败: %v", err)
 	}
