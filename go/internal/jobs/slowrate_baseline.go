@@ -326,7 +326,7 @@ func (b *SlowRateBaseline) clampW2Floor(
 //	A0 W1 达标                      -> 用 W1，source=primary
 //	A1 全期无行（不会走到：SlowRateScopeCounts 只返回有行的组合）
 //	A2 W1 不足、W2 达标且 W1 < 10   -> 用 W2，source=extended
-//	A3 W1 与 W2 都不足且 W1 < 10    -> 不发布并**撤销旧键**（fail-open）
+//	A3 W2 不足（无论 W1 有多少条）  -> 不发布并**撤销旧键**（fail-open）
 //	A4 W1 不足但 >= 10 条、W2 达标  -> 用 W2，source=extended_stale（只供会话级降级）
 func (b *SlowRateBaseline) publishScope(
 	ctx context.Context,
@@ -399,7 +399,7 @@ type BaselineDecision struct {
 //	A0 w1 >= 下限                     -> 发布，W1，source=primary
 //	A1 w2 == 0（全期无行）             -> 不发布（防御性；计数查询本就不会返回这种组合）
 //	A2 w1 < 下限、w2 >= 下限、w1 < 10  -> 发布，W2，source=extended
-//	A3 w1 与 w2 都 < 下限且 w1 < 10    -> 不发布（长期静默，fail-open）
+//	A3 w2 < 下限                       -> 不发布（样本下限是硬约束，fail-open）
 //	A4 w1 < 下限但 w1 >= 10、w2 达标   -> 发布，W2，source=extended_stale（只供会话级降级）
 func DecideBaseline(w1Samples, w2Samples int64, minSamples int) BaselineDecision {
 	if minSamples <= 0 {
@@ -418,13 +418,18 @@ func DecideBaseline(w1Samples, w2Samples int64, minSamples int) BaselineDecision
 		return BaselineDecision{}
 	}
 
-	// A3：两窗都不足，且 W1 连 10 条都没有——长期静默，不发布（fail-open）。
-	if w2Samples < floor && w1Samples < slowRateBaselineStaleFloorSamples {
+	// A3：W2 不足即不发布——**样本下限是硬约束**（用户裁决 2026-09-22）。
+	//
+	// 旧实现只在 W1 也 < 10 条时才拒绝，于是 W1=20、W2=99 也会用 W2 的陈旧样本发布
+	// extended_stale；而该来源虽不做渠道级 penalty，却会供 Recorder 判慢并**强制会话冷却**
+	// （用户可见的改选）——样本单薄时不该影响用户。
+	if w2Samples < floor {
 		return BaselineDecision{}
 	}
 
 	source := BaselineSourceExtended
-	// A2 与 A4 的区分点是 **W1 是否有 >= 10 条样本**，而不是 W2 是否充足：
+	// A2 与 A4 的共同前提是 **W2 已达标**（否则上面已按 A3 返回不发布）；
+	// 两者的区分点是 **W1 是否有 >= 10 条样本**：
 	//   - W1 >= 10 条：渠道**刚恢复**流量（刚恢复才有的少量样本），陈旧基线可能已不反映
 	//     恢复后的形态 -> extended_stale，只供会话级降级；
 	//   - W1 < 10 条：3 天内几乎静默（很可能只是没被选中），恢复时旧基线仍有效 -> extended。

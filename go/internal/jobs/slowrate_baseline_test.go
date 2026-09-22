@@ -45,12 +45,16 @@ func TestDecideBaselineFourEmptyCases(t *testing.T) {
 		{"A4 W1 恢复中（50 条）-> extended_stale", 50, 500, true, true, BaselineSourceExtendedStale},
 		{"A4 W1 差一条到下限 -> extended_stale", 99, 200, true, true, BaselineSourceExtendedStale},
 
-		// A3：长期静默——两窗都不足且 W1 < 10。
+		// A3：W2 不足即不发布——样本下限是**硬约束**（用户裁决 2026-09-22）。
+		// 这一组是本次反转的核心：旧实现只看 W1 是否 < 10 条，于是 W1 再多也能用 W2 的
+		// 陈旧样本发布 extended_stale，而该来源会供 Recorder 判慢并强制会话冷却。
 		{"A3 两窗皆不足且 W1 < 10 -> 不发布", 5, 50, false, false, ""},
 		{"A3 两窗皆不足且 W1 = 0 -> 不发布", 0, 99, false, false, ""},
+		{"A3 W1 充足但 W2 不足 -> 不发布（反转：旧实现发 extended_stale）", 20, 99, false, false, ""},
+		{"A3 W1 与 W2 都差一条到下限 -> 不发布（下限是硬约束）", 99, 99, false, false, ""},
 
-		// A4 的另一形态：W1 >= 10 但 W2 也不足（W1 有样本说明刚恢复；A3 的门槛是 W1 < 10）。
-		{"A4 形态 W1 >= 10 而 W2 不足 -> extended_stale", 20, 99, true, true, BaselineSourceExtendedStale},
+		// A4 的正面控制：W2 恰好达标时，W1 >= 10 条仍发 extended_stale（硬约束只砍 W2 不足）。
+		{"A4 W2 恰好等于下限 -> extended_stale", 20, 100, true, true, BaselineSourceExtendedStale},
 	}
 
 	for _, tc := range cases {
