@@ -149,6 +149,67 @@ func TestPrecommitRateGateDerivesFromBaseline(t *testing.T) {
 	}
 }
 
+// TestPrecommitRateGateRefusesMultiModelCandidates 钉住边界 5：
+// **多模型渠道不得凭基线推导阈值**。
+//
+// 为何必须拒绝：装配缝按 provider 粒度，拿不到本次请求的模型名，而基线与状态是 provider×model
+// 粒度。多模型渠道下取哪个模型都是猜：若取中的那个模型基线高，而实际请求的是正常就慢的另一个模型，
+// 正常流会被判 FailSlowRate（524 + 换家）。这不再是「少判」而是**误判**。
+//
+// 本例故意只给**排第一**的模型写基线：旧实现（取第一个精确模型）会命中它而把闸打开，故本用例
+// 在旧实现上必红——这正是它要拖住的回归。
+func TestPrecommitRateGateRefusesMultiModelCandidates(t *testing.T) {
+	client := feedRedis(t)
+	const providerID = 167
+	const fastModel = "fast-model"
+	const slowModel = "slow-model"
+	key := route.SlowRateBaselineKey(providerID, fastModel)
+	ctx := context.Background()
+
+	reader := newProbeGateRowReader()
+	cache := newIdleTimeoutCache(reader, client, nil, logx.New(nil))
+	// 只给排第一的模型写可用基线：若实现仍取第一个模型，这条就会让闸打开。
+	if err := client.Set(ctx, key, `{"median":242.6,"source":"primary"}`, time.Minute).Err(); err != nil {
+		t.Fatalf("写入基线失败: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Del(ctx, key).Err() })
+
+	t.Run("恰好一个精确模型 ⇒ 照常推导", func(t *testing.T) {
+		reader.set(providerID, precommitRow(true, precommitBoolRef(true), nil, `["`+fastModel+`"]`))
+		cache.ttl.Clear()
+		if got := cache.precommitRate(providerID); got <= 0 {
+			t.Fatalf("单模型渠道应能凭基线推导，实得 %d", got)
+		}
+	})
+
+	t.Run("两个精确模型 ⇒ 一律不启用", func(t *testing.T) {
+		reader.set(providerID, precommitRow(true, precommitBoolRef(true), nil,
+			`["`+fastModel+`","`+slowModel+`"]`))
+		cache.ttl.Clear()
+		if got := cache.precommitRate(providerID); got != 0 {
+			t.Fatalf("多模型渠道不得凭基线推导（会按错的模型误判正常流），期望 0，实得 %d", got)
+		}
+	})
+
+	t.Run("通配规则 ⇒ 不启用", func(t *testing.T) {
+		reader.set(providerID, precommitRow(true, precommitBoolRef(true), nil,
+			`[{"matchType":"prefix","pattern":"claude-"}]`))
+		cache.ttl.Clear()
+		if got := cache.precommitRate(providerID); got != 0 {
+			t.Fatalf("通配规则展开不出确定模型名，必须不启用，实得 %d", got)
+		}
+	})
+
+	t.Run("同一模型写两遍不算多模型", func(t *testing.T) {
+		reader.set(providerID, precommitRow(true, precommitBoolRef(true), nil,
+			`["`+fastModel+`","`+fastModel+`"]`))
+		cache.ttl.Clear()
+		if got := cache.precommitRate(providerID); got <= 0 {
+			t.Fatalf("去重后只有一个模型，应照常推导，实得 %d", got)
+		}
+	})
+}
+
 // TestPrecommitShadowDefaultsToOn 钉住影子期默认值：未设环境变量时必须只记录不裁决。
 //
 // 为何重要：影子期是「先取证再执法」的闸门。若默认值被改成 false，上线即改变首字时延，

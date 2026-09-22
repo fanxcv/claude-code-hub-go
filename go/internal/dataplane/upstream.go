@@ -13,7 +13,6 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/guard"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
-	"github.com/fanxcv/claude-code-hub-go/go/internal/pubstatus"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/terminal"
@@ -556,25 +555,11 @@ type slowScope struct {
 
 // slowScope 是两类低速事实（终态速率样本、提交前判废）共同的**作用域原料**。
 //
-// 为何抽到一处：两者必须落到**同一把键**上。模型键或请求 id 任一不一致，写进的滑窗就
-// 不是读侧要数的那个（读侧按请求的模型键查 state 与滑窗），标记于是静默隐形——这正是
-// 本仓反复出现的一类缺陷（「已定义≠未接线」的同构形态：值算了但没落到读侧看的地方）。
+// 实现已提到 slowScopeFor（slow_post_commit.go）：现在有**三类**事实（再加提交后掉速）必须落到同一把键，
+// 而键的解析必须只有一处，否则任一处分叉都会让标记静默隐形（本仓反复出现的一类缺陷）。
+// 保留本方法只为不变更既有调用点。
 func (s *storeSettler) slowScope(pc *pctx.Context) slowScope {
-	scope := slowScope{
-		ModelKey: pubstatus.ResolveSuccessRateModelKey(&s.state.Model, nil),
-		// 会话身份来自本请求的会话步骤记录（state.sessionID），密钥 id 来自鉴权槽位；
-		// 未接线时保持零值，slowrate 会只做渠道级统计、不写会话冷却。
-		SessionID: s.state.sessionID,
-	}
-	if pc != nil {
-		if auth, ok := pc.Auth(); ok {
-			scope.KeyID = auth.KeyID
-		}
-		if id, ok := pc.MessageRequestID(); ok {
-			scope.RequestID = id
-		}
-	}
-	return scope
+	return slowScopeFor(s.state, pc)
 }
 
 // slowPrecommit 取本次请求里「因提交前探测判废」的渠道。

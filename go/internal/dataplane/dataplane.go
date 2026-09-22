@@ -221,6 +221,9 @@ type Options struct {
 	Candidates CandidateSource
 	// Settlers 给出结算器，必填。
 	Settlers SettlerFor
+	// PostCommitSlow 写「提交后掉速」（二级闸）这条低速事实；nil 即不处置（只落标定日志）。
+	// 按请求绑定由 Handler.postCommitSlow 完成（模型分量必须取自本次请求）。
+	PostCommitSlow PostCommitSlowSink
 	// Forward 是转发主干依赖（Dial 必填）。
 	Forward forward.Deps
 	// Stream 是流式路径的基础配置（Format / ForceGate / Settle 由本包按请求填）。
@@ -648,6 +651,9 @@ func (h *Handler) forward(
 	streamOptions.GateMode = h.gateModeForRequest(requestCtx, state)
 	streamOptions.StartedAt = state.StartedAt
 	streamOptions.Settle = streamSettler{handler: h, state: state}
+	// 二级闸的处置回调：每次降速判定都要能标慢**这一家×这个模型**。
+	// 未接线时返回 nil，forward 整段跳过（行为与接线前逐字一致）。
+	streamOptions.OnPostCommitSlow = h.postCommitSlow(state, requestCtx)
 
 	result, err := h.forwardStream(requestCtx, pc, candidate, fwd, streamOptions, spec, state)
 	if result == nil {

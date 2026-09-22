@@ -183,6 +183,20 @@ func slowRateRecorder(options StoreOptions, logger *logx.Logger) *slowRateAdapte
 	}
 }
 
+// slowPostCommitSink 把二级闸的处置调用折成「写一条与提交前判废同形的事实」。
+//
+// 复用 RecordSlowPrecommit 而不是新开一个写入面：两者的事实形状与语义完全一致——
+// 「这个渠道×模型在窗内又出了一次慢」，共用同一把 samplesKey、同一个幂等成员（请求行 id）。
+// 另开一条写入面只会多出一份可能分叉的分档与封顶逻辑。
+func slowPostCommitSink(adapter *slowRateAdapter) PostCommitSlowSink {
+	if adapter == nil {
+		return nil
+	}
+	return func(ctx context.Context, fact terminal.SlowPrecommit) {
+		adapter.RecordSlowPrecommit(ctx, []terminal.SlowPrecommit{fact})
+	}
+}
+
 // slowRateAdapter 把 terminal 的中性样本视图译成 slowrate 的事实结构。
 //
 // 为何由本包做这层适配：terminal 不得 import slowrate（会与 guard/session 成环），

@@ -757,6 +757,11 @@ func reasonForCategory(category Category, statusCode int) string {
 		return ReasonUnsupported
 	case CategoryProviderSaturated:
 		return ReasonConcurrentLimitFailed
+	case CategorySlowRate:
+		// 复用既有词而不是自造：链上 reason 是跨语言契约（见 chainreason.go），
+		// 此档的状态码就是 524，与改造前 provider_error+524 写的是同一个词，
+		// 故消费者的判定（含公开状态投影）逐字不变——本分类只改**转发内部的重试决策**。
+		return ReasonVendorTypeAllTimeout
 	case CategoryLocalOverload:
 		return ReasonLocalOverload
 	default:

@@ -52,6 +52,21 @@ const (
 	// 而它的 SwitchesProvider() 为假（见下）且 hedge 会在该类失败时立刻收束整场竞速
 	// （见 hedge.go 的收束分支）——正好把「换一家」这个唯一正确的动作掐掉。
 	CategoryProviderSaturated
+	// CategorySlowRate 表示**我们主动判定的慢**：提交前停滞探测（FailSlowProbe）或分级速率闸
+	// （FailSlowRate）判定该家这一次的产出不达标。上游并未报错（没有真实 4xx/5xx），慢是实测结论。
+	//
+	// 属性：**不在同一家重试（立即换家）**、且换家；**不计熔断器**。
+	//
+	// 三属性各自的理由：
+	//   - 不同家重试：「这一家此刻慢」与「这一份输入会被拒」无关，但同一家**同一刻**大概率还是慢；
+	//     而同家重试要白等一个 RetryDelay 再加上一次完整的判慢周期——生产实测单条请求因此拖到
+	//     390s/220s/202s，而客户端拿到的却是 HTTP 200。立即换家才是对的。
+	//   - 不计熔断：「慢」不是「错」。慢渠道该走低速降权/隔离那条路（它有自己的滑窗、惩罚与恢复），
+	//     而不是被打成硬故障——进了熔断器就没有渐进恢复的机会了。
+	//
+	// 只对**主动判慢**成立：真实的 4xx/5xx、空响应、上游断开仍是 CategoryProviderError，
+	// 行为逐字不变（仍同家重试）。
+	CategorySlowRate
 )
 
 // String 返回与 Node 侧错误分类同名的英文标识，供日志与落链使用。
@@ -77,6 +92,11 @@ func (c Category) String() string {
 		return "local_overload"
 	case CategoryProviderSaturated:
 		return ReasonConcurrentLimitFailed
+	case CategorySlowRate:
+		// 本词仅作 Go 侧日志与错误文案标识，**不落** provider_chain：链上 reason 由
+		// reasonForCategory 给出（此档仍写 vendor_type_all_timeout，与改造前逐字一致），
+		// 故不引入新的跨语言词。
+		return "slow_rate"
 	default:
 		return "unknown"
 	}
@@ -87,6 +107,10 @@ func (c Category) RetriesSameProvider() bool {
 	switch c {
 	case CategoryProviderError, CategorySystemError, CategoryResourceNotFound:
 		return true
+	case CategorySlowRate:
+		// 显式写出而不是依赖 default：「慢」必须在同一家上不重试，而将来若有人把本分类
+		// 并进上面的允许集，就在这里当场可读得出来。
+		return false
 	default:
 		return false
 	}
@@ -96,7 +120,7 @@ func (c Category) RetriesSameProvider() bool {
 func (c Category) SwitchesProvider() bool {
 	switch c {
 	case CategoryProviderError, CategorySystemError, CategoryResourceNotFound, CategoryProviderUnsupportedInput,
-		CategoryProviderSaturated:
+		CategoryProviderSaturated, CategorySlowRate:
 		return true
 	default:
 		return false
@@ -108,7 +132,16 @@ func (c Category) SwitchesProvider() bool {
 // 网络错误（CategorySystemError）在 Node 侧默认不计入，由开关决定，故此处返回 false，
 // 计入与否由 Deps.CountNetworkFailureTowardCircuit 在调用点决定。
 func (c Category) CountsTowardCircuit() bool {
-	return c == CategoryProviderError
+	switch c {
+	case CategoryProviderError:
+		return true
+	case CategorySlowRate:
+		// 「慢」不是「错」：计熔断会让一次慢峰把渠道打成硬故障，反而丧失渐进恢复的机会。
+		// 显式写出是为了拖住将来把本分类并进 ProviderError 的动作（那会静默回归）。
+		return false
+	default:
+		return false
+	}
 }
 
 // RetryableStatusMarker 是「以 400 回传的上游存储容量故障」标记，逐条对齐

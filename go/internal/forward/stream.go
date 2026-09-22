@@ -450,9 +450,14 @@ func (d Deps) gateFailure(err error, plan *Plan, outcome *AttemptOutcome) *Failu
 		Attempt:       outcome.Attempt,
 		Err:           err,
 	}
-	if precommit.Reason == gate.FailIdleTimeout || precommit.Reason == gate.FailSlowProbe ||
-		precommit.Reason == gate.FailSlowRate {
+	if precommit.Reason == gate.FailIdleTimeout {
 		failure.Category = CategoryProviderError
+		failure.StatusCode = statusUpstreamTimeout
+	}
+	// 主动判慢（停滞与速率两来源）单独一档：不在同一家重试、立即换家、不计熔断。
+	// 其余门控失败（含 FailIdleTimeout）仍是 CategoryProviderError，行为逐字不变。
+	if precommit.Reason == gate.FailSlowProbe || precommit.Reason == gate.FailSlowRate {
+		failure.Category = CategorySlowRate
 		failure.StatusCode = statusUpstreamTimeout
 	}
 	return failure
@@ -913,6 +918,11 @@ func (s *Stream) awaitTerminal(ctx context.Context) {
 	observation := s.observer.Snapshot()
 	observation.Kind = terminalKindFor(completion, observation)
 	observation.Err = completion.Err
+
+	// 速率采样器收尾：撤销未到期的标定定时器（否则拖着一个已死的流到末档），
+	// 并落一条流结束终值日志（供标定 bytesPerToken）。放在终态类型算出来之后，
+	// 故日志里能带上真正的结束原因；它在泵终态之后、与提交时机无关。
+	s.rateSampler.Close(string(observation.Kind))
 
 	s.settleTerminal(ctx, StreamOutcome{
 		Kind:        observation.Kind,

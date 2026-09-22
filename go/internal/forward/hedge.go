@@ -1126,7 +1126,8 @@ func (r *hedgeRace) finishAttemptFailed(attempt *hedgeAttempt, failure *Failure)
 	}
 
 	r.lastFailure = failure
-	if failure.Category == CategoryProviderError || failure.Category == CategorySystemError {
+	if failure.Category == CategoryProviderError || failure.Category == CategorySystemError ||
+		failure.Category == CategorySlowRate {
 		if !failure.RequestScoped &&
 			(failure.Category.CountsTowardCircuit() ||
 				(failure.Category == CategorySystemError && r.deps.CountNetworkFailureTowardCircuit)) {
@@ -1134,6 +1135,9 @@ func (r *hedgeRace) finishAttemptFailed(attempt *hedgeAttempt, failure *Failure)
 				r.deps.RecordFailure(r.ctx, failure)
 			}
 		}
+		// 判慢必须进 failed：excludedLocked 据此把该家排出重选，否则竞速路径会再次选中它，
+		// 「立即换家」就只对串行路径生效（两条路径行为分叉）。计熔断那一支由
+		// CountsTowardCircuit()==false 自然跳过（慢不是错）。
 		r.failed = append(r.failed, attempt.provider.ID)
 	}
 	// 本次尝试的结局在此落定，必须标记：否则日后胜者裁决时 markLoserOutcomeLocked 仍会

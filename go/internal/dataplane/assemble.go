@@ -359,6 +359,9 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 
 	// 会话观测写侧：写活跃 ZSET、session:{id}:info、并发计数与请求工件。
 	//
+	// 低速旁路实例提到外面：它同时喂四个位置——终态样本、改道计数、提交前判废（经 terminal
+	// 的 SlowRate 面）与提交后掉速（PostCommitSlow 面）。四处同一实例才能保证写的是同一套键。
+	slowRate := slowRateRecorder(options, logger)
 	settler := options.Settler
 	if settler == nil {
 		settler = terminal.New(terminal.StoreWriter{Pools: options.Pools}, terminal.Options{
@@ -373,10 +376,10 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			Tracer: options.Tracer,
 			// 低速样本旁路（见 terminal/slow_rate_seam.go）：未开启监控的渠道在实现内即返回，
 			// 逐请求零 Redis 读写；缺 Redis 时为 nil，旁路整段跳过。
-			SlowRate: slowRateRecorder(options, logger),
+			SlowRate: slowRate,
 			// 低速改道计数旁路：与样本同一个适配器（同一个 recorder），但事实与时机不同
 			// ——它计的是**被挤掉的那家**，且要覆盖无候选的 503（见 SlowDivert）。
-			SlowDiverts: slowRateRecorder(options, logger),
+			SlowDiverts: slowRate,
 			Logger:      logger,
 			// 异步终态写队列（nil 即同步写，逐字保留原路径）。
 			Queue: settlementQueue,
@@ -564,6 +567,9 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		// 全局并发统计开关透传（nil = 未接线，见 Options 的字段注释）。
 		ProviderConcurrencyTracking: options.ProviderConcurrencyTracking,
 		providerConcurrency:         providerConcurrency,
+		// 提交后掉速（二级闸）的写入面：与其它低速事实同一个适配器实例。
+		// 缺 Redis 时为 nil ⇒ 不处置（只落标定日志），与接线前逐字一致。
+		PostCommitSlow: slowPostCommitSink(slowRate),
 		Settlers: func(state *RequestState) Settler {
 			return &storeSettler{
 				settler: settler,
@@ -857,7 +863,10 @@ func (c *idleTimeoutCache) precommitRateFromRow(ctx context.Context, row *store.
 		}
 		return 0
 	}
-	modelKey := precommitModelKey(row)
+	modelKey, ok := precommitModelKey(row)
+	if !ok {
+		return 0
+	}
 	baseline, ok := c.precommitBaseline(ctx, row.ID, modelKey)
 	if !ok {
 		return 0
@@ -865,24 +874,27 @@ func (c *idleTimeoutCache) precommitRateFromRow(ctx context.Context, row *store.
 	return slowrate.DerivePrecommitMinBytesPerSecond(baseline, precommitRatio(row))
 }
 
-// precommitModelKey 取该渠道第一个「精确」允许模型，作为「渠道×模型」组合键的模型分量。
+// precommitModelKey 取该渠道的「渠道×模型」组合键的模型分量；ok 为假表示**不能**凭它推导阈值。
 //
-// 为何只能这样取：装配缝按 provider 粒度（与既有 ProbeAfterFirstByteFor 同形制），而基线与
-// 状态是 provider×model 粒度。需开启该闸的渠道目前只服务单一模型，故取第一个精确规则即可命中。
-// **已知限制**：多模型渠道可能取不中实际请求的那个模型 ⇒ 读不到基线 ⇒ 闸不启用（fail-open，
-// 只会少判不会误判）。待装配缝支持按请求模型取键时再收紧。
-func precommitModelKey(row *store.Provider) string {
+// 为何要求恰好一个精确模型：装配缝按 provider 粒度（与既有 ProbeAfterFirstByteFor 同形制），
+// 拿不到**本次请求**的模型名，而基线与状态是 provider×model 粒度。多模型渠道下取哪个模型都是
+// 猜：若取中的那个模型基线高，而实际请求的是正常就慢的另一个模型，正常流会被判 FailSlowRate
+// （524 + 切家）。这不再是「少判」而是**误判**，故多模型渠道一律不启用（返回 0）。
+//
+// 通配规则（prefix/suffix/contains）展开不出确定模型名，故同样不启用。
+func precommitModelKey(row *store.Provider) (string, bool) {
 	if row == nil || len(row.AllowedModels) == 0 || string(row.AllowedModels) == "null" {
-		return ""
+		return "", false
 	}
 	var items []any
 	if err := json.Unmarshal(row.AllowedModels, &items); err != nil {
-		return ""
+		return "", false
 	}
+	exact := make([]string, 0, 1)
 	for _, item := range items {
 		if text, ok := item.(string); ok {
 			if trimmed := strings.TrimSpace(text); trimmed != "" {
-				return trimmed
+				exact = append(exact, trimmed)
 			}
 			continue
 		}
@@ -890,17 +902,25 @@ func precommitModelKey(row *store.Provider) string {
 		if !ok {
 			continue
 		}
-		// 只认精确规则：通配规则（prefix/suffix/contains）展开不出确定模型名。
 		matchType, _ := record["matchType"].(string)
 		pattern, _ := record["pattern"].(string)
 		if matchType != "exact" {
 			continue
 		}
 		if trimmed := strings.TrimSpace(pattern); trimmed != "" {
-			return trimmed
+			exact = append(exact, trimmed)
 		}
 	}
-	return ""
+	// 去重后仍须恰好一个：同一模型写两遍不是「多模型」，但它会让闸静默不启用，不如当作一个。
+	if len(exact) == 0 {
+		return "", false
+	}
+	for _, candidate := range exact[1:] {
+		if candidate != exact[0] {
+			return "", false
+		}
+	}
+	return exact[0], true
 }
 
 // precommitRatio 取该渠道的低速系数；未覆盖即出厂默认（0.3）。
