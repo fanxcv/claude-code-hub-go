@@ -47,6 +47,16 @@ const (
 	// 为何不并进 ReasonCircuitOpen：熔断是**全局**硬故障排除（整家渠道对所有会话都不可用），
 	// 本理由是**本会话**对该家的短期回避（其他会话照常选它），两者不可互换。
 	ReasonProviderErrorCooldown Reason = "provider_error_cooldown"
+	// ReasonNoAlternativeFailOpen 表示该候选本因**软信号**（本网关自己加的回避，见
+	// softSignalRejection）被排除，但排除后一个候选都不剩，于是被**重新纳入**本次选路。
+	//
+	// 为什么必须有这个理由（生产实证，2026-09-22）：某模型只有一家供应商，该会话进入 60 秒
+	// 低速冷却后唯一候选被剔掉 ⇒ 无候选 ⇒ `POST /v1/chat/completions` 返回 503（30 分钟 33 次）。
+	// 冷却的意图是让会话「逃到别家」，只有一家时无处可逃，却把唯一候选剔掉——可用性反而更差。
+	//
+	// 为何是**新词**而不是改写既有词：`provider_chain` 里的词被 `usage_ledger` 触发器、
+	// 状态页分类器与前端渲染按**精确词**消费，改既有词等于改它们的语义。
+	ReasonNoAlternativeFailOpen Reason = "no_alternative_fail_open"
 )
 
 // Filtered 是一个被过滤的候选及其理由，对应 Node 的 decisionContext.filteredProviders[]。

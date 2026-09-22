@@ -179,19 +179,50 @@ func (s *Selector) applyFilters(
 	dc.BeforeHealthCheck = len(enabled)
 
 	healthy := make([]Provider, 0, len(enabled))
+	// healthFiltered 是本步（熔断 + 会话冷却）的排除记录，**延后**并入留痕：软信号 fail-open
+	// 需要回头改写其中的理由，边滤边写会让同一家既在留痕里「被排除」又无法标出回退。
+	healthFiltered := make([]Filtered, 0, len(enabled))
+	softRejected := make([]Provider, 0, len(enabled))
+	hardRejected := false
+	reject := func(p Provider, record Filtered) {
+		healthFiltered = append(healthFiltered, record)
+		if softSignalRejection(record.Reason) {
+			softRejected = append(softRejected, p)
+			return
+		}
+		hardRejected = true
+	}
 	for _, p := range enabled {
 		if blocked, record := s.healthRejection(ctx, p); blocked {
-			dc.FilteredProviders = append(dc.FilteredProviders, record)
+			reject(p, record)
 			continue
 		}
 		// 会话级低速冷却在**熔断之后**判定（软回避不应改写硬故障的归因）。
 		// 它不改变 afterHealthCheck 的口径：那个计数是熔断步的产物，本判定属另一个维度。
 		if blocked, record := s.cooldownRejection(p, in); blocked {
-			dc.FilteredProviders = append(dc.FilteredProviders, record)
+			reject(p, record)
 			continue
 		}
 		healthy = append(healthy, p)
 	}
+	// 软信号 fail-open：排除后一个候选都不剩、且排除原因**全部**属软信号时，重新纳入这些候选。
+	//
+	// 只对软信号：硬信号（熔断、故障冷却、限额）代表上游已知故障或需改配置才恢复，把它们放行
+	// 只会让失败请求继续打过去。任一硬信号在场即整组不放行（含「一家冷却 + 一家熔断」的混合）。
+	//
+	// 为何要 `len(softRejected) > 0`：enabled 为空时本循环一次都没跑，「全部属软信号」是空真，
+	// 不加这道门会把「压根没有候选」误判成「可回退」。
+	if len(healthy) == 0 && len(softRejected) > 0 && !hardRejected {
+		healthy = softRejected
+		for index := range healthFiltered {
+			if !softSignalRejection(healthFiltered[index].Reason) {
+				continue
+			}
+			healthFiltered[index].Reason = ReasonNoAlternativeFailOpen
+			healthFiltered[index].Details = string(ReasonNoAlternativeFailOpen)
+		}
+	}
+	dc.FilteredProviders = append(dc.FilteredProviders, healthFiltered...)
 	dc.AfterHealthCheck = len(healthy)
 
 	return filterResult{healthy: healthy, context: dc}
@@ -220,6 +251,19 @@ func (s *Selector) cooldownRejection(p Provider, in filterInput) (bool, Filtered
 	}
 	record.Reason, record.Details = cooldownReason(kind)
 	return true, record
+}
+
+// softSignalRejection 报告某条排除理由是否属**软信号**：本网关自己加的、非上游故障的回避。
+//
+// 分界原则与 transientRejection 同源但不共用：那条回答「绑定要不要留着等它回来」，本条回答
+// 「无替代候选时能不能把它放行」。两者今天取值相同（会话冷却两类里只有低速那条算软信号），
+// 但语义不同——合并会让任一侧的改动无声影响另一侧。逐条依据：
+//
+//	slow_rate_cooldown        低速降权写下的本会话回避，等窗口过去即自愈，非上游故障
+//	provider_error_cooldown    上游 5xx/超时后的回避：上游确实出过事，放行等于继续打过去
+//	circuit_open / rate_limited  硬故障与限额，需改配置或等窗口，放行会让失败请求继续
+func softSignalRejection(reason Reason) bool {
+	return reason == ReasonSlowRateCooldown
 }
 
 // cooldownReason 把冷却成因折算成过滤理由与 i18n 键。

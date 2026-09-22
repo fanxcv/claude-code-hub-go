@@ -174,6 +174,10 @@ func sessionBindingBypass(
 //
 //	circuit_open             设计稿 §4 明定「跳过、不清空绑定、待恢复后仍粘回去」
 //	slow_rate_cooldown       低速写侧只写冷却、不清绑定（设计稿 §4 同源语义）
+//	no_alternative_fail_open 同一条低速冷却的**回退形态**（无替代候选时被重新纳入）：
+//	                         底层条件与 slow_rate_cooldown 逐字相同（冷却到期即恢复），
+//	                         只是链上为标记回退而换了词。漏登会让「绑定候选被回退使用」
+//	                         被误判成结构性失效，从而允许把会话永久搬走。
 //	provider_error_cooldown  故障冷却只挂 60 秒，到点即恢复（同一设计稿：绑定被清但应尽快粘回去）
 //	schedule_inactive        活动时段按钟点恢复
 //	rate_limited             金额/额度窗口按时间恢复
@@ -181,6 +185,7 @@ func sessionBindingBypass(
 func transientRejection(reason Reason) bool {
 	switch reason {
 	case ReasonCircuitOpen, ReasonSlowRateCooldown, ReasonProviderErrorCooldown,
+		ReasonNoAlternativeFailOpen,
 		ReasonScheduleInactive, ReasonRateLimited, ReasonExcluded:
 		return true
 	default:
