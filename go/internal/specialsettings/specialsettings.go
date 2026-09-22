@@ -196,47 +196,6 @@ func RequestTrimmedEffort(
 	return EffortRequest{}
 }
 
-// RequestSeeksReasoning 报告客户端是否在本次请求里要求了推理（思考）。
-//
-// 为什么需要它：推理型流的形态是「先吐一小片思考、再静默十余秒」，任何以平均产出速率为
-// 判据的闸在结构上分不出「模型在思考」与「上游卡住」——闸的时钟已在首片语义内容帧启动，
-// 10s 档的均速必然低于 θ。故提交前速率闸对推理型请求整体不裁决（见
-// forward.StreamOptions.ReasoningRequest）。
-//
-// 判定复用两处既有规则，不另立第三套：
-//   - 强度值（openai-chat 的 `reasoning_effort` / `reasoning.effort`、responses 的
-//     `reasoning.effort`、anthropic 的 `output_config.effort`）走本包的 RequestTrimmedEffort。
-//     它同时是 `special_settings` 里 `codex_reasoning_effort` 等条目的来源，故「闸认得的
-//     推理型」与「使用记录里显示的推理型」不会分叉（生产命中就是那条证据列）。
-//   - anthropic 的扩展思考（`thinking`）走 rectify 的同一判据：type 非空且非 `disabled`
-//     （见 internal/rectify/effort.go 的 thinkingType 判定）。RequestTrimmedEffort 只认
-//     `output_config.effort`，认不出「只给思考预算」的请求，故这一格必须另补。
-func RequestSeeksReasoning(
-	body map[string]any,
-	format convert.ClientFormat,
-	endpoint string,
-) bool {
-	if effort := RequestTrimmedEffort(body, format, endpoint); effort.Present && !reasoningEffortOff(effort.Effort) {
-		return true
-	}
-	if format != convert.FormatClaude {
-		return false
-	}
-	thinkingType, ok := nestedField(body, "thinking", "type").(string)
-	if !ok {
-		return false
-	}
-	return thinkingType != "" && thinkingType != "disabled"
-}
-
-// reasoningEffortOff 报告强度值是否等价于「不要推理」。
-//
-// 为何要单独判：`none` 是三条线共用的关闭值（openai 的 `reasoning_effort: "none"`）。
-// 不排除它，显式关掉思考的请求也会被豁免掉速率闸——那是与需求相反的方向。
-func reasoningEffortOff(effort string) bool {
-	return strings.EqualFold(strings.TrimSpace(effort), "none")
-}
-
 // ForwardedTrimmedEffort 从**即将发往上游的正文**里读取该协议线下的思考强度。
 //
 // 这是探针的唯一可信来源：入参必须就是转换器的产物（`forward.Plan.Body`），

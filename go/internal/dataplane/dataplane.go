@@ -154,12 +154,6 @@ type RequestState struct {
 	clientHeaders map[string]string
 	// requestedEffort 是客户端请求侧的思考强度（守卫链之后采集），终态探针用它做对照。
 	requestedEffort specialsettings.EffortRequest
-	// requestSeeksReasoning 为真表示客户端要求了推理（思考强度或扩展思考），同一处采集。
-	//
-	// 提交前速率闸对推理型请求整体不裁决（判据与理由见
-	// forward.StreamOptions.ReasoningRequest）；本字段是**逐请求**事实，故必须由下面那条赋值
-	// 搬进 streamOptions，进程级装配里没有它。
-	requestSeeksReasoning bool
 	// requestedServiceTier 是客户端请求侧的 codex service_tier（同一处采集）：
 	// codex priority 计费档用它判定（见 codex_priority_billing.go）。
 	requestedServiceTier string
@@ -660,9 +654,6 @@ func (h *Handler) forward(
 	// 二级闸的处置回调：每次降速判定都要能标慢**这一家×这个模型**。
 	// 未接线时返回 nil，forward 整段跳过（行为与接线前逐字一致）。
 	streamOptions.OnPostCommitSlow = h.postCommitSlow(state, requestCtx)
-	// 推理型请求豁免速率闸（提交前裁决与提交后采样同时不启用）。
-	// 判据在守卫链之后按逐请求正文算出（见 captureRequestedEffort）。
-	streamOptions.ReasoningRequest = state.requestSeeksReasoning
 
 	result, err := h.forwardStream(requestCtx, pc, candidate, fwd, streamOptions, spec, state)
 	if result == nil {

@@ -29,8 +29,7 @@ import (
 // plan 为 nil 表示本次没走到计划编译（无上游参与），此时既没有「转发值」这一事实，
 // 也没有「施加了转换」这一事实。
 
-// captureRequestedEffort 取一次客户端请求侧的思考强度，并对本次请求是否属于推理型下判，
-// 供终态探针与提交前速率闸的豁免使用。
+// captureRequestedEffort 取一次客户端请求侧的思考强度，供终态探针与终态断言使用。
 //
 // 调用点必须在**守卫链之后**：读体即解压，鉴权通过前不该做。
 func (h *Handler) captureRequestedEffort(state *RequestState, spec routeSpec, body *bodyAccess) {
@@ -46,7 +45,6 @@ func (h *Handler) captureRequestedEffort(state *RequestState, spec routeSpec, bo
 		return
 	}
 	state.requestedEffort = specialsettings.RequestTrimmedEffort(parsed, spec.Format, state.PC.Path())
-	state.requestSeeksReasoning = specialsettings.RequestSeeksReasoning(parsed, spec.Format, state.PC.Path())
 }
 
 // specialSettingsAppendEntries 产出终态要**追加**的审计条目（一个 JSON 数组）：

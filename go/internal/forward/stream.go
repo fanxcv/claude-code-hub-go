@@ -106,19 +106,6 @@ type StreamOptions struct {
 	// 启用后提交点后移（首个语义内容帧不再立即提交），详见 gate/progress.go 的三档判据。
 	// 与 ProbeAfterFirstByteFor 同形：只传一个整数，forward 不引入对 slowrate/route 的依赖。
 	PrecommitRateFor func(providerID int64) int
-	// ReasoningRequest 为真表示本次请求是推理型（客户端声明了思考强度或扩展思考）。
-	//
-	// 为何豁免是**结构性**的：推理型流的形态是「先吐一小片思考、再静默十余秒」，而闸的时钟
-	// 已在首片语义内容帧启动，10s 档的平均速率必然低于 θ ⇒ 分不出「模型在思考」与「上游
-	// 卡住」（生产实证：6 分钟内 13 次判慢，13/13 全是 codex 高/最高推理档）。故这类请求
-	// 整体不裁决，走与「未开闸」逐字相同的已验证路径（首个语义内容帧即提交）。
-	//
-	// 判据来源见 dataplane 的 specialsettings.RequestSeeksReasoning；本字段只承载事实，
-	// 不在这里做协议解析（forward 不依赖请求正文的方言）。
-	//
-	// 注意它同时关掉提交后采样器（rateSamplerEnabled 经 precommitRate）：二级闸与提交前闸
-	// 是同一套速率判据的两半，误判机理相同，故一并豁免。
-	ReasoningRequest bool
 	// PrecommitShadow 为真时速率闸**只观测不裁决**：门控照旧在首个语义内容帧提交
 	// （客户端时延与改造前完全一致），提交后仍采样并在 1s/3s/10s 落标定日志。
 	//
@@ -175,9 +162,9 @@ func (o StreamOptions) probeAfterFirstByte(providerID int64) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// precommitRate 取某供应商的分级速率闸阈值（字节/秒）。影子期或推理型请求返回 0。
+// precommitRate 取某供应商的分级速率闸阈值（字节/秒）。影子期返回 0：门控不得改变提交时机。
 func (o StreamOptions) precommitRate(providerID int64) int {
-	if o.PrecommitShadow || o.ReasoningRequest || o.PrecommitRateFor == nil {
+	if o.PrecommitShadow || o.PrecommitRateFor == nil {
 		return 0
 	}
 	rate := o.PrecommitRateFor(providerID)
