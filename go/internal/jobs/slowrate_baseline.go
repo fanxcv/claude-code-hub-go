@@ -364,8 +364,17 @@ func (b *SlowRateBaseline) publishScope(
 		return false, false, err
 	}
 	if median == nil {
-		// 计数达标但算不出中位数（清洗后速率全为 nil 的极端情形）——按无基线处理。
-		return false, cut, nil
+		// 计数达标却一行可用样本都没取到：这是本轮的**成功空结果**，与 A3 同属「成功判定为无基线」，
+		// 故走同一个 revokeBaseline。若只 return，旧键会留下来——该 scope 已进 seen，本轮清扫不会删它，
+		// 而基线键 TTL 是 7 天，recorder 会继续据陈旧中位数判慢并写会话冷却（第 5 轮审查 P2）。
+		//
+		// 为何不是抖动式撤销：计数与取行共用同一谓词、同一分道，而该谓词已保证每一行都能算出速率
+		// （output_tokens>=50、first_byte_ms NOT NULL、duration_ms>first_byte_ms>0），故 rates 为空
+		// 只能是「取行时样本已不在」。行不会回来，下一轮计数自会落到 A3，不存在撤了又建的来回。
+		//
+		// 与查询失败的分界：上面 err 分支仍保留旧键——那是设计稿明定的「宁可留着，也不要在查询
+		// 抖动时把基线清空」，两者不可混为一谈。
+		return false, cut, b.revokeBaseline(ctx, scope)
 	}
 	return true, cut, b.writeBaseline(ctx, scope, *median, total, decision.Source, now, config)
 }
@@ -472,8 +481,12 @@ func (b *SlowRateBaseline) medianForWindow(
 
 // revokeBaseline 撤销某个 scope 的基线键（A3「成功判定为无基线」的唯一动作）。
 //
-// 为什么删而不是改写成一个「无基线」值：读侧（B4）的判定是「键不存在 ⇒ 不生成 penalty」
-// （fail-open），删键即达成；写一个哨兵值要在读侧多一条分支，多一处可能分叉的口径。
+// 为什么删而不是改写成一个「无基线」值：两侧读判据都只认「有没有**可用**基线」——读侧（B4）
+// 的 slowRateBaselineUsable 只认 primary/extended，Recorder 侧另有 median<=0 的拒绝——
+// **没有消费方需要区分「已撤销」与「从未有过」**，写哨兵值等于凭空多出第三种状态，属虚设。
+//
+// （原句写的是「哨兵值要在读侧多一条分支」，已不成立：渠道惩罚改走 source 白名单后，哨兵值
+// 用现有判据即可表达。故按「无消费方需要区分」重述。）
 //
 // 删键失败返回错误、由调用方按单 scope 失败处理（记 scope_failed 后继续）——不静默吞。
 func (b *SlowRateBaseline) revokeBaseline(
