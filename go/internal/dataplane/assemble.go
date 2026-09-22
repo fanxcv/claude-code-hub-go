@@ -371,7 +371,10 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			// 低速样本旁路（见 terminal/slow_rate_seam.go）：未开启监控的渠道在实现内即返回，
 			// 逐请求零 Redis 读写；缺 Redis 时为 nil，旁路整段跳过。
 			SlowRate: slowRateRecorder(options, logger),
-			Logger:   logger,
+			// 低速改道计数旁路：与样本同一个适配器（同一个 recorder），但事实与时机不同
+			// ——它计的是**被挤掉的那家**，且要覆盖无候选的 503（见 SlowDivert）。
+			SlowDiverts: slowRateRecorder(options, logger),
+			Logger:      logger,
 			// 异步终态写队列（nil 即同步写，逐字保留原路径）。
 			Queue: settlementQueue,
 		})

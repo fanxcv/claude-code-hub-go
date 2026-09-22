@@ -65,6 +65,13 @@ type Settlement struct {
 	// 零值（ProviderID 或 ModelKey 为空）表示本次不采样。
 	SlowRate SlowRateSample
 
+	// SlowDiverts 是本次终态的**低速改道事实**：因低速机制被挤掉的渠道及其成因。
+	//
+	// 与 SlowRate 分开而不是塞进它：两者闸门不同——改道计数的键按**被挤掉的那家**，
+	// 而那家恰恰**不是** ProviderID（作答的是别家），且无可用供应商（503）那条路径
+	// **根本没有作答者**，却最该被计（唯一候选被会话冷却剔掉）。
+	SlowDiverts []SlowDivert
+
 	// LeaseSettlement 是本次终态的**租约结算事实**：判定时用过的切片（主体 id + 生效重置模式）。
 	// 与 Affinity 同规矩：不进 patch、不写任何列，只做「成本落库后发放的副作用」的入参
 	// （见 lease_settle.go）。零值表示本次不走租约结算（未装配，或该路径没有 pctx）。

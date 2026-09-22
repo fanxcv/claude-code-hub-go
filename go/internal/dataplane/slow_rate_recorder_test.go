@@ -284,3 +284,30 @@ func restoreLogLevel(t *testing.T, level logx.Level) {
 	}
 	t.Cleanup(func() { logx.SetLevel(previous) })
 }
+
+// TestRecoveryRequestsReachesParamsThroughSnapshot 钉住恢复阈值列**穿得过生产那一跳**。
+//
+// 为什么必须有：本包先前只钉了「库查了几次」，而列的**投影**在 slowrate 包内、由它自己的
+// config_test 覆盖——两边都绿，中间那一跳照样可以漏字段。这正是本仓反复出现的「已定义≠已接线」：
+// ProviderConfig 有字段、读面填了值、Params 却没收，结果 normalize() 静默回退默认 10，
+// 用户在页面上把 N 设成 2 也永远按 10 执行（写侧判定在 recorder，无从察觉）。
+func TestRecoveryRequestsReachesParamsThroughSnapshot(t *testing.T) {
+	recovery := 2
+	trigger := 3
+	reader := newCountingProviderReader()
+	reader.set(167, &store.Provider{
+		SlowRateMonitorEnabled:   true,
+		SlowRateTriggerCount:     &trigger,
+		SlowRateRecoveryRequests: &recovery,
+	})
+	config := slowrate.NewSnapshotConfig(newProviderSlowRateSource(reader, nil, logx.New(nil)))
+
+	params, enabled := config.SlowRateConfig(context.Background(), 167)
+	if !enabled {
+		t.Fatal("已开启监控的渠道应返回 ok=true")
+	}
+	if params.RecoveryRequests != recovery {
+		t.Fatalf("恢复阈值应为列值 %d，实得 %d——漏传该字段即回退默认 10，用户的配置不生效",
+			recovery, params.RecoveryRequests)
+	}
+}

@@ -434,15 +434,32 @@ func slowRateInt(value any) int {
 // 样本、写侧也就不再触达 Redis——快照会一直停在最后一次推进的值，直到状态键 TTL 到期
 // （2 倍窗长）。实测表现是「低速降权 +10 出现后一直不消失」。设计稿「恢复」一节要求的正是
 // 「惩罚值随样本过期连续衰减」，滑窗计数才是那个真值。
-func deriveSlowRatePenalty(liveCount int, params slowRatePenaltyParams) int {
-	if liveCount < params.triggerCount {
+// DeriveSlowRatePenalty 由「滑窗内慢样本数」与四个生效参数派生降权量。
+//
+// 为什么这个纯函数必须唯一：本公式在**两侧各算一遍**——写侧算完落 state Hash（供管理与
+// 回退读），读侧在选路时按活窗计数当场重算（这是 b240609 的修法：惩罚不能只涨不落）。
+// 两处若分叉，**界面与选路会看到不同的降权量**，而且静默：错的那侧不报错、用例也照绿。
+//
+// 本包（route）是唯一可放的公共处：slowrate 可以 import route，反之成环
+// （slowrate → session → guard → route）。故写侧也调本函数，而不再自己算一遍。
+//
+// 形态：先判阈值门（不足触发数即 0），再整数分档乘步长，最后封顶。
+// 三处都必须一致：少一个阈值门会让「1 条慢样本」也算降权；少封顶会让慢样本密集时无上限增长。
+func DeriveSlowRatePenalty(liveCount, triggerCount, penaltyStep, penaltyMax int) int {
+	if triggerCount <= 0 || liveCount < triggerCount {
 		return 0
 	}
-	penalty := (liveCount / params.triggerCount) * params.penaltyStep
-	if penalty > params.penaltyMax {
-		return params.penaltyMax
+	penalty := (liveCount / triggerCount) * penaltyStep
+	if penaltyMax > 0 && penalty > penaltyMax {
+		return penaltyMax
 	}
 	return penalty
+}
+
+// deriveSlowRatePenalty 是读侧入口：参数已由 slowRateEffectiveParams 归一（两侧同判），
+// 这里只做派生。
+func deriveSlowRatePenalty(liveCount int, params slowRatePenaltyParams) int {
+	return DeriveSlowRatePenalty(liveCount, params.triggerCount, params.penaltyStep, params.penaltyMax)
 }
 
 // CooldownKind 是「本会话对该渠道正在冷却中」的成因。

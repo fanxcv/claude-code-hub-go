@@ -35,6 +35,9 @@ type Options struct {
 	// SlowRate 是低速样本的旁路接收面（见 slow_rate_seam.go 的文件头）。
 	// nil 表示未装配：旁路整段跳过，结算路径行为与接线前完全一致。
 	SlowRate SlowRateRecorder
+	// SlowDiverts 是低速改道计数的旁路接收面（见 slow_rate_seam.go 的 SlowDivert）。
+	// nil 表示未装配：该计数不写，其余行为不变。
+	SlowDiverts SlowDivertRecorder
 	// Queue 是终态写入的异步队列（见 batch.go 的文件头）。
 	//
 	// nil（默认）表示同步写：终态与成本在 Settle 内写完再返回，与接线前逐字一致。
@@ -67,7 +70,9 @@ type Settler struct {
 	tracer Tracer
 	// slowRate 是低速样本的旁路接收面；nil 即未装配。
 	slowRate SlowRateRecorder
-	logger   Logger
+	// slowDiverts 是低速改道计数的旁路接收面；nil 即未装配。
+	slowDiverts SlowDivertRecorder
+	logger      Logger
 	// queue 是终态写入的异步队列；nil（默认）即同步写。
 	queue *WriteQueue
 }
@@ -91,6 +96,7 @@ func New(writer Writer, options Options) *Settler {
 		leaseSettler: options.LeaseSettler,
 		tracer:       options.Tracer,
 		slowRate:     options.SlowRate,
+		slowDiverts:  options.SlowDiverts,
 		logger:       options.Logger,
 		queue:        options.Queue,
 	}
@@ -334,12 +340,16 @@ func (s *Settler) SettleContext(
 		// 作用恰恰是让「下一个请求绕开这家」——推迟到 flush 会让该效果晚一个批次生效。
 		s.affinityTombstone(ctx, pc, settlement.Affinity)
 		s.sessionBindingWriteback(ctx, pc, settlement.Affinity, sessionBindingFailure, false)
+		// 改道计数与墓碑同一口径：它不依赖是否赢得终态，而「唯一候选被会话冷却剔掉」
+		// 恰恰是**没有可提交账务**的那条 503——把它放在 winner 里会永远收不到。
+		s.recordSlowDiverts(ctx, settlement.SlowDiverts)
 		return result, err
 	}
 	// 未入队（同步模式或队列满降级）：与接线前逐字一致——墓碑先、winner 后，且都在
 	// 写入返回之后。三种「没写成」的退出也走这里，结论同样是 Committed=false。
 	s.affinityWriteback(ctx, pc, settlement.Affinity, result.Committed)
 	s.recordSlowRateCommitted(ctx, settlement.SlowRate, result.Committed)
+	s.recordSlowDiverts(ctx, settlement.SlowDiverts)
 	return result, err
 }
 

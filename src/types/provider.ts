@@ -819,8 +819,26 @@ export interface ProviderSlowLogs {
   providerId: number;
   window: ProviderSlowLogsWindow;
   events: ProviderSlowLogEvent[];
+  /**
+   * 窗口内「因低速被改道」的请求数（用户 2026-09-22 需求）。
+   *
+   * null 表示后端未装配该读面——与「0 次改道」必须可区分，故不用零值对象冒充。
+   * 两个分项不合并成一个总数：成因不同（会话冷却 vs 渠道降权），下一步动作也不同。
+   */
+  diverts: ProviderSlowLogsDiverts | null;
   /** 仅在「读不到」时给出；此时 events 为空数组。 */
   unavailableReason: string | null;
+}
+
+/** 「因低速被改道」的窗口读数。 */
+export interface ProviderSlowLogsDiverts {
+  /** 求和覆盖的整点桶数（口径必须随读数一起给，否则「12 次」无意义）。 */
+  windowHours: number;
+  total: number;
+  /** 会话级冷却把该渠道剔出候选的次数。 */
+  cooldown: number;
+  /** 渠道级降权把该渠道挤出（它本会更优先）的次数。 */
+  penalty: number;
 }
 
 export interface CreateProviderData {

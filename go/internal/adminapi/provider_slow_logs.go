@@ -60,9 +60,26 @@ type slowLogsResponse struct {
 	ProviderID int64           `json:"providerId"`
 	Window     slowLogsWindow  `json:"window"`
 	Events     []slowLogsEvent `json:"events"`
+	// Diverts 是窗口内「因低速被改道」的请求数（用户 2026-09-22 需求）。
+	//
+	// 与 Events 的关系：Events 回答「什么时候被压了/恢复了」（逐条事件），
+	// 本字段回答「压下来之后实际挡掉了多少流量」（聚合读数）。前者是原因，后者是后果。
+	//
+	// nil 表示未装配该读面（不区分「无改道」与「读不了」）。
+	Diverts *slowLogsDiverts `json:"diverts"`
 	// UnavailableReason 只在「读不到」时给出；此时 Events 为空数组而非 null
 	// （前端不必为 null 与 [] 各写一条分支）。
 	UnavailableReason *string `json:"unavailableReason"`
+}
+
+// slowLogsDiverts 是改道读数的响应形状。
+//
+// 两个分项都要，且不合并成一个总数：成因不同（会话冷却 vs 渠道降权），运维的下一步动作也不同。
+type slowLogsDiverts struct {
+	WindowHours int   `json:"windowHours"`
+	Total       int64 `json:"total"`
+	Cooldown    int64 `json:"cooldown"`
+	Penalty     int64 `json:"penalty"`
 }
 
 // RegisterProviderSlowLogs 注册低速日志端点。
@@ -140,6 +157,24 @@ func handleProviderSlowLogs(deps Deps) http.HandlerFunc {
 			return
 		}
 		response.Events = slowLogsEventsFrom(events)
+		if deps.SlowDiverts != nil {
+			snapshot, divertErr := deps.SlowDiverts.ReadDivert(request.Context(), id, time.Now())
+			if divertErr != nil {
+				// 与事件流同纪律：读失败不把端点打成 5xx。改道读数缺失不影响事件流的可用性，
+				// 故只补一条原因不覆盖已有的 unavailableReason（那个描述的是 events）。
+				adminLoggerOf(deps).Warn("admin_provider_slow_diverts_query_failed", map[string]any{
+					"providerId": id,
+					"error":      divertErr.Error(),
+				})
+			} else {
+				response.Diverts = &slowLogsDiverts{
+					WindowHours: snapshot.WindowHours,
+					Total:       snapshot.Total(),
+					Cooldown:    snapshot.Cooldown,
+					Penalty:     snapshot.Penalty,
+				}
+			}
+		}
 		adminWriteJSON(writer, http.StatusOK, response)
 	}
 }

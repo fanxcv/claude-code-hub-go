@@ -10,6 +10,7 @@ import (
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/forward"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/guard"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pubstatus"
@@ -495,6 +496,12 @@ func (s *storeSettler) logSettle(_ context.Context, pc *pctx.Context, settlement
 	}
 	// 低速样本事实：两条路径（NonStream / Stream）在这里汇合，故构造一次即可覆盖两者。
 	settlement.SlowRate = s.slowRateSample(pc, settlement)
+	// 低速改道事实：与样本同处汇合，同样一次覆盖两条路径。
+	//
+	// 为何放在终态而不是选路处就计：选路处只知道「本次选了谁」，不知道「这次请求最终成不成」
+	// ——而计数的语义是「本该选它、实际选了别家」，那是一次已完成的选路的事实，
+	// 且必须走旁路（不得在选路热路径上写 Redis）。
+	settlement.SlowDiverts = s.slowDiverts()
 	settleCtx, cancel := context.WithTimeout(context.Background(), settleTimeout)
 	defer cancel()
 	err := s.settle(settleCtx, pc, settlement)
@@ -509,7 +516,6 @@ func (s *storeSettler) logSettle(_ context.Context, pc *pctx.Context, settlement
 }
 
 // slowRateSample 把一次终态折算成低速样本事实（不判定，判定在 slowrate 包）。
-//
 // 三处取值口径：
 //   - ProviderID 用行级 provider_id（resolveSettlementProviderID 已算好，直接复用）——
 //     慢的是「实际作答的那一家」，不是入口首选的候选（回退/竞速换家后两者不同）；
@@ -538,6 +544,58 @@ func (s *storeSettler) slowRateSample(pc *pctx.Context, settlement terminal.Sett
 		}
 	}
 	return sample
+}
+
+// noProviderDivertedAll 从无可用供应商的归因里抽出「被低速会话冷却剔掉」的家。
+//
+// 为何另开一条路而不复用 route.DivertedAll：那条路径的输入是**选路留痕**（decisionContext），
+// 而无候选时压根没有选路结果——留痕只剩归因里的 filtered 列表（id + reason）。
+//
+// 只认冷却这一个成因是有意的：降权（penalty）在无候选时无从成立——降权只是把档位抬高，
+// 仍会进候选池与加权随机，不会让候选变成 0（能变 0 的只有硬性剔除，冷却就是其一）。
+func noProviderDivertedAll(diagnostic guard.NoProviderDiagnostic) []route.Divert {
+	out := make([]route.Divert, 0, len(diagnostic.Filtered))
+	for _, filtered := range diagnostic.Filtered {
+		if route.Reason(filtered.Reason) != route.ReasonSlowRateCooldown {
+			continue
+		}
+		out = append(out, route.Divert{ProviderID: filtered.ID, Cause: route.DivertCauseCooldown})
+	}
+	return out
+}
+
+// slowDiverts 取本次请求里「因低速机制被改道」的渠道及其成因。
+//
+// 扫全部选路留痕（初选 + 竞速 + 故障转移各一次），按 (渠道, 成因) **去重**：
+// 一次请求里同一家可能被多次选路都挤掉（例如重试时重跑选路），按请求计一次即可
+// ——用户问的是「多少**请求**因撞上低速而被换渠道」，不是「多少候选被剔」。
+func (s *storeSettler) slowDiverts() []terminal.SlowDivert {
+	if s == nil || s.state == nil {
+		return nil
+	}
+	seen := map[terminal.SlowDivert]struct{}{}
+	out := make([]terminal.SlowDivert, 0, 2)
+	appendDivert := func(providerID int64, cause string) {
+		if providerID <= 0 || cause == "" {
+			return
+		}
+		entry := terminal.SlowDivert{ProviderID: providerID, Cause: cause}
+		if _, ok := seen[entry]; ok {
+			return
+		}
+		seen[entry] = struct{}{}
+		out = append(out, entry)
+	}
+	for _, capture := range s.state.selectionsSnapshot() {
+		for _, divert := range route.DivertedAll(capture.Context) {
+			appendDivert(divert.ProviderID, string(divert.Cause))
+		}
+	}
+	// 无候选那条路径上的改道（503）单独收：那里没有选路结果可供扫描。
+	for _, divert := range s.state.divertsSnapshot() {
+		appendDivert(divert.ProviderID, string(divert.Cause))
+	}
+	return out
 }
 
 // baseSettlement 填两侧共有的字段（供应商、模型归属、失败归因）。

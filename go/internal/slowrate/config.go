@@ -67,11 +67,12 @@ func (c *SnapshotConfig) SlowRateConfig(ctx context.Context, providerID int64) (
 		return Params{}, false
 	}
 	return Params{
-		WindowMinutes: deref(config.WindowMinutes),
-		TriggerCount:  deref(config.TriggerCount),
-		Ratio:         derefFloat(config.Ratio),
-		PenaltyStep:   deref(config.PenaltyStep),
-		PenaltyMax:    deref(config.PenaltyMax),
+		WindowMinutes:    deref(config.WindowMinutes),
+		TriggerCount:     deref(config.TriggerCount),
+		Ratio:            derefFloat(config.Ratio),
+		PenaltyStep:      deref(config.PenaltyStep),
+		PenaltyMax:       deref(config.PenaltyMax),
+		RecoveryRequests: deref(config.RecoveryRequests),
 	}, true
 }
 

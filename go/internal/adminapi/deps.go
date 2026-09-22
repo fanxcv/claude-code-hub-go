@@ -45,6 +45,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowrate"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/usagefeed"
 )
@@ -210,7 +211,6 @@ type SlowRatePenaltyReader interface {
 }
 
 // SlowLogsReader 读某渠道的近期低速事件（低速降权的升/降档与基线变更）。
-//
 // 为什么要有它：低速降权在生产上只表现为「选路结果变了」，运维看不到「什么时候压的、
 // 压了多少、恢复没有」——这正是用户要求「低速日志与熔断日志合窗 tab 切换」的动因。
 //
@@ -223,6 +223,17 @@ type SlowRatePenaltyReader interface {
 // 签名与 `slowlog.Reader.Recent` 逐字一致，由 provider_slow_logs_test.go 的编译期断言钉住。
 type SlowLogsReader interface {
 	Recent(ctx context.Context, providerID int64, limit int) ([]slowlog.Event, error)
+}
+
+// SlowDivertsReader 读某渠道窗口内「因低速被改道」的请求数（用户 2026-09-22 需求）。
+//
+// 为何与 SlowLogsReader 分开：事件流是「一条一条的事」（降权/基线变更，按条读），
+// 而本读数是**聚合计数**（每请求一次，按窗口求和）——两者寿命、尺寸与读取方式全不同。
+//
+// nil 表示未装配：响应里 `diverts` 一律为 null，前端不显示这一行（不是显示 0——
+// 「没有改道」与「不知道有没有改道」必须可区分，与 slowRate / provider 同一纪律）。
+type SlowDivertsReader interface {
+	ReadDivert(ctx context.Context, providerID int64, now time.Time) (slowrate.DivertSnapshot, error)
 }
 
 // Fixed5hWindowReader 读 5h 固定窗口的累计值与重置时刻
@@ -269,6 +280,9 @@ type Deps struct {
 	// SlowLogs 读某渠道的近期低速事件（`/providers/{id}/slow-logs` 的数据源）。
 	// nil 表示未装配：该路由不注册，原样回退 Node。
 	SlowLogs SlowLogsReader
+	// SlowDiverts 读某渠道窗口内的改道请求数（同端点响应里的 `diverts` 字段）。
+	// nil 表示未装配：该字段为 null，端点照常作答（事件流不依赖它）。
+	SlowDiverts SlowDivertsReader
 	// ProviderSlowRates 读**per-渠道**的低速降权聚合读数（/providers/health 的 slowRate 字段）。
 	// nil 表示未装配：该响应里 `slowRate` 一律为 null，前端整段不显示这一维
 	// （不是「无降权」——两者必须可区分，故不用零值对象冒充）。

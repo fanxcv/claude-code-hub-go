@@ -141,6 +141,9 @@
         "penalty": "降权量 {from} → {to}",
         "baseline": "中位数 {median} tok/s，样本 {samples}，来源 {source}",
         "revoked": "撤销原因 {reason}"
+      },
+      "diverts": {
+        "summary": "最近 {hours} 小时：因低速被改道 {total} 次（会话冷却 {cooldown}、渠道降权 {penalty}）"
       }
     }
   }

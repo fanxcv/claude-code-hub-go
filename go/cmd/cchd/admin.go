@@ -21,6 +21,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowrate"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/usagefeed"
 )
@@ -130,6 +131,10 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 	// 一份键形制与序列化。缺 Redis 时为 nil，该路由不注册（回退 Node）——
 	// 与熔断日志同一条 fail-closed 纪律。
 	deps.SlowLogs = slowlog.NewReader(redisClient, logger)
+	// 改道计数读面（同端点响应里的 diverts 字段）：与写侧（dataplane 适配器）共用
+	// internal/slowrate 的 DivertStore——键形制与字段编码只应有一处实现。
+	// nil 即未装配（无 Redis）：该字段为 null，事件流照常作答。
+	deps.SlowDiverts = slowrate.NewDivertStore(redisClient, logger)
 
 	// 粘性会话终止面（providers / provider-endpoints 写路径的副作用）：与上面读档的区别在于
 	// 它是写，缺装配不给任何路由降级，只让写路径记 warn（见 openStickySessions 的说明）。

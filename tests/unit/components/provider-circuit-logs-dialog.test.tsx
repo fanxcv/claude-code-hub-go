@@ -141,6 +141,8 @@ function slowPayload(overrides: Partial<ProviderSlowLogs> = {}): ProviderSlowLog
     providerId: 145,
     window: { limit: 20, retentionHours: 24, since: "2026-09-22T00:00:00.000Z" },
     events: [],
+    // 默认未装配：多数用例只关心事件表，汇总行的存在由专条用例钉。
+    diverts: null,
     unavailableReason: null,
     ...overrides,
   };
@@ -449,6 +451,45 @@ describe("ProviderCircuitLogsDialog", () => {
     expect(text()).toContain("circuitLogs.slow.unavailable");
     expect(text()).toContain("redis_unavailable");
     unmount2();
+  });
+
+  it("有改道读数时显示汇总，且两成因分列（不是只给总数）", () => {
+    querySuccess(payload(), {
+      events: [slowEvent()],
+      diverts: { windowHours: 24, total: 7, cooldown: 2, penalty: 5 },
+    });
+    const unmount = render(<ProviderCircuitLogsDialog providerId={145} providerName="P" open />);
+    clickSlowTab();
+    const body = text();
+    expect(body).toContain("circuitLogs.slow.diverts.summary");
+    // 两成因都要出现：合并成一个总数会让「会话冷却」与「渠道降权」无法区分（下一步动作不同）。
+    expect(body).toContain('"total":7');
+    expect(body).toContain('"cooldown":2');
+    expect(body).toContain('"penalty":5');
+    expect(body).toContain('"hours":24');
+    unmount();
+  });
+
+  it("改道读数未装配（null）时不画汇总行，且不崩", () => {
+    // null 与 0 必须可区分：前者是「不知道有没有改道」，后者是「确实没改道」。
+    querySuccess(payload(), { events: [slowEvent()], diverts: null });
+    const unmount = render(<ProviderCircuitLogsDialog providerId={145} providerName="P" open />);
+    clickSlowTab();
+    expect(text()).not.toContain("circuitLogs.slow.diverts.summary");
+    unmount();
+  });
+
+  it("响应缺 diverts 键（undefined）时不崩、不画汇总行", () => {
+    // undefined 与 null 都不该显示这一行。`!== null` 式的判断会把 undefined 放过去、渲染时抛错。
+    //
+    // 为何不能用 `delete`：夹具的 slowPayload 会把默认值（diverts: null）合回来，
+    // 删掉的键会当场复活，用例就失去分辨力（首版就是这么写的，变异未红才发现的）。
+    querySuccess(payload(), { events: [slowEvent()], diverts: undefined });
+    const unmount = render(<ProviderCircuitLogsDialog providerId={145} providerName="P" open />);
+    clickSlowTab();
+    expect(text()).toContain("circuitLogs.slow.title");
+    expect(text()).not.toContain("circuitLogs.slow.diverts.summary");
+    unmount();
   });
 
   it("低速 tab 取数失败只在该 tab 内显示失败态，不影响熔断 tab", () => {

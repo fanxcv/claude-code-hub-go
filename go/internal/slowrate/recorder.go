@@ -11,6 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pubstatus"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
 )
@@ -253,11 +254,12 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 	//
 	// 同时写生效参数：读侧要据「滑窗内慢样本数」派生惩罚，而 admin 的合成 Provider
 	// 没有参数列，只能从这份 Hash 里取（见 route.SlowRateStateFieldWindowSeconds 一族）。
-	level := count / params.TriggerCount
-	penalty := level * params.PenaltyStep
-	if penalty > params.PenaltyMax {
-		penalty = params.PenaltyMax
-	}
+	// 分档与封顶走 route.DeriveSlowRatePenalty——**与读侧同一个函数**。
+	//
+	// 为何共用：读侧在选路时按活窗计数当场重算（惩罚不能只涨不落），写侧算完落 state Hash
+	//（供管理与快照回退读）。两边各写一道时，只要分档或封顶差一点就分叉，而且静默。
+	// slowrate 可 import route（反向成环），故本包是能放下这个共用函数的唯一一侧。
+	penalty := route.DeriveSlowRatePenalty(count, params.TriggerCount, params.PenaltyStep, params.PenaltyMax)
 	statePipe := r.redis.Pipeline()
 	// HGet 排在 HSet **之前**：pipeline 按序执行，故读到的是本轮的**旧**惩罚值，
 	// 供低速日志去重（只在档位真的变了时记一条）。加在这一条既有 pipeline 里
@@ -323,20 +325,54 @@ func (r *Recorder) recordClean(
 	if int(streak.Val()) < params.RecoveryRequests {
 		return
 	}
-	// 达阈值：三个键一起删。只删 samples 与 state 会让 streak 停在阈值以上、把后续每一次
-	// 干净样本都变成一次重置写入；只删 streak 则状态还在、降权不解除。
+	// 达阈值：三个键原子地一起删（见下），并记一条「降权解除」事件。
 	//
-	// 据实记（三处取舍，皆有界）：
-	//  1. DEL 与并发的慢样本写入存在竞态窗口，最坏情况是「刚写入的一条慢样本被删掉」，
-	//     代价是那一轮少算一条；下一个慢样本会重建键。
-	//  2. **不清理**已写下的会话冷却键：那些键含会话身份、无法枚举，且各自 60 秒 TTL
-	//     自然过期。故重置后最多 60 秒内，旧会话仍可能避开该渠道。
-	//  3. 删除是破坏性的但可自愈：下一个慢样本重建 state，下一次可判定样本重建 streak。
-	resetPipe := r.redis.Pipeline()
-	resetPipe.Del(ctx, windowKey, stateKey, streakKey)
-	if _, err := resetPipe.Exec(ctx); err != nil {
+	// 为何必须原子：先前实现是「INCR 一条 pipeline，DEL 另一条 pipeline」，两条之间有竞态
+	// 窗口——若并发请求恰好在此期间写入一条慢样本，那条样本（连同它推进的惩罚）会被删除，
+	// 渠道被**错误恢复**，直到下一条慢样本重建状态。
+	//
+	// 修法：WATCH 三个键 + 单次 MULTI。慢样本写会同时改这三个键（ZADD window / DEL streak /
+	// HSet state），故只要期间有慢样本落盘，EXEC 必失败（TxFailedErr）——此时**放弃删除**
+	// 就是正确行为：让下一个干净样本重新累计。
+	//
+	// 为何不引入 Lua：本修法零新文件、零新部署面（Lua 要双副本 + MANIFEST + 黄金样本对拍），
+	// 而 WATCH/MULTI 是客户端标准能力，且这段只在「连续 N 个干净样本」后走一次（非热路径）。
+	if err := r.resetAfterRecovery(ctx, facts, windowKey, stateKey, streakKey); err != nil {
 		r.warn("slowrate.recovery_reset_failed", facts, err)
 	}
+}
+
+// resetAfterRecovery 在事务保护下删除三个键，并把解除的降权量记入低速日志。
+//
+// 返回 redis.TxFailedErr 表示期间有并发写入（慢样本）——调用方按 warn 记，但那是**预期**
+// 的放弃而不是故障；两种情形都不影响结算。
+func (r *Recorder) resetAfterRecovery(
+	ctx context.Context,
+	facts Facts,
+	windowKey string,
+	stateKey string,
+	streakKey string,
+) error {
+	err := r.redis.Watch(ctx, func(tx *redis.Tx) error {
+		// 旧惩罚值在事务**之外**读、WATCH **之内**取：WATCH 保证读到之后再无并发写，
+		// 故这个值就是本次删除真正解除掉的那个。
+		previousRaw := tx.HGet(ctx, stateKey, StateFieldPenalty).Val()
+		if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.Del(ctx, windowKey, stateKey, streakKey)
+			return nil
+		}); err != nil {
+			return err
+		}
+		// 只在事务真提交之后记日志：与慢样本的 RecordPenaltyChange 同一纪律
+		//（先落库、后记事件，记失败不回滚）。
+		slowlog.RecordRecoveryReset(ctx, r.redis, r.logger, facts.ProviderID, facts.ModelKey, previousRaw)
+		return nil
+	}, windowKey, stateKey, streakKey)
+	if errors.Is(err, redis.TxFailedErr) {
+		// 期间有慢样本落盘 ⇒ 放弃本次重置。不计故障：下一个干净样本会重新累计。
+		return nil
+	}
+	return err
 }
 
 // writeCooldown 写会话×供应商冷却键：冷却期内该会话的选路会跳过这家渠道（读侧在 B4）。
@@ -413,6 +449,14 @@ func generationRate(facts Facts) (float64, bool) {
 // 各写一遍，改单位时必须同时改**（两边都是 `基线 × 系数`，只改一处会让低速线差 1000 倍且静默）。
 func isSlow(rate, baseline float64, params Params) bool {
 	return rate < baseline*params.Ratio
+}
+
+func (r *Recorder) warnFields(event string, fields map[string]any, err error) {
+	if r.logger == nil {
+		return
+	}
+	fields["error"] = err.Error()
+	r.logger.Warn(event, fields)
 }
 
 func (r *Recorder) warn(event string, facts Facts, err error) {

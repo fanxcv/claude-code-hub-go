@@ -324,3 +324,45 @@ func (s *RequestState) selectionFor(providerID int64) (route.Result, bool) {
 	capture, ok := s.selections[providerID]
 	return capture, ok
 }
+
+// selectionsSnapshot 取全部选路留痕的快照（并发安全）。
+//
+// 为何要快照而不是暴露 map：写侧在竞速的阈值计时器协程里（time.AfterFunc），
+// 而读它的在终态协程，直接送 map 出去就是数据竞争。
+func (s *RequestState) selectionsSnapshot() []route.Result {
+	if s == nil {
+		return nil
+	}
+	s.selectionMu.Lock()
+	defer s.selectionMu.Unlock()
+	out := make([]route.Result, 0, len(s.selections))
+	for _, capture := range s.selections {
+		out = append(out, capture)
+	}
+	return out
+}
+
+// recordDiverts 记下「无可用供应商」那条路径上的低速改道（并发安全）。
+//
+// 为何不靠 selections：那条路径压根没有选路结果（无候选），但它是最该被计入的形态
+// ——「唯一支持该模型的渠道被本会话冷却剔掉」会让这个会话在冷却期内反复 503。
+func (s *RequestState) recordDiverts(diverts []route.Divert) {
+	if s == nil || len(diverts) == 0 {
+		return
+	}
+	s.selectionMu.Lock()
+	defer s.selectionMu.Unlock()
+	s.diverts = append(s.diverts, diverts...)
+}
+
+// divertsSnapshot 取无候选路径上记下的改道（并发安全）。
+func (s *RequestState) divertsSnapshot() []route.Divert {
+	if s == nil {
+		return nil
+	}
+	s.selectionMu.Lock()
+	defer s.selectionMu.Unlock()
+	out := make([]route.Divert, len(s.diverts))
+	copy(out, s.diverts)
+	return out
+}

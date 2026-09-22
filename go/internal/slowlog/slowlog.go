@@ -166,6 +166,44 @@ func RecordPenaltyChange(
 	})
 }
 
+// RecordRecoveryReset 记一次「恢复策略解除降权」（降权量归零）。
+//
+// 为何现在才有：KindPenaltyDown 早就定义好了，但**生产上几乎从不产生**——降档发生在选路
+// 读侧（读时派生），写侧无从知晓；恢复达阈值又只 DEL 键、不记日志。于是界面上看不到
+// 「什么时候恢复的」，而这正是运维最需要的一侧（「它到底好转了没有」）。
+//
+// 为何复用 KindPenaltyDown 而不新增 Kind：语义就是「降权量变小」（这里是从 N 到 0），
+// 且 Kind 是**存储契约**——已落下的条目按它渲染，新增一种会让旧条目与新条目在界面上
+// 分成两行，而它们其实是同一件事。reason=recovery 用来把「恢复解除」与「滑窗衰减」区分开。
+//
+// previousRaw 直接收 HGet 的**原值字符串**（调用方在事务内已取回）：空串（字段不存在）
+// 与非数字一律按 0 处理，此时不记——「本来就是 0」没有解除可说。
+func RecordRecoveryReset(
+	ctx context.Context,
+	client redis.UniversalClient,
+	logger Logger,
+	providerID int64,
+	modelKey string,
+	previousRaw string,
+) {
+	if client == nil || providerID <= 0 {
+		return
+	}
+	previous, err := strconv.Atoi(previousRaw)
+	if err != nil || previous <= 0 {
+		return
+	}
+	from, to := previous, 0
+	Record(ctx, client, logger, Event{
+		Kind:        KindPenaltyDown,
+		ProviderID:  providerID,
+		ModelKey:    modelKey,
+		PenaltyFrom: &from,
+		PenaltyTo:   &to,
+		Reason:      "recovery",
+	})
+}
+
 // RecordBaselinePublished 记一次基线发布（含中位数与样本数）。
 func RecordBaselinePublished(
 	ctx context.Context,

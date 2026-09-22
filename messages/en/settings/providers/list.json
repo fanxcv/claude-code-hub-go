@@ -141,6 +141,9 @@
         "penalty": "Penalty {from} → {to}",
         "baseline": "Median {median} tok/s, {samples} samples, source {source}",
         "revoked": "Revoked: {reason}"
+      },
+      "diverts": {
+        "summary": "Last {hours}h: {total} requests diverted by slow-rate handling (session cooldown {cooldown}, channel demotion {penalty})"
       }
     }
   }

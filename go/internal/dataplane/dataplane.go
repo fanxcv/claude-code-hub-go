@@ -122,6 +122,11 @@ type RequestState struct {
 	// 还有输家计费协程。
 	selectionMu sync.Mutex
 	selections  map[int64]route.Result
+	// diverts 记录无可用供应商那条路径上的低速改道路径（见 recordNoProviderDiverts）。
+	// 它单列而不进 selections：那条路径**根本没有选路结果**（无候选），链上无从表达，
+	// 而它恰恰是最该被计入的形态（唯一候选被会话冷却剔掉 ⇒ 该会话 503）。
+	// 与 selections 同锁（此处只有追加与整取快照两个动作）。
+	diverts []route.Divert
 	// Model 是客户端请求里的原始模型名（计费的备选基准）。
 	Model string
 	// ProviderGroupTag 是选中供应商的分组标签（providers.group_tag）。
@@ -497,6 +502,9 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				fields["totalProviders"] = diagnostic.TotalProviders
 				fields["reasonCounts"] = diagnostic.ReasonCountsLine()
 				fields["summary"] = diagnostic.Summary()
+				// 唯一候选被低速会话冷却剔掉，是这个会话在该冷却期内反复 503 的成因。
+				// 链上无从表达（压根没有候选），故直接记进请求状态，终态时与链留痕合并计数。
+				state.recordDiverts(noProviderDivertedAll(diagnostic))
 			}
 			h.logger.Warn("dataplane.no_provider_available", fields)
 			h.settleFailure(requestCtx, state, http.StatusServiceUnavailable, "无可用供应商")

@@ -433,6 +433,21 @@ function SlowLogsBlock({
           })}
         </span>
       </div>
+      {/* 改道汇总（用户 2026-09-22 需求）：回答「压下来之后实际挡掉了多少流量」。
+          与下面的事件表分工——事件回答「什么时候被压/恢复」，本行回答「后果有多大」。
+
+          用真值判断而不是 `!== null`：后端「未装配」时为 null，而**更旧的响应**可能根本没这个键
+          （undefined）。两者都不该显示这一行，`!== null` 会把 undefined 放过去、当场崩掉整块。 */}
+      {payload.diverts ? (
+        <div className="rounded-md border bg-muted/40 p-3 text-sm">
+          {t("slow.diverts.summary", {
+            hours: payload.diverts.windowHours,
+            total: payload.diverts.total,
+            cooldown: payload.diverts.cooldown,
+            penalty: payload.diverts.penalty,
+          })}
+        </div>
+      ) : null}
       {payload.events.length === 0 ? (
         <div className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
           {t("slow.empty", { hours: payload.window.retentionHours })}

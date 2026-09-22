@@ -3,9 +3,11 @@ package dataplane
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/cfgsync"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/slowrate"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/terminal"
@@ -151,7 +153,9 @@ func (s *providerSlowRateSource) SlowRateProvider(ctx context.Context, providerI
 }
 
 // slowRateRecorder 装配低速样本旁路；Redis 或配置源缺失时返回 nil（旁路整段跳过）。
-func slowRateRecorder(options StoreOptions, logger *logx.Logger) terminal.SlowRateRecorder {
+// 返回具体类型而不是 terminal.SlowRateRecorder：本适配器**同时**实现两个旁路接口
+// （样本与改道），而它们是两个独立的配置位；声明成其中之一会逼调用方做类型断言。
+func slowRateRecorder(options StoreOptions, logger *logx.Logger) *slowRateAdapter {
 	if options.Redis == nil {
 		logger.Info("dataplane.slow_rate_recorder_skipped", map[string]any{
 			"reason": "redis_unconfigured",
@@ -172,7 +176,11 @@ func slowRateRecorder(options StoreOptions, logger *logx.Logger) terminal.SlowRa
 	if recorder == nil {
 		return nil
 	}
-	return &slowRateAdapter{recorder: recorder}
+	return &slowRateAdapter{
+		recorder: recorder,
+		diverts:  slowrate.NewDivertStore(options.Redis, logger),
+		clock:    options.Now,
+	}
 }
 
 // slowRateAdapter 把 terminal 的中性样本视图译成 slowrate 的事实结构。
@@ -181,6 +189,11 @@ func slowRateRecorder(options StoreOptions, logger *logx.Logger) terminal.SlowRa
 // 而 slowrate 也不必知道 terminal 的类型。本包在依赖链顶端，两侧都看得到，是唯一合适的译点。
 type slowRateAdapter struct {
 	recorder *slowrate.Recorder
+	// diverts 是改道计数的读写面；与 recorder 共用同一个 Redis，但构造条件不同
+	// （读面不需要 ConfigSource）。
+	diverts *slowrate.DivertStore
+	// clock 可注入（nil 即 time.Now），取时刻走本包的 nowOr。
+	clock func() time.Time
 }
 
 // RecordSlowRate 实现 terminal.SlowRateRecorder。
@@ -199,4 +212,18 @@ func (a *slowRateAdapter) RecordSlowRate(ctx context.Context, sample terminal.Sl
 		DurationMS:   sample.DurationMS,
 		FirstByteMS:  sample.FirstByteMS,
 	})
+}
+
+// RecordSlowDiverts 实现 terminal.SlowDivertRecorder。
+//
+// 与样本分开走另一条路（而不是塞进 RecordSlowRate）：改道的键按**被挤掉的那家**，
+// 而那家恰恰不是作答的 ProviderID；且 503 路径没有作答者，却最该被计。
+func (a *slowRateAdapter) RecordSlowDiverts(ctx context.Context, diverts []terminal.SlowDivert) {
+	if a == nil || a.recorder == nil {
+		return
+	}
+	now := nowOr(a.clock)
+	for _, divert := range diverts {
+		a.diverts.Record(ctx, divert.ProviderID, route.DivertCause(divert.Cause), now)
+	}
 }

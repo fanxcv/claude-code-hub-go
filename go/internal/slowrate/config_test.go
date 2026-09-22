@@ -47,3 +47,32 @@ func TestSlowRateConfigCarriesOnlyTerminalParams(t *testing.T) {
 		t.Errorf("终态参数未按列投影: %+v", params)
 	}
 }
+
+// TestSlowRateConfigCarriesRecoveryRequests 钉住恢复阈值进 Params（列值优先于出厂默认）。
+//
+// 与 dataplane 侧的 TestRecoveryRequestsReachesParamsThroughSnapshot 配对：那条钉生产那一跳，
+// 这条钉本包投影。两处都绿才说明「列 → Params」整条通。
+func TestSlowRateConfigCarriesRecoveryRequests(t *testing.T) {
+	const recovery = 2
+	config := NewSnapshotConfig(stubProviderSource{
+		found: true,
+		config: ProviderConfig{
+			Enabled:          true,
+			RecoveryRequests: intPtr(recovery),
+		},
+	})
+
+	params, ok := config.SlowRateConfig(context.Background(), 1)
+	if !ok {
+		t.Fatal("已开启的渠道应返回 ok=true")
+	}
+	if params.RecoveryRequests != recovery {
+		t.Fatalf("恢复阈值应为列值 %d，实得 %d", recovery, params.RecoveryRequests)
+	}
+	// 列 NULL 时仍须收敛到出厂默认（不能让 0 直接进判定：0 会让 streak 判定恒真）。
+	blank := NewSnapshotConfig(stubProviderSource{found: true, config: ProviderConfig{Enabled: true}})
+	fallback, _ := blank.SlowRateConfig(context.Background(), 1)
+	if got := fallback.normalize().RecoveryRequests; got != DefaultParams().RecoveryRequests {
+		t.Fatalf("列 NULL 应收敛到出厂默认 %d，得到 %d", DefaultParams().RecoveryRequests, got)
+	}
+}
