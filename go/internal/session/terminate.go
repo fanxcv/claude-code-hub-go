@@ -349,11 +349,31 @@ func positiveUniqueProviderIDs(providerIDs []int64) []int64 {
 // clearProviderIndex 摘除某个 provider 自己的活跃索引（Node 的 providerCleanup 管道）。
 //
 // 清理失败不改变结论：Node 同样只记 warn 并继续——CAS 已经生效，索引残留会随 TTL 过期。
+//
+// 为什么要先枚举而不能直接 ZREM：成员是「会话身份 + 尝试 token」的组合串（见
+// ProviderAttemptMember），token 只写在成员里、调用方不可知，故按会话摘除必须先枚举成员
+// 再逐个删。直接拿裸会话身份当成员删是静默失效——ZREM 命中不了任何成员却返回 0，
+// 索引会一直残留到 TTL 过期。本路径不在热路径上（热路径是登记与释放）。
 func (b *Binder) clearProviderIndex(ctx context.Context, providerID int64, sessionID string) {
 	raw := b.client.rc.Raw()
+	members, zerr := raw.ZRange(ctx, ProviderActiveSessionsKey(providerID), 0, -1).Result()
+	if zerr != nil {
+		// 与下面的删除同口径：静默返回，不改变 CAS 已生效的结论（索引残留会随 TTL 过期）。
+		return
+	}
 	pipe := raw.Pipeline()
-	pipe.ZRem(ctx, ProviderActiveSessionsKey(providerID), sessionID)
-	pipe.HDel(ctx, ProviderActiveSessionRefsKey(providerID), sessionID)
+	matched := false
+	for _, member := range members {
+		if SessionIDFromProviderAttemptMember(member) != sessionID {
+			continue
+		}
+		matched = true
+		pipe.ZRem(ctx, ProviderActiveSessionsKey(providerID), member)
+		pipe.HDel(ctx, ProviderActiveSessionRefsKey(providerID), member)
+	}
+	if !matched {
+		return
+	}
 	_, _ = pipe.Exec(ctx)
 }
 
