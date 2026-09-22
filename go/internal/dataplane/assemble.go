@@ -853,7 +853,26 @@ func (c *idleTimeoutCache) timeoutsFromRow(ctx context.Context, row *store.Provi
 //   - 闸必须**显式打开**（列 NULL = 未覆盖 ⇒ false）。它改变首字时延，不随监控开关自动生效；
 //   - 阈值来源：列显式设值优先，否则由该组合的基线推导；
 //   - 阈值必须为正。
+//
+// precommitRateFromRow 解出该渠道的提交前速率闸阈值 θ（字节/秒）；0 表示不启用。
+//
+// 本函数只在超时缓存未命中时被调用，故其副作用（影子期告警）天然按渠道限频。
 func (c *idleTimeoutCache) precommitRateFromRow(ctx context.Context, row *store.Provider) int {
+	rate := c.derivePrecommitRate(ctx, row)
+	// 影子模式使本闸只观测不裁决，且它**优先于**渠道开关：运维把渠道开关打开而影子仍为真时，
+	// 「打开」与「生效」不一致。这类静默失效最难察觉（2026-09-22 生产：开关开了很久，慢请求
+	// 一条都没被中断），故在此告警一次。
+	if rate > 0 && precommitShadowEnabled() && c.logger != nil {
+		c.logger.Warn("dataplane.precommit_gate_suppressed_by_shadow", map[string]any{
+			"providerId": row.ID,
+			"rate":       rate,
+		})
+	}
+	return rate
+}
+
+// derivePrecommitRate 是未叠加影子模式的纯取值：渠道开关 → 显式阈值 → 由基线推导。
+func (c *idleTimeoutCache) derivePrecommitRate(ctx context.Context, row *store.Provider) int {
 	if row.SlowRatePrecommitEnabled == nil || !*row.SlowRatePrecommitEnabled {
 		return 0
 	}
@@ -968,12 +987,16 @@ func (c *idleTimeoutCache) precommitBaseline(ctx context.Context, providerID int
 	return payload.Median, true
 }
 
-// PrecommitShadowDefault 是影子期的出厂取值（true = 只记录不裁决）。
+// PrecommitShadowDefault 是影子期的出厂取值（false = 按渠道开关裁决）。
 //
-// 为何默认影子：该闸会改变首字时延（内容先暂存再决定提交或换家），而三档阈值与速率口径
-// 尚未由生产数据标定（用户明示「阈值要加日志分析数据得出」）。故先只记录、不动行为；
-// 标定完成把 CCH_SLOW_PRECOMMIT_SHADOW 设为 0 即转入执法。
-const PrecommitShadowDefault = true
+// 曾默认 true（理由「阈值未标定前先只记录」），但那是错的：影子为真时 precommitRate 直接返回 0，
+// 且它**优先于**渠道开关 slow_rate_precommit_enabled，于是运维把渠道开关打开也毫无效果——
+// 开关在、行为不在，属本仓最难察觉的静默失效（2026-09-22 生产实测：wb 的开关开了很久，
+// 慢请求一条都没被中断）。故出厂值改 false：是否裁决由**渠道开关**决定；只在需要一次纯采集时
+// 显式设 CCH_SLOW_PRECOMMIT_SHADOW=1。
+//
+// 标定数据不受影响：闸开启时（precommitRate > 0）采样器本就继续落标定日志，见 rate_sampler.go。
+const PrecommitShadowDefault = false
 
 // precommitShadowEnabled 读影子开关。
 //

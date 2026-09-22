@@ -1,8 +1,10 @@
 package dataplane
 
 import (
+	"bytes"
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -210,11 +212,12 @@ func TestPrecommitRateGateRefusesMultiModelCandidates(t *testing.T) {
 	})
 }
 
-// TestPrecommitShadowDefaultsToOn 钉住影子期默认值：未设环境变量时必须只记录不裁决。
+// TestPrecommitShadowDefaultsToOff 钉住影子期默认值：未设环境变量时必须**按渠道开关裁决**。
 //
-// 为何重要：影子期是「先取证再执法」的闸门。若默认值被改成 false，上线即改变首字时延，
-// 而三档阈值尚未由生产数据标定。
-func TestPrecommitShadowDefaultsToOn(t *testing.T) {
+// 为何重要：影子为真时 precommitRate 直接返回 0，且**优先于**渠道开关 slow_rate_precommit_enabled
+// ⇒ 运维把渠道开关打开也毫无效果（开关在、行为不在）。2026-09-22 生产实测：wb 的开关开了很久，
+// 慢请求一条都没被中断，根因就是出厂值曾为 true。故默认值必须是 false：是否裁决只由渠道开关决定。
+func TestPrecommitShadowDefaultsToOff(t *testing.T) {
 	// 完全未设置：回出厂值。
 	saved, had := os.LookupEnv("CCH_SLOW_PRECOMMIT_SHADOW")
 	if err := os.Unsetenv("CCH_SLOW_PRECOMMIT_SHADOW"); err != nil {
@@ -227,14 +230,14 @@ func TestPrecommitShadowDefaultsToOn(t *testing.T) {
 		}
 		_ = os.Unsetenv("CCH_SLOW_PRECOMMIT_SHADOW")
 	})
-	if !precommitShadowEnabled() {
-		t.Fatal("环境变量未设置时应为出厂值 true（影子期）")
+	if precommitShadowEnabled() {
+		t.Fatal("环境变量未设置时应为出厂值 false（按渠道开关裁决）")
 	}
 
-	// 空串只表示「设了但没值」，必须回落到出厂值，而不是解析成 false 转执法。
+	// 空串只表示「设了但没值」，必须回落到出厂值，而不是误判为别的。
 	t.Setenv("CCH_SLOW_PRECOMMIT_SHADOW", "")
-	if !precommitShadowEnabled() {
-		t.Fatal("空串应回落到出厂值 true")
+	if precommitShadowEnabled() {
+		t.Fatal("空串应回落到出厂值 false")
 	}
 
 	for _, raw := range []string{"0", "false", "FALSE", "off", "no"} {
@@ -249,9 +252,44 @@ func TestPrecommitShadowDefaultsToOn(t *testing.T) {
 			t.Fatalf("%q 应解析为 true（影子）", raw)
 		}
 	}
-	// 无法识别的取值回出厂值，而不是静默当成 false 转执法。
+	// 无法识别的取值回出厂值，而不是静默当成 true 转采集。
 	t.Setenv("CCH_SLOW_PRECOMMIT_SHADOW", "maybe")
+	if precommitShadowEnabled() {
+		t.Fatal("无法识别的取值应回落到出厂值 false")
+	}
+}
+
+// TestPrecommitRateWarnsWhenShadowSuppressesGate 钉住「开关开了、闸却因影子不动」的告警。
+//
+// 这条静默失效在线上极难察觉（渠道开关为真、日志却全是纯采集、慢请求照旧跑完），故必须有一条
+// 可检索的告警把它变成可观测事实。
+func TestPrecommitRateWarnsWhenShadowSuppressesGate(t *testing.T) {
+	enabled := true
+	minBytes := 240
+	row := &store.Provider{
+		ID:                                 167,
+		SlowRatePrecommitEnabled:           &enabled,
+		SlowRatePrecommitMinBytesPerSecond: &minBytes,
+	}
+
+	t.Setenv("CCH_SLOW_PRECOMMIT_SHADOW", "1")
 	if !precommitShadowEnabled() {
-		t.Fatal("无法识别的取值应回落到出厂值 true")
+		t.Fatal("前置：影子应为真")
+	}
+	logs := &bytes.Buffer{}
+	cache := &idleTimeoutCache{logger: logx.New(logs)}
+	if rate := cache.precommitRateFromRow(context.Background(), row); rate != minBytes {
+		t.Fatalf("取值不应受影子影响，得 %d 期望 %d", rate, minBytes)
+	}
+	if !strings.Contains(logs.String(), "precommit_gate_suppressed_by_shadow") {
+		t.Fatalf("渠道开关已开而影子为真时必须告警；实际日志：%q", logs.String())
+	}
+
+	// 影子关闭时不得告警（否则热路径徒增噪音）。
+	logs.Reset()
+	t.Setenv("CCH_SLOW_PRECOMMIT_SHADOW", "0")
+	_ = cache.precommitRateFromRow(context.Background(), row)
+	if strings.Contains(logs.String(), "precommit_gate_suppressed_by_shadow") {
+		t.Fatalf("影子关闭时不得告警；实际日志：%q", logs.String())
 	}
 }

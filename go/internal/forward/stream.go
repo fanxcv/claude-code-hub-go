@@ -108,7 +108,9 @@ type StreamOptions struct {
 	PrecommitRateFor func(providerID int64) int
 	// PrecommitShadow 为真时速率闸**只观测不裁决**：门控照旧在首个语义内容帧提交
 	// （客户端时延与改造前完全一致），提交后仍采样并在 1s/3s/10s 落标定日志。
-	// 这是标定三档阈值的唯一数据来源（见 rate_sampler.go）。
+	//
+	// 它**优先于**渠道开关 slow_rate_precommit_enabled：影子为真时，渠道开关开了也不裁决
+	// （precommitRate 首行即返回 0）。出厂值为假，故常态下「是否裁决」只由渠道开关决定。
 	PrecommitShadow bool
 	// OnPostCommitSlow 在二级闸判定「提交后掉速」时回调一次（渠道级，供后续请求避开）。
 	//
