@@ -139,7 +139,10 @@ describe("ProtocolConversionDisplay 失败态", () => {
 });
 
 describe("ProtocolConversionDisplay 损失态", () => {
-  // 分组里必须至少有一条**改写档**（image）：只有降级/信息档时列表不画徽章，tooltip 也就不存在。
+  // 分组里必须至少有一条**改写档**（tool_call.id.rewritten）：只有降级/信息档时列表不画徽章，
+  // tooltip 也就不存在。
+  // 为何不用 image：image/rewritten 自 2026-09-22 起是信息档（data URL → base64 的表示归一，
+  // 送达内容不变），拿它当改写档代表会让本用例失去对象。
   const lossEntry: SpecialSetting = {
     type: "protocol_conversion_loss",
     scope: "request",
@@ -148,7 +151,7 @@ describe("ProtocolConversionDisplay 损失态", () => {
     targetProtocol: "openai-chat",
     total: 3,
     groups: [
-      { capability: "image", action: "rewritten", count: 1 },
+      { capability: "tool_call.id.rewritten", action: "rewritten", count: 1 },
       { capability: "cache_control", action: "dropped", count: 2 },
     ],
   };
@@ -176,7 +179,7 @@ describe("ProtocolConversionDisplay 损失态", () => {
     expect(html).toContain("lossTotalLabel");
     expect(html).toContain("cache_control");
     expect(html).toContain("lossAction.dropped");
-    expect(html).toContain("image");
+    expect(html).toContain("tool_call.id.rewritten");
     expect(html).toContain("lossAction.rewritten");
     expect(html).toContain("openai-responses");
     expect(html).toContain("openai-chat");

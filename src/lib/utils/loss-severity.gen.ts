@@ -34,6 +34,9 @@ export const LOSS_SEVERITY_BY_CAPABILITY: Readonly<
 export const LOSS_SEVERITY_BY_CAPABILITY_ACTION: Readonly<
   Record<string, Readonly<Partial<Record<string, ConversionLossSeverity>>>>
 > = {
+  image: {
+    rewritten: "info",
+  },
   "thinking.block": {
     downgraded: "degrade",
   },

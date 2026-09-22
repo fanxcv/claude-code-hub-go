@@ -530,8 +530,20 @@ var lossSeverityByCapability = map[string]LossSeverity{
 // 为何要连 action 一起看：thinking.block 是同一能力的两种事实——块被**丢**（客户端的思考
 // 内容消失）与被**降级**（强度载体换算），前者改变内容、后者只弱化保真度。
 // 表中未列出的动作退回 lossSeverityByCapability，仍无命中则 rewrite。
+//
+// image/rewritten 为何是 info（2026-09-22 生产实证）：该动作记的是「客户端用 data URL 表达、
+// 解码归一成 (mediaType, data)、编码时按目标线重新表达」这一件事，**送达的内容不变**
+// （chat→responses 连字符串都相同：chatToDataURL 拿同一份 mediaType/data 拼回，见
+// codec_chat.go:255），故按本档位的判据「上游看到的东西变了」不成立。把它算进改写档的后果有
+// 实证：生产近 24h 带 rewrite 标记的转换请求里 **61%（253/416）只涉及这一条**，于是「几乎每条
+// 带图的转换都挂改写徽章」，真损失反被淹没。条目**仍照记**（只是不再计入徽章），tooltip 与详情
+// 的三档明细里仍可见，可观测性不丢；这与界面侧只画改写档的口径也一致。
+//
+// image/dropped 不在本表内、仍走 catch-all 落 rewrite 档：真丢图（非 image/* 媒体类型、GIF、
+// 解析失败转 opaque）必须继续显眼。
 var lossSeverityByCapabilityAction = map[string]map[LossAction]LossSeverity{
 	LossThinkingBlock: {LossDowngraded: SeverityDegrade},
+	LossImage:         {LossRewritten: SeverityInfo},
 }
 
 // LossSeverityOf 报告一条损失（capability + action）的档位。

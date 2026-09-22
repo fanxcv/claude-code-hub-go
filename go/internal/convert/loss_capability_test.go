@@ -105,12 +105,18 @@ func TestLossSeverityOf(t *testing.T) {
 		want       LossSeverity
 	}{
 		// 内容/参数被改写或丢弃 → 改写档：上游看到的东西变了。
-		{"图片改写", LossImage, LossRewritten, SeverityRewrite},
+		// image 的 rewritten 不在此列：那是 data URL → base64 的表示归一，送达内容不变（见下一条）。
 		{"客户端参数被丢", LossTopK, LossDropped, SeverityRewrite},
 		{"思考块被丢", LossThinkingBlock, LossDropped, SeverityRewrite},
 		{"命中未列出的能力按改写档", LossDocument, LossDropped, SeverityRewrite},
 		{"细分后的 catch-all", LossUnknownFieldTool, LossDropped, SeverityRewrite},
 		{"未细分的 catch-all 兜底", LossUnknownField, LossDropped, SeverityRewrite},
+		// 改写档里「按动作分档」的一对：同一 capability 两种事实必须分开。
+		// 真丢图（非 image/* 媒体类型、GIF、data URL 解析失败转 opaque）仍须显眼。
+		{"图片被丢", LossImage, LossDropped, SeverityRewrite},
+		// 表示归一 → 信息档：客户端用 data URL 表达、送达内容逐字不变，徽章不该计它
+		// （生产实证：算进改写档会让「几乎每条带图的转换」都挂徽章，真损失被淹没）。
+		{"图片表示归一", LossImage, LossRewritten, SeverityInfo},
 		// 保真度弱化 → 降级档：thinking.block 的两种事实必须分档。
 		{"思考强度换算", LossThinkingBlock, LossDowngraded, SeverityDegrade},
 		{"思考签名丢失", LossThinkingSignature, LossDropped, SeverityDegrade},
@@ -177,5 +183,56 @@ func TestImageLossCountedOncePerLogicalImage(t *testing.T) {
 	// 图确实编进了目标正文（data URL 形态），不是被丢掉换来的“只记一次”。
 	if marshaled := string(encoded.Body.MarshalCompact()); !strings.Contains(marshaled, "data:image/png;base64,") {
 		t.Fatalf("目标正文里应有一张 data URL 图片：%s", marshaled)
+	}
+}
+
+// TestImageLossSeveritySeparatesNormalizationFromLoss 钉住「表示归一」与「真损失」在档位上分开。
+//
+// 为何要钉这一对：`image` 这一个 capability 曾同时承载两种事实——(a) 客户端用 data URL 表达、
+// 编码侧按目标线原样重表达（送达内容不变），(b) 图被目标线整块丢掉。两者共用一个 capability 时，
+// 只把 image/rewritten 降为信息档会把 (b) 一起从徽章上降掉（真损失被降噪吞掉）；而 (a) 留在
+// 改写档的代价有生产实证：近 24h 带 rewrite 标记的转换请求里 **61%（253/416）只涉及这一条**，
+// 于是「几乎每条带图的转换都挂改写徽章」。
+//
+// 三格分别对应：① 归一降为信息档；② 真丢仍是改写档；③ 解析不出的 data URL（装箱成 opaque、
+// 跨线编码时被整块丢掉）**不借用 image**，故不会被 ① 一起降档。
+func TestImageLossSeveritySeparatesNormalizationFromLoss(t *testing.T) {
+	// ① 表示归一：data URL → (mediaType, data) → 拼回 data URL，送达内容不变。
+	if got := LossSeverityOf(LossImage, LossRewritten); got != SeverityInfo {
+		t.Fatalf("图片表示归一无内容变化，应为 %s，实际 %s", SeverityInfo, got)
+	}
+	// ② 真丢图：上游看不到这张图了，必须仍然显眼。
+	if got := LossSeverityOf(LossImage, LossDropped); got != SeverityRewrite {
+		t.Fatalf("真丢图必须留在 %s，实际 %s", SeverityRewrite, got)
+	}
+	// ③ 畸形 data URL（媒体类型不是 image/*）：归因到 unknown_field.content，不占用 image。
+	const body = `{"model":"gpt-5","input":[{"type":"message","role":"user","content":[` +
+		`{"type":"input_text","text":"看这张图"},` +
+		`{"type":"input_image","image_url":"data:application/pdf;base64,AAAA"}]}]}`
+	decoded, ok := DecodeRequest(ProtocolOpenAIResponses, mustParsePayload(t, body), ConvertCtx{
+		ClientFormat:   FormatResponse,
+		TargetProto:    ProtocolOpenAIChat,
+		Model:          "m",
+		ToWireToolName: NormalizeToolName,
+	})
+	if !ok {
+		t.Fatal("responses 线必须能解码")
+	}
+	found := -1
+	for index, entry := range decoded.Loss.Entries {
+		if entry.Capability == LossImage {
+			t.Fatalf("解析不出的 data URL 不该记成 image（会把真损失随表示归一一起降档）：%+v", entry)
+		}
+		if entry.Action == LossRewritten && entry.Detail == "image_url.data_url" {
+			found = index
+		}
+	}
+	if found < 0 {
+		t.Fatalf("解析不出的 data URL 必须留一条可归因的记录，实际 %+v", decoded.Loss.Entries)
+	}
+	entry := decoded.Loss.Entries[found]
+	if got := LossSeverityOf(entry.Capability, entry.Action); got != SeverityRewrite {
+		t.Fatalf("该记录仍须是 %s（上游确实看不到这张图），实际 %s（capability=%s）",
+			SeverityRewrite, got, entry.Capability)
 	}
 }

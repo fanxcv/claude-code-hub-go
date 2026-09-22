@@ -92,7 +92,21 @@ func decodeResponsesImagePart(part *Value, loss *LossCollector, direction string
 	if strings.HasPrefix(url, "data:") {
 		parsed, ok := parseChatDataURL(url)
 		if !ok || !strings.HasPrefix(parsed.MediaType, "image/") {
-			loss.Rewritten(LossImage, direction, "data_url")
+			// 归到 unknown_field（detail 前缀 image_url ⇒ unknown_field.content），**不借用 image**：
+			// 这条不是「图被改写」，而是「这段 data URL 解析不出图、整块装箱成 opaque」——
+			// 该 opaque 带的是本线线标，跨线编码时会被整块丢掉并**另记一条 dropped**
+			// （见各线 encode 的 BlockOpaque 分支），故真损失由 dropped 那条承载。
+			//
+			// 为何不归 image：image/rewritten 已被定为「表示归一、内容不变」的信息档
+			// （见 hub.go 的 lossSeverityByCapabilityAction），而本条描述的是「根本没解析成图」，
+			// 两者共享一个 capability 就会让真损失一起被降成信息档、从徽章上消失。
+			//
+			// 为何不按 detail 分档：groups 只落 (capability, action, count, severity)，detail
+			// 不进聚合也不进库，历史条目的档位推导只有 (capability, action) 可取
+			// （loss-severity.gen.ts 的两层表）⇒ detail 级分档会让新条目与历史条目走两条口径。
+			//
+			// 与本包 chat 侧对同一畸形输入的既有处理同归类（codec_chat.go 的 image_url.data_url）。
+			loss.Rewritten(LossUnknownField, direction, "image_url.data_url")
 			return []Block{opaqueBlock(responsesWire, part)}
 		}
 		// 不在此记损：同一张图的最终去向只有编码侧知道（可能被目标线整块丢掉），

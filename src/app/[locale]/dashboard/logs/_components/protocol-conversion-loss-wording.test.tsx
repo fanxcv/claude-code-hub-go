@@ -69,7 +69,12 @@ const locales: Array<[string, LossWordingTable, RegExp, RegExp]> = [
   ["en", enDashboard, /\bless\b|\blost\b|\bloss\b|\breduc/i, /differ|mismatch/i],
 ];
 
-/** 只含 `rewritten` 的损失条目：rewritten 是**非删减**转换，说明里不得暗示内容变少。 */
+/** 只含 `rewritten` 的损失条目：rewritten 是**非删减**转换，说明里不得暗示内容变少。
+ *
+ * 为何用 tool_call.id.rewritten 而不用 image：image/rewritten 自 2026-09-22 起是信息档
+ * （data URL → base64 的表示归一，送达内容不变），仅含它的条目**不再画徽章**、也就没有 tooltip，
+ * 拿它当夹具会让本用例失去对象；而 rewritten 这个动作本身仍是改写档（本例能力未列入档位表）。
+ */
 const rewrittenOnly: SpecialSetting = {
   type: "protocol_conversion_loss",
   scope: "request",
@@ -77,7 +82,7 @@ const rewrittenOnly: SpecialSetting = {
   clientProtocol: "openai-responses",
   targetProtocol: "openai-chat",
   total: 1,
-  groups: [{ capability: "image", action: "rewritten", count: 1 }],
+  groups: [{ capability: "tool_call.id.rewritten", action: "rewritten", count: 1 }],
 };
 
 describe("转换损失说明对 rewritten 的概括", () => {
@@ -100,7 +105,7 @@ describe("转换损失说明对 rewritten 的概括", () => {
       expect(tooltip).toMatch(neutral);
       // 中性化 tooltip 不等于抹掉信息：动作语义仍须在逐组明细里出现。
       expect(html).toContain(table.logs.protocolConversion.lossAction.rewritten);
-      expect(html).toContain("image");
+      expect(html).toContain("tool_call.id.rewritten");
     });
   }
 });

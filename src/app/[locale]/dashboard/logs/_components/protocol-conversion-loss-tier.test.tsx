@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test, vi } from "vitest";
 import type { ConversionLossAction, SpecialSetting } from "@/types/special-settings";
+import { getProtocolConversionLoss } from "@/lib/utils/protocol-conversion";
 import { ProtocolConversionDisplay } from "./protocol-conversion-display";
 
 // 把参数拼进返回值：徽章数字（{count}）必须断言到具体值，只验键名在场会被口径回归骗过。
@@ -61,6 +62,8 @@ describe("损失徽章降噪口径", () => {
     degradeTotal: 164,
     infoTotal: 1,
     groups: [
+      // 这一行摹写**存量行**（2026-09-22 之前落库）：image/rewritten 当时落的是 rewrite 档，
+      // 而读侧优先信任落库的 severity ⇒ 存量行仍按旧档位显示（新行由后端按现行表判档）。
       { capability: "image", action: "rewritten", count: 34, severity: "rewrite" },
       {
         capability: "unknown_field.image_without_url",
@@ -98,6 +101,8 @@ describe("损失徽章降噪口径", () => {
   });
 
   test("历史条目：有明细但无三档合计时按分组现算", () => {
+    // 改写档代表用 top_k（采样参数被丢，后端 LossSeverityOf 判 rewrite）：
+    // 不用 image/rewritten——它自 2026-09-22 起归信息档，拿它当改写档代表会让本用例失去对象。
     const legacyMixed: SpecialSetting = {
       type: "protocol_conversion_loss",
       scope: "request",
@@ -106,7 +111,7 @@ describe("损失徽章降噪口径", () => {
       targetProtocol: "openai-chat",
       total: 13,
       groups: [
-        { capability: "image", action: "rewritten", count: 3 },
+        { capability: "top_k", action: "dropped", count: 3 },
         { capability: "thinking.block", action: "downgraded", count: 9 },
         { capability: "store", action: "dropped", count: 1 },
       ],
@@ -116,6 +121,28 @@ describe("损失徽章降噪口径", () => {
     expect(html).toContain("lossBadge(count=3)");
     expect(html).toContain("lossTier.degrade：</span>9");
     expect(html).toContain("lossTier.info：</span>1");
+  });
+
+  test("历史条目：image 的 rewritten 是表示归一，归信息档、不进列表徽章", () => {
+    const legacyImageNormalization: SpecialSetting = {
+      type: "protocol_conversion_loss",
+      scope: "request",
+      hit: true,
+      clientProtocol: "openai-responses",
+      targetProtocol: "openai-chat",
+      total: 3,
+      groups: [{ capability: "image", action: "rewritten", count: 3 }],
+    };
+    const html = render(converted, legacyImageNormalization);
+
+    // data URL → base64 的往返不改送达内容，故不算「内容被改」：列表徽章不该计它
+    // （生产实证：算进改写档会让「几乎每条带图的转换」都挂徽章，真损失反被淹没）。
+    expect(html).not.toContain('data-slot="protocol-conversion-loss"');
+    // 账仍在：该组落信息档，明细（含 severity）随 special settings 原样进详情面。
+    const loss = getProtocolConversionLoss([legacyImageNormalization]);
+    expect(loss?.rewriteTotal).toBe(0);
+    expect(loss?.infoTotal).toBe(3);
+    expect(loss?.groups[0]?.severity).toBe("info");
   });
 
   test("历史条目：只有降级与信息档时不画徽章（降噪的主场景）", () => {
