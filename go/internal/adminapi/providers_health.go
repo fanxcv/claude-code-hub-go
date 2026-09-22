@@ -11,6 +11,7 @@ import (
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -148,10 +149,14 @@ type providerSlowRateSnapshot struct {
 // /providers/health 请求」这一件事，合在一起会让「谁在读哪族键」变模糊（同 provider_circuit_admin.go
 // 把三族熔断分开声明的那条理由）。
 //
+// 候选取 `route.Provider` 而不是 `[]int64`：读侧据渠道行上的四个降权参数算滑窗下界与档位，
+// 传完整候选才能让「参数改完立即生效」（见 route.SlowRateReader.Penalties 的参数优先级）。
+// 只传 id 会让读侧回退到状态里记录的旧参数，管理面因此滞后到下一次慢样本。
+//
 // 返回的 map 只含**有生效降权的** id；无降权的 id 不在表内——「不在表内」与「读不到」
 // 由调用方分开处理（后者是 error）。
 type ProviderSlowRateReader interface {
-	ProviderSlowRates(ctx context.Context, providerIDs []int64) (map[int64]providerSlowRateSnapshot, error)
+	ProviderSlowRates(ctx context.Context, candidates []route.Provider) (map[int64]providerSlowRateSnapshot, error)
 }
 
 // redisProviderSlowRates 是 ProviderSlowRateReader 的 Redis 实现。
@@ -226,13 +231,17 @@ func parseSlowRateStateKey(key, prefix, suffix string) (int64, string, bool) {
 // （需改 `internal/slowrate`，不在本次改动范围内），而不是在这里加缓存。
 func (r *redisProviderSlowRates) ProviderSlowRates(
 	ctx context.Context,
-	providerIDs []int64,
+	candidates []route.Provider,
 ) (map[int64]providerSlowRateSnapshot, error) {
-	wanted := make(map[int64]struct{}, len(providerIDs))
-	for _, id := range providerIDs {
-		if id > 0 {
-			wanted[id] = struct{}{}
+	byID := make(map[int64]route.Provider, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.ID > 0 {
+			byID[candidate.ID] = candidate
 		}
+	}
+	wanted := make(map[int64]struct{}, len(byID))
+	for id := range byID {
+		wanted[id] = struct{}{}
 	}
 	if len(wanted) == 0 {
 		return nil, nil
@@ -271,13 +280,18 @@ func (r *redisProviderSlowRates) ProviderSlowRates(
 
 	out := make(map[int64]providerSlowRateSnapshot, len(byModel))
 	for modelKey, ids := range byModel {
-		candidates := make([]route.Provider, 0, len(ids))
+		perModel := make([]route.Provider, 0, len(ids))
 		for id := range ids {
+			// 带上渠道行上的实时四参数：读侧据此算滑窗下界与档位，管理面因此与数据面
+			// 同步热生效（只传 id 会让读侧回退状态里的旧参数）。
+			//
 			// 状态键只由已开启监控的渠道写出（写侧门），故候选一律按已开启报：
 			// 否则 `Penalties` 的开关过滤会把真实存在降权的渠道滤掉。
-			candidates = append(candidates, route.Provider{ID: id, SlowRateMonitorEnabled: true})
+			provider := byID[id]
+			provider.SlowRateMonitorEnabled = true
+			perModel = append(perModel, provider)
 		}
-		for id, penalty := range r.penalties.Penalties(ctx, candidates, modelKey) {
+		for id, penalty := range r.penalties.Penalties(ctx, perModel, modelKey) {
 			current, exists := out[id]
 			if !exists {
 				out[id] = providerSlowRateSnapshot{Penalty: penalty, ModelKey: modelKey, Combinations: 1}
@@ -516,7 +530,7 @@ func handleGetProvidersHealth(deps Deps) http.HandlerFunc {
 		var slowRates map[int64]providerSlowRateSnapshot
 		slowRateReadFailed := false
 		if deps.ProviderSlowRates != nil {
-			slowRates, readErr = deps.ProviderSlowRates.ProviderSlowRates(request.Context(), ids)
+			slowRates, readErr = deps.ProviderSlowRates.ProviderSlowRates(request.Context(), slowRateCandidates(providers))
 			if readErr != nil {
 				adminLoggerOf(deps).Warn("admin_providers_slow_rate_read_failed", map[string]any{
 					"error": readErr.Error(),
@@ -567,6 +581,29 @@ func handleGetProvidersHealth(deps Deps) http.HandlerFunc {
 		}
 		adminWriteJSON(writer, http.StatusOK, out)
 	}
+}
+
+// slowRateCandidates 把可见渠道行折成低速读面的候选。
+//
+// 只带 id 与四个降权参数：读侧据这四个参数算滑窗下界与档位（`Penalties`）。带实时值，
+// 参数改完就立即生效；若只给 id，读侧会回退到状态里记录的旧参数，管理面就滞后到下一次慢样本
+// （数据面不会，因为它传的是完整行）。
+//
+// 开关一律按已开启报：状态键只由已开启监控的渠道写出，按原值过滤会把真实存在降权的渠道滤掉
+// （理由同 redisProviderSlowRates.ProviderSlowRates 的候选构造）。
+func slowRateCandidates(providers []store.AdminProvider) []route.Provider {
+	out := make([]route.Provider, 0, len(providers))
+	for _, provider := range providers {
+		out = append(out, route.Provider{
+			ID:                     provider.ID,
+			SlowRateMonitorEnabled: true,
+			SlowRateWindowMinutes:  provider.SlowRateWindowMinutes,
+			SlowRateTriggerCount:   provider.SlowRateTriggerCount,
+			SlowRatePenaltyStep:    provider.SlowRatePenaltyStep,
+			SlowRatePenaltyMax:     provider.SlowRatePenaltyMax,
+		})
+	}
+	return out
 }
 
 // providerSlowRateProjection 把内部聚合读数转成响应投影。

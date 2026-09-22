@@ -38,9 +38,10 @@ const (
 	// 状态 Hash 的字段名：与写侧（internal/slowrate）逐字节一致。本包因 import 环不能引用
 	// 那边的常量，两侧各写一遍字面量，由外部测试包的镜像钉子比对（slowrate_keys_mirror_test.go）。
 	//
-	// 后四项（窗长/阈值/步长/上限）是写侧随状态一起落的**生效参数**。读侧据「滑窗内慢样本数」
-	// 当场派生惩罚需要它们，而 admin 的 providers_health 构造的是合成 Provider（只有 id 与开关，
-	// 无参数列），取不到，只能从 Hash 带出。
+	// 后四项（窗长/阈值/步长/上限）是写侧随状态一起落的**生效参数**，在本包只作**回退**：
+	// 实时值优先取渠道行（见 slowRateEffectiveParams），故配置改动即时生效；候选只带部分字段
+	// （合成视图）时行上没有参数，才回退到这里。出厂默认与归一化判据由
+	// slowrate_params_mirror_test.go 与写侧逐值比对。
 	SlowRateStateFieldPenalty       = "penalty"
 	SlowRateStateFieldWindowMinutes = "windowMinutes"
 	SlowRateStateFieldTriggerCount  = "triggerCount"
@@ -152,10 +153,10 @@ func NewSlowRateReader(opts SlowRateOptions) *SlowRateReader {
 // 零开销：`SlowRateMonitorEnabled` 为假的渠道不进 Redis——默认全关时本方法在开头的
 // 长度判断处直接返回，选路热路径上一个往返都不产生。
 //
-// 两段往返，且**与候选数无关**：第一段读状态与基线（每候选两条命令），第二段只对「状态里带
-// 生效参数」的候选发区间计数（ZCount）。分两段是因为区间下界依赖窗长，而窗长来自第一段的
-// 状态结果——构造命令时还读不到。不用 Lua 合并：多个候选分属不同 hash tag（不同槽），
-// 跨槽多键 Lua 不适用，硬合并只会退化成「每候选一次往返」。
+// 两段往返，且**与候选数无关**：第一段读状态与基线（每候选两条命令），第二段只对「有过慢历史」
+// 的候选发区间计数（ZCount）。分两段是因为区间下界依赖窗长，而窗长要等第一段之后才知道用哪个
+// （实时值取自渠道行，回退值取自状态）——构造命令时参数还没定。不用 Lua 合并：多个候选分属
+// 不同 hash tag（不同槽），跨槽多键 Lua 不适用，硬合并只会退化成「每候选一次往返」。
 //
 // 为何是区间计数而不是取回全量成员：本方法**每次选路**都走，而成员数的上界是「一个 TTL
 // （2 倍窗长）内的慢样本数」，不是常数；ZCount 只回一个整数，载荷 O(1)。
@@ -207,12 +208,23 @@ func (r *SlowRateReader) Penalties(
 	}
 
 	decoded := make([]slowRateState, len(enabled))
+	resolved := make([]slowRatePenaltyParams, len(enabled))
+	derivable := make([]bool, len(enabled))
 	needsCount := make([]int, 0, len(enabled))
 	for index := range enabled {
 		decoded[index] = decodeSlowRateState(states[index])
-		if decoded[index].hasParams {
-			needsCount = append(needsCount, index)
+		// 闸门钉在「这家有过慢历史」：状态键只由写侧的慢路径创建（见 slowrate.Record 的
+		// statePipe），没有它就没有滑窗可数，故未慢过的候选一个 ZCount 都不发。
+		if !decoded[index].exists {
+			continue
 		}
+		params, ok := slowRateEffectiveParams(enabled[index], decoded[index])
+		if !ok {
+			continue
+		}
+		resolved[index] = params
+		derivable[index] = true
+		needsCount = append(needsCount, index)
 	}
 
 	// 第二段：只对参数齐备的候选发区间计数（参数缺失的走快照回退，不需要计数）。
@@ -224,7 +236,7 @@ func (r *SlowRateReader) Penalties(
 			for offset, index := range needsCount {
 				// 下界取闭区间，与「窗内」的既有定义（score >= now-窗长）逐字一致。
 				// 窗长单位是**分钟**（见 slowrate.Params.WindowMinutes）。
-				lower := nowMS - int64(decoded[index].params.windowMinutes)*60*1000
+				lower := nowMS - int64(resolved[index].windowMinutes)*60*1000
 				counts[offset] = pipe.ZCount(
 					ctx,
 					SlowRateSamplesKey(enabled[index].ID, modelKey),
@@ -247,9 +259,13 @@ func (r *SlowRateReader) Penalties(
 
 	for index := range enabled {
 		state := decoded[index]
+		if !state.exists {
+			continue
+		}
+		// 参数齐备即由活窗计数当场派生；只有「行与状态都没参数」的旧状态才回退到快照值。
 		penalty := state.penalty
-		if state.hasParams {
-			penalty = deriveSlowRatePenalty(liveCounts[index], state.params)
+		if derivable[index] {
+			penalty = deriveSlowRatePenalty(liveCounts[index], resolved[index])
 		}
 		if penalty <= 0 {
 			continue
@@ -273,8 +289,91 @@ type slowRatePenaltyParams struct {
 	penaltyMax    int
 }
 
+// slowRatePenaltyDefaults 是四个参数的出厂值，**镜像**写侧 `slowrate.DefaultParams()`。
+//
+// 为什么照抄而不 import：`slowrate` → `session` → `guard` → `route` 成环（见文件头），本包取不到
+// 那边的常量。与键形制、冷却标记同一手法、同一道防线：`slowrate_params_mirror_test.go` 从写侧
+// 源码里抽出这四个出厂值，与下面的函数逐值比对——只改一侧必红。
+func slowRatePenaltyDefaults() slowRatePenaltyParams {
+	return slowRatePenaltyParams{
+		windowMinutes: 30,
+		triggerCount:  3,
+		penaltyStep:   10,
+		penaltyMax:    30,
+	}
+}
+
+// normalize 把零值与越界值收敛为出厂默认，判据与写侧 `slowrate.Params.normalize` 的这四个字段
+// 逐条同判（四者都是「≤ 0 即取默认」）。读侧必须做同一件事：渠道列可空，NULL 即取出厂值。
+func (p slowRatePenaltyParams) normalize() slowRatePenaltyParams {
+	def := slowRatePenaltyDefaults()
+	if p.windowMinutes <= 0 {
+		p.windowMinutes = def.windowMinutes
+	}
+	if p.triggerCount <= 0 {
+		p.triggerCount = def.triggerCount
+	}
+	if p.penaltyStep <= 0 {
+		p.penaltyStep = def.penaltyStep
+	}
+	if p.penaltyMax <= 0 {
+		p.penaltyMax = def.penaltyMax
+	}
+	return p
+}
+
+// slowRatePenaltyParamsFromProvider 取渠道行上的四个实时参数（NULL 记 0，交给 normalize 收敛）。
+func slowRatePenaltyParamsFromProvider(provider Provider) slowRatePenaltyParams {
+	return slowRatePenaltyParams{
+		windowMinutes: slowRateIntPtr(provider.SlowRateWindowMinutes),
+		triggerCount:  slowRateIntPtr(provider.SlowRateTriggerCount),
+		penaltyStep:   slowRateIntPtr(provider.SlowRatePenaltyStep),
+		penaltyMax:    slowRateIntPtr(provider.SlowRatePenaltyMax),
+	}
+}
+
+// anySet 报告渠道行上是否带了任一参数，即「这是一个有参数列的候选」。
+//
+// 它区分的是两种候选：库存投影（参数列可空，至少能带出一列）与**合成视图**（管理面的健康
+// 投影只填 id 与开关）。合成视图上四个参数全是 nil，此时只能回退状态里记录的生效值。
+func (p slowRatePenaltyParams) anySet() bool {
+	return p.windowMinutes != 0 || p.triggerCount != 0 || p.penaltyStep != 0 || p.penaltyMax != 0
+}
+
+// slowRateIntPtr 解引用可空整数列；nil（NULL）记 0，由 normalize 收敛为出厂值。
+func slowRateIntPtr(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+// slowRateEffectiveParams 给出本次判定该用的四个生效参数；第二个返回值为假表示「无从派生」，
+// 调用方据此回退到状态里的快照惩罚。
+//
+// 优先级：渠道行的实时值 > 状态里记录的生效值 > 出厂默认。
+//
+// 为什么以渠道行为先：渠道行是**配置真源**，写侧判定用的是同一份快照（providers 域失效广播
+// 后即刻换新）。读侧若改用状态里的值，配置改动就要等下一次慢样本才被看见——正是「时间窗口
+// 改完不生效」的成因（2026-09-22 修）。状态里的值只在候选没有参数列时才是唯一来源。
+func slowRateEffectiveParams(provider Provider, state slowRateState) (slowRatePenaltyParams, bool) {
+	live := slowRatePenaltyParamsFromProvider(provider)
+	if live.anySet() {
+		return live.normalize(), true
+	}
+	if state.hasParams {
+		return state.params, true
+	}
+	return slowRatePenaltyParams{}, false
+}
+
 // slowRateState 是读侧对一条状态 Hash 的解析结果。
 type slowRateState struct {
+	// exists 表示状态键存在，即该组合**真的慢过**（状态键只由写侧的慢路径创建）。
+	//
+	// 它是「要不要为这家发一次区间计数」的闸门：键不存在就没有滑窗可数，
+	// 未慢过的候选一个 ZCount 都不发。
+	exists bool
 	// penalty 是写侧留下的快照值，**仅在参数缺失**（旧版本写下的状态）时回退使用。
 	penalty int
 	// params 齐备时 hasParams 为真，惩罚改由滑窗计数当场派生。
@@ -284,11 +383,21 @@ type slowRateState struct {
 
 // decodeSlowRateState 解析 HMGet 的五个字段；任一环节不符预期一律返回零值。
 //
-// 返回值零值的含义是「既无快照也无参数」⇒ 调用方得到惩罚 0（fail-open，与读不到键同判）。
+// 返回值零值（exists 为假）的含义是「状态键不存在」⇒ 调用方得到惩罚 0（fail-open，与读不到键同判）。
+//
+// exists 与「字段是否有值」是两件事：HMGET 对不存在的键返回全 nil 且**不带错误**，故只能按
+// 「有没有任一字段非 nil」判定键是否存在。
 func decodeSlowRateState(cmd *redis.SliceCmd) slowRateState {
 	raw, err := cmd.Result()
 	if err != nil || len(raw) < 5 {
 		return slowRateState{}
+	}
+	exists := false
+	for _, field := range raw {
+		if field != nil {
+			exists = true
+			break
+		}
 	}
 	params := slowRatePenaltyParams{
 		windowMinutes: slowRateInt(raw[1]),
@@ -297,6 +406,7 @@ func decodeSlowRateState(cmd *redis.SliceCmd) slowRateState {
 		penaltyMax:    slowRateInt(raw[4]),
 	}
 	return slowRateState{
+		exists:  exists,
 		penalty: slowRateInt(raw[0]),
 		params:  params,
 		// 四项都要为正才派生：写侧 normalize 已保证生效参数非零，缺任一即为旧数据。

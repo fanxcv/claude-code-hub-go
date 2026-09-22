@@ -12,6 +12,7 @@ import (
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
 // 本文件钉住 `/providers/health` 的**低速降权投影**：界面要能看出「这家渠道当前是否被降级、
@@ -184,7 +185,7 @@ func TestProviderSlowRatesAggregatesPerProvider(t *testing.T) {
 		t.Fatal("装配读面失败：应返回实现而不是 nil")
 	}
 
-	got, err := reader.ProviderSlowRates(context.Background(), []int64{heavy, light, stale})
+	got, err := reader.ProviderSlowRates(context.Background(), []route.Provider{{ID: heavy}, {ID: light}, {ID: stale}})
 	if err != nil {
 		t.Fatalf("读低速降权表失败: %v", err)
 	}
@@ -262,7 +263,7 @@ func TestProviderSlowRatesReportsReadFailure(t *testing.T) {
 		scanErr: errors.New("redis down"),
 	}
 	reader := NewRedisProviderSlowRates(client, route.NewSlowRateReader(route.SlowRateOptions{Redis: client}), nil)
-	if _, err := reader.ProviderSlowRates(context.Background(), []int64{1}); err == nil {
+	if _, err := reader.ProviderSlowRates(context.Background(), []route.Provider{{ID: 1}}); err == nil {
 		t.Fatal("扫描失败时应返回错误，不得静默回空表")
 	}
 }
@@ -345,4 +346,48 @@ func TestProvidersHealthCarriesSlowRate(t *testing.T) {
 		t.Errorf("未装配读面时 slowRate 应为 null，收到 %+v", entry)
 	}
 	_ = ctx
+}
+
+// TestSlowRateCandidatesCarryRowParams 钉住管理面候选带上渠道行的**实时四参数**。
+//
+// 为什么这条必须钉：读侧按候选行上的参数算滑窗下界与档位。候选若只带 id，读侧会回退到状态里
+// 记录的旧参数，管理面因此滞后到下一次慢样本；而数据面传的是完整行、当场生效——同一时刻两处
+// 会显示不同的降权。这是一条**接线钉子**（本仓既有教训：定义了不等于接上了）。
+func TestSlowRateCandidatesCarryRowParams(t *testing.T) {
+	window, trigger, step, max := 5, 3, 10, 30
+	candidates := slowRateCandidates([]store.AdminProvider{{
+		ID:                     7,
+		SlowRateMonitorEnabled: false,
+		SlowRateWindowMinutes:  &window,
+		SlowRateTriggerCount:   &trigger,
+		SlowRatePenaltyStep:    &step,
+		SlowRatePenaltyMax:     &max,
+	}})
+	if len(candidates) != 1 {
+		t.Fatalf("候选数 = %d，期望 1", len(candidates))
+	}
+	got := candidates[0]
+	if got.ID != 7 {
+		t.Errorf("ID = %d，期望 7", got.ID)
+	}
+	if !got.SlowRateMonitorEnabled {
+		t.Error("开关应按已开启报：状态键只由已开启监控的渠道写出，按原值过滤会滤掉真实存在降权的渠道")
+	}
+	for name, pair := range map[string]struct {
+		got  *int
+		want int
+	}{
+		"WindowMinutes": {got.SlowRateWindowMinutes, window},
+		"TriggerCount":  {got.SlowRateTriggerCount, trigger},
+		"PenaltyStep":   {got.SlowRatePenaltyStep, step},
+		"PenaltyMax":    {got.SlowRatePenaltyMax, max},
+	} {
+		if pair.got == nil {
+			t.Errorf("%s 丢了（应为 %d）：读侧据它算窗长与档位，丢了就退回状态里的旧参数", name, pair.want)
+			continue
+		}
+		if *pair.got != pair.want {
+			t.Errorf("%s = %d，期望 %d", name, *pair.got, pair.want)
+		}
+	}
 }
