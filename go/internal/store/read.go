@@ -68,6 +68,13 @@ type SystemSettings struct {
 	AffinityIgnoreClientSessionID bool `json:"affinity_ignore_client_session_id"`
 	// AffinityEnabled 是**总闸**：为假时整套亲和（前缀与会话绑定）都不参与选路。
 	AffinityEnabled bool `json:"affinity_enabled"`
+	// ProviderLiveStatsEnabled 是「供应商实时并发统计」的**全局开关**。
+	//
+	// 为假（默认）时整个特性当它不存在：写侧在入口即返回、连一条 Redis 命令都不发，
+	// 读侧也不查统计键，前端不轮询。故它必须是**逐请求读**的快照值，不能是构造期快照
+	// ——否则管理面改了开关、返回 200 并广播失效，运行中的读写侧却不变
+	// （affinityIgnoreClientSessionId 踩过这个坑，见 dataplane/assemble.go 的 affinitySwitchesFor 注释）。
+	ProviderLiveStatsEnabled bool `json:"provider_live_stats_enabled"`
 	// CacheEffectivenessEnabled 可空：Node 的语义是 `settings.cacheEffectivenessEnabled ?? env`
 	// （src/lib/system-settings/proxy-runtime.ts:77-78），故 nil（未设置）必须与 false（显式关闭）区分。
 	// 它门控 F3b 缓存模拟五列的写入（Node response-handler.ts:5430）。

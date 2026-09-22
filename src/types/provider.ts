@@ -654,6 +654,16 @@ export interface ProviderCircuitHealth {
    * - `available === true` 且 `penalty === null`：确实无降权（不是 0，0 与 null 同义于此）。
    */
   slowRate?: ProviderSlowRateHealth | null;
+  /**
+   * 实时并发数（Go 侧增强字段，Node 无此键）。
+   *
+   * 四态是刻意的，界面必须区分：
+   * - `null`/缺省：未装配读面，或全局统计开关关着（统计没在跑），整段不显示；
+   * - `trackingEnabled === false`：开关关着，**不显示**（服务端此时不会给数）；
+   * - `available === false`：开着但本次读不到，显示「读不到」而非「空闲」；
+   * - `available === true`：`activeSessions === 0` 是**真实读数**（确实没有在飞请求）。
+   */
+  concurrency?: ProviderConcurrencyHealth | null;
 }
 
 /**
@@ -674,6 +684,24 @@ export interface ProviderSlowRateHealth {
   /** 有生效降权的组合数（含 modelKey 那一个）。 */
   combinations: number;
   /** 只在 available === false 时给出（例如 redis_unavailable）。 */
+  unavailableReason?: string | null;
+}
+
+/**
+ * 渠道级实时并发数（`/api/v1/providers/health` 的 `concurrency` 字段）。
+ *
+ * `activeSessions` 用 `null` 而不是 0 表示「读不到」：**不用 0 冒充**——
+ * 0 是合法读数（确实没有在飞请求），与「没开统计 / 读不到」必须可区分
+ * （与 `ProviderSlowRateHealth` 同纪律）。
+ */
+export interface ProviderConcurrencyHealth {
+  /** 全局统计开关的本次读数。为假时服务端不会给 `activeSessions`。 */
+  trackingEnabled: boolean;
+  /** 为假表示开着统计但本次读不到；此时 `activeSessions` 为 null。 */
+  available: boolean;
+  /** 在飞请求数（每尝试计）；仅在 `available === true` 时给出。 */
+  activeSessions: number | null;
+  /** 只在 `available === false` 时给出（例如 redis_unavailable）。 */
   unavailableReason?: string | null;
 }
 

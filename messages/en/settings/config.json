@@ -169,6 +169,8 @@
     "affinityEnabledDesc": "When off, provider affinity as a whole (session binding and prefix fingerprint) no longer participates in routing. It is independent of the 'Ignore Client Session ID' setting below. Default on.",
     "affinityIgnoreClientSessionId": "Ignore Client Session ID",
     "affinityIgnoreClientSessionIdDesc": "When enabled, fingerprintable requests are forced to use longest-prefix affinity for provider stickiness (skipping client Session ID binding); non-fingerprintable requests still use session reuse. This is a mode switch and cannot disable affinity itself. Default off.",
+    "providerLiveStatsEnabled": "Live provider concurrency stats",
+    "providerLiveStatsEnabledDesc": "When enabled, the providers page refreshes each provider's live concurrency every 5 seconds and the request path records in-flight attempts per provider. When off (default) nothing is recorded, nothing is queried and the page does not poll, so the feature costs nothing.",
     "streamGateMode": "Stream Content Gate",
     "streamGateModeDesc": "Controls the first-valid-content gate for ordinary requests: enabled mode fails over on error frames or empty streams, shadow mode only records divergence, and off mode forwards directly. Replay owners always retain the pre-content safety gate regardless of this setting. Default enabled.",
     "streamGateModeOptions": {

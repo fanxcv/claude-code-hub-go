@@ -78,6 +78,12 @@ type providerCircuitHealth struct {
 	//   - available=false：读面在，但本次读不到；
 	//   - available=true：读到了，Penalty 为 null 即「无降权」。
 	SlowRate *providerSlowRateHealth `json:"slowRate"`
+	// Concurrency 是本渠道的**实时并发数**投影（Go 侧增强字段，Node 无此键）。
+	//
+	// 加性字段，nil 即前端整段不显示。为何必须有 TrackingEnabled 而不能只给一个数字：
+	// 统计开关关闭时并发数恒为 0，与「此刻真没有在飞请求」**同形**——只看数字无法区分，
+	// 界面会把「没开统计」画成「空闲」（与 slowRate 的 available 同一条纪律）。
+	Concurrency *providerConcurrencyHealth `json:"concurrency"`
 }
 
 // providerSlowRateHealth 是「低速降权」的展示投影。
@@ -106,6 +112,26 @@ type providerSlowRateHealth struct {
 	// Combinations 是有生效降权的组合数（含 ModelKey 那一个）。
 	Combinations int `json:"combinations"`
 	// UnavailableReason 只在 Available=false 时给出（例如 redis_unavailable）。
+	UnavailableReason *string `json:"unavailableReason"`
+}
+
+// providerConcurrencyHealth 是「实时并发数」的展示投影。
+//
+// 四态，每一态在前端都对应不同的渲染分支：
+//   - TrackingEnabled=false：全局统计开关关着。**此时不给出 ActiveSessions**——统计根本没在跑。
+//   - TrackingEnabled=true 且 Available=false：开着但本次读不到（Redis 不可用）；
+//   - TrackingEnabled=true 且 Available=true：ActiveSessions 是真实读数，**0 也是有意义的读数**；
+//   - 字段整体为 nil：未装配并发读面，本维整段不存在。
+//
+// 为什么 ActiveSessions 用指针：它在 Available=true 时可能合法地为 0，「0」必须与「不给」区分。
+type providerConcurrencyHealth struct {
+	// TrackingEnabled 是全局统计开关的**本次请求读数**（逐请求读，故管理面改完立即生效）。
+	TrackingEnabled bool `json:"trackingEnabled"`
+	// Available 为假表示开着统计但本次读不到；此时 ActiveSessions 为 null。
+	Available bool `json:"available"`
+	// ActiveSessions 是在飞请求数（每尝试计）；仅在 Available=true 时给出。
+	ActiveSessions *int `json:"activeSessions"`
+	// UnavailableReason 只在 Available=false 时给出。
 	UnavailableReason *string `json:"unavailableReason"`
 }
 
@@ -453,6 +479,38 @@ func handleGetProvidersHealth(deps Deps) http.HandlerFunc {
 		}
 
 		nowMS := time.Now().UnixMilli()
+		// 实时并发统计：开关是**逐请求读**的（不是构造期快照）。
+		//
+		// 为何不能快照：仓内已有教训——affinityIgnoreClientSessionId 曾是启动期快照，
+		// 而管理面 PUT 返回 200 且广播失效，运维会以为已生效。这里直读 system_settings
+		// 单行（与同包的 dashboard.go 的读法同例），代价是每请求一次单行查，
+		// 换来「改完立即生效」这条确定性——本端点是被 5s 轮询的总览面，不是热路径。
+		//
+		// 读设置失败时按**关闭**处理（fail-closed 到「不统计」）：统计是可选增值面，
+		// 读不到开关时宁可不报数，也不去 Redis 发一批可能无人要的计数命令。
+		liveStatsEnabled := false
+		if deps.Store != nil {
+			if settings, settingsErr := deps.Store.FindSystemSettings(request.Context()); settingsErr == nil && settings != nil {
+				liveStatsEnabled = settings.ProviderLiveStatsEnabled
+			} else if settingsErr != nil {
+				adminLoggerOf(deps).Warn("admin_providers_live_stats_switch_read_failed", map[string]any{
+					"error": settingsErr.Error(),
+				})
+			}
+		}
+		// 关闭时**不查计数键**——这是「关上完全不占用资源」在服务侧的那一半
+		var concurrencyCounts map[int64]int
+		concurrencyReadFailed := false
+		if liveStatsEnabled && deps.ObservedSessions != nil {
+			concurrencyCounts, readErr = deps.ObservedSessions.ProviderSessionCounts(request.Context(), ids)
+			if readErr != nil {
+				adminLoggerOf(deps).Warn("admin_providers_concurrency_read_failed", map[string]any{
+					"error": readErr.Error(),
+				})
+				concurrencyCounts = nil
+				concurrencyReadFailed = true
+			}
+		}
 		// 低速降权读数：未装配即 nil（整段不显示）；读失败也不打整页——降级为「读不到」，
 		// 与熔断状态同一条纪律（读不到显示「无数据」，不是把页面打成错误）。
 		var slowRates map[int64]providerSlowRateSnapshot
@@ -499,6 +557,12 @@ func handleGetProvidersHealth(deps Deps) http.HandlerFunc {
 					snapshot.ConsecutiveOpenCount,
 				),
 				SlowRate: providerSlowRateProjection(deps.ProviderSlowRates != nil, slowRateReadFailed, slowRates[id]),
+				Concurrency: providerConcurrencyProjection(
+					liveStatsEnabled,
+					deps.ObservedSessions != nil,
+					concurrencyReadFailed,
+					concurrencyCounts[id],
+				),
 			}
 		}
 		adminWriteJSON(writer, http.StatusOK, out)
@@ -531,6 +595,42 @@ func providerSlowRateProjection(
 		projection.ModelKey = &modelKey
 	}
 	return projection
+}
+
+// providerConcurrencyProjection 把实时并发读数转成响应投影。
+//
+// 四态见 providerConcurrencyHealth 的注释。这里的判据顺序很重要：
+//  1. 开关关闭优先于一切——此时连读面都没跑（handler 里那段 if），故 activeSessions 必须是 nil。
+//     若漏掉这一条，关闭状态下会输出 activeSessions=0，前端会把「没开统计」画成「空闲」。
+//  2. 未装配读面（wired=false）：整段 nil。
+//  3. 读失败：available=false + activeSessions=nil（**不用 0 冒充**，与 slowRate 同纪律）。
+//  4. 正常：available=true，0 也是真实读数。
+func providerConcurrencyProjection(
+	trackingEnabled bool,
+	wired bool,
+	readFailed bool,
+	activeSessions int,
+) *providerConcurrencyHealth {
+	if !trackingEnabled {
+		return nil
+	}
+	if !wired {
+		return nil
+	}
+	if readFailed {
+		reason := "redis_unavailable"
+		return &providerConcurrencyHealth{
+			TrackingEnabled:   true,
+			Available:         false,
+			UnavailableReason: &reason,
+		}
+	}
+	count := activeSessions
+	return &providerConcurrencyHealth{
+		TrackingEnabled: true,
+		Available:       true,
+		ActiveSessions:  &count,
+	}
 }
 
 // providerCircuitRecoveryMinutes 复刻 actions/providers.ts:1268-1271：

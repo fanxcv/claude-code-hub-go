@@ -106,6 +106,7 @@ interface SystemSettingsFormProps {
     | "streamGateMode"
     | "affinityEnabled"
     | "affinityIgnoreClientSessionId"
+    | "providerLiveStatsEnabled"
     | "replayEnabled"
     | "replayCacheTtlMinutes"
     | "cacheEffectivenessEnabled"
@@ -229,6 +230,9 @@ export function SystemSettingsForm({
   const [affinityEnabled, setAffinityEnabled] = useState(initialSettings.affinityEnabled);
   const [affinityIgnoreClientSessionId, setAffinityIgnoreClientSessionId] = useState(
     initialSettings.affinityIgnoreClientSessionId
+  );
+  const [providerLiveStatsEnabled, setProviderLiveStatsEnabled] = useState(
+    initialSettings.providerLiveStatsEnabled
   );
   // null = 跟随环境变量：未触碰开关时按 null 原样保存，
   // 避免无关字段的保存把覆写写死为布尔值；仅用户切换后才落显式值
@@ -436,6 +440,7 @@ export function SystemSettingsForm({
         streamGateMode,
         affinityEnabled,
         affinityIgnoreClientSessionId,
+        providerLiveStatsEnabled,
         replayEnabled,
         replayCacheTtlMinutes: Number(replayCacheTtlMinutes),
         cacheEffectivenessEnabled,
@@ -507,6 +512,7 @@ export function SystemSettingsForm({
         setStreamGateMode(result.data.streamGateMode);
         setAffinityEnabled(result.data.affinityEnabled);
         setAffinityIgnoreClientSessionId(result.data.affinityIgnoreClientSessionId);
+        setProviderLiveStatsEnabled(result.data.providerLiveStatsEnabled);
         setReplayEnabled(result.data.replayEnabled ?? null);
         setReplayCacheTtlMinutes(String(result.data.replayCacheTtlMinutes));
         setCacheEffectivenessEnabled(result.data.cacheEffectivenessEnabled ?? null);
@@ -1282,6 +1288,28 @@ export function SystemSettingsForm({
             aria-label={t("affinityIgnoreClientSessionId")}
             checked={affinityIgnoreClientSessionId}
             onCheckedChange={(checked) => setAffinityIgnoreClientSessionId(checked)}
+            disabled={isPending}
+          />
+        </div>
+
+        {/* 供应商实时并发统计（全局开关，默认关） */}
+        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between hover:bg-white/[0.04] transition-colors">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-sky-500/10 text-sky-400 shrink-0">
+              <Gauge className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-sm font-medium text-foreground">{t("providerLiveStatsEnabled")}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t("providerLiveStatsEnabledDesc")}
+              </p>
+            </div>
+          </div>
+          <Switch
+            id="provider-live-stats-enabled"
+            aria-label={t("providerLiveStatsEnabled")}
+            checked={providerLiveStatsEnabled}
+            onCheckedChange={(checked) => setProviderLiveStatsEnabled(checked)}
             disabled={isPending}
           />
         </div>

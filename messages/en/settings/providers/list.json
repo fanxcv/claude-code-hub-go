@@ -14,6 +14,12 @@
     "badgeWithModels": "Slow demoted +{penalty} ({model} and {count} models)",
     "tooltip": "Slow demotion: this provider's recent generation rate stayed below its own baseline, so its routing priority is shifted down by this amount (demotion changes neither circuit breaking nor hedging). Each model of a provider is evaluated on its own; this shows the heaviest demotion and how many combinations qualify."
   },
+  "concurrency": {
+    "badge": "Concurrency {count}",
+    "badgeWithLimit": "Concurrency {count}/{limit}",
+    "unavailable": "Concurrency unavailable",
+    "tooltip": "Live concurrency: the number of requests this provider is handling right now (each attempt of a hedge or retry counts once). Requires the global 'Live provider concurrency stats' switch, which refreshes every 5 seconds once enabled."
+  },
   "clipboardUnavailable": "Clipboard access is blocked in this environment. Select and copy the key manually.",
   "confirmDeleteMessage": "Are you sure you want to delete provider \"{name}\"? This action cannot be undone.",
   "confirmDeleteTitle": "Confirm Delete Provider?",

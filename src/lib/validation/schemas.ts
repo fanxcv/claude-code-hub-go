@@ -1181,6 +1181,8 @@ export const UpdateSystemSettingsSchema = z
     affinityEnabled: z.boolean().optional(),
     // 忽略客户端 Session ID（可选；模式开关，与总闸无关）
     affinityIgnoreClientSessionId: z.boolean().optional(),
+    // 供应商实时并发统计开关（可选）
+    providerLiveStatsEnabled: z.boolean().optional(),
     // F2 Replay 响应缓存与复用（可选；null = 跟随环境变量）
     replayEnabled: z.boolean().nullable().optional(),
     // F2 Replay 完成 payload 可重放窗口(分钟)

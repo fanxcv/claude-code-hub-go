@@ -73,6 +73,7 @@ type AdminSystemSettings struct {
 	StreamGateMode               string          `json:"stream_gate_mode"`
 	AffinityIgnoreClientSession  bool            `json:"affinity_ignore_client_session_id"`
 	AffinityEnabled              bool            `json:"affinity_enabled"`
+	ProviderLiveStatsEnabled     bool            `json:"provider_live_stats_enabled"`
 	ReplayEnabled                *bool           `json:"replay_enabled"`
 	ReplayCacheTTLMinutes        int             `json:"replay_cache_ttl_minutes"`
 	CacheEffectivenessEnabled    *bool           `json:"cache_effectiveness_enabled"`
@@ -138,6 +139,7 @@ const (
 	ColStreamGateMode               AdminSystemSettingsColumn = "stream_gate_mode"
 	ColAffinityIgnoreClientSession  AdminSystemSettingsColumn = "affinity_ignore_client_session_id"
 	ColAffinityEnabled              AdminSystemSettingsColumn = "affinity_enabled"
+	ColProviderLiveStatsEnabled     AdminSystemSettingsColumn = "provider_live_stats_enabled"
 	ColReplayEnabled                AdminSystemSettingsColumn = "replay_enabled"
 	ColReplayCacheTTLMinutes        AdminSystemSettingsColumn = "replay_cache_ttl_minutes"
 	ColCacheEffectivenessEnabled    AdminSystemSettingsColumn = "cache_effectiveness_enabled"
@@ -177,6 +179,7 @@ func (c AdminSystemSettingsColumn) known() bool {
 		ColIPExtractionConfig, ColIPGeoLookupEnabled, ColPublicStatusWindowHours,
 		ColPublicStatusAggregationMins, ColStreamGateMode, ColAffinityIgnoreClientSession,
 		ColAffinityEnabled,
+		ColProviderLiveStatsEnabled,
 		ColReplayEnabled, ColReplayCacheTTLMinutes, ColCacheEffectivenessEnabled, ColDiscoveryEnabled,
 		ColDiscoveryConcurrency, ColMaxDiscoveryRounds, ColDiscoverySLAMS, ColStickySLAMS,
 		ColRacingTotalTimeoutMS, ColStickyTimeoutCooldownMS:

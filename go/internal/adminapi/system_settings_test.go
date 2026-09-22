@@ -30,6 +30,10 @@ import (
 // Go 侧拆成两列：`affinity_enabled` 管总闸（见 drizzle/0132），
 // `affinity_ignore_client_session_id` 只管模式。故本条 golden 需手工加此键，
 // 它**不是** Node 行为的快照，而是有意偏离的声明；新增 Node 字段时应照旧逐字段对齐。
+//
+// **与 Node 的有意偏离（2026-09-22，第二处）**：`providerLiveStatsEnabled` 同样**不在** Node 的
+// 投影里，是 Go 侧新增的（供应商实时并发统计的全局开关，见 drizzle/0135）。它同样是手工加的键，
+// 不是 Node 行为的快照。
 const systemSettingsFixtureProjection = `{
   "id": 7,
   "siteTitle": "Fixture Hub",
@@ -84,6 +88,7 @@ const systemSettingsFixtureProjection = `{
   "streamGateMode": "shadow",
   "affinityIgnoreClientSessionId": false,
   "affinityEnabled": true,
+  "providerLiveStatsEnabled": true,
   "replayEnabled": null,
   "replayCacheTtlMinutes": 30,
   "cacheEffectivenessEnabled": true,
@@ -146,6 +151,7 @@ const systemSettingsFixtureRow = `{
   "stream_gate_mode": "shadow",
   "affinity_ignore_client_session_id": false,
   "affinity_enabled": true,
+  "provider_live_stats_enabled": true,
   "replay_enabled": null,
   "replay_cache_ttl_minutes": 999,
   "cache_effectiveness_enabled": true,

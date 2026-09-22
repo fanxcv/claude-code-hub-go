@@ -102,6 +102,7 @@ function SettingsConfigContent() {
             streamGateMode: settings.streamGateMode,
             affinityEnabled: settings.affinityEnabled,
             affinityIgnoreClientSessionId: settings.affinityIgnoreClientSessionId,
+            providerLiveStatsEnabled: settings.providerLiveStatsEnabled,
             replayEnabled: settings.replayEnabled,
             replayCacheTtlMinutes: settings.replayCacheTtlMinutes,
             cacheEffectivenessEnabled: settings.cacheEffectivenessEnabled,
