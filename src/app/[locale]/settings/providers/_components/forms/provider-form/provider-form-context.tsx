@@ -176,6 +176,7 @@ export function createInitialState(
         slowRateRatioPerMille: null,
         slowRatePenaltyStep: null,
         slowRatePenaltyMax: null,
+        slowRateRecoveryRequests: null,
         // 探测阈值在批量模式下不暴露（同 slow rate 其余参数），回退默认值。
         slowRateProbeAfterFirstByteSeconds: null,
         modelRedirects:
@@ -395,6 +396,7 @@ export function createInitialState(
         slowRateRatioPerMille: null,
         slowRatePenaltyStep: null,
         slowRatePenaltyMax: null,
+        slowRateRecoveryRequests: null,
         slowRateProbeAfterFirstByteSeconds: null,
         modelRedirects: [],
         allowedModels: [],
@@ -488,6 +490,7 @@ export function createInitialState(
       slowRateRatioPerMille: sourceProvider?.slowRateRatioPerMille ?? null,
       slowRatePenaltyStep: sourceProvider?.slowRatePenaltyStep ?? null,
       slowRatePenaltyMax: sourceProvider?.slowRatePenaltyMax ?? null,
+      slowRateRecoveryRequests: sourceProvider?.slowRateRecoveryRequests ?? null,
       slowRateProbeAfterFirstByteSeconds:
         sourceProvider?.slowRateProbeAfterFirstByteSeconds ?? null,
       modelRedirects: normalizeProviderModelRedirectRules(sourceProvider?.modelRedirects) ?? [],

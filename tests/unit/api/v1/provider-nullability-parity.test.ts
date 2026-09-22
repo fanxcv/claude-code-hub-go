@@ -34,6 +34,8 @@ const NULLABLE_SPECS = new Set([
   "providerNullableFieldSpec",
   "providerNumericFieldSpec",
   "providerJSONFieldSpec",
+  // 低速系数专用的 0-1 小数值规格：同样接 null（null = 取代码默认 0.3），只是多了上界 1。
+  "providerSlowRateRatioFieldSpec",
 ]);
 
 /**

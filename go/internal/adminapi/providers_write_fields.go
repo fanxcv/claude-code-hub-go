@@ -91,14 +91,16 @@ var providerPreimageFieldNames = map[string]string{
 	"mcp_passthrough_url":                         "mcpPassthroughUrl",
 	"protocol_conversion_enabled":                 "protocolConversionEnabled",
 	"slow_rate_monitor_enabled":                   "slowRateMonitorEnabled",
-	"slow_rate_window_seconds":                    "slowRateWindowSeconds",
-	"slow_rate_baseline_window_seconds":           "slowRateBaselineWindowSeconds",
-	"slow_rate_min_samples":                       "slowRateMinSamples",
-	"slow_rate_trigger_count":                     "slowRateTriggerCount",
-	"slow_rate_ratio_per_mille":                   "slowRateRatioPerMille",
-	"slow_rate_penalty_step":                      "slowRatePenaltyStep",
-	"slow_rate_penalty_max":                       "slowRatePenaltyMax",
-	"slow_rate_probe_after_first_byte_seconds":    "slowRateProbeAfterFirstByteSeconds",
+	// 低速参数：**payload 名沿旧**（用户 2026-09-22 裁决：REST 契约不破坏），只有列名换新单位。
+	"slow_rate_window_seconds":                 "slowRateWindowSeconds",
+	"slow_rate_baseline_window_seconds":        "slowRateBaselineWindowSeconds",
+	"slow_rate_min_samples":                    "slowRateMinSamples",
+	"slow_rate_trigger_count":                  "slowRateTriggerCount",
+	"slow_rate_ratio_per_mille":                "slowRateRatioPerMille",
+	"slow_rate_penalty_step":                   "slowRatePenaltyStep",
+	"slow_rate_penalty_max":                    "slowRatePenaltyMax",
+	"slow_rate_recovery_requests":              "slowRateRecoveryRequests",
+	"slow_rate_probe_after_first_byte_seconds": "slowRateProbeAfterFirstByteSeconds",
 	"tpm": "tpm",
 	"rpm": "rpm",
 	"rpd": "rpd",
@@ -340,6 +342,38 @@ func providerTimeoutFieldSpec(min, max *int64) providerDecodeSpec {
 }
 
 // providerNumericFieldSpec 复刻 `z.number().min(0).nullable().optional()`（numeric 列）。
+// providerSlowRateRatioFieldSpec 是低速系数的解码规格：可空 0-1 小数。
+//
+// 为何单独一个而不复用 providerNumericFieldSpec：它的域是**闭区间 [0,1]**，而现有那个只接
+// 下界。上界必须验——用户填 1.5 或 300（旧千分比习惯）时若放过，低速线会算成基线的 150%/30000%
+// 倍，判定恒假（永不标慢）却不报错。与前端 schemas.ts 的 .min(0).max(1) 同口径。
+func providerSlowRateRatioFieldSpec() providerDecodeSpec {
+	return providerDecodeSpec{Decode: func(object *adminObject, payload string) (any, bool) {
+		nullable, present := providerNullableNumber(object, payload, []any{payload})
+		if !present {
+			return nil, false
+		}
+		if nullable.Value == nil {
+			return (*float64)(nil), true
+		}
+		value := *nullable.Value
+		if value < 0 {
+			object.fail([]any{payload}, "too_small",
+				"Number must be greater than or equal to 0")
+			return nil, true
+		}
+		if value > 1 {
+			object.fail([]any{payload}, "too_big",
+				"Number must be less than or equal to 1")
+			return nil, true
+		}
+		// 返回 *float64（不是 float64）：store 侧的 providerNumericKind 期待的就是这个形状
+		// （与 cost_multiplier 同型），返回裸值会在绑定时报「值类型不符」。
+		return nullable.Value, true
+	}}
+}
+
+// providerNumericFieldSpec 是带下界的可空数值规格（Node 的 z.number().min(...).nullable().optional()）。
 func providerNumericFieldSpec(min *float64) providerDecodeSpec {
 	return providerDecodeSpec{Decode: func(object *adminObject, payload string) (any, bool) {
 		nullable, present := providerNullableNumber(object, payload, []any{payload})
@@ -495,9 +529,10 @@ func providerCreateWriteSpecs() map[string]providerDecodeSpec {
 		"slow_rate_baseline_window_seconds":        providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_min_samples":                    providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_trigger_count":                  providerNullableIntFieldSpec(nil, nil),
-		"slow_rate_ratio_per_mille":                providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_ratio_per_mille":                providerSlowRateRatioFieldSpec(),
 		"slow_rate_penalty_step":                   providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_penalty_max":                    providerNullableIntFieldSpec(nil, nil),
+		"slow_rate_recovery_requests":              providerNullableIntFieldSpec(nil, nil),
 		"slow_rate_probe_after_first_byte_seconds": providerNullableIntFieldSpec(nil, nil),
 		"website_url":                              providerNullableFieldSpec(0),
 		"favicon_url":                              providerNullableFieldSpec(0),
@@ -1194,14 +1229,16 @@ func providerWriteKindOf(name string) string {
 	case "limit_concurrent_sessions", "max_retry_attempts",
 		// 等待阶梯两列为可空（null = 不启用），故归 nullable_int 而不是 int。
 		"circuit_breaker_release_increment", "circuit_breaker_max_open_count", "tpm", "rpm", "rpd", "cc",
-		// 低速降级：五参数均可空（null = 取代码默认值）；判定窗与基线窗是两列。
+		// 低速降级：五参数均可空（null = 取代码默认值）；判定窗与基线窗是两列（分钟 vs 天）。
 		"slow_rate_window_seconds", "slow_rate_baseline_window_seconds",
-		"slow_rate_min_samples", "slow_rate_trigger_count", "slow_rate_ratio_per_mille",
-		"slow_rate_penalty_step", "slow_rate_penalty_max",
+		"slow_rate_min_samples", "slow_rate_trigger_count",
+		"slow_rate_penalty_step", "slow_rate_penalty_max", "slow_rate_recovery_requests",
 		"slow_rate_probe_after_first_byte_seconds":
 		return "nullable_int"
 	case "cost_multiplier", "limit_5h_usd", "limit_daily_usd", "limit_weekly_usd",
-		"limit_monthly_usd", "limit_total_usd":
+		"limit_monthly_usd", "limit_total_usd",
+		// 低速系数是 numeric(5,4) 的 0-1 小数，与 cost_multiplier 同归数值型。
+		"slow_rate_ratio_per_mille":
 		return "numeric"
 	case "model_redirects", "allowed_models", "allowed_clients", "blocked_clients",
 		"custom_headers", "group_priorities", "anthropic_adaptive_thinking":

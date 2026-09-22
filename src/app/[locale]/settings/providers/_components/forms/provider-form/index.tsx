@@ -343,6 +343,7 @@ function ProviderFormContent({
           disable_session_reuse: state.routing.disableSessionReuse,
           protocol_conversion_enabled: state.routing.protocolConversionEnabled,
           slow_rate_monitor_enabled: state.routing.slowRateMonitorEnabled,
+          // payload 名沿旧（REST 契约不破坏）；单位已改（2026-09-22）：分钟 / 天 / 0-1 小数。
           slow_rate_window_seconds: state.routing.slowRateWindowSeconds,
           slow_rate_baseline_window_seconds: state.routing.slowRateBaselineWindowSeconds,
           slow_rate_min_samples: state.routing.slowRateMinSamples,
@@ -350,6 +351,7 @@ function ProviderFormContent({
           slow_rate_ratio_per_mille: state.routing.slowRateRatioPerMille,
           slow_rate_penalty_step: state.routing.slowRatePenaltyStep,
           slow_rate_penalty_max: state.routing.slowRatePenaltyMax,
+          slow_rate_recovery_requests: state.routing.slowRateRecoveryRequests,
           slow_rate_probe_after_first_byte_seconds:
             state.routing.slowRateProbeAfterFirstByteSeconds,
           model_redirects:

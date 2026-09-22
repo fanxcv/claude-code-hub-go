@@ -95,16 +95,23 @@ type AdminProvider struct {
 
 	// 低速降级（逐渠道开关，默认全关）。
 	SlowRateMonitorEnabled bool `json:"slowRateMonitorEnabled"`
-	// SlowRateWindowSeconds 是判定滑窗（默认 1800s）；SlowRateBaselineWindowSeconds 是基线主窗
-	// （默认 3 天）。两列尺度不同（分钟 vs 天），不可混用。
-	SlowRateWindowSeconds         *int `json:"slowRateWindowSeconds"`
-	SlowRateBaselineWindowSeconds *int `json:"slowRateBaselineWindowSeconds"`
+	// SlowRateWindowMinutes 是判定滑窗（默认 30 **分钟**）；SlowRateBaselineWindowDays 是基线主窗
+	// （默认 3 **天**）。两列尺度不同，不可混用。列名与单位已对齐（旧列 *_seconds 见 0134 迁移）。
+	//
+	// **REST 字段名沿旧**（用户 2026-09-22 裁决）：`slowRateWindowSeconds` 等 JSON 名保持不变
+	// 以免断外部调用方，但**值存的是新单位**（分钟/天/0-1 小数）——看名字的人须留意这一点，
+	// 故在本注释与 OpenAPI 描述里都写明。
+	SlowRateWindowMinutes      *int `json:"slowRateWindowSeconds"`
+	SlowRateBaselineWindowDays *int `json:"slowRateBaselineWindowSeconds"`
 	// SlowRateMinSamples 是基线样本下限；SlowRateTriggerCount 是触发阈值。两者语义不同。
-	SlowRateMinSamples    *int `json:"slowRateMinSamples"`
-	SlowRateTriggerCount  *int `json:"slowRateTriggerCount"`
-	SlowRateRatioPerMille *int `json:"slowRateRatioPerMille"`
-	SlowRatePenaltyStep   *int `json:"slowRatePenaltyStep"`
-	SlowRatePenaltyMax    *int `json:"slowRatePenaltyMax"`
+	SlowRateMinSamples   *int `json:"slowRateMinSamples"`
+	SlowRateTriggerCount *int `json:"slowRateTriggerCount"`
+	// SlowRateRatio 是低速系数（0-1 小数，默认 0.3）；JSON 名沿旧 `slowRateRatioPerMille`。
+	SlowRateRatio       *float64 `json:"slowRateRatioPerMille"`
+	SlowRatePenaltyStep *int     `json:"slowRatePenaltyStep"`
+	SlowRatePenaltyMax  *int     `json:"slowRatePenaltyMax"`
+	// SlowRateRecoveryRequests 是恢复策略阈值（默认 10）。
+	SlowRateRecoveryRequests *int `json:"slowRateRecoveryRequests"`
 	// SlowRateProbeAfterFirstByteSeconds 是首字后停滞探测阈值 T（秒）；NULL = 不探测（机制默认关闭）。
 	SlowRateProbeAfterFirstByteSeconds *int `json:"slowRateProbeAfterFirstByteSeconds"`
 
@@ -172,13 +179,14 @@ const adminProviderColumns = `
 	openai_max_tokens_preference AS "openaiMaxTokensPreference",
 	gemini_google_search_preference AS "geminiGoogleSearchPreference",
 	slow_rate_monitor_enabled AS "slowRateMonitorEnabled",
-	slow_rate_window_seconds AS "slowRateWindowSeconds",
-	slow_rate_baseline_window_seconds AS "slowRateBaselineWindowSeconds",
+	slow_rate_window_minutes AS "slowRateWindowSeconds",
+	slow_rate_baseline_window_days AS "slowRateBaselineWindowSeconds",
 	slow_rate_min_samples AS "slowRateMinSamples",
 	slow_rate_trigger_count AS "slowRateTriggerCount",
-	slow_rate_ratio_per_mille AS "slowRateRatioPerMille",
+	slow_rate_ratio AS "slowRateRatioPerMille",
 	slow_rate_penalty_step AS "slowRatePenaltyStep",
 	slow_rate_penalty_max AS "slowRatePenaltyMax",
+	slow_rate_recovery_requests AS "slowRateRecoveryRequests",
 	slow_rate_probe_after_first_byte_seconds AS "slowRateProbeAfterFirstByteSeconds",
 	tpm, rpm, rpd, cc,
 	to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",

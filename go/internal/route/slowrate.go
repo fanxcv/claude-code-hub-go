@@ -42,7 +42,7 @@ const (
 	// 当场派生惩罚需要它们，而 admin 的 providers_health 构造的是合成 Provider（只有 id 与开关，
 	// 无参数列），取不到，只能从 Hash 带出。
 	SlowRateStateFieldPenalty       = "penalty"
-	SlowRateStateFieldWindowSeconds = "windowSeconds"
+	SlowRateStateFieldWindowMinutes = "windowMinutes"
 	SlowRateStateFieldTriggerCount  = "triggerCount"
 	SlowRateStateFieldPenaltyStep   = "penaltyStep"
 	SlowRateStateFieldPenaltyMax    = "penaltyMax"
@@ -190,7 +190,7 @@ func (r *SlowRateReader) Penalties(
 		for index, provider := range enabled {
 			states[index] = pipe.HMGet(ctx, SlowRateStateKey(provider.ID, modelKey),
 				SlowRateStateFieldPenalty,
-				SlowRateStateFieldWindowSeconds,
+				SlowRateStateFieldWindowMinutes,
 				SlowRateStateFieldTriggerCount,
 				SlowRateStateFieldPenaltyStep,
 				SlowRateStateFieldPenaltyMax,
@@ -223,7 +223,8 @@ func (r *SlowRateReader) Penalties(
 		_, err := r.redis.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 			for offset, index := range needsCount {
 				// 下界取闭区间，与「窗内」的既有定义（score >= now-窗长）逐字一致。
-				lower := nowMS - int64(decoded[index].params.windowSeconds)*1000
+				// 窗长单位是**分钟**（见 slowrate.Params.WindowMinutes）。
+				lower := nowMS - int64(decoded[index].params.windowMinutes)*60*1000
 				counts[offset] = pipe.ZCount(
 					ctx,
 					SlowRateSamplesKey(enabled[index].ID, modelKey),
@@ -265,7 +266,8 @@ func (r *SlowRateReader) Penalties(
 
 // slowRatePenaltyParams 是派生惩罚所需的四个生效参数（写侧随状态一起落 Hash）。
 type slowRatePenaltyParams struct {
-	windowSeconds int
+	// windowMinutes 是判定滑窗的**分钟**数（与写侧 state 字段同单位）。
+	windowMinutes int
 	triggerCount  int
 	penaltyStep   int
 	penaltyMax    int
@@ -289,7 +291,7 @@ func decodeSlowRateState(cmd *redis.SliceCmd) slowRateState {
 		return slowRateState{}
 	}
 	params := slowRatePenaltyParams{
-		windowSeconds: slowRateInt(raw[1]),
+		windowMinutes: slowRateInt(raw[1]),
 		triggerCount:  slowRateInt(raw[2]),
 		penaltyStep:   slowRateInt(raw[3]),
 		penaltyMax:    slowRateInt(raw[4]),
@@ -298,7 +300,7 @@ func decodeSlowRateState(cmd *redis.SliceCmd) slowRateState {
 		penalty: slowRateInt(raw[0]),
 		params:  params,
 		// 四项都要为正才派生：写侧 normalize 已保证生效参数非零，缺任一即为旧数据。
-		hasParams: params.windowSeconds > 0 && params.triggerCount > 0 &&
+		hasParams: params.windowMinutes > 0 && params.triggerCount > 0 &&
 			params.penaltyStep > 0 && params.penaltyMax > 0,
 	}
 }

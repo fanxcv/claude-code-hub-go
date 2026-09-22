@@ -12,14 +12,21 @@ import "context"
 type ProviderConfig struct {
 	Enabled bool
 	// 六个参数用指针：列可空，NULL 表示取出厂默认（不是取 0）。
-	WindowSeconds *int
+	//
+	// WindowMinutes / Ratio 的单位见 slowrate.Params 的同名字段（分钟；0-1 小数）。
+	WindowMinutes *int
 	// TriggerCount 是触发阈值（列 slow_rate_trigger_count）：窗内低速数达此值才标记，
 	// 且是 penalty 档位分母。**不是**基线样本下限——后者是 slow_rate_min_samples，
 	// 只由 B3 基线任务读取，本包不读它。
-	TriggerCount  *int
-	RatioPerMille *int
-	PenaltyStep   *int
-	PenaltyMax    *int
+	TriggerCount *int
+	Ratio        *float64
+	PenaltyStep  *int
+	PenaltyMax   *int
+	// RecoveryRequests 是恢复策略阈值（列 slow_rate_recovery_requests，默认 10）：连续这么多个
+	// 「可判定」请求都不慢即重置降权。
+	//
+	// 本包只负责把该列透传出去；判定逻辑在 slowrate 的样本写入器（另一 lane）。
+	RecoveryRequests *int
 	// ProbeAfterFirstByteSeconds 是「首字后停滞探测换家」的阈值列。
 	//
 	// 它**不进 Params**：Params 描述的是终态判定（请求结束后看整段速率），而这列
@@ -60,12 +67,22 @@ func (c *SnapshotConfig) SlowRateConfig(ctx context.Context, providerID int64) (
 		return Params{}, false
 	}
 	return Params{
-		WindowSeconds: deref(config.WindowSeconds),
+		WindowMinutes: deref(config.WindowMinutes),
 		TriggerCount:  deref(config.TriggerCount),
-		RatioPerMille: deref(config.RatioPerMille),
+		Ratio:         derefFloat(config.Ratio),
 		PenaltyStep:   deref(config.PenaltyStep),
 		PenaltyMax:    deref(config.PenaltyMax),
 	}, true
+}
+
+// derefFloat 把可空 numeric 列折成 0，交给 Params.normalize 收敛到出厂默认。
+//
+// 与 deref 同口径：0 由 normalize 判为非法（系数合法域是 (0,1]），故这里给 0 即等于「未配置」。
+func derefFloat(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 // deref 把可空列折成 0，交给 Params.normalize 收敛到出厂默认。

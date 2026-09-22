@@ -117,10 +117,10 @@ func TestSlowRateProviderCacheRefreshesAfterInvalidation(t *testing.T) {
 	}
 
 	// 渠道刚被打开：写库 + 广播 DomainProviders 都发生在下面这次读取之前。
-	window, trigger := 1800, 3
+	window, trigger := 30, 3
 	reader.set(167, &store.Provider{
 		SlowRateMonitorEnabled: true,
-		SlowRateWindowSeconds:  &window,
+		SlowRateWindowMinutes:  &window,
 		SlowRateTriggerCount:   &trigger,
 	})
 	if _, enabled := config.SlowRateConfig(context.Background(), 167); enabled {
@@ -134,7 +134,7 @@ func TestSlowRateProviderCacheRefreshesAfterInvalidation(t *testing.T) {
 	if !enabled {
 		t.Fatal("失效后必须重新查库并看到新值")
 	}
-	if params.WindowSeconds != window || params.TriggerCount != trigger {
+	if params.WindowMinutes != window || params.TriggerCount != trigger {
 		t.Fatalf("失效后参数应为新值，收到 %+v", params)
 	}
 	if got := reader.queries(); got != 2 {
@@ -173,10 +173,10 @@ func TestSlowRateProviderCacheClearedByDomainBroadcast(t *testing.T) {
 		t.Fatal("首次订阅的 resync 未触发 providers 域失效回调")
 	}
 
-	window, trigger := 1800, 3
+	window, trigger := 30, 3
 	reader.set(167, &store.Provider{
 		SlowRateMonitorEnabled: true,
-		SlowRateWindowSeconds:  &window,
+		SlowRateWindowMinutes:  &window,
 		SlowRateTriggerCount:   &trigger,
 	})
 	baseline := registry.Invalidations(cfgsync.DomainProviders)
@@ -189,7 +189,7 @@ func TestSlowRateProviderCacheClearedByDomainBroadcast(t *testing.T) {
 	}
 
 	params, enabled := config.SlowRateConfig(context.Background(), 167)
-	if !enabled || params.WindowSeconds != window || params.TriggerCount != trigger {
+	if !enabled || params.WindowMinutes != window || params.TriggerCount != trigger {
 		t.Fatalf("失效广播后必须看到新值，收到 enabled=%v params=%+v", enabled, params)
 	}
 }

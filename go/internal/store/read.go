@@ -160,18 +160,26 @@ type Provider struct {
 	// 低速降级（逐渠道开关，默认全关）。参数列可空，NULL 表示取代码默认值；
 	// 未开启的渠道行为与开启前逐字一致（读取侧不读、写入侧不写）。
 	SlowRateMonitorEnabled bool `json:"slow_rate_monitor_enabled"`
-	// SlowRateWindowSeconds 是**判定滑窗**（默认 1800s）；SlowRateBaselineWindowSeconds 是
-	// **基线主窗**（默认 3 天，只由基线定时任务读）。两列尺度差三个数量级（分钟 vs 天），
+	// SlowRateWindowMinutes 是**判定滑窗的分钟数**（默认 30）；SlowRateBaselineWindowDays 是
+	// **基线主窗的天数**（默认 3，只由基线定时任务读）。两列尺度差三个数量级（分钟 vs 天），
 	// 曾是同一列，故拆开——共用一列时「调判定窗」会静默把基线打坏。
-	SlowRateWindowSeconds         *int `json:"slow_rate_window_seconds"`
-	SlowRateBaselineWindowSeconds *int `json:"slow_rate_baseline_window_seconds"`
+	//
+	// 旧列 slow_rate_window_seconds / slow_rate_baseline_window_seconds 已被 0134 取代
+	// （值仍留在库里作回滚依据），本结构体不再读它们。
+	SlowRateWindowMinutes      *int `json:"slow_rate_window_minutes"`
+	SlowRateBaselineWindowDays *int `json:"slow_rate_baseline_window_days"`
 	// SlowRateMinSamples 是**基线样本下限**（默认 100），只由基线定时任务读。
 	SlowRateMinSamples *int `json:"slow_rate_min_samples"`
 	// SlowRateTriggerCount 是**触发阈值**（默认 3），由样本写入器读。两列不可混用。
-	SlowRateTriggerCount  *int `json:"slow_rate_trigger_count"`
-	SlowRateRatioPerMille *int `json:"slow_rate_ratio_per_mille"`
-	SlowRatePenaltyStep   *int `json:"slow_rate_penalty_step"`
-	SlowRatePenaltyMax    *int `json:"slow_rate_penalty_max"`
+	SlowRateTriggerCount *int `json:"slow_rate_trigger_count"`
+	// SlowRateRatio 是**低速系数**（默认 0.3，0-1 小数）；旧列 slow_rate_ratio_per_mille
+	// （千分比整数）已被 0134 取代，不再读。
+	SlowRateRatio       *float64 `json:"slow_rate_ratio"`
+	SlowRatePenaltyStep *int     `json:"slow_rate_penalty_step"`
+	SlowRatePenaltyMax  *int     `json:"slow_rate_penalty_max"`
+	// SlowRateRecoveryRequests 是**恢复策略阈值**（默认 10）：连续这么多个「可判定」请求都
+	// 不慢即重置降权。NULL = 取代码默认。
+	SlowRateRecoveryRequests *int `json:"slow_rate_recovery_requests"`
 	// SlowRateProbeAfterFirstByteSeconds 是**首字后停滞探测阈值**（秒）；NULL = 不探测（机制默认关闭）。
 	SlowRateProbeAfterFirstByteSeconds *int `json:"slow_rate_probe_after_first_byte_seconds"`
 }

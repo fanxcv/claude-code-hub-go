@@ -615,14 +615,18 @@ export const CreateProviderSchema = z
     // 低速降级（实验特性，默认关闭）：列可空，空值送 null 表示取代码默认值。
     // 用 .nullable().optional()（与 max_retry_attempts 同形），非空 spec 会让「清空输入框」变成 invalid_type。
     slow_rate_monitor_enabled: z.boolean().optional(),
+    // 单位：window 存**分钟**、baseline 存**天**、ratio 存 **0-1 小数**（用户 2026-09-22 改）。
+    // payload 名沿旧（REST 契约不破坏）——名字与单位已不符，以注释与 UI 文案标明。
     slow_rate_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_baseline_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_min_samples: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_trigger_count: z.coerce.number().int().min(0).nullable().optional(),
-    // 千分比：300 = 0.3。上限 1000 即系数 1.0（速率不可能高于基线本身还判低速）。
-    slow_rate_ratio_per_mille: z.coerce.number().int().min(0).max(1000).nullable().optional(),
+    // 0-1 小数：0.3 = 低于基线 30% 即算低速。上限 1（速率高于基线本身不可能还判低速）。
+    slow_rate_ratio_per_mille: z.coerce.number().min(0).max(1).nullable().optional(),
     slow_rate_penalty_step: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_penalty_max: z.coerce.number().int().min(0).nullable().optional(),
+    // 恢复策略阈值（默认 10）。
+    slow_rate_recovery_requests: z.coerce.number().int().min(0).nullable().optional(),
     // 首字后停滞探测阈值：null = 不探测（机制关闭）。
     slow_rate_probe_after_first_byte_seconds: z.coerce.number().int().min(0).nullable().optional(),
     max_retry_attempts: z.coerce
@@ -870,13 +874,16 @@ export const UpdateProviderSchema = z
     gemini_google_search_preference: GEMINI_GOOGLE_SEARCH_PREFERENCE.optional(),
     // 低速降级（实验特性，默认关闭）：与创建 schema 同形，见那里的说明。
     slow_rate_monitor_enabled: z.boolean().optional(),
+    // 单位同创建 schema（分钟 / 天 / 0-1 小数）。
     slow_rate_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_baseline_window_seconds: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_min_samples: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_trigger_count: z.coerce.number().int().min(0).nullable().optional(),
-    slow_rate_ratio_per_mille: z.coerce.number().int().min(0).max(1000).nullable().optional(),
+    slow_rate_ratio_per_mille: z.coerce.number().min(0).max(1).nullable().optional(),
     slow_rate_penalty_step: z.coerce.number().int().min(0).nullable().optional(),
     slow_rate_penalty_max: z.coerce.number().int().min(0).nullable().optional(),
+    // 恢复策略阈值（默认 10）。
+    slow_rate_recovery_requests: z.coerce.number().int().min(0).nullable().optional(),
     // 首字后停滞探测阈值：null = 不探测（机制关闭）。
     slow_rate_probe_after_first_byte_seconds: z.coerce.number().int().min(0).nullable().optional(),
     max_retry_attempts: z.coerce

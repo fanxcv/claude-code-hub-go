@@ -196,18 +196,19 @@ func (p *Pools) SlowRateScopeRates(
 //
 // 参数列可空（B1 的迁移：NULL 表示取代码默认值），故一律用指针；调用方负责回落默认值。
 type SlowRateProviderConfig struct {
-	ProviderID    int64
-	MinSamples    *int
-	RatioPerMille *int
-	// WindowSeconds 是 **B2 判定滑窗**的长度（秒）：慢样本 ZSET 保留多久、状态键 TTL 多久。
+	ProviderID int64
+	MinSamples *int
+	// Ratio 是低速系数（0-1 小数，默认 0.3）。旧列 slow_rate_ratio_per_mille 已废弃。
+	Ratio *float64
+	// WindowMinutes 是 **B2 判定滑窗**的长度（**分钟**）：慢样本 ZSET 保留多久、状态键 TTL 多久。
 	//
 	// 它**不是**基线主窗——两者尺度差三个数量级（分钟 vs 天），共用一列会让「用户把判定窗调成
 	// 30 分钟」顺带把基线打坏（生产实证：wb 设 1800 后 B3 改按 30 分钟聚合，样本凑不齐
 	// min_samples，基线落到扩展窗并降级为 extended_stale，渠道级降权静默失效）。故拆列。
-	WindowSeconds *int
-	// BaselineWindowSeconds 是 **B3 基线主窗 W1** 的长度（秒）：从 message_request 聚合多长
-	// 历史来算中位数。NULL/非正回落 slowRateBaselineW1Span（3 天）。
-	BaselineWindowSeconds *int
+	WindowMinutes *int
+	// BaselineWindowDays 是 **B3 基线主窗 W1** 的长度（**天**）：从 message_request 聚合多长
+	// 历史来算中位数。NULL/非正回落 slowRateBaselineW1Days（3 天）。
+	BaselineWindowDays *int
 }
 
 // SlowRateEnabledProviders 读回**已开启低速监控且未软删**的渠道及其参数覆写。
@@ -219,8 +220,8 @@ func (p *Pools) SlowRateEnabledProviders(ctx context.Context) ([]SlowRateProvide
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id, slow_rate_min_samples, slow_rate_ratio_per_mille, slow_rate_window_seconds,
-		slow_rate_baseline_window_seconds
+	query := `SELECT id, slow_rate_min_samples, slow_rate_ratio, slow_rate_window_minutes,
+		slow_rate_baseline_window_days
 	FROM providers
 	WHERE deleted_at IS NULL
 		AND is_enabled = true
@@ -236,7 +237,7 @@ func (p *Pools) SlowRateEnabledProviders(ctx context.Context) ([]SlowRateProvide
 	out := make([]SlowRateProviderConfig, 0, 8)
 	for rows.Next() {
 		var item SlowRateProviderConfig
-		if err := rows.Scan(&item.ProviderID, &item.MinSamples, &item.RatioPerMille, &item.WindowSeconds, &item.BaselineWindowSeconds); err != nil {
+		if err := rows.Scan(&item.ProviderID, &item.MinSamples, &item.Ratio, &item.WindowMinutes, &item.BaselineWindowDays); err != nil {
 			return nil, fmt.Errorf("store: 读取低速监控渠道行失败: %w", err)
 		}
 		out = append(out, item)

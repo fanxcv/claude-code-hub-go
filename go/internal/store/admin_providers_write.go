@@ -81,13 +81,17 @@ var adminProviderWriteFields = []adminProviderWriteField{
 	{"mcp_passthrough_url", "mcp_passthrough_url", providerNullableTextKind},
 	{"protocol_conversion_enabled", "protocol_conversion_enabled", providerBoolKind},
 	{"slow_rate_monitor_enabled", "slow_rate_monitor_enabled", providerBoolKind},
-	{"slow_rate_window_seconds", "slow_rate_window_seconds", providerNullableIntKind},
-	{"slow_rate_baseline_window_seconds", "slow_rate_baseline_window_seconds", providerNullableIntKind},
+	// 低速降级：**payload 名沿旧**（用户 2026-09-22 裁决：REST 字段名不变），只把列名换成新单位。
+	{"slow_rate_window_seconds", "slow_rate_window_minutes", providerNullableIntKind},
+	{"slow_rate_baseline_window_seconds", "slow_rate_baseline_window_days", providerNullableIntKind},
 	{"slow_rate_min_samples", "slow_rate_min_samples", providerNullableIntKind},
 	{"slow_rate_trigger_count", "slow_rate_trigger_count", providerNullableIntKind},
-	{"slow_rate_ratio_per_mille", "slow_rate_ratio_per_mille", providerNullableIntKind},
+	// 系数是 numeric(5,4) 的 0-1 小数，故用 numeric 型（Go 值 *float64），与 cost_multiplier 同型。
+	{"slow_rate_ratio_per_mille", "slow_rate_ratio", providerNumericKind},
 	{"slow_rate_penalty_step", "slow_rate_penalty_step", providerNullableIntKind},
 	{"slow_rate_penalty_max", "slow_rate_penalty_max", providerNullableIntKind},
+	// 恢复策略阈值是新字段（无旧名可用），payload 与列同名。
+	{"slow_rate_recovery_requests", "slow_rate_recovery_requests", providerNullableIntKind},
 	// 探测阈值：NULL = 不探测（机制关闭）。不得有 DEFAULT（见 0130 迁移的契约测试）。
 	{"slow_rate_probe_after_first_byte_seconds", "slow_rate_probe_after_first_byte_seconds", providerNullableIntKind},
 	{"limit_5h_usd", "limit_5h_usd", providerNumericKind},

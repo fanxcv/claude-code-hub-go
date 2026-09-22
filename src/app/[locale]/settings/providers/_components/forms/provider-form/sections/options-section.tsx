@@ -947,14 +947,15 @@ export function OptionsSection({ subSectionRefs }: OptionsSectionProps) {
                                 slowRateRatioPerMille:
                                   e.target.value === ""
                                     ? null
-                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
+                                    : Math.min(1, Math.max(0, parseFloat(e.target.value) || 0)),
                               },
                             })
                           }
                           placeholder={t("sections.routing.slowRate.ratioPerMille.placeholder")}
                           disabled={state.ui.isPending}
                           min="0"
-                          step="1"
+                          max="1"
+                          step="0.01"
                         />
                       </SmartInputWrapper>
 
@@ -1036,6 +1037,32 @@ export function OptionsSection({ subSectionRefs }: OptionsSectionProps) {
                           placeholder={t(
                             "sections.routing.slowRate.probeAfterFirstByteSeconds.placeholder"
                           )}
+                          disabled={state.ui.isPending}
+                          min="0"
+                          step="1"
+                        />
+                      </SmartInputWrapper>
+
+                      <SmartInputWrapper
+                        label={t("sections.routing.slowRate.recoveryRequests.label")}
+                        description={t("sections.routing.slowRate.recoveryRequests.desc")}
+                      >
+                        <Input
+                          id={isEdit ? "edit-slow-rate-recovery" : "slow-rate-recovery"}
+                          type="number"
+                          value={state.routing.slowRateRecoveryRequests ?? ""}
+                          onChange={(e) =>
+                            dispatch({
+                              type: "SET_SLOW_RATE_PARAMS",
+                              payload: {
+                                slowRateRecoveryRequests:
+                                  e.target.value === ""
+                                    ? null
+                                    : Math.max(0, parseInt(e.target.value, 10) || 0),
+                              },
+                            })
+                          }
+                          placeholder={t("sections.routing.slowRate.recoveryRequests.placeholder")}
                           disabled={state.ui.isPending}
                           min="0"
                           step="1"

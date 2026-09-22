@@ -22,15 +22,17 @@ func (s stubProviderSource) SlowRateProvider(context.Context, int64) (ProviderCo
 
 func intPtr(value int) *int { return &value }
 
+func floatPtr(value float64) *float64 { return &value }
+
 // TestSlowRateConfigCarriesOnlyTerminalParams 钉住探测阈值不进 Params。
 func TestSlowRateConfigCarriesOnlyTerminalParams(t *testing.T) {
 	config := NewSnapshotConfig(stubProviderSource{
 		found: true,
 		config: ProviderConfig{
 			Enabled:                    true,
-			WindowSeconds:              intPtr(1800),
+			WindowMinutes:              intPtr(30),
 			TriggerCount:               intPtr(3),
-			RatioPerMille:              intPtr(300),
+			Ratio:                      floatPtr(0.3),
 			PenaltyStep:                intPtr(10),
 			PenaltyMax:                 intPtr(30),
 			ProbeAfterFirstByteSeconds: intPtr(30),
@@ -41,7 +43,7 @@ func TestSlowRateConfigCarriesOnlyTerminalParams(t *testing.T) {
 	if !ok {
 		t.Fatal("已开启的渠道应返回 ok=true")
 	}
-	if params.WindowSeconds != 1800 || params.TriggerCount != 3 || params.RatioPerMille != 300 {
+	if params.WindowMinutes != 30 || params.TriggerCount != 3 || params.Ratio != 0.3 {
 		t.Errorf("终态参数未按列投影: %+v", params)
 	}
 }

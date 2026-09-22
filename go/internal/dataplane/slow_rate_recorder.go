@@ -110,8 +110,7 @@ func (s *providerSlowRateSource) SlowRateProvider(ctx context.Context, providerI
 		return entry.config, entry.exists
 	}
 	row, err := s.providers.FindProviderByID(ctx, providerID)
-	if err != nil {
-		// ErrNotFound 是**稳定的负结果**（行确实不存在），不是故障：与「查到了但没开监控」
+	if err != nil { // ErrNotFound 是**稳定的负结果**（行确实不存在），不是故障：与「查到了但没开监控」
 		// 同档，必须进缓存。漏了这一档的后果是双重的——不存在的 providerID 每条终态都回查
 		// 一次库，且每次刷一条 slow_rate_config_lookup_failed，把真故障淹在噪音里。
 		if errors.Is(err, store.ErrNotFound) {
@@ -136,11 +135,13 @@ func (s *providerSlowRateSource) SlowRateProvider(ctx context.Context, providerI
 		exists: true,
 		config: slowrate.ProviderConfig{
 			Enabled:       row.SlowRateMonitorEnabled,
-			WindowSeconds: row.SlowRateWindowSeconds,
+			WindowMinutes: row.SlowRateWindowMinutes,
 			TriggerCount:  row.SlowRateTriggerCount,
-			RatioPerMille: row.SlowRateRatioPerMille,
+			Ratio:         row.SlowRateRatio,
 			PenaltyStep:   row.SlowRatePenaltyStep,
 			PenaltyMax:    row.SlowRatePenaltyMax,
+			// 恢复阈值列：本包只透传（同 ProbeAfterFirstByteSeconds），判定在 slowrate 写入器。
+			RecoveryRequests: row.SlowRateRecoveryRequests,
 			// 探测阈值列：本包只透传，接线与判定在 forward/gate 侧。
 			ProbeAfterFirstByteSeconds: row.SlowRateProbeAfterFirstByteSeconds,
 		},

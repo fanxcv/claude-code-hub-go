@@ -142,20 +142,22 @@ func TestMedianRateEmpty(t *testing.T) {
 	}
 }
 
-// TestSlowLineRatioIsPerMille 钉住「系数是千分比整数」只有一处定义（默认 300 = 0.3）。
+// TestSlowLineRatioIsFraction 钉住「系数是 0-1 小数」只有一处定义（默认 0.3）。
 //
 // wb 验算：历史中位 239.7 × 0.3 ≈ 71.9 tok/s（系数原为 0.2 时的 47.9 见设计稿 §3，
-// 用户 2026-09-21 上调到 0.3 以收紧低速判定）。
-func TestSlowLineRatioIsPerMille(t *testing.T) {
-	if got := SlowLine(241.1, 200); math.Abs(got-48.22) > 1e-6 {
-		t.Fatalf("SlowLine(241.1, 200) = %v，期望 48.22", got)
+// 用户 2026-09-21 上调到 0.3 以收紧低速判定；2026-09-22 由千分比改为小数）。
+func TestSlowLineRatioIsFraction(t *testing.T) {
+	if got := SlowLine(241.1, 0.2); math.Abs(got-48.22) > 1e-6 {
+		t.Fatalf("SlowLine(241.1, 0.2) = %v，期望 48.22", got)
 	}
-	if got := SlowLine(100, 500); math.Abs(got-50) > 1e-9 {
-		t.Fatalf("SlowLine(100, 500) = %v，期望 50", got)
+	if got := SlowLine(100, 0.5); math.Abs(got-50) > 1e-9 {
+		t.Fatalf("SlowLine(100, 0.5) = %v，期望 50", got)
 	}
-	// 非正系数回落默认 300 ⇒ 100 × 0.3 = 30。
-	if got := SlowLine(100, 0); math.Abs(got-30) > 1e-9 {
-		t.Fatalf("SlowLine(100, 0) = %v，期望回落默认后的 30", got)
+	// 非法系数（0 / 负 / >1 / NaN）回落默认 0.3 ⇒ 100 × 0.3 = 30。
+	for _, invalid := range []float64{0, -0.1, 1.5, math.NaN()} {
+		if got := SlowLine(100, invalid); math.Abs(got-30) > 1e-9 {
+			t.Fatalf("SlowLine(100, %v) = %v，期望回落默认后的 30", invalid, got)
+		}
 	}
 }
 
@@ -182,19 +184,19 @@ func TestEffectiveHelpersFallBackOnUnset(t *testing.T) {
 	if got := effectiveMinSamples(nil); got != slowRateBaselineDefaultMinSamples {
 		t.Fatalf("effectiveMinSamples(nil) = %d", got)
 	}
-	if got := effectiveRatioPerMille(nil); got != slowRateBaselineDefaultRatioPerMille {
-		t.Fatalf("effectiveRatioPerMille(nil) = %d", got)
+	if got := effectiveRatio(nil); got != slowRateBaselineDefaultRatio {
+		t.Fatalf("effectiveRatio(nil) = %v", got)
 	}
 	if got := effectiveW1Span(0); got != slowRateBaselineW1Span {
 		t.Fatalf("effectiveW1Span(0) = %v", got)
 	}
 	// 逐渠道覆写要生效。
-	min, ratio := 7, 333
+	min, ratio := 7, 0.45
 	if got := effectiveMinSamples(&min); got != 7 {
 		t.Fatalf("effectiveMinSamples(&7) = %d", got)
 	}
-	if got := effectiveRatioPerMille(&ratio); got != 333 {
-		t.Fatalf("effectiveRatioPerMille(&333) = %d", got)
+	if got := effectiveRatio(&ratio); got != 0.45 {
+		t.Fatalf("effectiveRatio(&0.45) = %v", got)
 	}
 	// 非正值一律回落（0 与负值都是「没设」的等价写法）。
 	zero := 0
@@ -206,26 +208,26 @@ func TestEffectiveHelpersFallBackOnUnset(t *testing.T) {
 // TestGroupProviderConfigsByWindow 钉住「按基线窗口长度分组」——基线窗逐渠道可覆写，
 // 而窗口边界进的是同一条计数查询，故必须先分组再查：同组共用一个 w1Start。
 //
-// 注意：分组只看 slow_rate_baseline_window_seconds，**不看**判定滑窗
-// （slow_rate_window_seconds）。两者曾共用一列，导致「调判定窗打坏基线」；
+// 注意：分组只看 slow_rate_baseline_window_days（单位天），**不看**判定滑窗
+// （slow_rate_window_minutes）。两者曾共用一列，导致「调判定窗打坏基线」；
 // 该缺陷的专项回归见 slowrate_window_split_test.go。
 func TestGroupProviderConfigsByWindow(t *testing.T) {
-	short := 600
+	short := 2 // 2 天
 	configs := []store.SlowRateProviderConfig{
 		{ProviderID: 1}, // 默认窗
 		{ProviderID: 2}, // 默认窗
-		{ProviderID: 3, BaselineWindowSeconds: &short}, // 覆写为 600s
+		{ProviderID: 3, BaselineWindowDays: &short}, // 覆写为 2 天
 	}
 	groups := groupProviderConfigsByWindow(configs)
 	if len(groups) != 2 {
 		t.Fatalf("应分成 2 组，实得 %d 组：%v", len(groups), groups)
 	}
-	defaultWindow := int(slowRateBaselineW1Span / time.Second)
+	defaultWindow := slowRateBaselineW1Days
 	if len(groups[defaultWindow]) != 2 {
 		t.Fatalf("默认窗组应有 2 个渠道，实得 %d", len(groups[defaultWindow]))
 	}
-	if len(groups[600]) != 1 {
-		t.Fatalf("600s 组应有 1 个渠道，实得 %d", len(groups[600]))
+	if len(groups[2]) != 1 {
+		t.Fatalf("2 天组应有 1 个渠道，实得 %d", len(groups[2]))
 	}
 
 	// providerIDsOf 必须把组内 ID 原样带出（计数查询的入参）。
@@ -236,16 +238,18 @@ func TestGroupProviderConfigsByWindow(t *testing.T) {
 
 	// 非正覆写回落默认窗（与「没设」同义）。
 	zero := 0
-	fallback := groupProviderConfigsByWindow([]store.SlowRateProviderConfig{{ProviderID: 9, BaselineWindowSeconds: &zero}})
+	fallback := groupProviderConfigsByWindow([]store.SlowRateProviderConfig{{ProviderID: 9, BaselineWindowDays: &zero}})
 	if len(fallback[defaultWindow]) != 1 {
 		t.Fatalf("基线窗 0 应回落默认窗，实得 %v", fallback)
 	}
 }
 
 // TestEffectiveW1SpanHonorsOverride 钉住窗口长度覆写真的生效（不只是分组）。
+//
+// 入参单位是**天**（列 slow_rate_baseline_window_days）。
 func TestEffectiveW1SpanHonorsOverride(t *testing.T) {
-	if got := effectiveW1Span(600); got != 10*time.Minute {
-		t.Fatalf("effectiveW1Span(600) = %v，期望 10m", got)
+	if got := effectiveW1Span(2); got != 48*time.Hour {
+		t.Fatalf("effectiveW1Span(2) = %v，期望 48h", got)
 	}
 	if got := effectiveW1Span(-1); got != slowRateBaselineW1Span {
 		t.Fatalf("effectiveW1Span(-1) = %v，期望回落默认", got)

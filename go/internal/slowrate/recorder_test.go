@@ -230,9 +230,9 @@ func TestGenerationRateMatchesRollupFormula(t *testing.T) {
 	}
 }
 
-// TestIsSlowUsesBaselineTimesRatio 钉住低速线口径：基线 × 系数（千分比）。
+// TestIsSlowUsesBaselineTimesRatio 钉住低速线口径：基线 × 系数（0-1 小数）。
 func TestIsSlowUsesBaselineTimesRatio(t *testing.T) {
-	params := Params{RatioPerMille: 200} // 低速线 = 基线 × 0.2
+	params := Params{Ratio: 0.2} // 低速线 = 基线 × 0.2
 	if !isSlow(79, 400, params) {
 		t.Fatal("79 < 400×0.2=80，应判为低速")
 	}
@@ -255,27 +255,23 @@ func TestNormalizeFillsDefaults(t *testing.T) {
 }
 
 // TestDefaultParamsWindowAndRatio 钉住用户 2026-09-21 定的两个出厂默认：
-// 判定滑窗 30 分钟、系数 0.3。
+// 判定滑窗 30 分钟、系数 0.3。单位由用户 2026-09-22 改为**分钟**与 **0-1 小数**。
 //
 // 为何单列一条：这两个数是**产品口径**，改动会让全网渠道的降权敏感度变化；
 // 混在上面的 normalize 用例里，改错时错误信息指向的是「零值收敛」而不是具体数字。
 func TestDefaultParamsWindowAndRatio(t *testing.T) {
 	def := DefaultParams()
-	if def.WindowSeconds != 1800 {
-		t.Fatalf("判定滑窗默认 %d 秒，应为 1800（30 分钟）", def.WindowSeconds)
+	if def.WindowMinutes != 30 {
+		t.Fatalf("判定滑窗默认 %d 分钟，应为 30", def.WindowMinutes)
 	}
-	if def.RatioPerMille != 300 {
-		t.Fatalf("系数默认 %d，应为 300（0.3）", def.RatioPerMille)
+	if def.Ratio != 0.3 {
+		t.Fatalf("系数默认 %v，应为 0.3", def.Ratio)
 	}
 	// normalize 是「NULL 列 → 出厂默认」的唯一收敛点；零值必须收敛到**新**默认，
-	// 而不是残留的旧字面量（600 / 200）。
+	// 而不是残留的旧字面量。
 	normalized := Params{}.normalize()
-	if normalized.WindowSeconds != 1800 || normalized.RatioPerMille != 300 {
-		t.Fatalf("normalize() 收敛到 %d/‰%d，应为 1800/‰300", normalized.WindowSeconds, normalized.RatioPerMille)
-	}
-	// 反面：旧的出厂值不得再出现（否则说明只改了 DefaultParams 而 normalize 另有硬编码）。
-	if normalized.WindowSeconds == 600 || normalized.RatioPerMille == 200 {
-		t.Fatal("仍收敛到旧默认（600s / 200‰）")
+	if normalized.WindowMinutes != 30 || normalized.Ratio != 0.3 {
+		t.Fatalf("normalize() 收敛到 %d 分钟/%v，应为 30/0.3", normalized.WindowMinutes, normalized.Ratio)
 	}
 }
 
@@ -305,7 +301,7 @@ func TestBaselineUndecodableIsFailOpen(t *testing.T) {
 
 // TestSamplingSkipsWhenRateAboveLine：速率高于低速线的样本不写（判据 4 的反面）。
 func TestSamplingSkipsWhenRateAboveLine(t *testing.T) {
-	params := Params{TriggerCount: 3, RatioPerMille: 200}
+	params := Params{TriggerCount: 3, Ratio: 0.2}
 	// 基线 100，低速线 20；样本速率 200 远高于线。
 	if isSlow(200, 100, params) {
 		t.Fatal("高速样本不该判为低速")
@@ -331,19 +327,18 @@ func (p *sourceStubProvider) SlowRateProvider(_ context.Context, _ int64) (Provi
 // slow_rate_min_samples（或干脆写死常量 3）取值，功能看似照跑，而配置面完全失效——
 // 这正是「加了列但没人读」会静默通过的那类缺陷。
 //
-// 断言方式：给一个**非默认**的 TriggerCount（7）与一个同样非默认的旧列值（100），
-// 验算出来的 Params.TriggerCount 必须是 7 而非 3、也非 100。
+// 断言方式：给一个**非默认**的 TriggerCount（7）与一个非默认的 Ratio（0.7），
+// 验算出来的 Params.TriggerCount 必须是 7 而非 3（写死常量会得 3）。
 func TestTriggerCountComesFromColumnNotConstant(t *testing.T) {
 	seven := 7
-	hundred := 100
 	source := &sourceStubProvider{
 		found: true,
 		config: ProviderConfig{
 			Enabled: true,
 			// 新列（本次新增）：触发阈值。
 			TriggerCount: &seven,
-			// 旧列（基线样本下限）：实现若误读它，验算结果会是 100。
-			RatioPerMille: &hundred,
+			// 同时给一个非默认系数，防实现两者搞混。
+			Ratio: floatPtr(0.7),
 		},
 	}
 	config := NewSnapshotConfig(source)
@@ -356,7 +351,10 @@ func TestTriggerCountComesFromColumnNotConstant(t *testing.T) {
 	}
 	if params.TriggerCount != 7 {
 		t.Fatalf("TriggerCount: 得到 %d，期望 7（须取自 slow_rate_trigger_count 列，"+
-			"若为 3 说明写死了常量，若为 100 说明误读了基线样本下限列）", params.TriggerCount)
+			"若为 3 说明写死了常量）", params.TriggerCount)
+	}
+	if params.Ratio != 0.7 {
+		t.Fatalf("Ratio: 得到 %v，期望 0.7（须取自 slow_rate_ratio 列）", params.Ratio)
 	}
 }
 
@@ -390,15 +388,16 @@ func TestProviderConfigIgnoresBaselineFloorColumn(t *testing.T) {
 		found: true,
 		config: ProviderConfig{
 			Enabled: true,
-			// 只给旧列语义的值：本包不读它，故验算出的其他参数应为默认。
-			WindowSeconds: &hundred,
+			// 只给旧列语义的值（基线样本下限 100）经新列 WindowMinutes 传入：
+			// 本包不读 min_samples，故验算出的其它参数应为默认。
+			WindowMinutes: &hundred,
 		},
 	}
 	config := NewSnapshotConfig(source)
 	params, _ := config.SlowRateConfig(context.Background(), 167)
-	// WindowSeconds 会取该值（它确实是本包的列），但 TriggerCount 不会受它影响。
-	if params.WindowSeconds != 100 {
-		t.Fatalf("WindowSeconds: 得到 %d，期望 100", params.WindowSeconds)
+	// WindowMinutes 会取该值（它确实是本包的列），但 TriggerCount 不会受它影响。
+	if params.WindowMinutes != 100 {
+		t.Fatalf("WindowMinutes: 得到 %d，期望 100", params.WindowMinutes)
 	}
 	if params.TriggerCount != 0 {
 		t.Fatalf("TriggerCount 不应受基线样本下限列影响，得到 %d", params.TriggerCount)

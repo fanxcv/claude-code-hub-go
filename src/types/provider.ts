@@ -371,18 +371,23 @@ export interface Provider {
   disableSessionReuse: boolean;
   // 低速降级（实验特性，默认关闭）：仅开启的供应商参与低速监控。
   slowRateMonitorEnabled: boolean;
-  // 参数列可空，null = 取代码默认值（30m / 3 天 / 100 条 / 3 次 / 300‰ / 10 / 30）。
+  // 参数列可空，null = 取代码默认值（30 分钟 / 3 天 / 100 条 / 3 次 / 0.3 / 10 / 30 / 10）。
   // minSamples 是基线样本下限（默认 100）；triggerCount 是触发阈值（默认 3）。两列语义不同。
-  // windowSeconds 是**判定滑窗**（默认 1800s）；baselineWindowSeconds 是**基线主窗**（默认 3 天）。
-  // 两者尺度差三个数量级（分钟 vs 天），曾是同一列，故拆开。
+  //
+  // **单位（用户 2026-09-22 改）**：windowSeconds 存的是**分钟**（默认 30）；
+  // baselineWindowSeconds 存的是**天**（默认 3）；ratioPerMille 存的是 **0-1 小数**（默认 0.3）。
+  // 字段名保留旧形（REST 契约不破坏），但**名字与单位已不符**——改名会断外部调用方，故只在
+  // 注释与 UI 文案里标明真实单位。两者尺度差三个数量级（分钟 vs 天），曾是同一列，故拆开。
   slowRateWindowSeconds: number | null;
   slowRateBaselineWindowSeconds: number | null;
   slowRateMinSamples: number | null;
   slowRateTriggerCount: number | null;
-  // 千分比：300 = 0.3
+  // 0-1 小数（字段名沿旧 per-mille 形制，值不再乘 1000）
   slowRateRatioPerMille: number | null;
   slowRatePenaltyStep: number | null;
   slowRatePenaltyMax: number | null;
+  // 恢复策略阈值：连续这么多个可判定请求都不慢即重置降权（默认 10）。
+  slowRateRecoveryRequests: number | null;
   // 首字后停滞探测阈值 T（秒）：null = 不探测（机制默认关闭）。
   slowRateProbeAfterFirstByteSeconds: number | null;
   modelRedirects: ProviderModelRedirectRule[] | null;
@@ -521,6 +526,7 @@ export interface ProviderDisplay {
   disableSessionReuse: boolean;
   // 低速降级（实验特性，默认关闭）
   slowRateMonitorEnabled: boolean;
+  // 单位同 Provider 侧：windowSeconds 存分钟、baselineWindowSeconds 存天、ratioPerMille 存 0-1 小数。
   slowRateWindowSeconds: number | null;
   slowRateBaselineWindowSeconds: number | null;
   slowRateMinSamples: number | null;
@@ -528,6 +534,8 @@ export interface ProviderDisplay {
   slowRateRatioPerMille: number | null;
   slowRatePenaltyStep: number | null;
   slowRatePenaltyMax: number | null;
+  // 恢复策略阈值（默认 10）。
+  slowRateRecoveryRequests: number | null;
   // 首字后停滞探测阈值：null = 不探测。
   slowRateProbeAfterFirstByteSeconds: number | null;
   modelRedirects: ProviderModelRedirectRule[] | null;

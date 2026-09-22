@@ -151,18 +151,22 @@ export const ProviderSummarySchema = z
       .string()
       .nullable()
       .describe("Gemini Google Search preference."),
+    // 低速降级：字段名沿旧（用户 2026-09-22 裁决：改名会断外部调用方），但**单位已改**。
+    // 描述里逐条写明真实单位，因为字段名与单位已不符（windowSeconds 存的是分钟）。
     slowRateMonitorEnabled: z.boolean().describe("Slow rate demotion enabled for this provider."),
     slowRateWindowSeconds: z
       .number()
       .int()
       .nullable()
-      .describe("Slow rate sampling (decision) window in seconds; null uses the default of 1800."),
+      .describe(
+        "Slow rate sampling (decision) window in MINUTES (field name kept for backward compatibility; null uses the default of 30)."
+      ),
     slowRateBaselineWindowSeconds: z
       .number()
       .int()
       .nullable()
       .describe(
-        "Baseline aggregation window in seconds; null uses the default of 259200 (3 days). Only affects the baseline median window, not the decision window."
+        "Baseline aggregation window in DAYS (field name kept for backward compatibility; null uses the default of 3). Only affects the baseline median window, not the decision window."
       ),
     slowRateMinSamples: z
       .number()
@@ -176,9 +180,10 @@ export const ProviderSummarySchema = z
       .describe("Slow samples within the window before demotion kicks in; null uses the default."),
     slowRateRatioPerMille: z
       .number()
-      .int()
       .nullable()
-      .describe("Slow threshold ratio per mille (300 = 0.3); null uses the default."),
+      .describe(
+        "Slow threshold ratio as a 0-1 fraction (field name kept for backward compatibility; 0.3 means below 30% of the baseline; null uses the default of 0.3)."
+      ),
     slowRatePenaltyStep: z
       .number()
       .int()
@@ -189,6 +194,13 @@ export const ProviderSummarySchema = z
       .int()
       .nullable()
       .describe("Upper bound on added priority; null uses the default."),
+    slowRateRecoveryRequests: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        "Consecutive judgeable requests that are all not slow before the demotion resets; null uses the default of 10."
+      ),
     slowRateProbeAfterFirstByteSeconds: z
       .number()
       .int()

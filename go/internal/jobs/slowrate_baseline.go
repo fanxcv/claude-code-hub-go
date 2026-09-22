@@ -45,7 +45,11 @@ const (
 	SlowRateBaselineKeyTTL = 7 * 24 * time.Hour
 
 	// slowRateBaselineW1Span 是主窗长度（设计稿 §3：默认 3 天）。
-	slowRateBaselineW1Span = 3 * 24 * time.Hour
+	//
+	// 单位是**天**（用户 2026-09-22 裁决基线窗改天：列 slow_rate_baseline_window_days），
+	// 故 W1Days 是那个天数的默认值，本常量由它折算（见 effectiveW1Span）。
+	slowRateBaselineW1Days = 3
+	slowRateBaselineW1Span = slowRateBaselineW1Days * 24 * time.Hour
 
 	// slowRateBaselineW2Span 是扩展窗的**下界**跨度（设计稿 §3：now-30d 到 now-3d）。
 	//
@@ -68,11 +72,12 @@ const (
 	// 此时发布 extended_stale 基线只供会话级降级用。
 	slowRateBaselineStaleFloorSamples = 10
 
-	// slowRateBaselineDefaultRatioPerMille 是低速线系数的默认值（设计稿 §3 原为 0.2，
+	// slowRateBaselineDefaultRatio 是低速线系数的默认值（设计稿 §3 原为 0.2，
 	// 用户 2026-09-21 改为 0.3）。
 	//
-	// 用千分比整数存（300 = 0.3），与 providers 表的 *_per_mille 列同形（B1）。
-	slowRateBaselineDefaultRatioPerMille = 300
+	// 单位是 **0-1 小数**（用户 2026-09-22 裁决，与 providers 表 slow_rate_ratio 列同形）；
+	// 旧版本用千分比整数（300），见 0134 迁移。
+	slowRateBaselineDefaultRatio = 0.3
 
 	// slowRateBaselineSampleCeiling 是单个 scope 拉取样本行的上限。
 	//
@@ -525,7 +530,7 @@ func (b *SlowRateBaseline) writeBaseline(
 		Samples:    samples,
 		ComputedAt: now.UnixMilli(),
 		Source:     source,
-		SlowLine:   SlowLine(median, effectiveRatioPerMille(config.RatioPerMille)),
+		SlowLine:   SlowLine(median, effectiveRatio(config.Ratio)),
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
@@ -611,14 +616,18 @@ func MedianRate(values []float64) float64 {
 	return (sorted[mid-1] + sorted[mid]) / 2
 }
 
-// SlowLine 返回低速线 = 基线 × 系数（系数以千分比整数给出，200 = 0.2）。
+// SlowLine 返回低速线 = 基线 × 系数（系数是 0-1 小数，默认 0.3）。
 //
-// 单独成函数是为了让「系数是千分比」这件事只有一处定义：调用方与测试都不必各自 /1000。
-func SlowLine(median float64, ratioPerMille int) float64 {
-	if ratioPerMille <= 0 {
-		ratioPerMille = slowRateBaselineDefaultRatioPerMille
+// 单独成函数是为了让「系数怎么乘」只有一处定义：调用方与测试都不必各自乘一遍。
+//
+// **它与 slowrate.isSlow 各写一遍这个乘法**（两边都是 `基线 × 系数`），改单位时必须同时改：
+// 只改一处会让两侧判定的低速线差 1000 倍且**静默**——B2 写的 SlowLine 与 B4 读的基线同源，
+// 错的那一侧会让判定恒真或恒假，不报任何错。
+func SlowLine(median float64, ratio float64) float64 {
+	if !(ratio > 0 && ratio <= 1) {
+		ratio = slowRateBaselineDefaultRatio
 	}
-	return median * float64(ratioPerMille) / 1000
+	return median * ratio
 }
 
 // groupProviderConfigsByWindow 按「有效基线窗口长度」把渠道分组。
@@ -626,16 +635,16 @@ func SlowLine(median float64, ratioPerMille int) float64 {
 // 窗口长度是逐渠道可覆写的，而窗口边界进的是同一条计数查询，故必须先分组再查：
 // 同一组共用一个 w1Start。默认全用同一值时只有一组。
 //
-// **只读 BaselineWindowSeconds**：判定滑窗（WindowSeconds）与本窗尺度不同（分钟 vs 天），
+// **只读 BaselineWindowDays**：判定滑窗（WindowMinutes）与本窗尺度不同（分钟 vs 天），
 // 历史上共用 slow_rate_window_seconds 一列导致「调判定窗打坏基线」（见 store.SlowRateProviderConfig）。
 func groupProviderConfigsByWindow(configs []store.SlowRateProviderConfig) map[int][]store.SlowRateProviderConfig {
 	out := make(map[int][]store.SlowRateProviderConfig)
 	for _, config := range configs {
-		seconds := int(slowRateBaselineW1Span / time.Second)
-		if config.BaselineWindowSeconds != nil && *config.BaselineWindowSeconds > 0 {
-			seconds = *config.BaselineWindowSeconds
+		days := slowRateBaselineW1Days
+		if config.BaselineWindowDays != nil && *config.BaselineWindowDays > 0 {
+			days = *config.BaselineWindowDays
 		}
-		out[seconds] = append(out[seconds], config)
+		out[days] = append(out[days], config)
 	}
 	return out
 }
@@ -651,12 +660,12 @@ func providerIDsOf(configs []store.SlowRateProviderConfig) []int64 {
 
 // effectiveW1Span 是主窗（基线）的有效长度（0 或负值回落默认 3 天）。
 //
-// 入参是**基线窗**取值（slow_rate_baseline_window_seconds），不是判定滑窗。
-func effectiveW1Span(windowSeconds int) time.Duration {
-	if windowSeconds <= 0 {
+// 入参是**基线窗的千数**（slow_rate_baseline_window_days），不是判定滑窗。
+func effectiveW1Span(windowDays int) time.Duration {
+	if windowDays <= 0 {
 		return slowRateBaselineW1Span
 	}
-	return time.Duration(windowSeconds) * time.Second
+	return time.Duration(windowDays) * 24 * time.Hour
 }
 
 // effectiveMinSamples 是有效样本下限（nil 或非正值回落默认 100）。
@@ -667,10 +676,13 @@ func effectiveMinSamples(value *int) int {
 	return *value
 }
 
-// effectiveRatioPerMille 是有效系数（nil 或非正值回落默认 300，即 0.3）。
-func effectiveRatioPerMille(value *int) int {
-	if value == nil || *value <= 0 {
-		return slowRateBaselineDefaultRatioPerMille
+// effectiveRatio 是有效系数（nil 或不在 (0,1] 内回落默认 0.3）。
+//
+// 闸门写成**正向合取**而不是 `<= 0`：小数域里 NaN 与任何值比较都为假，用 `<= 0` 会放过它，
+// 一路乘进低速线使判定静默恒假（与 slowrate.Params.normalize 同口径）。
+func effectiveRatio(value *float64) float64 {
+	if value == nil || !(*value > 0 && *value <= 1) {
+		return slowRateBaselineDefaultRatio
 	}
 	return *value
 }
