@@ -167,6 +167,11 @@ export interface SystemSettings {
   // 不可指纹化的请求仍走会话复用。它是**模式**开关，关不掉亲和本身（那是 affinityEnabled）
   affinityIgnoreClientSessionId: boolean;
 
+  // 供应商实时并发统计开关（默认关闭）
+  // 开启后：供应商页面每 5s 拉一次各渠道的实时并发数并展示；关闭时写侧零 Redis 开销、
+  // 读侧不查计数键、本页也不轮询（完全等于该特性不存在）
+  providerLiveStatsEnabled: boolean;
+
   // F2 Replay（响应缓存与上游连接复用）开关覆写
   // null = 跟随环境变量 ENABLE_REQUEST_REPLAY（默认 true）
   replayEnabled: boolean | null;
@@ -309,6 +314,9 @@ export interface UpdateSystemSettingsInput {
 
   // 忽略客户端 Session ID（可选）
   affinityIgnoreClientSessionId?: boolean;
+
+  // 供应商实时并发统计开关（可选）
+  providerLiveStatsEnabled?: boolean;
 
   // F2 Replay 开关（可选；null = 清除覆写跟随环境变量）
   replayEnabled?: boolean | null;

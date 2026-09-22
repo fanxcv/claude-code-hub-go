@@ -1,0 +1,16 @@
+-- 日期: 2026-09-22
+-- 功能: 供应商实时并发统计的全局开关
+--
+-- 为什么加列：需求是「实时统计每个渠道的并发数并在供应商页面展示，做成可选开关——打开才统计
+-- 显示、每 5s 刷新、关上完全不占用资源」。开关取**全局**粒度（用户裁决）：落 system_settings
+-- 可复用现成的管理面读写与设置页表单（legacy_hedge_max_in_flight 是同一张表上的完整先例），
+-- 且不碰 providers 写面（同一批另两条 lane 的热点文件）。
+--
+-- 默认 false 是**行为不变**的关键：关闭时写侧在入口即返回、连一条 Redis 命令都不发，
+-- 读侧同样不查计数键，前端也不轮询 ⇒ 存量部署不打开就等于这个特性不存在。
+--
+-- 单列 boolean、无 CHECK 约束、无回填：新列默认值即期望值，存量行不需要 UPDATE。
+--
+-- 可回滚：
+--   ALTER TABLE "system_settings" DROP COLUMN "provider_live_stats_enabled";
+ALTER TABLE "system_settings" ADD COLUMN "provider_live_stats_enabled" boolean DEFAULT false NOT NULL;

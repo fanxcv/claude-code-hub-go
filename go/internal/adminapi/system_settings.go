@@ -148,11 +148,16 @@ type SystemSettingsBody struct {
 	StreamGateMode               string                        `json:"streamGateMode"`
 	AffinityIgnoreClientSession  bool                          `json:"affinityIgnoreClientSessionId"`
 	AffinityEnabled              bool                          `json:"affinityEnabled"`
-	ReplayEnabled                *bool                         `json:"replayEnabled"`
-	ReplayCacheTTLMinutes        int                           `json:"replayCacheTtlMinutes"`
-	CacheEffectivenessEnabled    *bool                         `json:"cacheEffectivenessEnabled"`
-	CreatedAt                    string                        `json:"createdAt"`
-	UpdatedAt                    string                        `json:"updatedAt"`
+	// ProviderLiveStatsEnabled 是「供应商实时并发统计」的全局开关（默认 false）。
+	//
+	// 加它的理由与读侧同：默认关 = 该特性不存在（写侧零 Redis 命令、前端不轮询），
+	// 故存量部署不打开开关就与加它之前完全同行为。
+	ProviderLiveStatsEnabled  bool   `json:"providerLiveStatsEnabled"`
+	ReplayEnabled             *bool  `json:"replayEnabled"`
+	ReplayCacheTTLMinutes     int    `json:"replayCacheTtlMinutes"`
+	CacheEffectivenessEnabled *bool  `json:"cacheEffectivenessEnabled"`
+	CreatedAt                 string `json:"createdAt"`
+	UpdatedAt                 string `json:"updatedAt"`
 }
 
 // FakeStreamingWhitelistEntry 逐字对应 Node 的 FakeStreamingWhitelistEntry。
@@ -232,6 +237,7 @@ func buildSystemSettingsBody(row *store.AdminSystemSettings, now time.Time) Syst
 		StreamGateMode:               settingsEnumDefault(row.StreamGateMode, "enforce", "off", "shadow", "enforce"),
 		AffinityIgnoreClientSession:  row.AffinityIgnoreClientSession,
 		AffinityEnabled:              row.AffinityEnabled,
+		ProviderLiveStatsEnabled:     row.ProviderLiveStatsEnabled,
 		ReplayEnabled:                row.ReplayEnabled,
 		ReplayCacheTTLMinutes: settingsClampInt(
 			row.ReplayCacheTTLMinutes, replayCacheTTLMinutesMin, replayCacheTTLMinutesMax,
@@ -761,6 +767,7 @@ type systemSettingsUpdate struct {
 	streamGateMode                   *string
 	affinityIgnoreClientSession      *bool
 	affinityEnabled                  *bool
+	providerLiveStatsEnabled         *bool
 	replayEnabled                    *bool
 	replayEnabledPresent             bool
 	replayCacheTTLMinutes            *int
@@ -919,6 +926,9 @@ func (d systemSettingsUpdate) patch() store.AdminSystemSettingsPatch {
 	}
 	if d.affinityEnabled != nil {
 		set(store.ColAffinityEnabled, *d.affinityEnabled)
+	}
+	if d.providerLiveStatsEnabled != nil {
+		set(store.ColProviderLiveStatsEnabled, *d.providerLiveStatsEnabled)
 	}
 	if d.replayEnabledPresent {
 		set(store.ColReplayEnabled, nullableBool(d.replayEnabled))
@@ -1090,6 +1100,7 @@ func decodeSystemSettingsUpdate(
 		"ipGeoLookupEnabled":                           &decoded.ipGeoLookupEnabled,
 		"affinityIgnoreClientSessionId":                &decoded.affinityIgnoreClientSession,
 		"affinityEnabled":                              &decoded.affinityEnabled,
+		"providerLiveStatsEnabled":                     &decoded.providerLiveStatsEnabled,
 		"discoveryEnabled":                             &decoded.discoveryEnabled,
 	}
 	for name, target := range booleans {
@@ -1340,6 +1351,7 @@ var systemSettingsUpdateKeys = map[string]bool{
 	"ipGeoLookupEnabled": true, "publicStatusWindowHours": true,
 	"publicStatusAggregationIntervalMinutes": true, "streamGateMode": true,
 	"affinityIgnoreClientSessionId": true, "affinityEnabled": true, "replayEnabled": true, "replayCacheTtlMinutes": true,
+	"providerLiveStatsEnabled":  true,
 	"cacheEffectivenessEnabled": true,
 }
 

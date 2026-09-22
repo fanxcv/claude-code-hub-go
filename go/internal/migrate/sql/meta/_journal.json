@@ -946,6 +946,13 @@
       "when": 1790012400000,
       "tag": "0134_slow_rate_units_and_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 135,
+      "version": "7",
+      "when": 1790016000000,
+      "tag": "0135_provider_live_stats_switch",
+      "breakpoints": true
     }
   ]
 }

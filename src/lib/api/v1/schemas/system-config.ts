@@ -239,6 +239,11 @@ export const SystemSettingsSchema = z
       .describe(
         "Mode switch: whether fingerprintable requests force longest-prefix affinity for provider stickiness, skipping client session id binding. It does not control whether affinity is enabled at all (see affinityEnabled)."
       ),
+    providerLiveStatsEnabled: z
+      .boolean()
+      .describe(
+        "Global switch for per-provider live concurrency stats. When off (default) the data plane issues no tracking commands at all, the health endpoint omits the concurrency field, and the providers page does not poll, so the feature costs nothing."
+      ),
     replayEnabled: z
       .boolean()
       .nullable()

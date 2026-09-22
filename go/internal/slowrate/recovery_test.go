@@ -73,9 +73,9 @@ func newRecoveryHarness(t *testing.T, providerID int64, recoveryRequests int) *r
 		model:    model,
 		now:      time.UnixMilli(1790046000000),
 		params: Params{
-			WindowSeconds:    600,
+			WindowMinutes:    10,
 			TriggerCount:     3,
-			RatioPerMille:    300,
+			Ratio:            0.3,
 			PenaltyStep:      10,
 			PenaltyMax:       50,
 			CooldownSeconds:  60,

@@ -27,13 +27,13 @@ describe("创建 schema - 低速参数单位", () => {
     // 上界 1 合法（区间上端是闭的）。
     expect(
       CreateProviderSchema.parse({ ...baseProvider, slow_rate_ratio_per_mille: 1 })
-        .slow_rate_ratio_per_mille,
+        .slow_rate_ratio_per_mille
     ).toBe(1);
 
     // 300 是旧千分比习惯值——必须被拒，否则低速线变成基线的 30000% 且静默恒假。
     for (const bad of [300, 1000, 1.5]) {
       expect(() =>
-        CreateProviderSchema.parse({ ...baseProvider, slow_rate_ratio_per_mille: bad }),
+        CreateProviderSchema.parse({ ...baseProvider, slow_rate_ratio_per_mille: bad })
       ).toThrow();
     }
   });
@@ -62,11 +62,11 @@ describe("创建 schema - 低速参数单位", () => {
   test("新参数 slow_rate_recovery_requests 可空且接受正整数", () => {
     expect(
       CreateProviderSchema.parse({ ...baseProvider, slow_rate_recovery_requests: 10 })
-        .slow_rate_recovery_requests,
+        .slow_rate_recovery_requests
     ).toBe(10);
     expect(
       CreateProviderSchema.parse({ ...baseProvider, slow_rate_recovery_requests: null })
-        .slow_rate_recovery_requests,
+        .slow_rate_recovery_requests
     ).toBeNull();
   });
 
@@ -107,9 +107,7 @@ describe("更新 schema - 低速参数单位", () => {
     expect(parsed.slow_rate_recovery_requests).toBe(10);
 
     for (const bad of [2, 300, -0.1]) {
-      expect(() =>
-        UpdateProviderSchema.parse({ slow_rate_ratio_per_mille: bad }),
-      ).toThrow();
+      expect(() => UpdateProviderSchema.parse({ slow_rate_ratio_per_mille: bad })).toThrow();
     }
   });
 });

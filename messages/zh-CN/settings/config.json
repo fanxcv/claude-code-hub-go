@@ -110,6 +110,8 @@
     "affinityEnabledDesc": "关闭后整套亲和（会话绑定与前缀指纹）都不参与选路。它是独立的开关，关掉它不影响下一条「忽略客户端 Session ID」的设置。默认开启。",
     "affinityIgnoreClientSessionId": "忽略客户端 Session ID",
     "affinityIgnoreClientSessionIdDesc": "开启后，可指纹化的请求强制使用最长前缀亲和做供应商粘性（跳过客户端 Session ID 绑定）；不可指纹化的请求仍走会话复用。这是模式开关，关不掉亲和本身。默认关闭。",
+    "providerLiveStatsEnabled": "渠道实时并发统计",
+    "providerLiveStatsEnabledDesc": "开启后，供应商页面每 5 秒刷新一次各渠道的实时并发数，请求处理路径会记录每个渠道的在飞请求数。关闭时（默认）不记录、不查询、页面也不轮询，完全不占用资源。",
     "fakeStreaming": {
       "title": "Fake 流式输出白名单",
       "description": "针对图像 / 视频等长耗时同步生成场景（容易超过 Cloudflare 120 秒无响应体超时），CCH 会先返回 SSE 心跳保活，并在内部串行调用上游供应商，仅在最终拿到非空结果时回写最终响应。命中白名单的模型会启用 fake streaming；列表为空表示完全禁用。",

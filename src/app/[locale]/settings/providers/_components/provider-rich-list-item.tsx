@@ -2,6 +2,7 @@
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  Activity,
   AlertTriangle,
   ArrowRightLeft,
   CheckCircle,
@@ -532,6 +533,24 @@ function ProviderRichListItemInner({
   const showSlowRateBadge = showCircuitBadges && slowRatePenalty !== null;
   const slowRateModelKey = healthStatus?.slowRate?.modelKey ?? null;
   const slowRateCombinations = healthStatus?.slowRate?.combinations ?? 0;
+
+  // 实时并发：只在统计开启且读得到时呈现。
+  //
+  // 三态各自有原因不占位：
+  //   - trackingEnabled 为假：统计根本没在跑（服务端也不会给数）；
+  //   - available 为假：开着但读不到（无值可报，不在这里编一个 0）；
+  //   - activeSessions 为 null：同上（与 available 同源的双保险）。
+  // 与 slowRate 徽标同一条纪律（showCircuitBadges）：停用渠道不报读数。
+  const concurrency = healthStatus?.concurrency ?? null;
+  const concurrencyActive =
+    concurrency?.trackingEnabled === true &&
+    concurrency.available &&
+    concurrency.activeSessions !== null
+      ? concurrency.activeSessions
+      : null;
+  const showConcurrencyBadge = showCircuitBadges && concurrencyActive !== null;
+  // 并发上限：渠道级配置，为 0（未设）时只显示分子，不显示一个假的「/0」。
+  const concurrencyLimit = provider.limitConcurrentSessions ?? 0;
   const accentColor = hasKeyCircuitOpen
     ? "border-l-red-500"
     : hasEndpointCircuitOpen
@@ -671,6 +690,23 @@ function ProviderRichListItemInner({
                     penalty: slowRatePenalty,
                     model: slowRateModelKey ?? "",
                   })}
+            </Badge>
+          )}
+          {/* 实时并发数：需在系统设置里开启全局统计（关闭时服务端不报数、本页也不轮询）。
+              与并发上限一起报「用了几个 / 上限几个」；未设上限时只报分子。 */}
+          {showConcurrencyBadge && concurrencyActive !== null && (
+            <Badge
+              variant="outline"
+              className="flex items-center gap-1 bg-sky-50 text-sky-700 border-sky-300 hover:bg-sky-100 dark:bg-sky-950/40 dark:text-sky-400 dark:border-sky-800"
+              title={tList("concurrency.tooltip")}
+            >
+              <Activity className="h-3 w-3" />
+              {concurrencyLimit > 0
+                ? tList("concurrency.badgeWithLimit", {
+                    count: concurrencyActive,
+                    limit: concurrencyLimit,
+                  })
+                : tList("concurrency.badge", { count: concurrencyActive })}
             </Badge>
           )}
           {/* Endpoint-level circuit badge */}
@@ -955,6 +991,22 @@ function ProviderRichListItemInner({
                       penalty: slowRatePenalty,
                       model: slowRateModelKey ?? "",
                     })}
+              </Badge>
+            )}
+            {/* 实时并发数（桌面端同款，见那里的说明）。 */}
+            {showConcurrencyBadge && concurrencyActive !== null && (
+              <Badge
+                variant="outline"
+                className="flex items-center gap-1 flex-shrink-0 bg-sky-50 text-sky-700 border-sky-300 hover:bg-sky-100 dark:bg-sky-950/40 dark:text-sky-400 dark:border-sky-800"
+                title={tList("concurrency.tooltip")}
+              >
+                <Activity className="h-3 w-3" />
+                {concurrencyLimit > 0
+                  ? tList("concurrency.badgeWithLimit", {
+                      count: concurrencyActive,
+                      limit: concurrencyLimit,
+                    })
+                  : tList("concurrency.badge", { count: concurrencyActive })}
               </Badge>
             )}
             {/* Endpoint-level circuit badge */}

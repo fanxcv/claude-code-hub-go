@@ -18,6 +18,12 @@
     "badgeWithModels": "低速降权 +{penalty}（{model} 等 {count} 个模型）",
     "tooltip": "低速降级：该渠道近期生成速率持续低于自身基线，选路时按此降权量后移优先级（降权不改熔断与竞速）。同一渠道的多个模型各自评估，此处显示降权最重的那一个及其组合数。"
   },
+  "concurrency": {
+    "badge": "并发 {count}",
+    "badgeWithLimit": "并发 {count}/{limit}",
+    "unavailable": "并发读不到",
+    "tooltip": "实时并发数：该渠道当前正在处理的请求数（竞速与重试的每次尝试各计一次）。需在系统设置里开启「渠道实时并发统计」，开启后每 5 秒刷新一次。"
+  },
   "officialWebsite": "官网",
   "viewFullKey": "查看完整 API Key",
   "viewFullKeyDesc": "请妥善保管，不要泄露给他人",
