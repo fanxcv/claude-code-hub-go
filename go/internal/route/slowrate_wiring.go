@@ -26,15 +26,17 @@ func (s *Selector) slowRatePenalties(
 	return penaltyTable(penalties)
 }
 
-// slowRateCooldown 取「本会话正在冷却中」的渠道集。
+// slowRateCooldown 取「本会话正在冷却中」的渠道及其成因。
 //
 // 无会话身份（req.SessionID 空 或 KeyID 为 0）时返回 nil：冷却键的形制含会话与 key，
 // 缺任一项都构不出键，也就没有冷却可言。
+//
+// 返回成因而不是 bool：同一个冷却键的两个写入者（故障回避 / 低速降权）要记不同理由。
 func (s *Selector) slowRateCooldown(
 	ctx context.Context,
 	providers []Provider,
 	req Request,
-) map[int64]bool {
+) map[int64]CooldownKind {
 	if s.opts.SlowRate == nil || req.SessionID == "" || req.KeyID == 0 {
 		return nil
 	}

@@ -1,6 +1,8 @@
 package route_test
 
 import (
+	"os"
+	"regexp"
 	"testing"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/jobs"
@@ -90,6 +92,36 @@ func TestModelKeyMirrorsUpstream(t *testing.T) {
 		if got := route.SlowRateModelKey(model); got != want {
 			t.Errorf("模型键不一致：route = %q，pubstatus = %q（输入 %q）", got, want, model)
 		}
+	}
+}
+
+// TestCooldownMarkerMirrorsWriteSide 钉住冷却键的**值**标记逐字节一致。
+//
+// 为何本仓需要这条：同一个冷却键有两个写入者，读侧只能按值把它们分开——低速写侧写标记
+// `slow`（受低速监控开关约束），绑定写侧写下一代 generation（正整数字符串，**不受**该开关
+// 约束，见 `route.CooldownKind`）。读侧把「非标记值」一律算故障冷却，故**标记值一旦在写侧
+// 被改名而读侧没跟上，低速冷却就会被误判成故障冷却**——表现是「关掉监控后低速冷却仍生效」，
+// 静默、无报错。
+//
+// 为何是源码结构性钉子而不是常量比对：`slowrate` 没有导出这个标记（写侧是 `writeCooldown`
+// 里的字面量），而本包不允许 import `slowrate`（成环）。只能读它的源码，把「那一处确实是这个
+// 值」钉住——与键形制那几条同一道防线，只是没法用常量对照。
+//
+// 正则容许 gofmt 换行（`r.redis.Set(` 与参数之间可能断行），但不容许值本身不同。
+func TestCooldownMarkerMirrorsWriteSide(t *testing.T) {
+	const path = "../slowrate/recorder.go"
+	source, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取 %s 失败：%v", path, err)
+	}
+	pattern := regexp.MustCompile(
+		`r\.redis\.Set\(\s*ctx,\s*key,\s*"` + regexp.QuoteMeta(route.SlowRateCooldownMarker) + `"\s*,`)
+	if !pattern.Match(source) {
+		t.Fatalf("低速写侧写的冷却标记与读侧常量不一致：\n"+
+			"  %s 里找不到形如 r.redis.Set(ctx, key, %q, ...) 的写入\n"+
+			"  读侧常量 route.SlowRateCooldownMarker = %q\n"+
+			"  两侧不一致时，低速冷却会被读侧误判成故障冷却（关掉监控仍生效）。",
+			path, route.SlowRateCooldownMarker, route.SlowRateCooldownMarker)
 	}
 }
 

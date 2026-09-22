@@ -1297,14 +1297,14 @@ func (s *Selector) validateAffinityCandidate(
 	if blocked, _ := s.healthRejection(ctx, p); blocked {
 		return false
 	}
-	// 会话级低速冷却同样要拦住**亲和提名**。
+	// 会话级冷却（故障回避与低速降权两类）同样要拦住**亲和提名**。
 	//
 	// 为何不能只靠过滤阶段：亲和一旦命中就短路整场选路（`resolve` 在过滤之后直接返回提名者），
 	// 过滤只会从候选人集里去掉它，而提名者并不需要留在集里就能被选中（validateAffinityCandidate
-	// 自己逐条重做硬校验）。若这里不判，被粘住的会话会一次次绕过冷却撞回同一家慢渠道——
-	// 而「已粘会话如何逃脱」正是本机制要解决的问题。
+	// 自己逐条重做硬校验）。若这里不判，被粘住的会话会一次次绕过冷却撞回同一家——
+	// 慢渠道是「已粘会话如何逃脱」要解决的问题，刚失败的家则是「清绑定后立刻重选回去」。
 	if req.SessionID != "" && req.KeyID != 0 && s.opts.SlowRate != nil {
-		if s.opts.SlowRate.InCooldown(ctx, req.SessionID, req.KeyID, []Provider{p})[p.ID] {
+		if _, cooling := s.opts.SlowRate.InCooldown(ctx, req.SessionID, req.KeyID, []Provider{p})[p.ID]; cooling {
 			return false
 		}
 	}

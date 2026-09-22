@@ -665,7 +665,10 @@ func TestSlowRateFailsOpenOnRedisError(t *testing.T) {
 
 // TestSlowRateCooldownExcludesCandidate 钉住会话级冷却：命中冷却键的候选被排除。
 //
-// 反证：去掉 filter.go 的 slowRateRejection 调用，本用例变红。
+// 本用例只盖低速那一路（写入值是标记 `slow` 且渠道开了监控）。同一个键的另一个写入者
+// （故障冷却）与「按值分流」见 TestCooldownKindDistinguishesTwoWriters。
+//
+// 反证：去掉 filter.go 的 cooldownRejection 调用，本用例变红。
 func TestSlowRateCooldownExcludesCandidate(t *testing.T) {
 	first := slowRateProvider(1)
 	second := slowRateProvider(2)
@@ -748,6 +751,133 @@ func TestSlowRateCooldownAlsoBlocksAffinityNomination(t *testing.T) {
 	selector = newSlowRateSelector(t, redisClient, []Provider{provider})
 	if selector.validateAffinityCandidate(context.Background(), provider, req, map[int64]bool{}) {
 		t.Fatalf("冷却期内提名仍被接受（会话会绕过冷却撞回同一家慢渠道）")
+	}
+
+	// 故障冷却（监控**关闭**的渠道）同样要拦住提名。
+	//
+	// 为何与上面那条分开：低速冷却的写入者受监控开关约束，而故障冷却的写入者
+	// （session.Binder.Clear）不看那个开关。若只认开启监控的渠道，绑定刚被清掉的会话
+	// 会在下一请求里重新提名刚失败的那一家。
+	failure := baseProvider(1, convert.ProviderClaude)
+	selector = newSlowRateSelector(t, &slowRateRedis{values: map[string]string{
+		SlowRateCooldownKey("s1", 7, 1): "42",
+	}}, []Provider{failure})
+	if selector.validateAffinityCandidate(context.Background(), failure, req, map[int64]bool{}) {
+		t.Fatalf("监控关闭的渠道写了故障冷却后，提名仍被接受（会话会撞回刚失败的那家）")
+	}
+}
+
+// cooldownRecordOf 取该候选的过滤留痕；第二个返回值为假表示它**没被过滤**。
+//
+// 不用 reasonOf：它对「没有记录」直接 Fatal，而下面两组用例正需要断言「没有被过滤」。
+func cooldownRecordOf(dc DecisionContext, id int64) (Filtered, bool) {
+	for _, record := range dc.FilteredProviders {
+		if record.ID == id {
+			return record, true
+		}
+	}
+	return Filtered{}, false
+}
+
+// TestCooldownKindDistinguishesTwoWriters 钉住第 5 轮审查的 P1：同一个冷却键的两个写入者
+// 必须按**值**分开，且故障冷却不受低速监控开关约束。
+//
+// 缺陷（改前）：读侧先把候选过滤成只剩 SlowRateMonitorEnabled=true 的，而故障冷却的写入者
+// （session.Binder.Clear，由供应商侧失败触发）根本不看那个开关 ⇒ 监控关闭的渠道
+// （providers 该列 DB 默认 false）的故障冷却**写了永不读**：绑定已清，同一会话可立刻重选
+// 刚失败的那一家。违约判据：设计稿 §4 要求 provider_error 后 60 秒冷却使后续请求绕开它。
+//
+// 为何判据只有值：两个写入者的值空间不相交——绑定写侧写下一代 generation（正整数字符串，
+// lua/clear-session-binding.lua 对 ARGV[3] 有 is_positive_integer 校验），低速写侧写固定标记。
+//
+// 反证（三次变异，均实测变红，见报告 §3）：
+//   - 变异 1「只读 monitor=true 的候选」（即改回旧实现）⇒ 子例 1（监控关闭+故障冷却）红；
+//   - 变异 2「读全部但一律看监控开关」⇒ 同为子例 1 红（与变异 1 同向：两者分辨的是同一处）；
+//   - 变异 3「低速那条也不看监控开关」⇒ 子例 2（监控关闭+低速冷却）红。
+//
+// 两个方向都能红，故本钉子不是恒真；子例 4（监控开启+故障冷却）在三个变异下**都绿**——
+// 它是既有行为的对照，不是本缺陷的判据。
+func TestCooldownKindDistinguishesTwoWriters(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		monitor     bool
+		value       string
+		wantReason  Reason
+		wantCooling bool
+	}{
+		{"监控关闭+故障冷却仍排除", false, "42", ReasonProviderErrorCooldown, true},
+		{"监控关闭+低速冷却不排除", false, SlowRateCooldownMarker, "", false},
+		{"监控开启+低速冷却排除", true, SlowRateCooldownMarker, ReasonSlowRateCooldown, true},
+		{"监控开启+故障冷却排除", true, "42", ReasonProviderErrorCooldown, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := baseProvider(1, convert.ProviderClaude)
+			second := baseProvider(2, convert.ProviderClaude)
+			first.SlowRateMonitorEnabled = tc.monitor
+			second.SlowRateMonitorEnabled = tc.monitor
+			redisClient := &slowRateRedis{values: map[string]string{
+				SlowRateCooldownKey("s1", 7, 2): tc.value,
+			}}
+			selector := newSlowRateSelector(t, redisClient, []Provider{first, second})
+
+			result, err := selector.Select(context.Background(), Request{Model: "m1", SessionID: "s1", KeyID: 7})
+			if err != nil {
+				t.Fatalf("选路失败: %v", err)
+			}
+			record, filtered := cooldownRecordOf(result.Context, 2)
+			if !tc.wantCooling {
+				if filtered {
+					t.Fatalf("供应商 2 不该被过滤，实得 reason=%q details=%q", record.Reason, record.Details)
+				}
+				return
+			}
+			if !filtered {
+				t.Fatalf("供应商 2 应被冷却排除，但留痕里没有它：%+v", result.Context.FilteredProviders)
+			}
+			if record.Reason != tc.wantReason {
+				t.Errorf("理由 = %q，期望 %q", record.Reason, tc.wantReason)
+			}
+			if record.Details != string(tc.wantReason) {
+				t.Errorf("详情 = %q，期望 %q（详情是 i18n 键，与理由同名）", record.Details, string(tc.wantReason))
+			}
+			if result.Provider == nil || result.Provider.ID != 1 {
+				t.Fatalf("选中 = %v，期望 1（2 在冷却中）", result.Provider)
+			}
+		})
+	}
+}
+
+// TestCooldownReadFailureFailsOpen 钉住 fail-open：读冷却键报错时不排除任何人。
+//
+// 为何单列：本组的正例都建立在「读到值」之上，若把读错误也当命中，一次 Redis 抖动就会把
+// 整场候选排除光（比误选一家严重得多）。替身的 getErrs 与「键缺失」是两条不同路径，
+// 键缺失给 redis.Nil（同样不排除），这里走**真错误**那条。
+func TestCooldownReadFailureFailsOpen(t *testing.T) {
+	provider := baseProvider(1, convert.ProviderClaude)
+	key := SlowRateCooldownKey("s1", 7, 1)
+	redisClient := &slowRateRedis{getErrs: map[string]error{key: errors.New("redis 连接被重置")}}
+	selector := newSlowRateSelector(t, redisClient, []Provider{provider})
+
+	result, err := selector.Select(context.Background(), Request{Model: "m1", SessionID: "s1", KeyID: 7})
+	if err != nil {
+		t.Fatalf("选路失败: %v", err)
+	}
+	if _, filtered := cooldownRecordOf(result.Context, 1); filtered {
+		t.Errorf("读冷却键失败时仍排除了候选（应 fail-open）：%+v", result.Context.FilteredProviders)
+	}
+}
+
+// TestProviderErrorCooldownKeepsBinding 钉住新理由属**临时**原因。
+//
+// 为何必须有：transientRejection 决定「绑定 provider 因临时原因被跳过时，备用成功是否改绑」。
+// 漏了这条新理由，会话绑定就会在一次故障冷却期间被永久搬到备用——而设计稿 §4 要求
+// 「跳过该 provider、不清空绑定、待恢复后仍粘回去」。
+func TestProviderErrorCooldownKeepsBinding(t *testing.T) {
+	if !transientRejection(ReasonProviderErrorCooldown) {
+		t.Errorf("provider_error_cooldown 应属临时原因（不改任何配置就可能恢复）")
+	}
+	if !transientBypass([]Filtered{{ID: 7, Reason: ReasonProviderErrorCooldown}}, 7) {
+		t.Errorf("留痕里带 provider_error_cooldown 的家应判为临时跳过，绑定不该被改写")
 	}
 }
 

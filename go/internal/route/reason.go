@@ -31,11 +31,22 @@ const (
 	ReasonEndpointUnavailable Reason = "endpoint_unavailable"
 	// ReasonSlowRateCooldown 本会话对该渠道正在低速冷却期内（设计稿 §8 的会话级强制降级）。
 	//
-	// 说明：前端 `src/types/message.ts` 的过滤理由联合类型与 `provider-chain-formatter.ts` 的
-	// 图标映射是封闭枚举，新取值会落到默认分支。这是取舍而非遗漏：会话级冷却只在开启低速监控的
-	// 渠道上产生，界面文案与图标待前端一并补（已登记在报告「未确证」）。理由文本与详情
-	// 在链上可读，不依赖前端映射也能事后归因。
+	// 前端已就位（2026-09-22 核）：`src/types/message.ts` 的过滤理由联合类型含本取值；
+	// `messages/{zh-CN,en}/provider-chain.json` 的 filterReasons 与 filterDetails 两处均有词条；
+	// `LogicTraceTab.test.tsx` 钉住渲染的是本地化文案而非原始 token。
+	//
+	// 唯一未覆盖的是 `provider-chain-formatter.ts` 的图标映射（一个三元表达式，本取值落默认分支）：
+	// 图标属装饰，链上的理由与详情文本已足以事后归因，故不为它新增图标。
 	ReasonSlowRateCooldown Reason = "slow_rate_cooldown"
+	// ReasonProviderErrorCooldown 本会话对该渠道正在**故障**冷却期内：该家刚在**本会话**里发生供应商侧
+	// 失败（上游 5xx / 超时），60 秒内先绕开它。
+	//
+	// 为何与 ReasonSlowRateCooldown 分开：两者是同一个冷却键的两个写入者（见 `CooldownKind`），语义
+	// 不同——本条是**故障回避**，那条是**低速降权**。合并会把「渠道故障」误报成「渠道慢」。
+	//
+	// 为何不并进 ReasonCircuitOpen：熔断是**全局**硬故障排除（整家渠道对所有会话都不可用），
+	// 本理由是**本会话**对该家的短期回避（其他会话照常选它），两者不可互换。
+	ReasonProviderErrorCooldown Reason = "provider_error_cooldown"
 )
 
 // Filtered 是一个被过滤的候选及其理由，对应 Node 的 decisionContext.filteredProviders[]。

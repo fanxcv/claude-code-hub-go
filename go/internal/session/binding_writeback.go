@@ -76,6 +76,12 @@ func (w *sessionBindingWriteback) CompareAndSet(ctx context.Context, providerID 
 // 「写冷却」——分两步做会在两步之间留下「绑定还在但已冷却」的窗口。
 // expectedProviderID 取**失败的那一家**：只对「绑定恰好指向它」写冷却（防羊群，
 // 与亲和墓碑的判据同源）。
+//
+// 两个必须同时成立的性质（读侧据此把本条与低速降权分开，见 `route.CooldownKind`）：
+//   - **不看低速监控开关**：本动作是故障回避，与「渠道慢不慢」无关。若把它也挂上那个开关，
+//     默认（监控关闭）渠道的故障冷却就会写了永不生效；
+//   - **写入值是下一代 generation**（正整数，见 `lua/clear-session-binding.lua` 的 `SETEX`），
+//     与低速写入侧的固定标记 `slow` 不重叠——这是读侧分辨两者的唯一依据。
 func (w *sessionBindingWriteback) CooldownOnFailure(ctx context.Context, providerID int64) bool {
 	if w == nil || providerID <= 0 {
 		return false

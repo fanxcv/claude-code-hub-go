@@ -172,14 +172,16 @@ func sessionBindingBypass(
 // 分界原则只一条：**不改配置就可能恢复的属临时**，绑定该留着等它回来；要改配置才恢复的
 // （停用、模型/端点/格式不兼容、客户端名单）属结构性，允许改绑。逐条依据：
 //
-//	circuit_open          设计稿 §4 明定「跳过、不清空绑定、待恢复后仍粘回去」
-//	slow_rate_cooldown    低速写侧只写冷却、不清绑定（设计稿 §4 同源语义）
-//	schedule_inactive     活动时段按钟点恢复
-//	rate_limited          金额/额度窗口按时间恢复
-//	excluded              本次请求内已试过并失败（故障转移），不是该渠道的结构性结论
+//	circuit_open             设计稿 §4 明定「跳过、不清空绑定、待恢复后仍粘回去」
+//	slow_rate_cooldown       低速写侧只写冷却、不清绑定（设计稿 §4 同源语义）
+//	provider_error_cooldown  故障冷却只挂 60 秒，到点即恢复（同一设计稿：绑定被清但应尽快粘回去）
+//	schedule_inactive        活动时段按钟点恢复
+//	rate_limited             金额/额度窗口按时间恢复
+//	excluded                 本次请求内已试过并失败（故障转移），不是该渠道的结构性结论
 func transientRejection(reason Reason) bool {
 	switch reason {
-	case ReasonCircuitOpen, ReasonSlowRateCooldown, ReasonScheduleInactive, ReasonRateLimited, ReasonExcluded:
+	case ReasonCircuitOpen, ReasonSlowRateCooldown, ReasonProviderErrorCooldown,
+		ReasonScheduleInactive, ReasonRateLimited, ReasonExcluded:
 		return true
 	default:
 		return false

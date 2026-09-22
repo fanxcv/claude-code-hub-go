@@ -52,8 +52,10 @@ type filterInput struct {
 	// scheduleGate / clientGate 是本次请求的判定（非 nil 时优先于 gates 的同名钩子）。
 	scheduleGate func(p Provider) bool
 	clientGate   func(p Provider) *ClientRestriction
-	// cooldown 是本次请求的「本会话冷却中」渠道集（nil 即不判定，回落到只有渠道级降权）。
-	cooldown map[int64]bool
+	// cooldown 是本次请求的「本会话冷却中」渠道及其成因（nil 即不判定，回落到只有渠道级降权）。
+	// 成因必须带过来：同一个冷却键有两个写入者（故障回避 / 低速降权），两者记的理由不同，
+	// 而「渠道故障」不该在链上被写成「渠道慢」（见 cooldownRejection）。
+	cooldown map[int64]CooldownKind
 }
 
 // filterResult 是候选过滤的结果与留痕。
@@ -184,7 +186,7 @@ func (s *Selector) applyFilters(
 		}
 		// 会话级低速冷却在**熔断之后**判定（软回避不应改写硬故障的归因）。
 		// 它不改变 afterHealthCheck 的口径：那个计数是熔断步的产物，本判定属另一个维度。
-		if blocked, record := s.slowRateRejection(p, in); blocked {
+		if blocked, record := s.cooldownRejection(p, in); blocked {
 			dc.FilteredProviders = append(dc.FilteredProviders, record)
 			continue
 		}
@@ -197,23 +199,39 @@ func (s *Selector) applyFilters(
 
 // basicFilterRejection 判定「基础过滤」维度：启用态、排除列表、调度窗口、格式兼容、
 // 模型允许集、限额。理由取值与 Node 的记录循环逐条对齐。
-// slowRateRejection 判定该候选是否因「本会话的低速冷却」而不该参与本次竞争。
+// cooldownRejection 判定该候选是否因「本会话对它正在冷却期内」而不该参与本次竞争。
 //
 // 与熔断的关系：两者独立不合并（设计稿 §5 边界表）。熔断是硬故障排除（`healthRejection`），
-// 本判定是「本会话刚刚在这家磨过」的软回避，只作用于**本会话**。因此先跑熔断、再跑本判定，
+// 本判定是「本会话刚在这家出过事」的软回避，只作用于**本会话**。因此先跑熔断、再跑本判定，
 // 且本判定命中时记的是专门理由（而不是 circuit_open）。
 //
+// 两种成因分开记理由，因为它们是两件事：
+//   - provider_error_cooldown：供应商侧失败（上游 5xx/超时）后的 60 秒回避，与「渠道慢不慢」无关；
+//   - slow_rate_cooldown：低速降权写下的冷却。
+//
+// 把后者当成前者会误报（「渠道故障」写成「渠道慢」），反之则会让故障冷却在界面上消失。
+//
 // 只在 Options.SlowRate 已装配且本次请求带会话身份时判定；in.cooldown 为 nil 时直接返回。
-func (s *Selector) slowRateRejection(p Provider, in filterInput) (bool, Filtered) {
+func (s *Selector) cooldownRejection(p Provider, in filterInput) (bool, Filtered) {
 	record := Filtered{ID: p.ID, Name: p.Name}
-	if in.cooldown == nil || !in.cooldown[p.ID] {
+	kind, ok := in.cooldown[p.ID]
+	if !ok {
 		return false, record
 	}
-	record.Reason = ReasonSlowRateCooldown
-	// Details 取 i18n 键形态（与 circuit_open / rate_limited 等同例）：前端先按 filterDetails.<值>
-	// 查词表，查不到才回落原值。写死中文会让英文界面露出中文，违反「用户可见文案走 i18n」。
-	record.Details = "slow_rate_cooldown"
+	record.Reason, record.Details = cooldownReason(kind)
 	return true, record
+}
+
+// cooldownReason 把冷却成因折算成过滤理由与 i18n 键。
+//
+// Details 取 i18n 键形态（与 circuit_open / rate_limited 等同例）：前端先按 filterDetails.<值>
+// 查词表，查不到才回落原值。写死中文会让英文界面露出中文，违反「用户可见文案走 i18n」。
+// 两个取值同名（理由与详情逐字一致），是因为它们本就是一回事；分开取名只会多一处可漂移的映射。
+func cooldownReason(kind CooldownKind) (Reason, string) {
+	if kind == CooldownSlowRate {
+		return ReasonSlowRateCooldown, string(ReasonSlowRateCooldown)
+	}
+	return ReasonProviderErrorCooldown, string(ReasonProviderErrorCooldown)
 }
 
 func (s *Selector) basicFilterRejection(

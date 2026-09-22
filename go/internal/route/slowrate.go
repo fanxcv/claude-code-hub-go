@@ -47,7 +47,6 @@ const (
 	SlowRateStateFieldPenaltyStep   = "penaltyStep"
 	SlowRateStateFieldPenaltyMax    = "penaltyMax"
 
-	slowRateBaselineFieldName  = "source"
 	slowRateCooldownKeyPattern = "session-binding:v1:{%s}:provider:%s:cooldown"
 )
 
@@ -334,38 +333,66 @@ func deriveSlowRatePenalty(liveCount int, params slowRatePenaltyParams) int {
 	return penalty
 }
 
-// InCooldown 批量判定候选里哪些「对本会话正在冷却期内」。
+// CooldownKind 是「本会话对该渠道正在冷却中」的成因。
 //
-// 语义边界（设计稿 §8 的会话级强制降级）：
+// 为什么必须分种类：同一个冷却键有**两个写入者**，语义完全不同——
+//   - 绑定写入侧（`session.Binder.Clear` 的 cooldown 参数，由供应商侧失败触发，见
+//     `terminal/settle.go` 的 `sessionBindingFailure`）写的是下一代的 generation（正整数字符串），
+//     这是**故障回避**：刚失败的家本会话先绕开它；
+//   - 低速写入侧（`slowrate.Recorder.writeCooldown`）写的是固定标记 `slow`，这是**低速降权**。
+//
+// 两者的开关也不同：低速那条受「渠道是否开启低速监控」约束（关掉监控就该立即停止该渠道的低速
+// 降级），而故障回避与「渠道慢不慢」无关，**不能**被那个开关吞掉——本仓踩过的正是这一条
+// （见 InCooldown 的说明）。
+type CooldownKind string
+
+const (
+	// CooldownProviderError 是供应商侧失败后的会话冷却（绑定写入侧所写）。
+	//
+	// 命名与 `terminal.AffinityTombstoneProviderError` 同源：同一件事（上游 5xx/超时）在终态侧叫
+	// provider error，在选路侧不该换个说法。
+	CooldownProviderError CooldownKind = "provider_error"
+	// CooldownSlowRate 是低速降权写下的会话冷却（低速写入侧所写）。
+	CooldownSlowRate CooldownKind = "slow_rate"
+)
+
+// SlowRateCooldownMarker 是低速写入侧写进冷却键的固定值，镜像
+// `internal/slowrate/recorder.go` 的 `writeCooldown`（那里是字面量 "slow"）。
+//
+// 为什么本包必须知道它：读侧只能按**值**把两个写入者分开（见 slowRateCooldownKind），而本包
+// 不能 import slowrate（slowrate → session → guard → route，成环，见文件头）。故两侧各写一遍，
+// 由 `slowrate_keys_mirror_test.go` 的源码结构性钉子比对——与键形制同一手法、同一道防线。
+const SlowRateCooldownMarker = "slow"
+
+// InCooldown 批量判定候选里哪些「对本会话正在冷却期内」，并给出成因。
+//
+// 语义边界：
 //   - 只在本次请求带会话身份时生效（无 sessionID / keyID 即无冷却概念，返回空集）；
-//   - 只判定**已开启监控**的渠道：冷却键由写侧在开启后才产生，未开启渠道读它只会白花往返，
-//     且「关掉监控」应当立即停止对该渠道的降级；
+//   - **按值分流**（见 slowRateCooldownKind）：低速冷却只对已开启监控的渠道生效（「关掉监控」
+//     应当立即停止该渠道的低速降级）；**故障冷却对所有渠道生效**——它的写入者（绑定写入侧）
+//     本来就不看低速开关，读侧若也按那个开关过滤，写下去的冷却就永不生效：绑定已清、同一会话
+//     可立刻重选刚失败的那一家（2026-09-22 修掉的正是这条）。
 //   - 读失败 fail-open：判不出冷却即不排除任何人。
 //
 // 一次往返：全部候选压进同一个 pipeline。
+//
+// 代价据实记：改前只对「已开启监控」的候选发 GET（生产上通常仅一两家），改后对所有候选各发一次
+// GET。仍是同一个 pipeline（一次往返），载荷随候选数增长；这是「故障冷却必须对所有渠道可读」
+// 换来的，不是可以省的往返。
 func (r *SlowRateReader) InCooldown(
 	ctx context.Context,
 	sessionID string,
 	keyID int64,
 	candidates []Provider,
-) map[int64]bool {
-	out := make(map[int64]bool, len(candidates))
+) map[int64]CooldownKind {
+	out := make(map[int64]CooldownKind, len(candidates))
 	if r == nil || r.redis == nil || sessionID == "" || keyID == 0 || len(candidates) == 0 {
 		return out
 	}
-	enabled := make([]Provider, 0, len(candidates))
-	for _, provider := range candidates {
-		if provider.SlowRateMonitorEnabled {
-			enabled = append(enabled, provider)
-		}
-	}
-	if len(enabled) == 0 {
-		return out
-	}
 
-	cmds := make([]*redis.StringCmd, len(enabled))
+	cmds := make([]*redis.StringCmd, len(candidates))
 	_, err := r.redis.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-		for index, provider := range enabled {
+		for index, provider := range candidates {
 			cmds[index] = pipe.Get(ctx, SlowRateCooldownKey(sessionID, keyID, provider.ID))
 		}
 		return nil
@@ -373,13 +400,35 @@ func (r *SlowRateReader) InCooldown(
 	if err != nil && !errors.Is(err, redis.Nil) {
 		r.warn("route.slow_rate_cooldown_read_failed", "", err)
 	}
-	for index := range enabled {
-		// 键存在即命中；redis.Nil 表示未命中（不是故障），其余错误同样不排除（fail-open）。
-		if err := cmds[index].Err(); err == nil {
-			out[enabled[index].ID] = true
+	for index, provider := range candidates {
+		// redis.Nil 表示未命中（不是故障），其余错误同样不排除（fail-open）。
+		value, err := cmds[index].Result()
+		if err != nil {
+			continue
+		}
+		if kind, ok := slowRateCooldownKind(value, provider.SlowRateMonitorEnabled); ok {
+			out[provider.ID] = kind
 		}
 	}
 	return out
+}
+
+// slowRateCooldownKind 把冷却键的值折算成成因；第二个返回值为假表示「本次不算冷却」。
+//
+// 判据只有值本身，因为两个写入者的值空间不相交：低速写的是固定标记，绑定写的是正整数字符串
+// （`lua/clear-session-binding.lua` 对 ARGV[3] 有 `is_positive_integer` 校验，写不出标记值）。
+//
+// 非标记值一律算故障冷却，而不是「不认识就放过」：键形制含会话与 key，能写进这个键的只有上述
+// 两个写入者；真出现第三种值时按故障回避处理更保守，且该键自带 60 秒 TTL，不会长期挂住。
+func slowRateCooldownKind(value string, monitorEnabled bool) (CooldownKind, bool) {
+	if value == SlowRateCooldownMarker {
+		// 低速写入侧所写：受低速监控开关约束——关掉监控即立即停止该渠道的低速降级。
+		if !monitorEnabled {
+			return "", false
+		}
+		return CooldownSlowRate, true
+	}
+	return CooldownProviderError, true
 }
 
 // slowRateBaselineSource 取基线 JSON 的 source 字段；键缺失、读失败、非 JSON 一律返回空串。

@@ -90,7 +90,8 @@
     "endpoint_circuit_open": "端点已熔断",
     "endpoint_disabled": "端点已禁用",
     "client_restriction": "客户端限制",
-    "slow_rate_cooldown": "低速冷却（本会话）"
+    "slow_rate_cooldown": "低速冷却（本会话）",
+    "provider_error_cooldown": "故障冷却（本会话）"
   },
   "filterDetails": {
     "vendor_type_circuit_open": "供应商类型临时熔断",
@@ -104,7 +105,8 @@
     "detectedClient": "Detected: {client}",
     "providerAllowlist": "Allowlist: {list}",
     "providerBlocklist": "Blocklist: {list}",
-    "slow_rate_cooldown": "本会话刚在该渠道上遇到低速响应，冷却期内跳过"
+    "slow_rate_cooldown": "本会话刚在该渠道上遇到低速响应，冷却期内跳过",
+    "provider_error_cooldown": "本会话刚在该渠道上失败（上游错误），冷却期内跳过"
   },
   "details": {
     "selectionMethod": "选择方式",
