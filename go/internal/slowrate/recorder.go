@@ -48,6 +48,10 @@ type Params struct {
 	PenaltyStep     int
 	PenaltyMax      int
 	CooldownSeconds int
+	// RecoveryRequests 是恢复阈值（列 slow_rate_recovery_requests，默认 10）：连续这么多个
+	// **可判定样本**都不慢，即重置该组合的降权。用户的说法是「最近 N 个请求都没出现低速」，
+	// 但计入的只有能算出速率的样本——见 recordClean 的判据说明。
+	RecoveryRequests int
 }
 
 // DefaultParams 是六个渠道参数与冷却期的出厂值（与 providers 表 slow_rate_* 列的语义一致）。
@@ -68,6 +72,8 @@ func DefaultParams() Params {
 		RatioPerMille: 300,
 		PenaltyStep:   10,
 		PenaltyMax:    30,
+		// 恢复阈值默认 10（用户 2026-09-22 指定）：连续 10 个可判定样本都不慢即重置降权。
+		RecoveryRequests: 10,
 		// 冷却期不在 providers 表里（表内没有它），故取常量。
 		CooldownSeconds: 60,
 	}
@@ -93,6 +99,9 @@ func (p Params) normalize() Params {
 	}
 	if p.CooldownSeconds <= 0 {
 		p.CooldownSeconds = def.CooldownSeconds
+	}
+	if p.RecoveryRequests <= 0 {
+		p.RecoveryRequests = def.RecoveryRequests
 	}
 	return p
 }
@@ -182,21 +191,39 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 	if !ok {
 		return
 	}
-	// 慢样本写入与状态推进分开：前者无条件（只要判据成立），后者需要看窗内计数。
-	if !isSlow(rate, baseline, params) {
-		return
-	}
 	windowKey := samplesKey(facts.ProviderID, facts.ModelKey)
 	stateKey := stateKey(facts.ProviderID, facts.ModelKey)
+	streakKey := cleanStreakKey(facts.ProviderID, facts.ModelKey)
 	at := r.now().UnixMilli()
 	windowMS := int64(params.WindowSeconds) * 1000
 	ttl := time.Duration(params.WindowSeconds*2) * time.Second
+
+	// 慢样本写入与状态推进分开：前者无条件（只要判据成立），后者需要看窗内计数。
+	//
+	// 能走到这里的样本一律是「可判定样本」（status 200、输出够长、首字比例达标、有基线），
+	// 故非慢的这一支就是恢复策略要数的「干净样本」。
+	if !isSlow(rate, baseline, params) {
+		r.recordClean(ctx, facts, params, windowKey, stateKey, streakKey, ttl)
+		return
+	}
 
 	pipe := r.redis.Pipeline()
 	pipe.ZAdd(ctx, windowKey, redis.Z{Score: float64(at), Member: strconv.FormatInt(facts.RequestID, 10)})
 	pipe.ZRemRangeByScore(ctx, windowKey, "0", strconv.FormatInt(at-windowMS, 10))
 	pipe.Expire(ctx, windowKey, ttl)
 	zcard := pipe.ZCard(ctx, windowKey)
+	// 慢样本打断连续干净计数：删掉计数键本身（而不是删 state 里的某个字段）。
+	//
+	// 挂进同一次 pipeline 是为了零新增往返——它必须与慢样本同生共死，否则「慢样本写入」
+	// 与「计数清零」之间会留下一个可被并发读看到的窗口。
+	//
+	// 为何是 DEL 而非 HDEL：连续计数的语义是「**连续**这么多个样本都不慢」。若只清一个
+	// 字段而保留计数键，「2 干净 + 1 慢 + 2 干净」在 N=3 时会凑够 3 而误重置——计数必须归零。
+	//
+	// 计数刻意放在独立键而不是 state Hash：state 只在该组合**真的慢过**时才存在，
+	// 而干净计数在每次可判定样本上都会长一截——写进 state 会让每个有流量的已开启组合
+	// 凭空多出一个 state 键，而 adminapi 的 /providers/health 会 SCAN 全部 state 键。
+	pipe.Del(ctx, streakKey)
 	if _, err := pipe.Exec(ctx); err != nil {
 		r.warn("slowrate.sample_write_failed", facts, err)
 		return
@@ -235,6 +262,60 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 		return
 	}
 	r.writeCooldown(ctx, facts, params)
+}
+
+// recordClean 累计「连续干净样本」，达到恢复阈值即重置该组合的降权。
+//
+// 恢复策略（用户 2026-09-22 需求：「最近 N 个请求都没有出现低速请求了，也就直接重置低速加的
+// 优先级」）。粒度是**渠道 × 模型**：惩罚本就按 scope 存（键含 modelKey），而写侧一次终态
+// 只知道一个 modelKey，故这是唯一可实现的粒度（整个渠道一起重置需要 SCAN 该渠道所有 scope，
+// 在终态异步写路径上不可接受）。
+//
+// 只把**可判定样本**计入（本函数只从 isSlow 那一行之后进入）：短输出（<minOutputTokens）、
+// 非 200、整包到达（首字比例超限）这些请求没有任何速率信息，若也计入「干净」，一个正在劣化
+// 但恰好只服务短请求的渠道会被误判为已恢复、惩罚被清掉——与「宁可少标不可误标」的口径相反。
+// 基线缺失时调用方已提前返回（fail-open），而读侧本来就不对无基线的组合施惩罚，故那批请求
+// 计不计入都无行为差异。
+//
+// 读侧零改动：惩罚是纯读时派生（读侧数的是 samples 滑窗里的活成员，state 的 penalty 字段
+// 只在「生效参数缺失」时作旧数据回退），故删掉 samples 与 state 后，下一次选路当场得到
+// 零惩罚，/providers/health 的投影也随之消失。
+func (r *Recorder) recordClean(
+	ctx context.Context,
+	facts Facts,
+	params Params,
+	windowKey string,
+	stateKey string,
+	streakKey string,
+	ttl time.Duration,
+) {
+	pipe := r.redis.Pipeline()
+	streak := pipe.Incr(ctx, streakKey)
+	// TTL 与滑窗同寿命：干净计数是「最近一段时间的连续干净」，不是一个永久累计值。
+	// 零流量时计数不增长、惩罚因此不被清除，但惩罚会随滑窗自然归零（样本滑出窗后读侧的
+	// 活窗计数低于阈值），最迟一个窗长——这是既有行为，不额外处理。
+	pipe.Expire(ctx, streakKey, ttl)
+	if _, err := pipe.Exec(ctx); err != nil {
+		r.warn("slowrate.streak_write_failed", facts, err)
+		return
+	}
+	if int(streak.Val()) < params.RecoveryRequests {
+		return
+	}
+	// 达阈值：三个键一起删。只删 samples 与 state 会让 streak 停在阈值以上、把后续每一次
+	// 干净样本都变成一次重置写入；只删 streak 则状态还在、降权不解除。
+	//
+	// 据实记（三处取舍，皆有界）：
+	//  1. DEL 与并发的慢样本写入存在竞态窗口，最坏情况是「刚写入的一条慢样本被删掉」，
+	//     代价是那一轮少算一条；下一个慢样本会重建键。
+	//  2. **不清理**已写下的会话冷却键：那些键含会话身份、无法枚举，且各自 60 秒 TTL
+	//     自然过期。故重置后最多 60 秒内，旧会话仍可能避开该渠道。
+	//  3. 删除是破坏性的但可自愈：下一个慢样本重建 state，下一次可判定样本重建 streak。
+	resetPipe := r.redis.Pipeline()
+	resetPipe.Del(ctx, windowKey, stateKey, streakKey)
+	if _, err := resetPipe.Exec(ctx); err != nil {
+		r.warn("slowrate.recovery_reset_failed", facts, err)
+	}
 }
 
 // writeCooldown 写会话×供应商冷却键：冷却期内该会话的选路会跳过这家渠道（读侧在 B4）。
@@ -355,6 +436,11 @@ func SamplesKey(providerID int64, modelKey string) string {
 
 func stateKey(providerID int64, modelKey string) string {
 	return "cch:slow:" + scopeTag(providerID, modelKey) + ":state"
+}
+
+// cleanStreakKey 是该组合的「连续干净样本」计数键（STRING，INCR 累加，TTL 同滑窗）。
+func cleanStreakKey(providerID int64, modelKey string) string {
+	return "cch:slow:" + scopeTag(providerID, modelKey) + ":streak"
 }
 
 func baselineKey(providerID int64, modelKey string) string {
