@@ -357,7 +357,9 @@ function EditUserDialogInner({ onOpenChange, user, onSuccess }: EditUserDialogPr
       }
       toast.success(t("editDialog.resetLimits.success"));
       setResetLimitsDialogOpen(false);
-      window.location.reload();
+      // 用缓失效代替整页重载：重载会把列表的搜索词/筛选/展开态全部丢掉，用户要重新
+      // 逐个点开；失效只让列表重取数据，就地刷新限额列。
+      queryClient.invalidateQueries({ queryKey: ["users"] });
     } catch (error) {
       console.error("[EditUserDialog] reset limits only failed", error);
       toast.error(t("editDialog.resetLimits.error"));
@@ -384,7 +386,8 @@ function EditUserDialogInner({ onOpenChange, user, onSuccess }: EditUserDialogPr
           : t("editDialog.reset5h.successRolling")
       );
       setReset5hDialogOpen(false);
-      window.location.reload();
+      // 同上：不整页重载，只失效用户列表那条 query。
+      queryClient.invalidateQueries({ queryKey: ["users"] });
     } catch (error) {
       console.error("[EditUserDialog] reset 5h limit failed", error);
       toast.error(t("editDialog.reset5h.error"));

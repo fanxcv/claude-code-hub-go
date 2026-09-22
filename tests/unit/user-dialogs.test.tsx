@@ -427,7 +427,9 @@ describe("EditUserDialog", () => {
   // （而不是服务端 Problem 的英文 title）。
   test("『仅重置 5H 限额』走 REST，成功文案按 resetMode 选（fixed）", async () => {
     mockResetUser5hLimitOnly.mockResolvedValue({ ok: true, data: { resetMode: "fixed" } });
-    // 成功后处理器会 window.location.reload()；happy-dom 下换掉 reload，避免跳转噪声。
+    // 成功后处理器应**只失效用户列表那条 query**，不得整页重载：重载会丢掉搜索词、筛选
+    // 与展开态，用户得重新逐个点开。故这里不但要断言失效被触发，还要断言 reload 不再被调。
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     const reload = vi.fn();
     const originalLocation = window.location;
     Object.defineProperty(window, "location", {
@@ -456,7 +458,49 @@ describe("EditUserDialog", () => {
       expect(toast.success).toHaveBeenCalledWith(
         messages.dashboard.userManagement.editDialog.reset5h.successFixed
       );
-      expect(reload).toHaveBeenCalled();
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["users"] });
+      expect(reload).not.toHaveBeenCalled();
+
+      unmount();
+    } finally {
+      Object.defineProperty(window, "location", {
+        configurable: true,
+        writable: true,
+        value: originalLocation,
+      });
+    }
+  });
+
+  test("『仅重置限额』成功后同相处理：失效用户列表，不整页重载", async () => {
+    mockResetUserLimitsOnly.mockResolvedValue({ ok: true, data: {} });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const reload = vi.fn();
+    const originalLocation = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { ...originalLocation, reload },
+    });
+
+    try {
+      const { container, unmount } = renderWithProviders(
+        <EditUserDialog open={true} onOpenChange={vi.fn()} user={mockUser} />
+      );
+
+      const confirmButton = Array.from(container.querySelectorAll("button")).find(
+        (button) =>
+          button.textContent?.trim() ===
+          messages.dashboard.userManagement.editDialog.resetLimits.confirm
+      );
+      expect(confirmButton).toBeDefined();
+
+      await act(async () => {
+        confirmButton?.click();
+      });
+
+      expect(mockResetUserLimitsOnly).toHaveBeenCalledWith(mockUser.id);
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["users"] });
+      expect(reload).not.toHaveBeenCalled();
 
       unmount();
     } finally {

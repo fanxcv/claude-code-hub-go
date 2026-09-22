@@ -407,7 +407,7 @@ export function UserManagementTable({
   };
 
   return (
-    <div className="space-y-3">
+    <div className="flex grow shrink-0 flex-col space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           {!showMultiSelect ? (
@@ -458,9 +458,15 @@ export function UserManagementTable({
         ) : null}
       </div>
 
-      <div className={cn("border border-border rounded-lg", "overflow-hidden")}>
-        <div className="relative w-full overflow-x-auto">
-          <div className={MIN_TABLE_WIDTH_CLASS}>
+      <div
+        className={cn(
+          "border border-border rounded-lg",
+          "flex grow shrink-0 flex-col",
+          "overflow-hidden"
+        )}
+      >
+        <div className="relative flex grow shrink-0 flex-col w-full overflow-x-auto">
+          <div className={cn(MIN_TABLE_WIDTH_CLASS, "flex grow shrink-0 flex-col")}>
             <div className="bg-muted/50 border-b">
               <div
                 className={cn(
@@ -543,7 +549,10 @@ export function UserManagementTable({
                 </div>
               </div>
             ) : (
-              <div ref={parentRef} className="h-[600px] overflow-y-auto">
+              /* 与使用记录页同一范式（理由见 virtualized-logs-table.tsx 的链注释）：
+                 h-[600px] 是基线高度兼非 flex 宿主的兜底，链上余量由 grow 吃掉，
+                 shrink-0 保证小屏不被压小。 */
+              <div ref={parentRef} className={cn("h-[600px] grow shrink-0 overflow-y-auto")}>
                 <div
                   style={{
                     height: `${rowVirtualizer.getTotalSize()}px`,

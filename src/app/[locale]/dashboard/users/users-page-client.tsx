@@ -582,7 +582,7 @@ function UsersPageContent({ currentUser }: UsersPageClientProps) {
   );
 
   return (
-    <div className="space-y-4">
+    <div className="flex grow shrink-0 flex-col space-y-4">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">{t("title")}</h1>
@@ -772,7 +772,7 @@ function UsersPageContent({ currentUser }: UsersPageClientProps) {
           {error instanceof Error ? error.message : tCommon("error")}
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="flex grow shrink-0 flex-col space-y-3">
           <UserManagementTable
             users={visibleUsers}
             hasNextPage={hasNextPage}
