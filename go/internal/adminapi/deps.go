@@ -44,6 +44,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/limit"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/usagefeed"
 )
@@ -208,6 +209,22 @@ type SlowRatePenaltyReader interface {
 	Penalties(ctx context.Context, candidates []route.Provider, requestModel string) map[int64]int
 }
 
+// SlowLogsReader 读某渠道的近期低速事件（低速降权的升/降档与基线变更）。
+//
+// 为什么要有它：低速降权在生产上只表现为「选路结果变了」，运维看不到「什么时候压的、
+// 压了多少、恢复没有」——这正是用户要求「低速日志与熔断日志合窗 tab 切换」的动因。
+//
+// nil 表示未装配（无 Redis 命令连接）：`/providers/{id}/slow-logs` **不注册**，原样回退 Node——
+// 注册一个必然失败的路由比不注册坏得多（与 CircuitStates 同一纪律）。
+//
+// 实现是 `*slowlog.Reader`（见 internal/slowlog）：本接口只声明最小读面，
+// 键形制与序列化留在一个包里，两侧不各写一遍。
+//
+// 签名与 `slowlog.Reader.Recent` 逐字一致，由 provider_slow_logs_test.go 的编译期断言钉住。
+type SlowLogsReader interface {
+	Recent(ctx context.Context, providerID int64, limit int) ([]slowlog.Event, error)
+}
+
 // Fixed5hWindowReader 读 5h 固定窗口的累计值与重置时刻
 // （Node 的 RateLimitService.getFixed5hWindowState，src/lib/rate-limit/service.ts:160-183）。
 //
@@ -249,6 +266,9 @@ type Deps struct {
 	// nil 表示未装配：调度模拟器的该维不降权——与「全渠道未开启低速监控」同义。
 	// 它不阻断任何路由注册（只是预览与真实选路在降权维不一致，属可见的偏离）。
 	SlowRatePenalties SlowRatePenaltyReader
+	// SlowLogs 读某渠道的近期低速事件（`/providers/{id}/slow-logs` 的数据源）。
+	// nil 表示未装配：该路由不注册，原样回退 Node。
+	SlowLogs SlowLogsReader
 	// ProviderSlowRates 读**per-渠道**的低速降权聚合读数（/providers/health 的 slowRate 字段）。
 	// nil 表示未装配：该响应里 `slowRate` 一律为 null，前端整段不显示这一维
 	// （不是「无降权」——两者必须可区分，故不用零值对象冒充）。

@@ -20,6 +20,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/ratelimit"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/usagefeed"
 )
@@ -125,6 +126,10 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 	// 复用上面那一份读取实现做生效判定（两处判定必须只有一份）；缺 Redis 时为 nil，
 	// 那响应里 slowRate 一律 null，前端整段不显示。
 	deps.ProviderSlowRates = adminapi.NewRedisProviderSlowRates(redisClient, slowRateReader, logger)
+	// 低速日志读面（`/providers/{id}/slow-logs`）：与写侧（slowrate / jobs）共用 internal/slowlog
+	// 一份键形制与序列化。缺 Redis 时为 nil，该路由不注册（回退 Node）——
+	// 与熔断日志同一条 fail-closed 纪律。
+	deps.SlowLogs = slowlog.NewReader(redisClient, logger)
 
 	// 粘性会话终止面（providers / provider-endpoints 写路径的副作用）：与上面读档的区别在于
 	// 它是写，缺装配不给任何路由降级，只让写路径记 warn（见 openStickySessions 的说明）。
@@ -385,6 +390,8 @@ func registerAdminRoutes(
 	adminapi.RegisterProvidersWrite(router, deps)
 	// 熔断日志查看（用户需求）：返回当前熔断状态 + 该供应商的近期失败请求，供排障。
 	adminapi.RegisterProviderCircuitLogs(router, deps)
+	// 低速日志查看（用户需求）：返回低速降权的升/降档与基线变更事件，与熔断日志同弹窗 tab 切换。
+	adminapi.RegisterProviderSlowLogs(router, deps)
 	adminapi.RegisterProviderGroups(router, deps)
 	// provider-endpoints 资源的读面（厂/端点列表、探活日志）与两条根级价格读端点：
 	// 它们只需 PG，与上面六条熔断端点的装配条件不同，故分开注册。

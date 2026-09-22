@@ -25,14 +25,18 @@ vi.mock("next-intl", () => ({
 }));
 
 // react-query：由各用例替换返回值，避免真起 QueryClient。
+// **按 queryKey 分派**（而非一个全局 mockReturnValue）：本弹窗现在有两个查询
+// （熔断 + 低速），全局返回会让「切 tab 才请求低速数据」变成无法断言的。
 const useQueryMock = vi.fn();
 vi.mock("@tanstack/react-query", () => ({
   useQuery: (options: unknown) => useQueryMock(options),
 }));
 
 const getProviderCircuitLogsMock = vi.fn();
+const getProviderSlowLogsMock = vi.fn();
 vi.mock("@/lib/api-client/v1/actions/providers", () => ({
   getProviderCircuitLogs: (...args: unknown[]) => getProviderCircuitLogsMock(...args),
+  getProviderSlowLogs: (...args: unknown[]) => getProviderSlowLogsMock(...args),
 }));
 
 // Radix 的 Dialog 只在 open 时渲染内容；这里换成受控的直通实现，
@@ -86,7 +90,12 @@ vi.mock("@/components/ui/button", () => ({
 }));
 
 import { ProviderCircuitLogsDialog } from "@/app/[locale]/settings/providers/_components/provider-circuit-logs-dialog";
-import type { ProviderCircuitLogs, ProviderCircuitLogsError } from "@/types/provider";
+import type {
+  ProviderCircuitLogs,
+  ProviderCircuitLogsError,
+  ProviderSlowLogEvent,
+  ProviderSlowLogs,
+} from "@/types/provider";
 
 function render(node: ReactNode) {
   const container = document.createElement("div");
@@ -121,14 +130,66 @@ function payload(overrides: Partial<ProviderCircuitLogs> = {}): ProviderCircuitL
   };
 }
 
-function querySuccess(data: ProviderCircuitLogs) {
-  useQueryMock.mockReturnValue({
-    data,
-    isPending: false,
-    isError: false,
-    isFetching: false,
-    refetch: vi.fn(),
+/** 查询结果典形：非 pending 非 error。 */
+function resolved(data: unknown) {
+  return { data, isPending: false, isError: false, isFetching: false, refetch: vi.fn() };
+}
+
+/** 低速日志的完整响应；用例只覆盖自己关心的字段。 */
+function slowPayload(overrides: Partial<ProviderSlowLogs> = {}): ProviderSlowLogs {
+  return {
+    providerId: 145,
+    window: { limit: 20, retentionHours: 24, since: "2026-09-22T00:00:00.000Z" },
+    events: [],
+    unavailableReason: null,
+    ...overrides,
+  };
+}
+
+/**
+ * 按 queryKey 分派返回值：两个查询共用同一个 useQuery 替身，
+ * 只看一个全局返回值无法区分「谁的数据」——而本文件要同时断言两个 tab。
+ */
+function querySuccess(data: ProviderCircuitLogs, slow: Partial<ProviderSlowLogs> = {}) {
+  const slowData = slowPayload(slow);
+  useQueryMock.mockImplementation((options: { queryKey?: unknown[] }) => {
+    const key = String(options?.queryKey?.[0] ?? "");
+    return key === "provider-slow-logs" ? resolved(slowData) : resolved(data);
   });
+}
+
+/**
+ * 切到低速 tab：点 Radix 的**真实**触发器。
+ *
+ * 为什么按文案找而不是按 value 属性：Radix 的 TabsTrigger 只渲染 role="tab" 与
+ * aria-controls/id，**不把 value 写进 DOM**——按 value 找会静默拿到 null，
+ * 于是「切 tab」这一步没发生，断言跟着假绿/假红。
+ */
+function clickSlowTab() {
+  const triggers = [...document.querySelectorAll("[role='tab']")] as HTMLElement[];
+  const slow = triggers.find((node) => (node.textContent ?? "").includes("circuitLogs.tabs.slow"));
+  if (!slow) {
+    throw new Error(
+      `未找到低速 tab 触发器，实际触发器：${triggers.map((t) => t.textContent).join(" | ")}`
+    );
+  }
+  // Radix 在 **mousedown** 上切值（click 不触发它的 onMouseDown）；button=0 是左键。
+  act(() => {
+    slow.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+  });
+}
+
+/**
+ * 取指定 queryKey **最近一次**的 useQuery 入参（用于断言 enabled 与 queryKey）。
+ *
+ * 为什么取最后一次而不是第一次：useQuery 每次渲染都被调用，第一次是打开弹窗那一刻的
+ * （低速侧那时 enabled=false）。取第一次会让「切 tab 后变成 true」永远断不出来。
+ */
+function queryOptions(key: string): { enabled?: boolean; queryKey?: unknown[] } | undefined {
+  const matched = useQueryMock.mock.calls.filter(
+    (args) => String((args[0] as { queryKey?: unknown[] })?.queryKey?.[0] ?? "") === key
+  );
+  return matched.at(-1)?.[0] as { enabled?: boolean; queryKey?: unknown[] } | undefined;
 }
 
 /** 造一条错误行；用例只覆盖自己关心的字段（其余取典形值）。 */
@@ -144,6 +205,21 @@ function errorRow(overrides: Partial<ProviderCircuitLogsError> = {}): ProviderCi
     source: "direct",
     chainReason: null,
     redacted: false,
+    ...overrides,
+  };
+}
+
+/** 造一条低速事件；用例只覆盖自己关心的字段（其余取典形值）。 */
+function slowEvent(overrides: Partial<ProviderSlowLogEvent> = {}): ProviderSlowLogEvent {
+  return {
+    kind: "penalty_up",
+    at: 1789993274606,
+    modelKey: "deepseek-v4.1-flash",
+    penaltyFrom: 10,
+    penaltyTo: 30,
+    median: null,
+    samples: null,
+    reason: null,
     ...overrides,
   };
 }
@@ -300,9 +376,103 @@ describe("ProviderCircuitLogsDialog", () => {
     const unmount = render(
       <ProviderCircuitLogsDialog providerId={145} providerName="Ollama Codex" open={false} />
     );
-    const options = useQueryMock.mock.calls[0]?.[0] as { enabled?: boolean; queryKey?: unknown[] };
-    expect(options?.enabled).toBe(false);
-    expect(options?.queryKey?.[1]).toBe(145);
+    expect(queryOptions("provider-circuit-logs")?.enabled).toBe(false);
+    expect(queryOptions("provider-circuit-logs")?.queryKey?.[1]).toBe(145);
+    unmount();
+  });
+
+  // ———————————————————————————————————————————————————————————————
+  // 以下四例针对低速 tab（用户需求：低速日志与熔断日志合窗、tab 切换）。
+  // ———————————————————————————————————————————————————————————————
+
+  it("切到低速 tab 才请求低速数据（懒加载）", () => {
+    querySuccess(payload(), { events: [slowEvent()] });
+    const unmount = render(<ProviderCircuitLogsDialog providerId={145} providerName="P" open />);
+
+    // 默认停在熔断 tab：低速查询必须处于关闭态（否则开弹窗就白付一次 Redis 读）。
+    expect(queryOptions("provider-slow-logs")?.enabled).toBe(false);
+    // 且低速内容不得被渲染。
+    expect(text()).not.toContain("circuitLogs.slow.title");
+
+    // 切 tab：点 Radix 的触发器（真实交互，不是直接改 state）。
+    clickSlowTab();
+
+    // 切换后启用，且低速内容出现。
+    expect(queryOptions("provider-slow-logs")?.enabled).toBe(true);
+    expect(text()).toContain("circuitLogs.slow.title");
+    unmount();
+  });
+
+  it("低速事件按种类渲染，且「不含此维」不画成 0", () => {
+    querySuccess(payload(), {
+      events: [
+        slowEvent(),
+        slowEvent({
+          kind: "baseline_published",
+          penaltyFrom: null,
+          penaltyTo: null,
+          median: 239.68,
+          samples: 7215,
+          reason: "primary",
+        }),
+      ],
+    });
+    const unmount = render(<ProviderCircuitLogsDialog providerId={145} providerName="P" open />);
+    clickSlowTab();
+
+    // 事件种类走词表键（禁硬编码文案），带前后值参数。
+    expect(text()).toContain("circuitLogs.slow.kinds.penalty_up");
+    expect(text()).toContain("circuitLogs.slow.detail.penalty");
+    expect(text()).toContain('"from":10');
+    expect(text()).toContain('"to":30');
+    // 基线事件走另一条详情文案（含中位数与样本数）。
+    expect(text()).toContain("circuitLogs.slow.kinds.baseline_published");
+    expect(text()).toContain("circuitLogs.slow.detail.baseline");
+    expect(text()).toContain('"median":239.68');
+    // 时间范围必须写明（否则「24h 内无降权」会被读成「从未降权」）。
+    expect(text()).toContain("circuitLogs.slow.window");
+    unmount();
+  });
+
+  it("低速日志为空时给出带时间范围的空态；读不到时给出原因而不是空表", () => {
+    querySuccess(payload(), { events: [] });
+    const unmount = render(<ProviderCircuitLogsDialog providerId={145} providerName="P" open />);
+    clickSlowTab();
+    expect(text()).toContain("circuitLogs.slow.empty");
+    expect(text()).toContain('"hours":24');
+    unmount();
+
+    // 读不到：必须是明确原因（不是一张空表）。
+    querySuccess(payload(), { events: [], unavailableReason: "redis_unavailable" });
+    const unmount2 = render(<ProviderCircuitLogsDialog providerId={145} providerName="P" open />);
+    clickSlowTab();
+    expect(text()).toContain("circuitLogs.slow.unavailable");
+    expect(text()).toContain("redis_unavailable");
+    unmount2();
+  });
+
+  it("低速 tab 取数失败只在该 tab 内显示失败态，不影响熔断 tab", () => {
+    useQueryMock.mockImplementation((options: { queryKey?: unknown[] }) => {
+      const key = String(options?.queryKey?.[0] ?? "");
+      if (key === "provider-slow-logs") {
+        return {
+          data: undefined,
+          isPending: false,
+          isError: true,
+          isFetching: false,
+          refetch: vi.fn(),
+        };
+      }
+      return resolved(payload());
+    });
+    const unmount = render(<ProviderCircuitLogsDialog providerId={145} providerName="P" open />);
+
+    // 熔断 tab 正常（不受低速侧失败影响）。
+    expect(text()).not.toContain("circuitLogs.loadFailed");
+    expect(text()).toContain("circuitLogs.state.title");
+
+    clickSlowTab();
+    expect(text()).toContain("circuitLogs.loadFailed");
     unmount();
   });
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pubstatus"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
 )
 
 // Facts 是一次终态的速率事实，慢样本判定的全部输入。
@@ -220,6 +221,10 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 		penalty = params.PenaltyMax
 	}
 	statePipe := r.redis.Pipeline()
+	// HGet 排在 HSet **之前**：pipeline 按序执行，故读到的是本轮的**旧**惩罚值，
+	// 供低速日志去重（只在档位真的变了时记一条）。加在这一条既有 pipeline 里
+	// 意味着日志不新增任何往返；见 internal/slowlog.RecordPenaltyChange 的去重理由。
+	previousPenalty := statePipe.HGet(ctx, stateKey, StateFieldPenalty)
 	statePipe.HSet(ctx, stateKey,
 		StateFieldPenalty, penalty,
 		StateFieldWindowSeconds, params.WindowSeconds,
@@ -234,6 +239,11 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 		r.warn("slowrate.state_write_failed", facts, err)
 		return
 	}
+	// 惩罚档位变化记一条低速日志（旁路：失败只 warn，见 slowlog 包注释）。
+	// 与 state 同 pipeline 取旧值，故本调用不新增 Redis 往返。
+	slowlog.RecordPenaltyChange(
+		ctx, r.redis, r.logger, facts.ProviderID, facts.ModelKey, previousPenalty.Val(), penalty,
+	)
 	r.writeCooldown(ctx, facts, params)
 }
 

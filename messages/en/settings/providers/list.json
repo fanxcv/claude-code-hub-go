@@ -109,6 +109,33 @@
       "copied": "Copied",
       "copyFailed": "Copy failed",
       "copyAll": "Copy all"
+    },
+    "tabs": {
+      "circuit": "Circuit",
+      "slow": "Slow rate"
+    },
+    "slow": {
+      "title": "Slow-rate events",
+      "window": "Last {hours} h (up to {limit} entries, since {since})",
+      "empty": "No slow-rate events in the last {hours} h.",
+      "unavailable": "Slow-rate log unavailable: {reason}",
+      "columns": {
+        "time": "Time",
+        "kind": "Event",
+        "model": "Model",
+        "detail": "Detail"
+      },
+      "kinds": {
+        "penalty_up": "Penalty up",
+        "penalty_down": "Penalty down",
+        "baseline_published": "Baseline published",
+        "baseline_revoked": "Baseline revoked"
+      },
+      "detail": {
+        "penalty": "Penalty {from} → {to}",
+        "baseline": "Median {median} tok/s, {samples} samples, source {source}",
+        "revoked": "Revoked: {reason}"
+      }
     }
   }
 }

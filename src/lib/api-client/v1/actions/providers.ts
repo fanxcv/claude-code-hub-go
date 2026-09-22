@@ -4,6 +4,7 @@ import type {
   ProviderCircuitLogs,
   ProviderDisplay,
   ProviderHealthStatus,
+  ProviderSlowLogs,
   ProviderStatisticsMap,
   RemoveProviderResult,
 } from "@/types/provider";
@@ -27,6 +28,7 @@ export type {
   ProviderCircuitLogs,
   ProviderDisplay,
   ProviderHealthStatus,
+  ProviderSlowLogs,
   ProviderStatisticsMap,
   RemoveProviderResult,
 } from "@/types/provider";
@@ -122,6 +124,18 @@ export function getProviderCircuitLogs(
   const query = limit === undefined ? "" : searchParams({ limit: String(limit) });
   return apiGet<ProviderCircuitLogs>(
     `/api/v1/providers/${providerId}/circuit-logs${query}`,
+    dashboardCompatOptions
+  );
+}
+
+// 低速日志：该供应商近期的降权升/降档与基线变更（与熔断日志同弹窗 tab 切换）。
+//
+// 与 getProviderCircuitLogs 同样**不**用 toActionResult 包装：端点即便 Redis 不可用也返回
+// 200 + unavailableReason（由弹窗呈现降级），故这里只有真异常才算失败。
+export function getProviderSlowLogs(providerId: number, limit?: number): Promise<ProviderSlowLogs> {
+  const query = limit === undefined ? "" : searchParams({ limit: String(limit) });
+  return apiGet<ProviderSlowLogs>(
+    `/api/v1/providers/${providerId}/slow-logs${query}`,
     dashboardCompatOptions
   );
 }
