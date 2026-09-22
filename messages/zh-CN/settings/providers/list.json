@@ -109,6 +109,33 @@
       "copied": "已复制",
       "copyFailed": "复制失败",
       "copyAll": "复制全部"
+    },
+    "tabs": {
+      "circuit": "熔断",
+      "slow": "低速降权"
+    },
+    "slow": {
+      "title": "低速降权事件",
+      "window": "最近 {hours} 小时（最多 {limit} 条，自 {since}）",
+      "empty": "最近 {hours} 小时内没有低速降权事件。",
+      "unavailable": "读不到低速日志：{reason}",
+      "columns": {
+        "time": "时间",
+        "kind": "事件",
+        "model": "模型",
+        "detail": "详情"
+      },
+      "kinds": {
+        "penalty_up": "降权升档",
+        "penalty_down": "降权降档",
+        "baseline_published": "基线发布",
+        "baseline_revoked": "基线撤销"
+      },
+      "detail": {
+        "penalty": "降权量 {from} → {to}",
+        "baseline": "中位数 {median} tok/s，样本 {samples}，来源 {source}",
+        "revoked": "撤销原因 {reason}"
+      }
     }
   }
 }

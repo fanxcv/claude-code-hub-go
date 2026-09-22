@@ -757,6 +757,44 @@ export interface ProviderCircuitLogs {
   errorsUnavailableReason: string | null;
 }
 
+/** 低速日志里的一条事件（存储侧 internal/slowlog 的 Event 投影）。 */
+export type ProviderSlowLogKind =
+  | "penalty_up"
+  | "penalty_down"
+  | "baseline_published"
+  | "baseline_revoked";
+
+export interface ProviderSlowLogEvent {
+  kind: ProviderSlowLogKind;
+  /** 毫秒时间戳。 */
+  at: number;
+  modelKey: string | null;
+  /** 降权量的前后值（惩罚类事件）；基线事件为 null——用 null 表达「不含此维」而不是 0。 */
+  penaltyFrom: number | null;
+  penaltyTo: number | null;
+  /** 基线读数（基线发布事件）。 */
+  median: number | null;
+  samples: number | null;
+  /** 基线来源（primary/extended/extended_stale）或撤销原因。 */
+  reason: string | null;
+}
+
+/** 低速事件的时间范围——与熔断日志同理，界面必须显示，否则「24h 内无降权」会被误读成「从未降权」。 */
+export interface ProviderSlowLogsWindow {
+  limit: number;
+  retentionHours: number;
+  since: string;
+}
+
+/** 供应商低速日志（GET /api/v1/providers/{id}/slow-logs）。 */
+export interface ProviderSlowLogs {
+  providerId: number;
+  window: ProviderSlowLogsWindow;
+  events: ProviderSlowLogEvent[];
+  /** 仅在「读不到」时给出；此时 events 为空数组。 */
+  unavailableReason: string | null;
+}
+
 export interface CreateProviderData {
   name: string;
   url: string;

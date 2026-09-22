@@ -22,17 +22,26 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getProviderCircuitLogs } from "@/lib/api-client/v1/actions/providers";
-import type { ProviderCircuitLogs, ProviderCircuitLogsError } from "@/types/provider";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { getProviderCircuitLogs, getProviderSlowLogs } from "@/lib/api-client/v1/actions/providers";
+import type {
+  ProviderCircuitLogs,
+  ProviderCircuitLogsError,
+  ProviderSlowLogEvent,
+  ProviderSlowLogs,
+} from "@/types/provider";
 
 /**
- * 查看熔断日志：供应商**当前熔断状态** + 该供应商**近期错误**。
+ * 查看熔断日志：供应商**当前熔断状态** + 该供应商**近期错误**，另有一个 tab 看**低速降权事件**。
  *
  * 两块数据在后端各自独立降级（Redis 读不到只影响状态块、库读不到只影响错误块），故这里也必须
  * 分别渲染各自的「无数据/不可用」——把降级画成一个整体会让人以为整个排障入口坏了。
+ * 加 tab 后这条纪律落到**每个 tab 内**：加载/错误态不再放在整弹窗上，否则切到还没取数的
+ * 低速 tab 会闪一整页 loading。
  *
  * 为什么最近错误要显示「时间范围」：后端只回看最近 N 小时（默认 24）。不写清这一点，
  * 「24 小时内没有错误」会被读成「从来没有错误」，而这正是最需要避免的误判。
+ * 低速 tab 同理（保留 24 小时）。
  */
 
 // 与后端 circuitLogsMaxLimit 一致；这里给一个更小的默认值，首屏要能一眼扫完。
@@ -62,6 +71,7 @@ export function ProviderCircuitLogsDialog({
   const t = useTranslations("settings.providers.list.circuitLogs");
   const locale = useLocale();
   const [internalOpen, setInternalOpen] = useState(false);
+  const [tab, setTab] = useState<"circuit" | "slow">("circuit");
   const isControlled = open !== undefined;
   const dialogOpen = isControlled ? open : internalOpen;
   const setDialogOpen = isControlled ? (onOpenChange ?? (() => {})) : setInternalOpen;
@@ -71,6 +81,16 @@ export function ProviderCircuitLogsDialog({
     queryKey: ["provider-circuit-logs", providerId, DEFAULT_LIMIT],
     queryFn: () => getProviderCircuitLogs(providerId, DEFAULT_LIMIT),
     enabled: dialogOpen,
+    staleTime: 10_000,
+  });
+
+  // 低速日志同样是按需查询，且**更懒**一层：切到该 tab 才发请求。
+  // 为什么不用 dialogOpen 一个条件：两个请求都在开弹窗时发，会让只来看熔断状态的人
+  // 白白多付一次 Redis 读；排障场景按需取数是本弹窗的既有取舍（见上一条注释）。
+  const slowQuery = useQuery({
+    queryKey: ["provider-slow-logs", providerId, DEFAULT_LIMIT],
+    queryFn: () => getProviderSlowLogs(providerId, DEFAULT_LIMIT),
+    enabled: dialogOpen && tab === "slow",
     staleTime: 10_000,
   });
 
@@ -88,33 +108,87 @@ export function ProviderCircuitLogsDialog({
           <DialogDescription>{t("description")}</DialogDescription>
         </DialogHeader>
 
-        {query.isPending ? (
-          <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            {t("loading")}
-          </div>
-        ) : query.isError ? (
-          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
-            <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
-            <span>{t("loadFailed")}</span>
-          </div>
-        ) : (
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1">
-            <CircuitStateBlock payload={query.data} formatTime={formatTime} />
-            <ErrorsBlock payload={query.data} />
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => query.refetch()}
-                disabled={query.isFetching}
-              >
-                <RefreshCw className={`mr-2 h-4 w-4 ${query.isFetching ? "animate-spin" : ""}`} />
-                {t("refresh")}
-              </Button>
-            </div>
-          </div>
-        )}
+        {/* Tabs 承担剩下的高度（min-h-0 是 flex 里能真正收缩的前提），
+            每个 TabsContent 自己滚动——原来那一个整弹窗级滚动容器被 tab 结构切开了。 */}
+        <Tabs
+          value={tab}
+          onValueChange={(value) => setTab(value === "slow" ? "slow" : "circuit")}
+          className="flex min-h-0 flex-1 flex-col"
+        >
+          <TabsList>
+            <TabsTrigger value="circuit">{t("tabs.circuit")}</TabsTrigger>
+            <TabsTrigger value="slow">{t("tabs.slow")}</TabsTrigger>
+          </TabsList>
+
+          <TabsContent
+            value="circuit"
+            className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1"
+          >
+            {query.isPending ? (
+              <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t("loading")}
+              </div>
+            ) : query.isError ? (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
+                <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
+                <span>{t("loadFailed")}</span>
+              </div>
+            ) : (
+              <>
+                <CircuitStateBlock payload={query.data} formatTime={formatTime} />
+                <ErrorsBlock payload={query.data} />
+                <div className="flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => query.refetch()}
+                    disabled={query.isFetching}
+                  >
+                    <RefreshCw
+                      className={`mr-2 h-4 w-4 ${query.isFetching ? "animate-spin" : ""}`}
+                    />
+                    {t("refresh")}
+                  </Button>
+                </div>
+              </>
+            )}
+          </TabsContent>
+
+          <TabsContent
+            value="slow"
+            className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pr-1"
+          >
+            {slowQuery.isPending ? (
+              <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t("loading")}
+              </div>
+            ) : slowQuery.isError ? (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm">
+                <AlertTriangle className="mt-0.5 h-4 w-4 text-destructive" />
+                <span>{t("loadFailed")}</span>
+              </div>
+            ) : (
+              <>
+                <SlowLogsBlock payload={slowQuery.data} formatTime={formatTime} />
+                <div className="flex justify-end">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => slowQuery.refetch()}
+                    disabled={slowQuery.isFetching}
+                  >
+                    <RefreshCw
+                      className={`mr-2 h-4 w-4 ${slowQuery.isFetching ? "animate-spin" : ""}`}
+                    />
+                    {t("refresh")}
+                  </Button>
+                </div>
+              </>
+            )}
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );
@@ -326,6 +400,114 @@ function ErrorRow({ row }: { row: ProviderCircuitLogsError }) {
       </TableCell>
     </TableRow>
   );
+}
+
+/** 低速日志块：时间范围 + 逐条降权/基线事件。 */
+function SlowLogsBlock({
+  payload,
+  formatTime,
+}: {
+  payload: ProviderSlowLogs;
+  formatTime: (value: number | null) => string;
+}) {
+  const t = useTranslations("settings.providers.list.circuitLogs");
+
+  if (payload.unavailableReason !== null) {
+    return (
+      <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-700 dark:bg-amber-950/30">
+        {t("slow.unavailable", { reason: payload.unavailableReason })}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="text-sm font-medium">{t("slow.title")}</span>
+        {/* 时间范围必须显示（同 errors.window 的纪律）：否则「24h 内无降权」会被读成「从未降权」。 */}
+        <span className="text-xs text-muted-foreground">
+          {t("slow.window", {
+            hours: payload.window.retentionHours,
+            limit: payload.window.limit,
+            since: new Date(payload.window.since).toLocaleString(),
+          })}
+        </span>
+      </div>
+      {payload.events.length === 0 ? (
+        <div className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
+          {t("slow.empty", { hours: payload.window.retentionHours })}
+        </div>
+      ) : (
+        <div className="overflow-x-auto rounded-md border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="whitespace-nowrap">{t("slow.columns.time")}</TableHead>
+                <TableHead className="whitespace-nowrap">{t("slow.columns.kind")}</TableHead>
+                <TableHead className="whitespace-nowrap">{t("slow.columns.model")}</TableHead>
+                <TableHead>{t("slow.columns.detail")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {payload.events.map((event, index) => (
+                <SlowLogRow
+                  // 存储层事件没有唯一 id（同毫秒可并存多条）；用索引做键，
+                  // 列表是只读且不重排的，索引键在这是安全的。
+                  key={`${event.at}-${event.kind}-${index}`}
+                  event={event}
+                  formatTime={formatTime}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SlowLogRow({
+  event,
+  formatTime,
+}: {
+  event: ProviderSlowLogEvent;
+  formatTime: (value: number | null) => string;
+}) {
+  const t = useTranslations("settings.providers.list.circuitLogs");
+  return (
+    <TableRow>
+      <TableCell className="whitespace-nowrap text-xs">{formatTime(event.at)}</TableCell>
+      <TableCell className="whitespace-nowrap text-xs">{t(`slow.kinds.${event.kind}`)}</TableCell>
+      <TableCell className="whitespace-nowrap text-xs">{event.modelKey ?? "-"}</TableCell>
+      <TableCell className="text-xs">{formatSlowLogDetail(event, t)}</TableCell>
+    </TableRow>
+  );
+}
+
+/**
+ * 事件的「详情」列：按种类渲染各自有意义的数字。
+ *
+ * 用 null 判断而不是 `?? 0`：后端用 null 表达「本事件不含此维」，渲染成 0 会说谎
+ * （例如把基线事件的降权量显示成「0 → 0」）。
+ */
+function formatSlowLogDetail(
+  event: ProviderSlowLogEvent,
+  t: ReturnType<typeof useTranslations>
+): string {
+  if (event.kind === "penalty_up" || event.kind === "penalty_down") {
+    return t("slow.detail.penalty", {
+      from: event.penaltyFrom ?? 0,
+      to: event.penaltyTo ?? 0,
+    });
+  }
+  if (event.kind === "baseline_published") {
+    return t("slow.detail.baseline", {
+      median: event.median ?? 0,
+      samples: event.samples ?? 0,
+      source: event.reason ?? "-",
+    });
+  }
+  return t("slow.detail.revoked", { reason: event.reason ?? "-" });
 }
 
 /**

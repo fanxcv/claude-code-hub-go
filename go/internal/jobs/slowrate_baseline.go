@@ -13,6 +13,7 @@ import (
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pubstatus"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
@@ -512,6 +513,9 @@ func (b *SlowRateBaseline) revokeBaseline(
 		"modelKey":   scope.ModelKey,
 		"reason":     "no_baseline",
 	})
+	// 同时记一条低速日志（Redis 事件流，供管理面弹窗与熔断日志同窗展示）。
+	// 旁路：失败只 warn，不影响本轮任务结果（见 slowlog 包注释）。
+	slowlog.RecordBaselineRevoked(ctx, b.redis, b.logger, scope.ProviderID, scope.ModelKey)
 	return nil
 }
 
@@ -548,6 +552,11 @@ func (b *SlowRateBaseline) writeBaseline(
 		"samples":    samples,
 		"source":     string(source),
 	})
+	// 同时记一条低速日志（Redis 事件流，供管理面弹窗与熔断日志同窗展示）。
+	// 旁路：失败只 warn，不影响本轮任务结果（见 slowlog 包注释）。
+	slowlog.RecordBaselinePublished(
+		ctx, b.redis, b.logger, scope.ProviderID, scope.ModelKey, median, samples, string(source), now,
+	)
 	return nil
 }
 

@@ -69,6 +69,35 @@ func (r *revokeStubRedis) Del(ctx context.Context, keys ...string) *redis.IntCmd
 	return cmd
 }
 
+// Pipelined 是低速日志写入（slowlog.Record）需要的面：括号里只跑闭包、不模拟命令语义。
+//
+// 为何要有它：替身内嵌 nil 的 redis.UniversalClient，任何未实现的方法都会空指针 panic——
+// 这正好把「生产路径调了替身没实现的方法」变成一条硬失败，而不是静默跳过。
+func (r *revokeStubRedis) Pipelined(
+	ctx context.Context,
+	fn func(redis.Pipeliner) error,
+) ([]redis.Cmder, error) {
+	return nil, fn(&revokeStubPipeline{redis: r})
+}
+
+// revokeStubPipeline 只记录 XAdd/Expire，不做真写入：本文件的断言对象是 Del。
+type revokeStubPipeline struct {
+	redis.Pipeliner
+	redis *revokeStubRedis
+}
+
+func (p *revokeStubPipeline) XAdd(_ context.Context, _ *redis.XAddArgs) *redis.StringCmd {
+	cmd := redis.NewStringCmd(context.Background())
+	cmd.SetVal("0-0")
+	return cmd
+}
+
+func (p *revokeStubPipeline) Expire(_ context.Context, _ string, _ time.Duration) *redis.BoolCmd {
+	cmd := redis.NewBoolCmd(context.Background())
+	cmd.SetVal(true)
+	return cmd
+}
+
 func revokeTestScope(w1Samples, w2Samples int64) store.SlowRateScopeSamples {
 	return store.SlowRateScopeSamples{
 		ProviderID: 167,
