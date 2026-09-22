@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -186,6 +187,85 @@ func TestIntegrationOpenAffinityBuildsStoreFromConfig(t *testing.T) {
 	setup.close()
 	if err := setup.client.Ping(ctx).Err(); err == nil {
 		t.Fatal("close 之后亲和连接必须已释放")
+	}
+}
+
+// /readyz 的亲和结论必须自带「启动快照」标注，且 env 派生的 window/ttl 仍照旧带出。
+//
+// 为什么必须钉：Enabled / Source / IgnoreClientSessionID 取自启动时读到的系统设置（装配时经
+// AffinityReport 一次性回填），而对应的选路已改成**逐请求读**、运行时改设置**立即**生效。
+// 不标注就会让运维把 /readyz 读成活值，进而得出「改了没生效」的错误结论——
+// 与「接口返 200 而行为不变」同一族误导。本用例同时钉住「不得把 env 那半也标成快照」。
+func TestAffinityDescribeMarksBootSnapshot(t *testing.T) {
+	cases := []struct {
+		name   string
+		status affinityStatus
+	}{
+		{
+			name:   "启用：来源与模式均带标注",
+			status: affinityStatus{Enabled: true, Source: "system_setting", Window: 8, TTLSeconds: 3600},
+		},
+		{
+			// 关掉时同样必须标注：运维正靠着看为什么亲和没开。
+			name:   "关闭：仍带标注",
+			status: affinityStatus{Source: "disabled"},
+		},
+		{
+			name: "设置读取失败：错误说明与标注共存",
+			status: affinityStatus{
+				Enabled: true, Source: "system_setting", Window: 8, TTLSeconds: 3600,
+				SettingsErr: "dial tcp: 连接超时",
+			},
+		},
+		{
+			name: "模式=强制前缀：标注不受模式影响",
+			status: affinityStatus{
+				Enabled: true, Source: "env+system_setting", Window: 8, TTLSeconds: 3600,
+				IgnoreClientSessionID: true,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.status.describe()
+			if !strings.Contains(got, affinityBootSnapshotNote) {
+				t.Fatalf("结论必须自带启动快照标注，收到 %q", got)
+			}
+			// 标注必须说清两件事：这半是启动快照且运行时改设置不刷新它。
+			for _, want := range []string{"启动快照", "本行不更新"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("标注应含 %q，收到 %q", want, got)
+				}
+			}
+			// env 派生的那半不得被当成快照一起标：它本就是启动常量，但必须仍被如实带出。
+			if tc.status.Enabled && !strings.Contains(got, fmt.Sprintf("window %d", tc.status.Window)) {
+				t.Errorf("env 派生的 window 必须照旧带出，收到 %q", got)
+			}
+			if !strings.Contains(got, "取自 env") {
+				t.Errorf("window/ttl 的 env 出处必须写明，收到 %q", got)
+			}
+		})
+	}
+}
+
+// /readyz 的配置结论里，affinity 一行必须带上「启动快照」标注；翻设置**不得**让它看起来像活值。
+//
+// 为何在 /readyz 这一层再钉一次：describe() 的单测只证「串里含标注」，本用例证「该串真的
+// 经 readyProber 走到了 notes 里」。而「改设置后本行不变」是**设计事实**（装配时一次性
+// 回填），所以钉的是「标注在场」而不是「值变新」——后者才需要改行为，超出本次授权。
+func TestReadyzAffinityNoteCarriesBootSnapshotMarker(t *testing.T) {
+	prober := readyProber{affinity: affinityStatus{
+		Enabled: true, Source: "system_setting", Window: 8, TTLSeconds: 3600,
+	}}
+	note, ok := prober.DataPlaneConfiguration()["affinity"]
+	if !ok || note == "" {
+		t.Fatal("/readyz 必须报出 affinity 一行")
+	}
+	if !strings.Contains(note, affinityBootSnapshotNote) {
+		t.Fatalf("affinity 一行必须自带启动快照标注，收到 %q", note)
+	}
+	if !strings.Contains(note, "window 8") || !strings.Contains(note, "ttl 3600s") {
+		t.Fatalf("env 派生的 window/ttl 必须照旧带出，收到 %q", note)
 	}
 }
 

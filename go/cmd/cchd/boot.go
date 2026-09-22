@@ -740,7 +740,12 @@ type readyProber struct {
 //
 // 为什么必须报：亲和关掉只表现为「请求在多供应商间抖动」，没有任何错误；
 // 页面归属同理——三种取值都不报错，只表现成行为不同。启动日志会被滚动掉，
-// 而 /readyz 是随时可查的事实。
+// 而 /readyz 是随时可查的入口。
+//
+// 但**它报的不是活值**：affinity 的 Enabled / Source / IgnoreClientSessionID 取自启动时读到的
+// 系统设置快照（装配时经 AffinityReport 一次性回填），运行中改设置不会刷新它们；
+// 对应的选路早已改成逐请求读、改完即生效。故 describe() 自带启动快照标注，
+// 不得把本行当「随时可查的活值」用——两者混谈正是本仓反复出现的「呈现与事实不符」。
 func (p readyProber) DataPlaneConfiguration() map[string]string {
 	return map[string]string{
 		"affinity": p.affinity.describe(),

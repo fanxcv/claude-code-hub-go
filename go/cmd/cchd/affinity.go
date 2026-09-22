@@ -40,10 +40,23 @@ type affinityStatus struct {
 	IgnoreClientSessionID bool
 }
 
-// describe 是给 /readyz 与日志用的一行结论。
+// affinityBootSnapshotNote 是 /readyz 与启动日志里那半「取自启动时系统设置」的标注。
+//
+// 提为包级常量是为了让钉子能引用同一串：测试里另抄一份会在改文案时静默变绿。
+const affinityBootSnapshotNote = "；注：来源与模式取自启动时的系统设置（启动快照），运行时改设置后选路即生效、本行不更新；window/ttl 取自 env，本就是启动常量"
+
+// describe 是给 /readyz 与日志用的一行结论，**自带启动快照标注**。
+//
+// 为何必须标注：Enabled / Source / IgnoreClientSessionID 三者取自启动时读到的系统设置，
+// 而它们对应的选路已改为**逐请求读**快照（dataplane 的 affinitySwitchesFor），运行时改设置
+// **立即**生效、本行却不随之更新。不标注就会让 /readyz 读起来像「随时可查的活值」——
+// 与「接口返 200 而行为不变」是同一族误导，只是方向相反。
+//
+// 为何 Window / TTLSeconds **不**并入标注：它们取自 env（cfg.Env.PrefixAffinityWindow /
+// PrefixAffinityTTLSeconds），env 本就是启动常量，报快照是对的。
 func (s affinityStatus) describe() string {
 	if !s.Enabled {
-		return "disabled（env 未开且系统设置未开）"
+		return "disabled（env 未开且系统设置未开）" + affinityBootSnapshotNote
 	}
 	mode := "会话粘性（前缀兜底）"
 	if s.IgnoreClientSessionID {
@@ -53,7 +66,7 @@ func (s affinityStatus) describe() string {
 	if s.SettingsErr != "" {
 		text += "；系统设置读取失败，已按出厂默认（总闸开、模式为会话优先）处理"
 	}
-	return text
+	return text + affinityBootSnapshotNote
 }
 
 // affinityDecision 把两路总闸开关合成结论，优先级逐字对齐 Node：`env || settings`。
