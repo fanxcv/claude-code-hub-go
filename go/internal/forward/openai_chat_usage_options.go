@@ -1,8 +1,6 @@
 package forward
 
 import (
-	"encoding/json"
-
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
 )
 
@@ -34,6 +32,10 @@ const includeUsageChatPath = "/v1/chat/completions"
 //
 // 解析失败时原样返回：Node 这条规则作用于**已解析**的对象、永不抛错；在 Go 侧新增一个失败模式
 // 会把「客户端正文非法」升级成转发期错误，而它在守卫链的正文解析处已被拦下。
+//
+// 正文模型用 convert.Value 而非 Go map 往返：后者经 encoding/json 序列化会把键序变字典序、
+// 把 `<` 转成 `\u003c`、把数字经 float64 重排（`1e21` → `1e+21`、超 2^53 的整数丢精度）。
+// Value 保序、保数字字面量，输出为紧凑形态（空白与转义形态会归一，语义不变）。
 func applyOpenAIChatStreamUsageOption(
 	body []byte,
 	providerType convert.ProviderType,
@@ -42,42 +44,45 @@ func applyOpenAIChatStreamUsageOption(
 	if len(body) == 0 || providerType != convert.ProviderOpenAICompatible || requestPath != includeUsageChatPath {
 		return body, false, nil
 	}
-	var decoded map[string]any
-	if err := json.Unmarshal(body, &decoded); err != nil {
+	decoded, err := convert.ParseJSON(body)
+	if err != nil || !decoded.IsObject() {
 		return body, false, nil
 	}
 	// `stream` 严格为 true：Node 判的是 `body.stream !== true`，故 1 / "true" 都不算。
-	if streaming, ok := decoded["stream"].(bool); !ok || !streaming {
+	stream, ok := decoded.Get("stream")
+	if !ok {
+		return body, false, nil
+	}
+	if streaming, isBool := stream.Bool(); !isBool || !streaming {
 		return body, false, nil
 	}
 
-	switch options, present := decoded["stream_options"]; {
-	case !present || options == nil:
-		decoded["stream_options"] = map[string]any{"include_usage": true}
+	options, present := decoded.Get("stream_options")
+	switch {
+	case !present || options.IsNull():
+		decoded.Set("stream_options", convert.NewObject().Set("include_usage", convert.NewBool(true)))
 	case includeUsageIsTrue(options):
 		return body, false, nil
 	default:
-		record, ok := options.(map[string]any)
-		if !ok {
+		if !options.IsObject() {
 			// 数组或标量：Node 不动它（这种形态上游本来也不认）。
 			return body, false, nil
 		}
-		record["include_usage"] = true
+		options.Set("include_usage", convert.NewBool(true))
 	}
 
-	rewritten, err := json.Marshal(decoded)
-	if err != nil {
-		return body, false, err
-	}
-	return rewritten, true, nil
+	return []byte(decoded.MarshalCompact()), true, nil
 }
 
 // includeUsageIsTrue 报告 `stream_options` 已经是「对象且 include_usage 为 true」。
-func includeUsageIsTrue(options any) bool {
-	record, ok := options.(map[string]any)
+func includeUsageIsTrue(options *convert.Value) bool {
+	if !options.IsObject() {
+		return false
+	}
+	include, ok := options.Get("include_usage")
 	if !ok {
 		return false
 	}
-	include, ok := record["include_usage"].(bool)
-	return ok && include
+	value, isBool := include.Bool()
+	return isBool && value
 }

@@ -171,3 +171,153 @@ func TestBuildPlanLeavesClaudeBodyUntouchedByUsageOption(t *testing.T) {
 		t.Fatalf("claude 正文被改写了: %s", plan.Body)
 	}
 }
+
+// TestApplyOpenAIChatStreamUsageOptionKeepsNumberLiterals 钉住数字字面量不经 float64 往返：
+// 顶层与嵌套层各放一个会被 map[string]any 往返改写的字面量（超 2^53 的整数与 1e21）。
+func TestApplyOpenAIChatStreamUsageOptionKeepsNumberLiterals(t *testing.T) {
+	body := []byte(`{"stream":true,"max_int":9007199254740993,"meta":{"huge":1e21,"nested_int":9007199254740993}}`)
+
+	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	decoded, err := convert.ParseJSON(rewritten)
+	if err != nil {
+		t.Fatalf("改写后不是合法 JSON: %v", err)
+	}
+	maxInt, _ := decoded.Get("max_int")
+	if got, _ := maxInt.NumberLiteral(); got != "9007199254740993" {
+		t.Fatalf("顶层整数精度丢失: %q", got)
+	}
+	meta := decoded.ObjectField("meta")
+	if meta == nil {
+		t.Fatalf("嵌套对象被丢了: %s", rewritten)
+	}
+	huge, _ := meta.Get("huge")
+	if got, _ := huge.NumberLiteral(); got != "1e21" {
+		t.Fatalf("嵌套 1e21 字面量被重排: %q", got)
+	}
+	nestedInt, _ := meta.Get("nested_int")
+	if got, _ := nestedInt.NumberLiteral(); got != "9007199254740993" {
+		t.Fatalf("嵌套整数精度丢失: %q", got)
+	}
+}
+
+// TestApplyOpenAIChatStreamUsageOptionKeepsTopLevelKeyOrder 钉住顶层键序保持（不受字典序重排）。
+func TestApplyOpenAIChatStreamUsageOptionKeepsTopLevelKeyOrder(t *testing.T) {
+	// 顶层键故意非字典序：z_flag 在 stream 之前。
+	body := []byte(`{"z_flag":true,"stream":true,"a_flag":false}`)
+
+	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	decoded, err := convert.ParseJSON(rewritten)
+	if err != nil {
+		t.Fatalf("改写后不是合法 JSON: %v", err)
+	}
+	var keys []string
+	for _, member := range decoded.Members() {
+		keys = append(keys, member.Key)
+	}
+	want := []string{"z_flag", "stream", "a_flag", "stream_options"}
+	if len(keys) != len(want) {
+		t.Fatalf("顶层键集合被改：got %v want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Fatalf("顶层键序被改：got %v want %v", keys, want)
+		}
+	}
+}
+
+// TestApplyOpenAIChatStreamUsageOptionPreservesNestedStructure 钉住除
+// stream_options.include_usage 外语义等价：多层嵌套对象与数组一并不丢。
+func TestApplyOpenAIChatStreamUsageOptionPreservesNestedStructure(t *testing.T) {
+	body := []byte(`{"stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object","required":["a","b"]}}}],"meta":{"n":{"deep":[1,2,{"x":null}]}}}`)
+
+	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	original := decodeUsageBody(t, body)
+	got := decodeUsageBody(t, rewritten)
+	options, ok := got["stream_options"].(map[string]any)
+	if !ok {
+		t.Fatalf("stream_options 形态不对: %s", rewritten)
+	}
+	if options["include_usage"] != true || len(options) != 1 {
+		t.Fatalf("stream_options 应只有 include_usage=true: %v", options)
+	}
+	// 去掉补齐的 stream_options 后，其余部分须与原文逐值相等（json.Marshal 对 map 是
+	// 字典序的确定性序列化，可作深比较）。
+	delete(got, "stream_options")
+	wantJSON, _ := json.Marshal(original)
+	gotJSON, _ := json.Marshal(got)
+	if string(gotJSON) != string(wantJSON) {
+		t.Fatalf("除 stream_options 外语义被改：\n got %s\nwant %s", gotJSON, wantJSON)
+	}
+}
+
+// TestApplyOpenAIChatStreamUsageOptionKeepsExistingOptionKeys 钉住 stream_options 已有其它键时
+// 其键序与内容保持，只有 include_usage 被置真。
+func TestApplyOpenAIChatStreamUsageOptionKeepsExistingOptionKeys(t *testing.T) {
+	body := []byte(`{"stream":true,"stream_options":{"alpha":1,"include_usage":false,"beta":{"n":2}}}`)
+
+	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	decoded, err := convert.ParseJSON(rewritten)
+	if err != nil {
+		t.Fatalf("改写后不是合法 JSON: %v", err)
+	}
+	options := decoded.ObjectField("stream_options")
+	if options == nil {
+		t.Fatalf("stream_options 被丢了: %s", rewritten)
+	}
+	var keys []string
+	for _, member := range options.Members() {
+		keys = append(keys, member.Key)
+	}
+	want := []string{"alpha", "include_usage", "beta"}
+	if len(keys) != len(want) {
+		t.Fatalf("stream_options 键集合被改：got %v want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Fatalf("stream_options 键序被改：got %v want %v", keys, want)
+		}
+	}
+	alpha, _ := options.Get("alpha")
+	if got, _ := alpha.NumberLiteral(); got != "1" {
+		t.Fatalf("alpha 被改: %q", got)
+	}
+	includeUsage, _ := options.Get("include_usage")
+	if include, isBool := includeUsage.Bool(); !isBool || !include {
+		t.Fatalf("include_usage 未置真: %s", rewritten)
+	}
+	beta := options.ObjectField("beta")
+	if beta == nil {
+		t.Fatalf("beta 被丢了: %s", rewritten)
+	}
+	betaN, _ := beta.Get("n")
+	if got, _ := betaN.NumberLiteral(); got != "2" {
+		t.Fatalf("beta.n 被改: %q", got)
+	}
+}
+
+// TestApplyOpenAIChatStreamUsageOptionNormalizesEscapeForm 说明性用例：convert.Value 按
+// JS JSON.stringify 语义序列化，`\u003c` 形态会归一为 `<`。这是**有意接受**的形态变化
+// （语义等价），故只断言解码后的值，不断言字节形态。
+func TestApplyOpenAIChatStreamUsageOptionNormalizesEscapeForm(t *testing.T) {
+	body := []byte(`{"stream":true,"content":"\u003cdiv\u003e"}`)
+
+	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if got := decodeUsageBody(t, rewritten)["content"]; got != "<div>" {
+		t.Fatalf("转义归一后语义应不变: %v", got)
+	}
+}
