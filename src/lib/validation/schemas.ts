@@ -1180,10 +1180,8 @@ export const UpdateSystemSettingsSchema = z
         }
       })
       .optional(),
-    // F1 流式内容门控模式（可选）
-    streamGateMode: z
-      .enum(["off", "shadow", "enforce"], { message: "不支持的流式门控模式" })
-      .optional(),
+    // F1 流式内容门控开关（可选）
+    streamGateMode: z.enum(["off", "enforce"], { message: "不支持的流式门控模式" }).optional(),
     // 亲和总闸（可选）
     affinityEnabled: z.boolean().optional(),
     // 忽略客户端 Session ID（可选；模式开关，与总闸无关）

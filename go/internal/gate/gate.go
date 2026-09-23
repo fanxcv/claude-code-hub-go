@@ -16,8 +16,6 @@ type Mode string
 const (
 	// ModeOff 关闭门控：直接透传。
 	ModeOff Mode = "off"
-	// ModeShadow 只做旁路诊断，不阻断（见 NewShadowObserver）。
-	ModeShadow Mode = "shadow"
 	// ModeEnforce 强制执行门控（Run 的严格模式）。
 	ModeEnforce Mode = "enforce"
 )
@@ -27,8 +25,6 @@ func ParseMode(value string) (Mode, bool) {
 	switch Mode(value) {
 	case ModeOff:
 		return ModeOff, true
-	case ModeShadow:
-		return ModeShadow, true
 	case ModeEnforce:
 		return ModeEnforce, true
 	default:

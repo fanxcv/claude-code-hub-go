@@ -172,11 +172,10 @@
     "providerLiveStatsEnabled": "Live provider concurrency stats",
     "providerLiveStatsEnabledDesc": "When enabled, the providers page refreshes each provider's live concurrency every 5 seconds and the request path records in-flight attempts per provider. When off (default) nothing is recorded, nothing is queried and the page does not poll, so the feature costs nothing.",
     "streamGateMode": "Stream Content Gate",
-    "streamGateModeDesc": "Controls the first-valid-content gate for ordinary requests: enabled mode fails over on error frames or empty streams, shadow mode only records divergence, and off mode forwards directly. Replay owners always retain the pre-content safety gate regardless of this setting. Default enabled.",
+    "streamGateModeDesc": "Controls the first-valid-content gate for ordinary requests: when on, error frames or empty streams fail over to another provider; when off, the response is forwarded directly. Replay owners always retain the pre-content safety gate regardless of this switch. Default on.",
     "streamGateModeOptions": {
       "off": "Off",
-      "shadow": "Shadow mode",
-      "enforce": "Enabled"
+      "enforce": "On"
     },
     "replayEnabled": "Request Replay",
     "replayEnabledDesc": "Caches upstream responses and reuses upstream connections: identical concurrent or reconnecting requests attach to the in-flight stream instead of re-hitting the provider. Follows the ENABLE_REQUEST_REPLAY environment variable until saved here. Default on.",

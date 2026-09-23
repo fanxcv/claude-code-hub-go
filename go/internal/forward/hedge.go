@@ -574,9 +574,7 @@ func (r *hedgeRace) runGateOrFirstChunk(
 	}
 
 	// 未门控的流形态：读第一个可读块判定有效性（空流 = 空响应失败）。
-	// shadow 模式的旁路观察者必须在首次读之前就挂上：首块就可能是决定性帧，
-	// 漏掉它等于把「首有效内容」的度量从根上做偏。
-	source := r.options.shadowSource(response.Body, family, outcome)
+	source := response.Body
 	buffer := make([]byte, DefaultPumpChunkBytes)
 	n, err := source.Read(buffer)
 	if n > 0 {

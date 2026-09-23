@@ -7,7 +7,6 @@
 //	classify.go   <- frame-classifier.ts   帧五态分类与协议家族规则表
 //	budget.go     <- prebuffer-budget.ts   进程级前缀预算与租约
 //	gate.go       <- stream-content-gate.ts 门控主流程与失败原因
-//	observer.go   <- stream-content-gate.ts 的 shadow 观测部分
 //
 // # 不变量
 //
@@ -15,7 +14,7 @@
 // 分类作用于**上游原生 wire 格式**（协议转换之前），因此家族按供应商类型选择
 // （MapProviderTypeToFamily），而不是按客户端入站格式。
 //
-// G2 有界：前缀缓冲、parser 保留状态、shadow 观测三处都有硬上限；任何上游输入都不能
+// G2 有界：前缀缓冲与 parser 保留状态两处都有硬上限；任何上游输入都不能
 // 让它们无界增长（超限即 prebuffer_overflow，不是 OOM）。上限单位是**字节**（TS 侧是
 // UTF-16 码点，见「与 TS 的有意差异」）。
 //
@@ -40,6 +39,6 @@
 //
 // # 不属于本包
 //
-// 门控模式（off/shadow/enforce）的解析、进程内共享预算的装配、以及前缀字节之后如何透传，
+// 门控模式（off/enforce）的解析、进程内共享预算的装配、以及前缀字节之后如何透传，
 // 都是调用方（接线层）的职责：本包提供 Mode 字面量、DefaultBudget 与 Run 的返回值。
 package gate

@@ -1,6 +1,6 @@
 {
   "source": "src/lib/config/env.schema.ts",
-  "sourceSha256": "7703d103dc77064d26d4f40b73057cfd8d827b40550d2d3e417edd2a8791579a",
+  "sourceSha256": "266d0818e4c8b12620b9aeee5a70fefacbb273f3880129370a7e3aee3bb4f6c6",
   "variableCount": 70,
   "countsByType": {
     "enum": 6,
@@ -1175,8 +1175,8 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": ["off", "shadow", "enforce"],
-      "descriptionComment": "===== CCHP 网关移植功能开关 =====\n流式内容门控：off=关闭；shadow=旁路分类只记录分歧；enforce=首个有效内容帧前缓冲+failover",
+      "enumValues": ["off", "enforce"],
+      "descriptionComment": "===== CCHP 网关移植功能开关 =====\n流式内容门控：off=关闭；enforce=首个有效内容帧前缓冲+failover",
       "descriptionSummary": "===== CCHP 网关移植功能开关 =====",
       "consumerFiles": [],
       "consumerFileCount": 0

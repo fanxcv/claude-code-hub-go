@@ -3,7 +3,7 @@
 由 `scripts/export-env-matrix.ts` 从 `src/lib/config/env.schema.ts` 生成，请勿手工编辑。
 
 - 变量总数：**70**
-- 源文件 SHA256：`7703d103dc77064d26d4f40b73057cfd8d827b40550d2d3e417edd2a8791579a`
+- 源文件 SHA256：`266d0818e4c8b12620b9aeee5a70fefacbb273f3880129370a7e3aee3bb4f6c6`
 - 重生成：`bun scripts/export-env-matrix.ts`
 
 ## Redis 与缓存（4）
@@ -92,7 +92,7 @@
 | `DETACHED_STREAM_MAX_CONCURRENCY` | number | `64` | >= 1；<= 4096 | （无静态引用） |
 | `DETACHED_STREAM_METERING_RESERVE_BYTES` | number | `16 * 1024 * 1024` | >= 65536；<= 1073741824 | （无静态引用） |
 | `STREAM_GATE_GLOBAL_PREBUFFER_BYTE_CAP` | number | `256 * 1024 * 1024` | >= 2048；<= 2147483648 | （无静态引用） |
-| `STREAM_GATE_MODE` | enum | `"enforce"` | ∈ {off, shadow, enforce} | （无静态引用） |
+| `STREAM_GATE_MODE` | enum | `"enforce"` | ∈ {off, enforce} | （无静态引用） |
 | `STREAM_GATE_PREBUFFER_BYTE_CAP` | number | `10 * 1024 * 1024` | >= 1024；<= 67108864 | （无静态引用） |
 | `STREAM_GATE_PREBUFFER_EVENT_CAP` | number | `64` | >= 1；<= 4096 | （无静态引用） |
 

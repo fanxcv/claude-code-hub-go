@@ -644,14 +644,16 @@ func TestGateErrorBody(t *testing.T) {
 }
 
 func TestParseMode(t *testing.T) {
-	for _, value := range []string{"off", "shadow", "enforce"} {
+	for _, value := range []string{"off", "enforce"} {
 		mode, ok := ParseMode(value)
 		if !ok || string(mode) != value {
 			t.Fatalf("ParseMode(%q) 失败", value)
 		}
 	}
-	if _, ok := ParseMode("strict"); ok {
-		t.Fatal("未知模式应返回 false")
+	for _, value := range []string{"strict", "shadow"} {
+		if _, ok := ParseMode(value); ok {
+			t.Fatalf("未知模式 %q 应返回 false", value)
+		}
 	}
 }
 

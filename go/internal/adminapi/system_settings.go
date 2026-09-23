@@ -234,7 +234,7 @@ func buildSystemSettingsBody(row *store.AdminSystemSettings, now time.Time) Syst
 		StickyTimeoutCooldownMS:      settingsDefaultInt(row.StickyTimeoutCooldownMS, defaultStickyTimeoutCooldownMS),
 		IPExtractionConfig:           normalizeJSONOrNull(row.IPExtractionConfig),
 		IPGeoLookupEnabled:           row.IPGeoLookupEnabled,
-		StreamGateMode:               settingsEnumDefault(row.StreamGateMode, "enforce", "off", "shadow", "enforce"),
+		StreamGateMode:               settingsEnumDefault(row.StreamGateMode, "enforce", "off", "enforce"),
 		AffinityIgnoreClientSession:  row.AffinityIgnoreClientSession,
 		AffinityEnabled:              row.AffinityEnabled,
 		ProviderLiveStatsEnabled:     row.ProviderLiveStatsEnabled,
@@ -1211,7 +1211,7 @@ func decodeSystemSettingsUpdate(
 		parsed, err := settingsStringValue(value)
 		if err != nil {
 			fail("streamGateMode", "invalid_type", "Expected string, received "+err.Error())
-		} else if !settingsContainsString([]string{"off", "shadow", "enforce"}, parsed) {
+		} else if !settingsContainsString([]string{"off", "enforce"}, parsed) {
 			fail("streamGateMode", "invalid_enum_value", "不支持的流式门控模式")
 		} else {
 			decoded.streamGateMode = &parsed

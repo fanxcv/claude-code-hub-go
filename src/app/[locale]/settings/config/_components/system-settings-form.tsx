@@ -1219,8 +1219,8 @@ export function SystemSettingsForm({
           />
         </div>
 
-        {/* Stream Content Gate Mode */}
-        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] transition-colors space-y-3">
+        {/* Stream Content Gate */}
+        <div className="p-4 rounded-xl bg-white/[0.02] border border-white/5 flex items-center justify-between hover:bg-white/[0.04] transition-colors">
           <div className="flex items-start gap-3">
             <div className="w-8 h-8 flex items-center justify-center rounded-lg bg-rose-500/10 text-rose-400 shrink-0">
               <Filter className="h-4 w-4" />
@@ -1230,21 +1230,19 @@ export function SystemSettingsForm({
               <p className="text-xs text-muted-foreground mt-0.5">{t("streamGateModeDesc")}</p>
             </div>
           </div>
-          <div className="pl-11">
-            <Select
-              value={streamGateMode}
-              onValueChange={(value) => setStreamGateMode(value as StreamGateSettingMode)}
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="text-xs text-muted-foreground">
+              {streamGateMode === "enforce"
+                ? t("streamGateModeOptions.enforce")
+                : t("streamGateModeOptions.off")}
+            </span>
+            <Switch
+              id="stream-gate-mode"
+              aria-label={t("streamGateMode")}
+              checked={streamGateMode === "enforce"}
+              onCheckedChange={(checked) => setStreamGateMode(checked ? "enforce" : "off")}
               disabled={isPending}
-            >
-              <SelectTrigger id="stream-gate-mode" className={selectTriggerClassName}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="off">{t("streamGateModeOptions.off")}</SelectItem>
-                <SelectItem value="shadow">{t("streamGateModeOptions.shadow")}</SelectItem>
-                <SelectItem value="enforce">{t("streamGateModeOptions.enforce")}</SelectItem>
-              </SelectContent>
-            </Select>
+            />
           </div>
         </div>
 

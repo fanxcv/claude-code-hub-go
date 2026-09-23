@@ -5,8 +5,8 @@ import type { IpExtractionConfig } from "@/types/ip-extraction";
 export type BillingModelSource = "original" | "redirected";
 export type CodexPriorityBillingSource = "requested" | "actual";
 
-// F1 流式内容门控模式: 'off' (关闭) | 'shadow' (仅旁路统计) | 'enforce' (启用)
-export type StreamGateSettingMode = "off" | "shadow" | "enforce";
+// F1 流式内容门控开关: 'off' (关闭) | 'enforce' (启用)
+export type StreamGateSettingMode = "off" | "enforce";
 
 export interface ResponseFixerConfig {
   fixTruncatedJson: boolean;
@@ -152,8 +152,8 @@ export interface SystemSettings {
   publicStatusWindowHours: number;
   publicStatusAggregationIntervalMinutes: number;
 
-  // F1 流式内容门控模式（默认 enforce）
-  // enforce：首个有效内容帧前缓冲，错误/空流时自动切换供应商；shadow：仅旁路统计分歧
+  // F1 流式内容门控开关（默认 enforce）
+  // enforce：首个有效内容帧前缓冲，错误/空流时自动切换供应商；off：直接转发
   streamGateMode: StreamGateSettingMode;
 
   // 亲和总闸（默认开启）

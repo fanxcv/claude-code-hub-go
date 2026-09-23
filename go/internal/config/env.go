@@ -136,7 +136,7 @@ var envSpecs = []envSpec{
 	{name: "STORE_SESSION_MESSAGES", field: "StoreSessionMessages", kind: kindBool, def: "false"},
 	{name: "STORE_SESSION_RESPONSE_BODY", field: "StoreSessionResponseBody", kind: kindBool, def: "true"},
 	{name: "STREAM_GATE_GLOBAL_PREBUFFER_BYTE_CAP", field: "StreamGateGlobalPrebufferByteCap", kind: kindNumber, def: "268435456", isInt: true, hasMin: true, min: 2048, hasMax: true, max: 2147483648},
-	{name: "STREAM_GATE_MODE", field: "StreamGateMode", kind: kindEnum, def: "enforce", enum: []string{"off", "shadow", "enforce"}},
+	{name: "STREAM_GATE_MODE", field: "StreamGateMode", kind: kindEnum, def: "enforce", enum: []string{"off", "enforce"}},
 	{name: "STREAM_GATE_PREBUFFER_BYTE_CAP", field: "StreamGatePrebufferByteCap", kind: kindNumber, def: "10485760", isInt: true, hasMin: true, min: 1024, hasMax: true, max: 67108864},
 	{name: "STREAM_GATE_PREBUFFER_EVENT_CAP", field: "StreamGatePrebufferEventCap", kind: kindNumber, def: "64", isInt: true, hasMin: true, min: 1, hasMax: true, max: 4096},
 	{name: "TZ", field: "TZ", kind: kindString, def: "Asia/Shanghai"},

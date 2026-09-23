@@ -50,7 +50,7 @@ func (h *Handler) resolveStreamGateMode(ctx context.Context) gate.Mode {
 //
 // 为什么 owner 必须门控：回放 spool 依赖门控的 precommit 语义（只有首个有效内容帧之后
 // 才向客户端提交），Node 的判据里 `session.replayState?.role === "owner"` 正是这一支。
-// 若在 off/shadow 下照配置跳过门控，spool 会把「中性前缀」也算成已交付内容。
+// 若在 off 下照配置跳过门控，spool 会把「中性前缀」也算成已交付内容。
 func (h *Handler) gateModeForRequest(ctx context.Context, state *RequestState) gate.Mode {
 	if state != nil && state.replay != nil && state.replay.holdsOwnership() {
 		return gate.ModeEnforce

@@ -225,9 +225,9 @@ export const SystemSettingsSchema = z
       .int()
       .describe("Public status aggregation interval in minutes."),
     streamGateMode: z
-      .enum(["off", "shadow", "enforce"])
+      .enum(["off", "enforce"])
       .describe(
-        "Stream content gate mode for ordinary requests: buffer until the first valid content frame and fail over on error or empty streams (enforce), observe divergence only (shadow), or disable (off). Replay owners always retain the pre-content safety gate."
+        "Stream content gate switch for ordinary requests: when enabled (enforce), buffer until the first valid content frame and fail over on error or empty streams; when off, forward directly. Replay owners always retain the pre-content safety gate."
       ),
     affinityEnabled: z
       .boolean()

@@ -8,8 +8,12 @@ describe("EnvSchema - STREAM_GATE_MODE", () => {
     expect(env.STREAM_GATE_GLOBAL_PREBUFFER_BYTE_CAP).toBe(256 * 1024 * 1024);
   });
 
-  test.each(["off", "shadow", "enforce"] as const)("preserves an explicit %s mode", (mode) => {
+  test.each(["off", "enforce"] as const)("preserves an explicit %s mode", (mode) => {
     expect(EnvSchema.parse({ STREAM_GATE_MODE: mode }).STREAM_GATE_MODE).toBe(mode);
+  });
+
+  test("rejects the removed shadow mode", () => {
+    expect(() => EnvSchema.parse({ STREAM_GATE_MODE: "shadow" })).toThrow();
   });
 
   test("requires the shared budget to cover raw and decoded echo-exempt prefixes", () => {
