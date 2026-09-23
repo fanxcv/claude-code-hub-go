@@ -188,6 +188,73 @@ func TestUpstreamStreamCutWritesStreamCutCooldown(t *testing.T) {
 	}
 }
 
+// TestUpstreamErrorStreamCutCooldownFollowsContentDelivery 是本次修复的**跨包**钉子：真实的流式
+// 指令产出喂给真实的终态写回，断言「已交付正文后的错误帧」与「零内容错误帧」走不同的写回方法。
+//
+// 为何必须跨包：把 affinityDirectiveForStream 里那条新分支（或其 Bytes 判据）任一摘掉/写死，
+// 本用例会当场变红——两半的单测各自可能全绿，而生产上「正文中途错误帧」会落回硬冷却，
+// 回到「唯一候选被剔 ⇒ 503」（见 route 的 fail-open 钉子）。
+func TestUpstreamErrorStreamCutCooldownFollowsContentDelivery(t *testing.T) {
+	cases := []struct {
+		name          string
+		observation   forward.Observation
+		wantStreamCut []int64
+		wantCooldown  []int64
+	}{
+		{
+			name:          "已交付正文后的错误帧：走断流软冷却",
+			observation:   forward.Observation{Bytes: 4096, Frames: 12, ErrorText: "overloaded_error"},
+			wantStreamCut: []int64{9},
+		},
+		{
+			name:         "零内容的错误帧（提交前失败）：仍走故障硬冷却",
+			observation:  forward.Observation{ErrorText: "overloaded_error"},
+			wantCooldown: []int64{9},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pc, err := pctx.New(pctx.Init{Method: "POST", Path: "/v1/chat/completions"})
+			if err != nil {
+				t.Fatalf("构造上下文失败: %v", err)
+			}
+			if err := pc.SetMessageRequestID(80); err != nil {
+				t.Fatalf("写入行标识失败: %v", err)
+			}
+			recorder := &recordingSessionBinding{}
+			pc.SetSessionBindingWriteback(recorder)
+
+			directive := affinityDirectiveForStream(forward.StreamOutcome{
+				Kind: forward.TerminalUpstreamError, StatusCode: 200,
+				Provider: forward.Provider{ID: 9}, Observation: tc.observation,
+			})
+			if _, err := terminal.New(alwaysCommitWriter{}, terminal.Options{}).SettleContext(
+				context.Background(), pc,
+				terminal.Settlement{StatusCode: 200, Affinity: directive},
+				nil,
+			); err != nil {
+				t.Fatalf("终态结算失败: %v", err)
+			}
+			if len(recorder.streamCuts) != len(tc.wantStreamCut) {
+				t.Fatalf("断流冷却 = %v，期望 %v", recorder.streamCuts, tc.wantStreamCut)
+			}
+			for i := range tc.wantStreamCut {
+				if recorder.streamCuts[i] != tc.wantStreamCut[i] {
+					t.Errorf("断流冷却的供应商 = %v，期望 %v", recorder.streamCuts, tc.wantStreamCut)
+				}
+			}
+			if len(recorder.cooldowns) != len(tc.wantCooldown) {
+				t.Fatalf("故障冷却 = %v，期望 %v", recorder.cooldowns, tc.wantCooldown)
+			}
+			for i := range tc.wantCooldown {
+				if recorder.cooldowns[i] != tc.wantCooldown[i] {
+					t.Errorf("故障冷却的供应商 = %v，期望 %v", recorder.cooldowns, tc.wantCooldown)
+				}
+			}
+		})
+	}
+}
+
 func TestSessionBindingInvalidationFollowsFailureKind(t *testing.T) {
 	cases := []struct {
 		name         string

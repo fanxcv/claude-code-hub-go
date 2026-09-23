@@ -95,7 +95,7 @@ func (w *sessionBindingWriteback) CooldownOnFailure(ctx context.Context, provide
 	return w.cooldownOn(ctx, providerID, w.generation)
 }
 
-// CooldownOnUpstreamStreamCut 在「上游在正文中途干净断流」后写会话级冷却键。
+// CooldownOnUpstreamStreamCut 在「上游在正文中途失败」（断流或错误帧）后写会话级冷却键。
 //
 // 与 CooldownOnFailure 的差别**只在写入值**：本方法写固定标记（UpstreamStreamCutCooldownMarker），
 // 故障冷却写本次代际。两者共用同一冷却键与 60 秒 TTL，fence 语义也逐字相同（只对绑定恰好
@@ -204,8 +204,8 @@ func (w *sessionBindingWriteback) warn(event string, err error, kv ...any) {
 // sessionCooldownTTL 是会话级供应商冷却时长，与设计稿 §4 的 60s 一致。
 const sessionCooldownTTL = 60 * time.Second
 
-// UpstreamStreamCutCooldownMarker 是「上游中途断流」类冷却写进冷却键的固定值，与故障冷却
-// （写本次代际）和低速冷却（写 "slow"，见 internal/slowrate）的值空间不相交。
+// UpstreamStreamCutCooldownMarker 是「上游中途失败」（断流或正文中途错误帧）类冷却写进冷却键的
+// 固定值，与故障冷却（写本次代际）和低速冷却（写 "slow"，见 internal/slowrate）的值空间不相交。
 //
 // 为何必须是独立标记：两类冷却共用同一个键与 TTL，读侧（route）只能按值把它们分开；
 // 用同一个值会让「断流冷却可在无替代候选时放行」无法实现。route 侧镜像一份常量，

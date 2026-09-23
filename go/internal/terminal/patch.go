@@ -122,12 +122,14 @@ const (
 	//
 	// 前缀侧仍写墓碑：这次请求确实没成，同前缀的后续请求该绕开它（Node 对齐）。
 	AffinityTombstonePrefixOnly
-	// AffinityTombstoneUpstreamStreamCut 是「上游在正文中途干净断流、无协议终止标记」这一类终态
-	// （forward.TerminalUpstreamTruncated 且内部状态码 2xx）。
+	// AffinityTombstoneUpstreamStreamCut 是「上游在正文中途失败」这一类终态：干净断流、无协议终止
+	// 标记（forward.TerminalUpstreamTruncated），或正文中途发错误帧（forward.TerminalUpstreamError），
+	// 两者都是内部状态码 2xx 且已向客户端交付过内容。
 	//
 	// 为何与 AffinityTombstoneProviderError 分开：两者都会写会话冷却键，但成因不同——本条是
 	// 上游偶发的收尾瑕疵（生产实证 wb 池代理 3.4% 概率），不是渠道持续故障；只有本类冷却在
 	// 「健康候选为空」时允许 fail-open 放行（读侧按写入值分流，见 route.CooldownKind）。
+	// 零内容的错误帧（提交前就失败）不属于本类，仍按故障冷却（见 dataplane/affinity.go）。
 	AffinityTombstoneUpstreamStreamCut
 )
 

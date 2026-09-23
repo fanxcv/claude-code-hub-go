@@ -95,7 +95,14 @@ func TestAffinityDirectiveForStream(t *testing.T) {
 			want: terminal.AffinityDirective{},
 		},
 		{
-			name: "上游错误帧写墓碑",
+			name: "已交付正文后的上游错误帧：写断流软墓碑（与断流同档）",
+			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamError, StatusCode: 200,
+				Provider:    forward.Provider{ID: 7},
+				Observation: forward.Observation{Bytes: 4096, Frames: 12, ErrorText: "overloaded_error"}},
+			want: terminal.AffinityDirective{TombstoneProviderID: 7, TombstoneKind: terminal.AffinityTombstoneUpstreamStreamCut},
+		},
+		{
+			name: "上游错误帧但未交付正文（零字节）：仍写故障墓碑（硬）",
 			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamError, StatusCode: 200,
 				Provider:    forward.Provider{ID: 7},
 				Observation: forward.Observation{ErrorText: "overloaded_error"}},

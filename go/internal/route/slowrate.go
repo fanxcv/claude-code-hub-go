@@ -576,8 +576,8 @@ const (
 	CooldownProviderError CooldownKind = "provider_error"
 	// CooldownSlowRate 是低速降权写下的会话冷却（低速写入侧所写）。
 	CooldownSlowRate CooldownKind = "slow_rate"
-	// CooldownUpstreamStreamCut 是「上游在正文中途干净断流」后的会话冷却（绑定写入侧的
-	// CooldownOnUpstreamStreamCut 所写，值与故障冷却不同）。
+	// CooldownUpstreamStreamCut 是「上游在正文中途失败」（断流或正文中途错误帧）后的会话冷却
+	// （绑定写入侧的 CooldownOnUpstreamStreamCut 所写，值与故障冷却不同）。
 	//
 	// 为何单列：它与故障冷却共用同一个键与 TTL，但成因是上游偶发的收尾瑕疵而非持续故障；
 	// 只有它在健康候选为空时允许 fail-open（见 softSignalRejection）。

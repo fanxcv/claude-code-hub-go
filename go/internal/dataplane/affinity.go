@@ -71,6 +71,24 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 			TombstoneKind:       terminal.AffinityTombstoneUpstreamStreamCut,
 		}
 	}
+	// 上游在正文中途发错误帧（内部状态码 2xx，且已向客户端交付过内容）：与「上游中途断流」
+	// 同一个物理事件——上游读到非 EOF 错后先补一帧 error、再补终止标记（wb 池代理 2026-09
+	// 上线的新收尾）。终态因此从 TerminalUpstreamTruncated 变成 TerminalUpstreamError
+	// （error 帧文案命中 ErrorText，优先级高于 CompletionMarker），冷却必须与断流同档归软，
+	// 否则同一事件只因多写一帧就从严转宽。
+	//
+	// 判据 `Observation.Bytes > 0` 即「已过门控提交」：观测器只在提交后随 Stream 构造
+	// （forward/stream.go:277 调用 newStream，定义 663），且只喂提交后的字节——门控前缀
+	// （forward/stream.go:719）与泵读到的正文（forward/stream.go:812），字节计数在
+	// forward/observe.go:264。提交前的错误帧被门控拦成 FailGateError（gate/gate.go:508/579）
+	// → Failure，根本不会产生本终态；故本终态带非零字节 ⟺ 客户端已拿到内容。
+	// 零字节（未交付过任何内容）仍落默认分支（故障冷却，硬）。
+	if outcome.Kind == forward.TerminalUpstreamError && success && outcome.Observation.Bytes > 0 {
+		return terminal.AffinityDirective{
+			TombstoneProviderID: outcome.Provider.ID,
+			TombstoneKind:       terminal.AffinityTombstoneUpstreamStreamCut,
+		}
+	}
 	return terminal.AffinityDirective{TombstoneProviderID: outcome.Provider.ID}
 }
 
