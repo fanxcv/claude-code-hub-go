@@ -113,15 +113,55 @@ func TestAffinityDirectiveForStream(t *testing.T) {
 			},
 		},
 		{
-			name: "静默超时写墓碑",
+			name: "静默超时写墓碑（即便已交付过正文：不是干净 EOF）",
 			outcome: forward.StreamOutcome{Kind: forward.TerminalIdleTimeout, StatusCode: 200,
-				Provider: forward.Provider{ID: 7}},
+				Provider:    forward.Provider{ID: 7},
+				Observation: forward.Observation{Bytes: 4096, Frames: 12}},
 			want: terminal.AffinityDirective{TombstoneProviderID: 7},
 		},
 		{
 			name: "未正常结束（截断）写墓碑",
 			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
 				Provider: forward.Provider{ID: 7}},
+			want: terminal.AffinityDirective{TombstoneProviderID: 7},
+		},
+		// 以下五条钉住「流尾缺终止标记但正文已完整送达」的判据与其四条边界。
+		// 判据的依据是 TerminalUpstreamTruncated 就是干净的 EOF（报文体被中途切断是 LocalError），
+		// 故只缺协议标记这一形态不再算供应商故障：写冷却会把 60 秒的会话级冷却挂在健康渠道上，
+		// 而落库行与可用性投影都按成功记账。
+		{
+			name: "流尾缺终止标记但正文已交付：两边都不写",
+			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
+				Provider:    forward.Provider{ID: 7},
+				Observation: forward.Observation{Bytes: 60332, Frames: 242, Model: "deepseek-v4.1-flash"}},
+			want: terminal.AffinityDirective{},
+		},
+		{
+			name: "流尾缺终止标记且正文未送达（零字节）：仍写墓碑",
+			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
+				Provider:    forward.Provider{ID: 7},
+				Observation: forward.Observation{Frames: 1}},
+			want: terminal.AffinityDirective{TombstoneProviderID: 7},
+		},
+		{
+			name: "流尾缺终止标记但流内错误帧：仍写墓碑",
+			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
+				Provider:    forward.Provider{ID: 7},
+				Observation: forward.Observation{Bytes: 1024, ErrorText: "overloaded_error"}},
+			want: terminal.AffinityDirective{TombstoneProviderID: 7},
+		},
+		{
+			name: "流尾缺终止标记且非 2xx：仍写墓碑",
+			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 502,
+				Provider:    forward.Provider{ID: 7},
+				Observation: forward.Observation{Bytes: 512}},
+			want: terminal.AffinityDirective{TombstoneProviderID: 7},
+		},
+		{
+			name: "本地读错（报文体被中途切断）即便有正文也写墓碑",
+			outcome: forward.StreamOutcome{Kind: forward.TerminalLocalError, StatusCode: 200,
+				Provider:    forward.Provider{ID: 7},
+				Observation: forward.Observation{Bytes: 2048}},
 			want: terminal.AffinityDirective{TombstoneProviderID: 7},
 		},
 		{

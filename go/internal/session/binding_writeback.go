@@ -72,30 +72,43 @@ func (w *sessionBindingWriteback) CompareAndSet(ctx context.Context, providerID 
 
 // CooldownOnFailure 在供应商侧失败后写会话级冷却键。
 //
-// 用 Clear 实现：它一次 Lua 同时做「清 provider 绑定 + 写冷却键」，正是设计稿 §4 要求的
-// 「写冷却」——分两步做会在两步之间留下「绑定还在但已冷却」的窗口。
-// expectedProviderID 取**失败的那一家**：只对「绑定恰好指向它」写冷却（防羊群，
-// 与亲和墓碑的判据同源）。
+// 只写冷却键、**绑定一个字段都不动**（与 ClearBinding 的「清绑定」正相反：两者共用
+// ProviderCooldownKey 的键形制，但语义不同）。为何不清：冷却的语义是「本会话 60 秒内
+// 先绕开这家」，不是「忘掉这家」。清掉绑定会让本会话在冷却期内落到备用渠道、并把
+// canonical CAS 过去——冷却到点也回不来，60 秒的临时冷却就此变成永久迁移
+// （生产实测：冷却过期后 68 个请求 100% 走备用）。绑定留着，读侧按冷却键跳过该家、
+// 并据「绑定仅因临时原因被跳过」抑制成功侧 CAS
+// （route.SessionBindingBypassTransient → pctx.SessionBindingKeepReason，见 terminal/settle.go），
+// 冷却过期即粘回。
 //
 // 两个必须同时成立的性质（读侧据此把本条与低速降权分开，见 `route.CooldownKind`）：
 //   - **不看低速监控开关**：本动作是故障回避，与「渠道慢不慢」无关。若把它也挂上那个开关，
 //     默认（监控关闭）渠道的故障冷却就会写了永不生效；
-//   - **写入值是下一代 generation**（正整数，见 `lua/clear-session-binding.lua` 的 `SETEX`），
-//     与低速写入侧的固定标记 `slow` 不重叠——这是读侧分辨两者的唯一依据。
+//   - **写入值不是固定标记 `slow`**（取本次请求的代际）：与低速写入侧的标记不重叠——
+//     这是读侧分辨两者的唯一依据，而低速侧刻意不清绑定（recorder.go），本侧从 2026-09-24 起同。
+//
+// 仍然只对「绑定恰好指向失败的那家」写（防羊群，与原 Lua 的 provider fence 同判据）。
+// 不再看代际：那一半 fence 原本只是「同时旋转代际」的配套，绑定不动之后，
+// 同会话并发成功请求推进会误杀本该写下的冷却（旧实现下这类误杀只记 warn，静默）。
 func (w *sessionBindingWriteback) CooldownOnFailure(ctx context.Context, providerID int64) bool {
 	if w == nil || providerID <= 0 {
 		return false
 	}
-	result, err := w.binder.Clear(
-		ctx, w.sessionID, w.keyID, w.generation, providerID,
-		providerID, int(sessionCooldownTTL/time.Second), w.ttlSeconds(),
-	)
+	bound, err := w.binder.boundProvider(ctx, w.sessionID, w.keyID)
 	if err != nil {
 		w.warn("session.binding.cooldown_failed", err)
 		return false
 	}
-	if !result.OK {
-		w.warn("session.binding.cooldown_conflict", nil, "conflictReason", result.ConflictReason)
+	if bound != providerID {
+		// 绑定此刻指向别家（并发请求已改绑）或本会话无绑定：不动冷却键。
+		// 与清绑定侧的 skipped 同形：这是 fence 的正常语义，不是故障。
+		w.warn("session.binding.cooldown_skipped", nil, "boundProviderID", bound)
+		return false
+	}
+	if err := w.binder.writeProviderCooldown(
+		ctx, w.sessionID, w.keyID, providerID, w.generation, sessionCooldownTTL,
+	); err != nil {
+		w.warn("session.binding.cooldown_failed", err)
 		return false
 	}
 	return true

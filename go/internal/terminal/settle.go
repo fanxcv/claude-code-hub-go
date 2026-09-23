@@ -440,8 +440,8 @@ func (s *Settler) sessionBindingWriteback(
 	// 会话就被永久搬到备用——「待恢复仍粘回去」即为假，且此后每次熔断都搬一次。
 	//
 	// 不在此处记日志：该判定每请求都可能成立，逐条会淹掉日志；「为何没搬」在链上可读
-	// （绑定 provider 带 circuit_open / slow_rate_cooldown 出现在 filteredProviders 里），
-	// 选路侧的 Debug 日志也带上了 bypass 值（见 guard.adapters.provider_selected）。
+	// （绑定 provider 带 circuit_open / provider_error_cooldown / slow_rate_cooldown 出现在
+	// filteredProviders 里），选路侧的 Debug 日志也带上了 bypass 值（见 guard.adapters.provider_selected）。
 	if phase == sessionBindingWinner {
 		if _, keep := pc.SessionBindingKeepReason(); keep {
 			return

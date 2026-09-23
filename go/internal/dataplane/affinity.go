@@ -40,6 +40,11 @@ func affinityDirectiveForNonStream(result *forward.Result, failure *forward.Fail
 //     非 2xx、未正常结束（502）、静默超时、以及客户端中断（Node 把中断归为
 //     499/CLIENT_ABORTED，errorMessage 非空，故同样写墓碑）。incomplete
 //     （response.incomplete：语义未完成但 2xx 且无错误）两边都不写。
+//
+// 本仓另加两类本类型未覆盖的收尾：
+//   - 客户端主动中断：前缀墓碑照写、会话绑定侧不动（Node 对齐，见下）；
+//   - 流尾缺协议终止标记但正文已按分帧交付完毕：两边都不写
+//     （见 streamBodyDeliveredWithoutMarker）。
 func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.AffinityDirective {
 	success := outcome.StatusCode >= 200 && outcome.StatusCode < 300
 	incomplete := outcome.Observation.SawIncomplete && outcome.Observation.ErrorText == "" && success
@@ -49,6 +54,10 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 	if success && outcome.Kind == forward.TerminalCompleted {
 		return terminal.AffinityDirective{WinnerProviderID: outcome.Provider.ID}
 	}
+	if streamBodyDeliveredWithoutMarker(outcome, success) {
+		return terminal.AffinityDirective{}
+	}
+
 	// 客户端主动中断不是供应商故障：前缀墓碑照写（Node 对齐），但会话绑定侧不得动作——
 	// 否则用户按停就会给一家健康渠道写 60 秒冷却，下一请求无故换家。
 	if outcome.Kind == forward.TerminalClientAborted {
@@ -58,6 +67,33 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 		}
 	}
 	return terminal.AffinityDirective{TombstoneProviderID: outcome.Provider.ID}
+}
+
+// streamBodyDeliveredWithoutMarker 报告「上游把响应正文正常收尾、只漏了协议终止标记」。
+//
+// 判据的核心是 TerminalUpstreamTruncated 的语义：它是**干净的 EOF**。报文体被中途切断
+// （分块未终结、Content-Length 不足、读错误）在 forward 的终态分类里是
+// TerminalLocalError，不是本类型（见 forward/terminalKindFor：只有 `Err != nil` 且非
+// io.EOF 才落 LocalError；本类型出自「Err 为空、无错误帧、无终止标记」）。
+// 故本条成立即「正文按分帧交付完毕」，缺的只是 message_stop / [DONE] /
+// response.completed 这类**协议级**标记。
+//
+// 为何两边都不写（既不写 winner 也不写故障墓碑）：
+//   - 落库行与可用性投影对这类收尾按「成功」记账（终态层刻意不给它写 error_message，
+//     见 dataplane 的 Stream 结算；DB 侧成功率判据按 2xx 判 success），选路侧不该反过来
+//     记成「这家刚失败过」——生产事故正是这条误判把 60 秒会话冷却写给了一家健康渠道；
+//   - 奖励也不行：把跨会话的前缀亲和 tip 写回给一个漏发终止标记的渠道，是另一件未被求的事；
+//   - 与 Node 的判据同源：它写墓碑的前提是「存在错误文案」，本例没有；与同文件的 incomplete
+//     分支同形——证据不足的收尾不做判定。
+//
+// 四个显式条件缺一不可：非 2xx 是上游明说失败；ErrorText 非空是流内错误帧（Err==io.EOF
+// 的收尾路径不看 ErrorText，故必须在这里判）；Bytes 为 0 是「200 后立刻干净 EOF」即正文
+// 从未送达——这四种都不放过，照旧写墓碑与冷却。
+func streamBodyDeliveredWithoutMarker(outcome forward.StreamOutcome, success bool) bool {
+	return success &&
+		outcome.Kind == forward.TerminalUpstreamTruncated &&
+		outcome.Observation.ErrorText == "" &&
+		outcome.Observation.Bytes > 0
 }
 
 // tombstoneDirective 按 Node 的类别判据给出墓碑指令。

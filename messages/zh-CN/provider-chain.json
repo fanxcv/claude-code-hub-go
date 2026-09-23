@@ -91,7 +91,7 @@
     "endpoint_disabled": "端点已禁用",
     "client_restriction": "客户端限制",
     "slow_rate_cooldown": "低速冷却（本会话）",
-    "provider_error_cooldown": "故障冷却（本会话）",
+    "provider_error_cooldown": "故障冷却（本会话 60 秒）",
     "no_alternative_fail_open": "无替代候选，已回退使用"
   },
   "filterDetails": {
@@ -107,7 +107,7 @@
     "providerAllowlist": "Allowlist: {list}",
     "providerBlocklist": "Blocklist: {list}",
     "slow_rate_cooldown": "本会话刚在该渠道上遇到低速响应，冷却期内跳过",
-    "provider_error_cooldown": "本会话刚在该渠道上失败（上游错误），冷却期内跳过",
+    "provider_error_cooldown": "本会话刚在该渠道上发生供应商侧失败（如上游 5xx、静默超时），60 秒内先绕开；冷却过后仍粘回该渠道",
     "no_alternative_fail_open": "本会话对该渠道正在冷却，但没有替代候选可逃，故仍然使用它"
   },
   "details": {

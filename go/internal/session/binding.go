@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
+
+	"github.com/redis/go-redis/v9"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/ratelimit"
 )
@@ -156,6 +159,50 @@ func (b *Binder) Ready() bool {
 // validInput 是绑定输入预检：keyId 与 TTL 必须为正整数。
 func validInput(keyID int64, ttlSeconds int) bool {
 	return keyID > 0 && ttlSeconds > 0
+}
+
+// bindingProviderField 是规范键里记绑定供应商的字段（与两个 Lua 脚本里的字面量逐字一致）。
+const bindingProviderField = "provider_id"
+
+// boundProvider 读规范键此刻绑定的供应商；0 表示键不存在或字段为空（两者都等于「本会话此刻无绑定」）。
+//
+// 只读供应商这一个字段：写冷却的闸门是「绑定恰好指向失败的那家」（防羊群，与清绑定、
+// 亲和墓碑同一道闸），不需要也不该看代际——代际会被同会话的并发成功请求推进，
+// 而失败请求仍应给这家写冷却。
+func (b *Binder) boundProvider(ctx context.Context, sessionID string, keyID int64) (int64, error) {
+	if !b.Ready() {
+		return 0, ErrNilClient
+	}
+	raw, err := b.client.rc.Raw().HGet(
+		ctx, BuildBindingKeys(sessionID, keyID).Canonical, bindingProviderField,
+	).Result()
+	if errors.Is(err, redis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("session.binding: 读绑定供应商失败: %w", err)
+	}
+	providerID, parseErr := strconv.ParseInt(raw, 10, 64)
+	if parseErr != nil {
+		return 0, fmt.Errorf("session.binding: 绑定 %s 不是整数: %q", bindingProviderField, raw)
+	}
+	return providerID, nil
+}
+
+// writeProviderCooldown 写会话×供应商冷却键：冷却期内该会话的选路会跳过这家（读侧在 route）。
+//
+// 只写冷却键、**一个绑定字段都不动**（与 clear-session-binding.lua 的「清绑定 + 顺带写冷却」
+// 相反）——为何必须如此见 sessionBindingWriteback.CooldownOnFailure。
+// 值与低速写侧的固定标记 "slow" 不相交（读侧只能按值分流两类冷却），取本次请求的代际。
+func (b *Binder) writeProviderCooldown(
+	ctx context.Context, sessionID string, keyID, providerID int64, value string, ttl time.Duration,
+) error {
+	if !b.Ready() {
+		return ErrNilClient
+	}
+	return b.client.rc.Raw().Set(
+		ctx, ProviderCooldownKey(sessionID, keyID, providerID), value, ttl,
+	).Err()
 }
 
 // ReadOrReconcile 复刻 readOrReconcileSessionBinding。

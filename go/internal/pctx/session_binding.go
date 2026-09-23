@@ -18,6 +18,11 @@ type SessionBindingWriteback interface {
 	CompareAndSet(ctx context.Context, providerID int64) bool
 	// CooldownOnFailure 在供应商侧失败后写会话级冷却（键 session-binding:v1:{tag}:provider:{id}:cooldown）；
 	// 返回 false 表示未写。
+	//
+	// **只写冷却键、不动绑定**（清绑定是 ClearBinding 的语义）：清掉绑定会让本会话在冷却期内
+	// 落到备用渠道并把绑定 CAS 过去，冷却到点也回不来——60 秒的临时冷却就此变成永久迁移。
+	// 绑定留着，选路侧据冷却键跳过该家并抑制成功侧改绑（SessionBindingBypassTransient），
+	// 冷却过期即粘回。
 	CooldownOnFailure(ctx context.Context, providerID int64) bool
 	// ClearBinding 在「资源/配置类失效」时清空绑定且**不写冷却**。
 	//
