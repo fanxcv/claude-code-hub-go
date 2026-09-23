@@ -1005,6 +1005,9 @@ func terminalKindFor(completion PumpCompletion, observation Observation) Termina
 	if observation.ErrorText != "" {
 		return TerminalUpstreamError
 	}
+	if observation.SawIncomplete {
+		return TerminalIncomplete
+	}
 	if observation.CompletionMarker {
 		return TerminalCompleted
 	}

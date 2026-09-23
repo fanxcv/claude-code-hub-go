@@ -60,6 +60,8 @@ const (
 	TerminalEmpty TerminalKind = ""
 	// TerminalCompleted 表示上游发出协议终止标记，流完整结束。
 	TerminalCompleted TerminalKind = "completed"
+	// TerminalIncomplete 表示协议正常收尾，但内容因输出额度等原因未完成；不归咎供应商。
+	TerminalIncomplete TerminalKind = "incomplete"
 	// TerminalUpstreamError 表示流内出现错误帧（上游已在流中宣告失败）。
 	TerminalUpstreamError TerminalKind = "upstream_error"
 	// TerminalUpstreamTruncated 表示上游在协议终止标记之前断流。
@@ -101,7 +103,7 @@ type Observation struct {
 	Frames int64
 	// CompletionMarker 为真表示见到了与协议族匹配的终止标记。
 	CompletionMarker bool
-	// SawIncomplete 为真表示见到 responses 家族的 response.incomplete（语义未完成）。
+	// SawIncomplete 为真表示见到协议正常收尾但内容未完成（如输出额度触顶）。
 	SawIncomplete bool
 	// StopReason 是流内最后一次声明的停止原因（原样保留各线取值）。
 	StopReason string
@@ -400,7 +402,10 @@ func (o *Observer) observeFrame(frame gate.Frame) {
 		return
 	}
 	if data == "[DONE]" {
-		o.observation.CompletionMarker = true
+		// [DONE] 是 OpenAI 家族的哨兵，不可替 Anthropic/Gemini 缺失的协议终止帧背书。
+		if o.opts.Format == convert.FormatOpenAI || o.opts.Format == convert.FormatResponse {
+			o.observation.CompletionMarker = true
+		}
 		return
 	}
 	payload, err := convert.ParseJSON([]byte(data))
@@ -427,8 +432,30 @@ func (o *Observer) observePayload(payload *convert.Value, event string) {
 	if hasCompletionMarker(o.opts.Format, payload, event) {
 		o.observation.CompletionMarker = true
 	}
-	if kind, ok := payload.StringField("type"); ok && kind == "response.incomplete" {
+	if kind, ok := payload.StringField("type"); ok && kind == "response.incomplete" && o.opts.Format == convert.FormatResponse && (event == "" || event == "message" || event == kind) {
 		o.observation.SawIncomplete = true
+	}
+	if o.observation.CompletionMarker {
+		switch o.opts.Format {
+		case convert.FormatClaude:
+			o.observation.SawIncomplete = o.observation.SawIncomplete || o.observation.StopReason == "max_tokens"
+		case convert.FormatOpenAI:
+			for _, choice := range payload.ArrayField("choices") {
+				if reason, ok := choice.StringField("finish_reason"); ok && reason == "length" {
+					o.observation.SawIncomplete = true
+				}
+			}
+		case convert.FormatGemini, convert.FormatGeminiCLI:
+			source := payload.ObjectField("response")
+			if source == nil {
+				source = payload
+			}
+			for _, candidate := range source.ArrayField("candidates") {
+				if reason, ok := candidate.StringField("finishReason"); ok && reason == "MAX_TOKENS" {
+					o.observation.SawIncomplete = true
+				}
+			}
+		}
 	}
 }
 

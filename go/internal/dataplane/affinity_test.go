@@ -89,7 +89,7 @@ func TestAffinityDirectiveForStream(t *testing.T) {
 		},
 		{
 			name: "incomplete（2xx 且无错误帧）两边都不写",
-			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
+			outcome: forward.StreamOutcome{Kind: forward.TerminalIncomplete, StatusCode: 200,
 				Provider:    forward.Provider{ID: 7},
 				Observation: forward.Observation{SawIncomplete: true}},
 			want: terminal.AffinityDirective{},

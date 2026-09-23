@@ -36,10 +36,9 @@ func affinityDirectiveForNonStream(result *forward.Result, failure *forward.Fail
 //   - 成功写回（5414-5420）：协议终态正常抵达、未被判为错误、内部状态码 2xx；
 //     客户端在协议终态之后断开也算成功（Node 的 clientAbortCompleteSuccess），
 //     Go 的 TerminalCompleted 已涵盖这一情形（泵只在终态未定时才标 clientAborted）。
-//   - 墓碑（5420-5426）：**非** incomplete 且存在错误文案的一切终态——上游错误帧、
-//     非 2xx、未正常结束（502）、静默超时、以及客户端中断（Node 把中断归为
-//     499/CLIENT_ABORTED，errorMessage 非空，故同样写墓碑）。incomplete
-//     （response.incomplete：语义未完成但 2xx 且无错误）两边都不写。
+//   - 墓碑（5420-5426）：供应商侧错误帧、未正常结束、静默超时等写墓碑。
+//     TerminalIncomplete 是协议合法收尾、内容因输出额度等原因未完成，
+//     并非供应商故障，故两边都不写。
 //
 // 本仓另加一类本类型未覆盖的收尾：
 //   - 客户端主动中断：前缀墓碑照写、会话绑定侧不动（Node 对齐，见下）。
@@ -48,8 +47,7 @@ func affinityDirectiveForNonStream(result *forward.Result, failure *forward.Fail
 // 对应分支，见下方注记。
 func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.AffinityDirective {
 	success := outcome.StatusCode >= 200 && outcome.StatusCode < 300
-	incomplete := outcome.Observation.SawIncomplete && outcome.Observation.ErrorText == "" && success
-	if incomplete {
+	if outcome.Kind == forward.TerminalIncomplete {
 		return terminal.AffinityDirective{}
 	}
 	if success && outcome.Kind == forward.TerminalCompleted {

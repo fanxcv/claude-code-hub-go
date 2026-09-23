@@ -67,6 +67,9 @@ func TestObserverOllamaResponsesUsageRepro(t *testing.T) {
 	if !snapshot.UsageSeen {
 		t.Fatalf("应取到用量（真实流里 response.incomplete 带 usage），实际 UsageSeen=false")
 	}
+	if snapshot.CompletionMarker || !snapshot.SawIncomplete || terminalKindFor(PumpCompletion{}, snapshot) != TerminalIncomplete {
+		t.Fatalf("真实 response.incomplete 应独立于成功和截断收尾: marker=%v incomplete=%v kind=%s", snapshot.CompletionMarker, snapshot.SawIncomplete, terminalKindFor(PumpCompletion{}, snapshot))
+	}
 	if snapshot.Usage.InputTokens == nil || *snapshot.Usage.InputTokens != 31 {
 		t.Errorf("input_tokens 应为 31，实际 %v", snapshot.Usage.InputTokens)
 	}

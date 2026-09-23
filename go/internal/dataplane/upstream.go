@@ -387,6 +387,9 @@ func (s *storeSettler) NonStream(
 // 它进 message_request.error_message，是可 grep、可告警、可对账的判据，不是给终端用户读的文案。
 const upstreamStreamCutMessage = "upstream_stream_cut"
 
+// requestIncompleteMessage 为协议已收尾但输出未完成的中立终态：不算成功，也不归咎渠道。
+const requestIncompleteMessage = "request_incomplete"
+
 // streamErrorMessage 派生流式终态的错误文案；返回 nil 表示本次终态按成功记账。
 //
 // 为何它是记账的开关而不是单纯日志：`message_request.is_success` 由 DB 触发器按
@@ -407,6 +410,10 @@ const upstreamStreamCutMessage = "upstream_stream_cut"
 func streamErrorMessage(outcome forward.StreamOutcome, observation forward.Observation) *string {
 	if outcome.Err != nil {
 		message := outcome.Err.Error()
+		return &message
+	}
+	if outcome.Kind == forward.TerminalIncomplete {
+		message := requestIncompleteMessage
 		return &message
 	}
 	if outcome.Kind == forward.TerminalUpstreamTruncated && !observation.CompletionMarker {

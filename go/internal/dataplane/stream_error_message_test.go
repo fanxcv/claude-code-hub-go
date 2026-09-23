@@ -46,6 +46,11 @@ func TestStreamErrorMessage(t *testing.T) {
 			wantNil:     true,
 		},
 		{
+			name:    "合法 incomplete 收尾：不是成功且须用独立标识供投影排除",
+			outcome: forward.StreamOutcome{Kind: forward.TerminalIncomplete, StatusCode: 200},
+			want:    requestIncompleteMessage,
+		},
+		{
 			name:        "正常完成：按成功记账",
 			outcome:     forward.StreamOutcome{Kind: forward.TerminalCompleted, StatusCode: 200},
 			observation: forward.Observation{Bytes: 1024, Frames: 8, CompletionMarker: true},
