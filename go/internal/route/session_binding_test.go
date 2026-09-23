@@ -120,7 +120,7 @@ func TestSessionBindingSkippedWhenForcePrefix(t *testing.T) {
 
 // TestSessionBindingRejectsCircuitOpenProvider 反向判据：绑定的供应商熔断开闸时必须被跳过。
 //
-// 这是设计稿 §8 风险二的缓解：熔断是暂时的，绑定保留待恢复，但本次绝不钉死在它上面。
+// 熔断开闸时不得强行复用绑定候选；备用成功后终态可将绑定改写到 winner。
 func TestSessionBindingRejectsCircuitOpenProvider(t *testing.T) {
 	now := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
 	bound := baseProvider(7, convert.ProviderClaude)

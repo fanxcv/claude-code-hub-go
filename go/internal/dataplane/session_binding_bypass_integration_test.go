@@ -21,9 +21,8 @@ import (
 
 // 本文件是**跨层端到端钉子**：真 Binder（真 Redis + 真 Lua）+ 真选路器 + 真终态结算器。
 //
-// 为什么必须跨层：这条缺陷的判定在选路层、动作在终态层，两者隔着守卫链与 pctx。分层钉子
-// 各自全绿仍可能整体失效（判定做对了但没人读，或读到了但写回照样发）。故本用例走完整链：
-// 预置绑定 → 熔断跳过绑定 → 选路给出 winner 与 bypass → 盖保留事实 → 终态结算 → 读回 Redis。
+// 为什么必须跨层：选路会因冷却跳过绑定，成功终态则须改绑到 winner。故本用例走完整链：
+// 预置绑定 → 故障冷却跳过绑定 → 选路给出 winner 与 bypass → 终态结算 → 读回 Redis。
 //
 // 真库门控：未设 CCH_TEST_REDIS_URL 时跳过（与同目录其余集成用例一致，CI 即跳过）。
 
@@ -120,13 +119,9 @@ func newCrossLayerContext(t *testing.T, writeback pctx.SessionBindingWriteback) 
 	return pc
 }
 
-// TestSessionBindingKeptWhenBoundProviderInCircuitAcrossLayers 是本 lane 的主线钉子。
-//
-// 判据（缺一即红）：
-//  1. 绑定 provider 熔断开闸时，本次能选别家，且 bypass 判为「须保留绑定」；
-//  2. 备用**成功**终态跑完之后，Redis 里的绑定**仍指向原 provider**（这是缺陷本体）；
-//  3. 熔断恢复后，下一次选路重新命中原 provider（设计稿 §4：待恢复后仍粘回去）。
-func TestSessionBindingKeptWhenBoundProviderInCircuitAcrossLayers(t *testing.T) {
+// TestSessionBindingFollowsWinnerAfterProviderErrorCooldownAcrossLayers 钉住冷却跳过绑定、
+// 备用成功后绑定改写为 winner；冷却到期也不粘回原家。
+func TestSessionBindingFollowsWinnerAfterProviderErrorCooldownAcrossLayers(t *testing.T) {
 	rdb := crossLayerRedis(t)
 	registry, err := ratelimit.Load()
 	if err != nil {
@@ -153,12 +148,10 @@ func TestSessionBindingKeptWhenBoundProviderInCircuitAcrossLayers(t *testing.T) 
 	)
 	ctx := context.Background()
 	keys := session.BuildBindingKeys(sessionID, keyID)
-	stateKey := route.ProviderStateKeyPrefix + strconv.FormatInt(boundID, 10)
 	purge := func() {
 		_ = rdb.Del(ctx, keys.Canonical, keys.LegacyProvider, keys.LegacyOwner,
 			session.ProviderCooldownKey(sessionID, keyID, boundID),
-			session.ProviderCooldownKey(sessionID, keyID, backupID),
-			stateKey).Err()
+			session.ProviderCooldownKey(sessionID, keyID, backupID)).Err()
 	}
 	purge()
 	t.Cleanup(purge)
@@ -180,13 +173,9 @@ func TestSessionBindingKeptWhenBoundProviderInCircuitAcrossLayers(t *testing.T) 
 	}
 	generation := current.Snapshot.Generation
 
-	// 熔断状态：真 HealthReader 读真 Redis 的键（键形制取自 route.ProviderStateKeyPrefix）。
-	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
-	if err := rdb.HSet(ctx, stateKey, map[string]any{
-		"circuitState":     string(route.StateOpen),
-		"circuitOpenUntil": strconv.FormatInt(now.Add(time.Hour).UnixMilli(), 10),
-	}).Err(); err != nil {
-		t.Fatalf("写入熔断状态失败: %v", err)
+	writeback := adapter.SessionBindingWriteback(sessionID, keyID, generation)
+	if writeback == nil || !writeback.CooldownOnFailure(ctx, boundID) {
+		t.Fatal("写入 provider_error_cooldown 失败")
 	}
 
 	bound := crossLayerProvider(boundID)
@@ -196,7 +185,7 @@ func TestSessionBindingKeptWhenBoundProviderInCircuitAcrossLayers(t *testing.T) 
 			providers: []route.Provider{bound, backup},
 			byID:      map[int64]route.Provider{boundID: bound, backupID: backup},
 		},
-		Health:   route.NewHealthReader(route.HealthOptions{Redis: rdb, Now: func() time.Time { return now }}),
+		SlowRate: route.NewSlowRateReader(route.SlowRateOptions{Redis: rdb}),
 		Affinity: route.NewAffinityStore(route.AffinityOptions{Window: 8}),
 		Rand:     func() float64 { return 0 },
 	})
@@ -213,21 +202,17 @@ func TestSessionBindingKeptWhenBoundProviderInCircuitAcrossLayers(t *testing.T) 
 		t.Fatalf("选路失败: %v", err)
 	}
 	if result.Provider == nil || result.Provider.ID != backupID {
-		t.Fatalf("熔断的绑定 provider 不该被选中，实际 %+v", result.Provider)
+		t.Fatalf("故障冷却中的绑定 provider 不该被选中，实际 %+v", result.Provider)
 	}
-	if !result.SessionBindingBypass.KeepsBinding() {
-		t.Fatalf("熔断开闸应判为临时原因，实际 %v", result.SessionBindingBypass)
+	if result.SessionBindingBypass != route.SessionBindingBypassTransient {
+		t.Fatalf("故障冷却应留痕为临时原因，实际 %v", result.SessionBindingBypass)
+	}
+	if got := result.Context.FilteredProviders; len(got) == 0 || got[0].Reason != route.ReasonProviderErrorCooldown {
+		t.Fatalf("故障冷却应留痕 provider_error_cooldown，实际 %+v", got)
 	}
 
-	// 终态：备用成功。守卫链在这一步盖「不得改绑」事实（与 guard/adapters_route.go 同源）。
-	writeback := adapter.SessionBindingWriteback(sessionID, keyID, generation)
-	if writeback == nil {
-		t.Fatal("应拿到会话绑定写回能力（真 Binder 已就绪）")
-	}
+	// 备用成功后，终态应改绑到备用。
 	pc := newCrossLayerContext(t, writeback)
-	if result.SessionBindingBypass.KeepsBinding() {
-		pc.SetSessionBindingKeep(result.SessionBindingBypass.String())
-	}
 	durationMS := 62
 	settlement := terminal.Settlement{
 		StatusCode:    200,
@@ -243,24 +228,24 @@ func TestSessionBindingKeptWhenBoundProviderInCircuitAcrossLayers(t *testing.T) 
 	if err != nil || !after.OK {
 		t.Fatalf("读回绑定失败: %+v / %v", after, err)
 	}
-	if after.Snapshot.ProviderID != boundID {
-		t.Fatalf("临时原因下备用成功不得改绑：绑定应仍为 %d，实际 %d"+
-			"（改绑后「熔断恢复仍粘回去」即为假，且每次熔断都会把会话永久搬走一次）",
-			boundID, after.Snapshot.ProviderID)
+	if after.Snapshot.ProviderID != backupID {
+		t.Fatalf("provider_error_cooldown 跳过绑定家、备用成功后应改绑至 %d，实际 %d", backupID, after.Snapshot.ProviderID)
 	}
 
-	// 熔断恢复：删掉熔断状态，下一次选路必须重新命中原 provider。
-	if err := rdb.Del(ctx, stateKey).Err(); err != nil {
-		t.Fatalf("清除熔断状态失败: %v", err)
+	// 冷却到期后，用最新绑定快照选路，仍须命中备用。
+	if err := rdb.Del(ctx, session.ProviderCooldownKey(sessionID, keyID, boundID)).Err(); err != nil {
+		t.Fatalf("清除冷却键失败: %v", err)
 	}
+	request.SessionBinding.Generation = after.Snapshot.Generation
+	request.SessionBinding.ProviderID = backupID
 	recovered, err := selector.Select(ctx, request)
 	if err != nil {
 		t.Fatalf("恢复后选路失败: %v", err)
 	}
-	if recovered.Provider == nil || recovered.Provider.ID != boundID {
-		t.Fatalf("熔断恢复后应重新粘回 %d，实际 %+v", boundID, recovered.Provider)
+	if recovered.Provider == nil || recovered.Provider.ID != backupID {
+		t.Fatalf("冷却到期后应仍粘于 winner %d，实际 %+v", backupID, recovered.Provider)
 	}
 	if recovered.Method != route.MethodSessionReuse {
-		t.Errorf("熔断恢复后应走会话复用，实际 %q", recovered.Method)
+		t.Errorf("冷却到期后应走会话复用，实际 %q", recovered.Method)
 	}
 }

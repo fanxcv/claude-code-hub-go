@@ -12,10 +12,8 @@ import (
 
 // 本文件钉住「读绑定行**失败**」与「绑定行**已不存在**」必须分开处置这条契约。
 //
-// 为什么必须单独钉：两者的返回形态都是 error，但处置相反——读失败是**临时**原因（绑定必须
-// 保留、成功侧不得改绑，设计稿 §4「待恢复后仍粘回去」），行不存在是**结构性**失效（旧绑定
-// 已死，允许改绑）。压成一支的后果是：一次 DB 抖动就把会话永久搬到备用渠道，且单测、日志、
-// 配置面全都看不见——只有对比「本次选了谁」与「绑定还指向谁」才看得出。
+// 为什么必须单独钉：两者的返回形态都是 error，但选路留痕不同——读失败属临时原因，
+// 行不存在属结构性失效。备用成功时两者都改绑到 winner。
 
 // lookupErrorSource 是「按 id 直读会失败」的数据源：列表照常给，只有直读某家时报错。
 //
@@ -60,7 +58,7 @@ func newLookupFailureSelector(source Source) *Selector {
 }
 
 // TestSessionBindingBypassTransientWhenLookupFails 是主线：读绑定行**失败**时本次照常回落选
-// 备用，但 bypass 必须判为临时 ⇒ 终态成功侧跳过 CAS ⇒ 绑定仍指向原 provider。
+// 备用，但 bypass 必须记录读失败属临时原因。
 func TestSessionBindingBypassTransientWhenLookupFails(t *testing.T) {
 	bound := baseProvider(7, convert.ProviderClaude)
 	backup := baseProvider(8, convert.ProviderClaude)
@@ -83,19 +81,12 @@ func TestSessionBindingBypassTransientWhenLookupFails(t *testing.T) {
 		t.Fatalf("读不到绑定行时应照常回落选备用，实际 %+v", result.Provider)
 	}
 	if result.SessionBindingBypass != SessionBindingBypassTransient {
-		t.Errorf("bypass = %v，期望 transient（读失败是临时原因，不得改绑）", result.SessionBindingBypass)
-	}
-	if !result.SessionBindingBypass.KeepsBinding() {
-		t.Error("KeepsBinding 应为真：终态成功侧据此跳过 CAS")
+		t.Errorf("bypass = %v，期望 transient（读失败属临时原因）", result.SessionBindingBypass)
 	}
 }
 
 // TestSessionBindingBypassNoneWhenBindingRowGone 反向：绑定行**已不存在**（StoreSource 译出的
-// ErrProviderNotFound）时属结构性失效，必须允许改绑——旧绑定已经死了，新 winner 才是该会话
-// 该去的地方；钉住它才能证明「读失败」与「行不存在」真的被分开了。
-//
-// 没有这条反向，把「任何 error 都判 transient」也能让主线变绿，而后果是会话永远钉在一家
-// 已删除的渠道上（绑定再也改不掉）。
+// ErrProviderNotFound）时属结构性失效；钉住它才能证明两种 error 的留痕并未混淆。
 func TestSessionBindingBypassNoneWhenBindingRowGone(t *testing.T) {
 	bound := baseProvider(7, convert.ProviderClaude)
 	backup := baseProvider(8, convert.ProviderClaude)
@@ -118,10 +109,7 @@ func TestSessionBindingBypassNoneWhenBindingRowGone(t *testing.T) {
 		t.Fatalf("绑定行已不存在时应回落选备用，实际 %+v", result.Provider)
 	}
 	if result.SessionBindingBypass != SessionBindingBypassNone {
-		t.Errorf("bypass = %v，期望 none（行已不存在属结构性失效，允许改绑）", result.SessionBindingBypass)
-	}
-	if result.SessionBindingBypass.KeepsBinding() {
-		t.Error("KeepsBinding 应为假：行已不存在不是临时故障")
+		t.Errorf("bypass = %v，期望 none（行已不存在属结构性失效）", result.SessionBindingBypass)
 	}
 }
 

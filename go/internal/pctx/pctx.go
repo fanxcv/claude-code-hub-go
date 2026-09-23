@@ -134,12 +134,6 @@ type Context struct {
 	affinity AffinityWriteback
 	// sessionBinding 是会话绑定终态写回能力（见 session_binding.go）；nil 表示本次不写会话绑定。
 	sessionBinding SessionBindingWriteback
-	// sessionBindingKeep 非空表示**本次成功终态不得改写会话绑定**，值为原因（排障用）。
-	//
-	// 为什么要有它：选路层知道既有绑定为何没被采用（熔断/会话冷却等临时原因），而改绑发生在
-	// 终态层，两者隔着守卫链。设计稿 §4 要求临时原因下绑定保留（待恢复后仍粘回去），
-	// 故必须把这条判定带过去：只带「选了哪家」会丢掉「为何没选那家」。
-	sessionBindingKeep string
 	// affinityIdentity 是本次请求的亲和身份事实（仅两个字符串，不是 route 的类型）：
 	// 请求日志的 session_identity_kind 靠它判定「前缀亲和」还是「客户端会话」。
 	affinityIdentity    AffinityIdentity

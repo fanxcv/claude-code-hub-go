@@ -193,10 +193,7 @@ type Result struct {
 	// 因为身份事实只依赖指纹链与键，不依赖 Redis。请求日志的 session_identity_kind 取它。
 	AffinityIdentity *AffinityIdentity
 
-	// SessionBindingBypass 说明既有会话绑定为何未被本次采用，供终态判定「成功侧能否改绑」。	//
-	// 零值（SessionBindingBypassNone）即允许改绑：无既有绑定、绑定被采用、或绑定因结构性
-	// 原因被跳过。SessionBindingBypassTransient（熔断/会话冷却等活动时段、限额、本次已试过，
-	// 以及**读绑定行失败**）要求保留原绑定——设计稿 §4：熔断是暂时的，待恢复后会话仍粘回去。
+	// SessionBindingBypass 留痕既有绑定未被采用的原因，不影响终态改绑 winner。
 	SessionBindingBypass SessionBindingBypass
 
 	// SlowProbe 非 nil 表示本次是**探针请求**：被隔离的组合因持有探针租约而被定向到。
@@ -349,15 +346,14 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		writeback        *AffinityWriteback
 		affinityIdentity *AffinityIdentity
 		nominated        bool
-		// bindingBypass 是「既有绑定未被采用」的性质，随 Result 交到终态层决定能否改绑。
+		// bindingBypass 随 Result 交给接线层留痕，说明既有绑定为何未被采用。
 		bindingBypass SessionBindingBypass
 	)
 	// 会话绑定层（第一优先级）：会话存在且已有非空绑定时短路，不查前缀、不跑加权随机。
 	//
 	// 为何在 filtered 之后：绑定候选必须通过全套硬校验（熔断、停用、分组、模型、端点、
 	// 冷却等），而 applyFilters 正是那份校验的产物——在它之前短路等于绕开全部校验。
-	// 候选不在 healthy 池时**不短路**，继续走后续层级（设计稿 §4：熔断是暂时的，
-	// 绑定保留待恢复，但本次不钉死在它上面）。
+	// 候选不在 healthy 池时**不短路**，继续走后续层级；备用若成功，终态会改绑。
 	//
 	// 模式开关（AffinityIgnoreClientSessionID）为真时整层跳过：那就是「强制前缀粘性」
 	// 的语义，也是设计 §5 说的 kill switch。缺了这道门，把它置真并不会退回前缀行为
@@ -372,7 +368,7 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		if !switches.ForcePrefix {
 			bound, nomination := s.nominateBySessionBinding(ctx, req, excluded)
 			// 隔离必须能拦住**会话绑定**（否则被粘住的会话会一次次绕过隔离撞回同一家）。
-			// 拦下后不直接返回：走后续层级（绑定会被保留，见 sessionBindingBypass 的临时判定）。
+			// 拦下后不直接返回：走后续层级，仍记录本次跳过的原因。
 			if nomination == sessionBindingNominated && !quarantineExcluded[bound.ID] {
 				selectedPriority := resolveEffectivePriority(bound, req.Group, penalties)
 				survivors := affinitySurvivors(filtered.healthy, bound.ID, req.Group, penalties)
@@ -398,10 +394,10 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 				}, nil
 			}
 			// 既有绑定未被采用：判定它是临时原因（熔断/会话冷却/读绑定行失败等）还是结构性原因。
-			// 临时原因下终态成功侧**不得**改绑（设计稿 §4：熔断是暂时的，绑定保留待恢复）。
+			// 分类仅供留痕；成功终态不论分类都尝试改绑到 winner。
 			//
 			// 「读绑定行失败」必须由这里显式传入（nomination）：该情形下候选根本没读出来，
-			// 不进过滤留痕，靠留痕推断只会把它当成「行已不存在」而允许改绑。
+			// 不进过滤留痕，靠留痕推断会把它误记成「行已不存在」。
 			bindingBypass = sessionBindingBypass(
 				dc.FilteredProviders,
 				req.SessionBinding,

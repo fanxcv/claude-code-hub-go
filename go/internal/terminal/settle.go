@@ -433,20 +433,6 @@ func (s *Settler) sessionBindingWriteback(
 	if !sessionBindingApplies(directive, phase, committed) {
 		return
 	}
-	// 成功侧的第三道门（前两道在 sessionBindingApplies 里）：本次选路是否要求保留既有绑定。
-	//
-	// 设计稿 §4 对熔断明定「跳过该 provider、不清空绑定、待恢复后仍粘回去」。绑定 provider
-	// 因临时原因（熔断/会话冷却/活动时段/限额/本次已试过）被跳过、备用成功时，若照旧 CAS，
-	// 会话就被永久搬到备用——「待恢复仍粘回去」即为假，且此后每次熔断都搬一次。
-	//
-	// 不在此处记日志：该判定每请求都可能成立，逐条会淹掉日志；「为何没搬」在链上可读
-	// （绑定 provider 带 circuit_open / provider_error_cooldown / slow_rate_cooldown 出现在
-	// filteredProviders 里），选路侧的 Debug 日志也带上了 bypass 值（见 guard.adapters.provider_selected）。
-	if phase == sessionBindingWinner {
-		if _, keep := pc.SessionBindingKeepReason(); keep {
-			return
-		}
-	}
 	writeback, writeCtx, cancel, ok := s.sessionBindingTarget(ctx, pc)
 	if !ok {
 		return

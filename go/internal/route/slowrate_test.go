@@ -935,17 +935,13 @@ func TestCooldownReadFailureFailsOpen(t *testing.T) {
 	}
 }
 
-// TestProviderErrorCooldownKeepsBinding 钉住新理由属**临时**原因。
-//
-// 为何必须有：transientRejection 决定「绑定 provider 因临时原因被跳过时，备用成功是否改绑」。
-// 漏了这条新理由，会话绑定就会在一次故障冷却期间被永久搬到备用——而设计稿 §4 要求
-// 「跳过该 provider、不清空绑定、待恢复后仍粘回去」。
-func TestProviderErrorCooldownKeepsBinding(t *testing.T) {
+// TestProviderErrorCooldownRecordsTransientBypass 钉住故障冷却的临时原因留痕。
+func TestProviderErrorCooldownRecordsTransientBypass(t *testing.T) {
 	if !transientRejection(ReasonProviderErrorCooldown) {
 		t.Errorf("provider_error_cooldown 应属临时原因（不改任何配置就可能恢复）")
 	}
 	if !transientBypass([]Filtered{{ID: 7, Reason: ReasonProviderErrorCooldown}}, 7) {
-		t.Errorf("留痕里带 provider_error_cooldown 的家应判为临时跳过，绑定不该被改写")
+		t.Errorf("留痕里带 provider_error_cooldown 的家应判为临时跳过")
 	}
 }
 

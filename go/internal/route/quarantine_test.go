@@ -184,9 +184,9 @@ func TestSlowProbeLeaseIsExclusiveAndDirected(t *testing.T) {
 	if first.SlowProbe.ProviderID != 1 || first.SlowProbe.ModelKey != "m1" {
 		t.Errorf("租约作用域 = (%d,%q)，期望 (1,m1)", first.SlowProbe.ProviderID, first.SlowProbe.ModelKey)
 	}
-	// 探针不得改写会话绑定：否则被隔离的渠道会靠探针把会话「拽」过去。
-	if !first.SessionBindingBypass.KeepsBinding() {
-		t.Errorf("探针选的绑定处置 = %v，期望保留既有绑定", first.SessionBindingBypass)
+	// 探针命中仍要留痕，以便排查隔离渠道为何获选。
+	if first.SessionBindingBypass != SessionBindingBypassTransient {
+		t.Errorf("探针选的 bypass = %v，期望 transient", first.SessionBindingBypass)
 	}
 
 	second, err := selector.Select(context.Background(), Request{Model: "m1", SessionID: "s1", KeyID: 7})
@@ -231,8 +231,8 @@ func TestQuarantineBlocksSessionBinding(t *testing.T) {
 	if result.Provider == nil || result.Provider.ID != 2 {
 		t.Fatalf("选中 = %v，期望 2（会话绑定指向被隔离的 1，不得绕过隔离）", result.Provider)
 	}
-	// 绑定必须**保留**（隔离是临时的）：否则一次隔离就把会话永久搬走，恢复后也回不去。
-	if !result.SessionBindingBypass.KeepsBinding() {
-		t.Errorf("绑定处置 = %v，期望保留（隔离属临时原因）", result.SessionBindingBypass)
+	// 隔离属临时原因，须留痕；备用成功仍可改绑。
+	if result.SessionBindingBypass != SessionBindingBypassTransient {
+		t.Errorf("绑定 bypass = %v，期望 transient", result.SessionBindingBypass)
 	}
 }

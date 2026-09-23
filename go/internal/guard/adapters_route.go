@@ -238,13 +238,6 @@ func (r *ProviderRouter) Select(ctx context.Context, req *pctx.Context) (pctx.Pr
 	} else {
 		req.SetSelectionChainEntry(encoded)
 	}
-	// 会话绑定保留事实：本次选路若因**临时原因**（熔断/会话冷却/活动时段/限额/本次已试过）
-	// 跳过了既有绑定，终态成功侧就不得改绑——设计稿 §4：熔断是暂时的，绑定保留待恢复，
-	// 待恢复后会话仍粘回去。判定在选路层（只有它知道绑定为何没被采用），动作在终态层，
-	// 故经 pctx 转交（见 pctx.SetSessionBindingKeep 与 terminal 的成功侧闸门）。
-	if result.SessionBindingBypass.KeepsBinding() {
-		req.SetSessionBindingKeep(result.SessionBindingBypass.String())
-	}
 	r.logger.Debug("guard.adapters.provider_selected", map[string]any{
 		"providerId":           result.Provider.ID,
 		"method":               string(result.Method),

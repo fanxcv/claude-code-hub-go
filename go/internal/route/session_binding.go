@@ -59,21 +59,20 @@ func (s *Selector) f3bCacheScoreFacts(req Request) *AffinityWriteback {
 // sessionBindingNomination 是会话绑定层「本次为什么没（能）采用既有绑定」的结果。
 //
 // 为什么不让调用方自己看 error：判定必须收在一处（见 sessionBindingBypass）。这里只负责
-// 把**读绑定行失败**这一支从「行不存在 / 校验不过」里分出来——两者的处置相反。
+// 把**读绑定行失败**这一支从「行不存在 / 校验不过」里分出来，便于留痕。
 type sessionBindingNomination int
 
 const (
 	// sessionBindingNotNominated 表示本次没有采用既有绑定。含三种情形：无绑定、绑定行已不存在
 	// （ErrProviderNotFound）、绑定候选未过硬校验。三者均属**结构性**失效或本就不适用，
-	// 由 sessionBindingBypass 按过滤留痕判定（允许改绑）。
+	// 由 sessionBindingBypass 按过滤留痕分类。
 	sessionBindingNotNominated sessionBindingNomination = iota
 	// sessionBindingNominated 表示绑定候选已采用，选路短路。
 	sessionBindingNominated
 	// sessionBindingLookupFailed 表示**读绑定行失败**（DB 抖动/超时/快照装载失败）。
 	//
-	// 它是**临时**原因：不改任何配置就可能恢复，故绑定必须保留、本次成功终态不得改绑。
-	// 与「行已不存在」（ErrProviderNotFound，结构性、允许改绑）严格分开：压成一支，
-	// 一次瞬时读错就会把会话永久搬走。
+	// 它是**临时**原因：不改任何配置就可能恢复。与「行已不存在」
+	// （ErrProviderNotFound，结构性）分开，供本次选路留痕与排障。
 	sessionBindingLookupFailed
 )
 
@@ -88,10 +87,10 @@ func (s *Selector) nominateBySessionBinding(
 	provider, err := s.opts.Source.Provider(ctx, req.SessionBinding.ProviderID)
 	if err != nil {
 		if errors.Is(err, ErrProviderNotFound) {
-			// 行已不存在：结构性失效，旧绑定已死，允许改绑。
+			// 行已不存在：结构性失效，留痕为 none。
 			return Provider{}, sessionBindingNotNominated
 		}
-		// 其余 error 一律是**读失败**（DB 抖动/超时/快照装载失败）：临时原因，绑定必须保留。
+		// 其余 error 一律是**读失败**（DB 抖动/超时/快照装载失败）：记作临时原因。
 		// 不按具体错误码细分：本层只需回答「能不能恢复」，而「要改配置才恢复」的失效
 		// 都走不到这里（停用/不兼容的候选是读得出来的，由 validateAffinityCandidate 拦下）。
 		return Provider{}, sessionBindingLookupFailed
@@ -105,33 +104,16 @@ func (s *Selector) nominateBySessionBinding(
 	return *provider, sessionBindingNominated
 }
 
-// SessionBindingBypass 说明「既有会话绑定为何未在本次被采用」，是终态能否改绑的唯一判据来源。
-//
-// 为什么必须区分：设计稿 §4 失效规则对熔断逐字明定「跳过该 provider、继续走后续层级
-// （不写冷却、**不清空绑定**）」，表下注「熔断是暂时的，绑定保留；待熔断恢复后会话仍粘回去」。
-// 若不加区分，绑定 provider 因熔断/会话冷却被跳过、备用成功之后，成功侧的 CAS 会把绑定
-// 改写成备用——「待恢复仍粘回去」即为假，且此后每次熔断都把会话永久搬走一次。
-//
-// 它是零值安全的：零值（SessionBindingBypassNone）即「本次不抑制改绑」，与接线前的行为逐字一致。
+// SessionBindingBypass 说明「既有会话绑定为何未在本次被采用」，仅供留痕与排障。
+// 零值表示无临时跳过原因；成功终态始终尝试把绑定写给 winner。
 type SessionBindingBypass int
 
 const (
-	// SessionBindingBypassNone 表示本次不抑制改绑。三种情形：无既有绑定、绑定被正常采用、
-	// 或绑定因**结构性**原因被跳过。最后一种允许改绑是对的——旧绑定已结构性失效
-	// （渠道停用、模型/端点不兼容），新 winner 才是该会话该去的地方。
+	// SessionBindingBypassNone 表示无既有绑定、绑定被正常采用，或绑定因结构性原因被跳过。
 	SessionBindingBypassNone SessionBindingBypass = iota
-	// SessionBindingBypassTransient 表示既有绑定**仅因临时原因**被跳过：绑定必须保留，
-	// 本次成功终态**不得**改绑。
+	// SessionBindingBypassTransient 表示既有绑定因临时原因被跳过，供日志排障。
 	SessionBindingBypassTransient
 )
-
-// KeepsBinding 报告本次成功终态是否必须保留既有绑定。
-//
-// 接线层（guard 选路适配器）据它决定是否给 pctx 盖「不得改绑」的事实，终态层再据 pctx
-// 跳过成功侧 CAS。判定收在这里一处，两侧不各算一遍。
-func (b SessionBindingBypass) KeepsBinding() bool {
-	return b == SessionBindingBypassTransient
-}
 
 // String 返回稳定标识，供日志与排障（勿当协议值或落库值）。
 func (b SessionBindingBypass) String() string {
@@ -148,7 +130,7 @@ func (b SessionBindingBypass) String() string {
 //
 // lookupFailed 是**读绑定行失败**那一支，必须由调用方显式传来：该情形下候选根本没读出来，
 // 过滤阶段压根没见到它，故它**不进留痕**；而「留痕里没有该家」那一支是**行已不存在**
-// （结构性失效，允许改绑），两者处置相反，不能靠同一条推断兼收。
+// （结构性失效），两者留痕不同，不能靠同一条推断兼收。
 func sessionBindingBypass(
 	filtered []Filtered,
 	binding *SessionBindingSnapshot,
@@ -169,17 +151,15 @@ func sessionBindingBypass(
 
 // transientRejection 报告某条排除理由是否属**临时**（不需改任何配置即可能恢复）。
 //
-// 分界原则只一条：**不改配置就可能恢复的属临时**，绑定该留着等它回来；要改配置才恢复的
-// （停用、模型/端点/格式不兼容、客户端名单）属结构性，允许改绑。逐条依据：
+// 分界原则只一条：**不改配置就可能恢复的属临时**；要改配置才恢复的
+// （停用、模型/端点/格式不兼容、客户端名单）属结构性。逐条依据：
 //
-//	circuit_open             设计稿 §4 明定「跳过、不清空绑定、待恢复后仍粘回去」
+//	circuit_open             熔断开闸时跳过绑定候选
 //	slow_rate_cooldown       低速写侧只写冷却、不清绑定（设计稿 §4 同源语义）
 //	slow_rate_quarantine     渠道级低速隔离：准入档位会随连续干净样本抬回，属临时（同源语义）
 //	no_alternative_fail_open 同一条低速冷却的**回退形态**（无替代候选时被重新纳入）：
-//	                         底层条件与 slow_rate_cooldown 逐字相同（冷却到期即恢复），
-//	                         只是链上为标记回退而换了词。漏登会让「绑定候选被回退使用」
-//	                         被误判成结构性失效，从而允许把会话永久搬走。
-//	provider_error_cooldown  故障冷却只挂 60 秒，到点即恢复（同一设计稿：绑定被清但应尽快粘回去）
+//	                         底层条件与 slow_rate_cooldown 相同，只是链上为标记回退而换了词。
+//	provider_error_cooldown  故障冷却只挂 60 秒，到点即恢复
 //	schedule_inactive        活动时段按钟点恢复
 //	rate_limited             金额/额度窗口按时间恢复
 //	excluded                 本次请求内已试过并失败（故障转移），不是该渠道的结构性结论

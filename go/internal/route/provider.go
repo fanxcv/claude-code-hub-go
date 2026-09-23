@@ -156,10 +156,8 @@ func (s *StoreSource) Providers(ctx context.Context) ([]Provider, error) {
 
 // ErrProviderNotFound 表示按 id 查供应商时**该行不存在**，与「查询失败」相对。
 //
-// 为什么必须把这一支显式标出来：候选被跳过时两种情形都表现为 error，但处置相反——
-// 「行已不存在」是**结构性**失效（旧绑定已死，允许改绑），「读失败」（DB 抖动/超时）是
-// **临时**原因（绑定必须保留，见 SessionBindingBypass）。若压平成同一种 error，一次瞬时
-// 读错就会把会话永久搬走（设计稿 §4：熔断等临时故障恢复后会话仍须粘回去）。
+// 为什么必须把这一支显式标出来：候选被跳过时两种情形都表现为 error，但排障分类不同——
+// 「行已不存在」是结构性失效，「读失败」（DB 抖动/超时）是临时原因（见 SessionBindingBypass）。
 var ErrProviderNotFound = errors.New("route: 供应商不存在")
 
 // providerLookupError 把 store 的「无行」哨兵译成 route 的 ErrProviderNotFound，其余错误原样透传。

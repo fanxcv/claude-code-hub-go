@@ -74,12 +74,8 @@ func (w *sessionBindingWriteback) CompareAndSet(ctx context.Context, providerID 
 //
 // 只写冷却键、**绑定一个字段都不动**（与 ClearBinding 的「清绑定」正相反：两者共用
 // ProviderCooldownKey 的键形制，但语义不同）。为何不清：冷却的语义是「本会话 60 秒内
-// 先绕开这家」，不是「忘掉这家」。清掉绑定会让本会话在冷却期内落到备用渠道、并把
-// canonical CAS 过去——冷却到点也回不来，60 秒的临时冷却就此变成永久迁移
-// （生产实测：冷却过期后 68 个请求 100% 走备用）。绑定留着，读侧按冷却键跳过该家、
-// 并据「绑定仅因临时原因被跳过」抑制成功侧 CAS
-// （route.SessionBindingBypassTransient → pctx.SessionBindingKeepReason，见 terminal/settle.go），
-// 冷却过期即粘回。
+// 先绕开这家」，不是「忘掉这家」。绑定留着供读侧判断冷却期间为何跳过该家；
+// 若备用成功，终态仍可将绑定 CAS 到 winner。
 //
 // 两个必须同时成立的性质（读侧据此把本条与低速降权分开，见 `route.CooldownKind`）：
 //   - **不看低速监控开关**：本动作是故障回避，与「渠道慢不慢」无关。若把它也挂上那个开关，

@@ -19,12 +19,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// 本文件是「读绑定行失败」这条临时原因的**跨层端到端钉子**：真 Binder（真 Redis + 真 Lua）
-// + 真选路器 + 真终态结算器，断言最终落到 Redis 的绑定键上。
-//
-// 为什么必须跨层：判定在选路层（route.SessionBindingBypass），动作在终态层，两者隔着 pctx。
-// 分层钉子各自全绿仍可能整体失效（判定做对了但没人读）。包内那条钉子用 stub 源，钉的是
-// 「分类对不对」；本文件钉的是「分类对了之后，绑定键在 Redis 里真的没被动过」。
+// 本文件用真 Binder（真 Redis + 真 Lua）、真选路器与真终态结算器钉住
+// 「读绑定行失败」仍留痕 transient、备用成功后绑定跟随 winner。
 //
 // 为何是**外部测试包**（route_test）而不是包内：本文件要 import session 与 terminal，而
 // session → guard → terminal（guard/adapters.go），包内测试会撞 import cycle。
@@ -204,7 +200,7 @@ func runLookupFailureScenario(t *testing.T, sourceErr error) (int64, route.Sessi
 		t.Fatal("前置条件不成立：读不到绑定行时不得短路为会话复用")
 	}
 
-	// 终态：备用成功。守卫链在这一步盖「不得改绑」事实（与 guard/adapters_route.go 同源）。
+	// 终态：备用成功，绑定跟随 winner。
 	writeback := adapter.SessionBindingWriteback(sessionID, keyID, generation)
 	if writeback == nil {
 		t.Fatal("应拿到会话绑定写回能力（真 Binder 已就绪）")
@@ -217,10 +213,6 @@ func runLookupFailureScenario(t *testing.T, sourceErr error) (int64, route.Sessi
 		t.Fatalf("写入行标识失败: %v", err)
 	}
 	pc.SetSessionBindingWriteback(writeback)
-	if result.SessionBindingBypass.KeepsBinding() {
-		pc.SetSessionBindingKeep(result.SessionBindingBypass.String())
-	}
-
 	durationMS := 62
 	settlement := terminal.Settlement{
 		StatusCode:    200,
@@ -240,28 +232,24 @@ func runLookupFailureScenario(t *testing.T, sourceErr error) (int64, route.Sessi
 	return after.Snapshot.ProviderID, result.SessionBindingBypass
 }
 
-// TestSessionBindingKeptWhenLookupFailsAcrossLayers 主线：读绑定行**失败**（瞬时）⇒ 本次回落
-// 选备用 ⇒ 备用**成功**终态跑完 ⇒ Redis 里的绑定**仍指向原 provider**。
-func TestSessionBindingKeptWhenLookupFailsAcrossLayers(t *testing.T) {
+// TestSessionBindingFollowsWinnerWhenLookupFailsAcrossLayers 钉住读绑定行失败仍留痕临时原因，
+// 但备用成功后 Redis 绑定跟随 winner。
+func TestSessionBindingFollowsWinnerWhenLookupFailsAcrossLayers(t *testing.T) {
 	providerID, bypass := runLookupFailureScenario(t, errors.New("lookup: 连接池暂时不可用"))
-	if !bypass.KeepsBinding() {
-		t.Fatalf("读绑定行失败应判为临时原因，实际 %v", bypass)
+	if bypass != route.SessionBindingBypassTransient {
+		t.Fatalf("读绑定行失败应留痕为临时原因，实际 %v", bypass)
 	}
-	if providerID != 7 {
-		t.Fatalf("读绑定行失败属临时原因，备用成功不得改绑：绑定应仍为 7，实际 %d"+
-			"（一次 DB 抖动就会把会话永久搬走）", providerID)
+	if providerID != 8 {
+		t.Fatalf("读绑定行失败后备用成功应改绑至 8，实际 %d", providerID)
 	}
 }
 
-// TestSessionBindingReboundWhenBindingRowGoneAcrossLayers 反向：绑定行**已不存在**（结构性，
-// route.ErrProviderNotFound）⇒ 备用成功**允许**改绑 ⇒ Redis 里的绑定变为备用。
-//
-// 没有这条反向，「任何 error 都判 transient」也能让主线变绿，而后果是会话永远钉在一家
-// 已删除的渠道上（绑定再也改不掉）。两条合起来才证明「读失败」与「行已不存在」真的被分开。
+// TestSessionBindingReboundWhenBindingRowGoneAcrossLayers 钉住行已不存在时留痕 none，
+// 备用成功后 Redis 绑定同样跟随 winner。
 func TestSessionBindingReboundWhenBindingRowGoneAcrossLayers(t *testing.T) {
 	providerID, bypass := runLookupFailureScenario(t, route.ErrProviderNotFound)
-	if bypass.KeepsBinding() {
-		t.Fatalf("行已不存在属结构性失效，不应要求保留绑定，实际 %v", bypass)
+	if bypass != route.SessionBindingBypassNone {
+		t.Fatalf("行已不存在应留痕为结构性原因，实际 %v", bypass)
 	}
 	if providerID != 8 {
 		t.Fatalf("行已不存在时应允许改绑到备用 8，实际绑定为 %d", providerID)

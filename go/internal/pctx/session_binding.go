@@ -19,10 +19,8 @@ type SessionBindingWriteback interface {
 	// CooldownOnFailure 在供应商侧失败后写会话级冷却（键 session-binding:v1:{tag}:provider:{id}:cooldown）；
 	// 返回 false 表示未写。
 	//
-	// **只写冷却键、不动绑定**（清绑定是 ClearBinding 的语义）：清掉绑定会让本会话在冷却期内
-	// 落到备用渠道并把绑定 CAS 过去，冷却到点也回不来——60 秒的临时冷却就此变成永久迁移。
-	// 绑定留着，选路侧据冷却键跳过该家并抑制成功侧改绑（SessionBindingBypassTransient），
-	// 冷却过期即粘回。
+	// **只写冷却键、不动绑定**（清绑定是 ClearBinding 的语义）：冷却期间选路会绕开该家；
+	// 备用成功后终态仍可将绑定改写为 winner。
 	CooldownOnFailure(ctx context.Context, providerID int64) bool
 	// CooldownOnUpstreamStreamCut 与 CooldownOnFailure 同为「写本会话对供应商的 60 秒冷却、
 	// 绑定不动」，但写入值是一个独立标记（见 session.UpstreamStreamCutCooldownMarker），
@@ -52,35 +50,6 @@ func (c *Context) SetSessionBindingWriteback(writeback SessionBindingWriteback) 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.sessionBinding = writeback
-}
-
-// SetSessionBindingKeep 记下「本次成功终态不得改写会话绑定」及其原因。
-//
-// 由守卫链在选路之后按 route.Result.SessionBindingBypass 调用（选路层才知道绑定为何没被采用）。
-// 原因只用于留痕与排障，判定本身由「是否调用过本方法」决定；空原因不记（等于不抑制）。
-func (c *Context) SetSessionBindingKeep(reason string) {
-	if c == nil || reason == "" {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.sessionBindingKeep = reason
-}
-
-// SessionBindingKeepReason 返回「本次不得改绑」的原因；第二个返回值为 false 表示允许改绑。
-//
-// 设计稿 §4：熔断/会话冷却等临时原因下绑定保留，待恢复后会话仍粘回去——那时若照旧 CAS，
-// 会话就被永久搬到备用，「仍粘回去」即为假。
-func (c *Context) SessionBindingKeepReason() (string, bool) {
-	if c == nil {
-		return "", false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.sessionBindingKeep == "" {
-		return "", false
-	}
-	return c.sessionBindingKeep, true
 }
 
 // SessionBindingWriteback 取本次请求的会话绑定写回能力。

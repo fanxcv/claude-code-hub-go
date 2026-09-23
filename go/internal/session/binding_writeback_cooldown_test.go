@@ -13,17 +13,15 @@ import (
 // 本文件用**真 Redis + 真脚本**钉住 CooldownOnFailure 的**范围**：写冷却键、绑定一个字段都不动。
 //
 // 为何必须用真 Redis（与 binding_writeback_clear_test.go 同一条理由）：本缺陷的全部危害都在
-// 「写完键之后 canonical 变成了什么」。计数替身只看「有没有被调用」，看不见「绑定被清掉了」——
-// 旧实现（Binder.Clear：HDEL provider_id + SETEX cooldown，同一次 Lua 里两件事）在替身下全程
-// 绿灯，而生产上 60 秒的临时冷却因此变成永久迁移：冷却 10:07:42 过期后，序号 37–104 共 68 个
-// 请求 100% 走备用渠道。
+// 「写完键之后 canonical 变成了什么」。计数替身只看「有没有被调用」，看不见「绑定被清掉了」；
+// CooldownOnFailure 不负责改绑，只有成功终态才把绑定改写为 winner。
 //
 // 夹具沿用 binding_writeback_clear_test.go 的 clearFixture（真 Redis + 真脚本 + 日志缓冲）。
 
-// TestCooldownOnFailureKeepsBindingForReturn 是主线：写冷却后绑定仍指向该家，冷却过期即回迁。
+// TestCooldownOnFailureLeavesBindingUntouched 是主线：单独写冷却不更动绑定。
 //
 // 把写侧换回 Binder.Clear（或任何清了 provider_id 的写法），本用例第一条断言即红。
-func TestCooldownOnFailureKeepsBindingForReturn(t *testing.T) {
+func TestCooldownOnFailureLeavesBindingUntouched(t *testing.T) {
 	binder, rdb, adapter, logs := clearFixture(t)
 	ctx := context.Background()
 	sessionID := uniqueSessionID(t)
@@ -40,14 +38,14 @@ func TestCooldownOnFailureKeepsBindingForReturn(t *testing.T) {
 	}
 	want := strconv.FormatInt(clearTestProviderID, 10)
 	if got := canonicalProvider(t, rdb, sessionID); got != want {
-		t.Fatalf("写冷却不得动绑定：provider_id = %q，期望 %q（清了绑定，冷却期一过就再也回不来）", got, want)
+		t.Fatalf("写冷却不得动绑定：provider_id = %q，期望 %q", got, want)
 	}
 	if !cooldownExists(t, rdb, sessionID, clearTestProviderID) {
 		t.Fatalf("冷却键未写下；日志：%s", logs.String())
 	}
 	assertTTLWithin(t, rdb, ProviderCooldownKey(sessionID, testKeyID, clearTestProviderID), int(sessionCooldownTTL.Seconds()))
 
-	// 冷却过期（读侧再也看到不冷却键的那一刻）：本会话必须粘回原家。
+	// 本用例尚未发生备用成功；冷却到期后，读侧仍应看到原绑定。
 	if err := rdb.Del(ctx, ProviderCooldownKey(sessionID, testKeyID, clearTestProviderID)).Err(); err != nil {
 		t.Fatalf("删除冷却键失败: %v", err)
 	}
@@ -56,7 +54,7 @@ func TestCooldownOnFailureKeepsBindingForReturn(t *testing.T) {
 		t.Fatalf("冷却过期后读绑定失败: %+v err=%v", returned, err)
 	}
 	if returned.Snapshot.ProviderID != clearTestProviderID {
-		t.Fatalf("冷却过期后应粘回 %d，实得 %d（临时冷却变成了永久迁移）",
+		t.Fatalf("未发生备用成功时绑定应仍为 %d，实得 %d",
 			clearTestProviderID, returned.Snapshot.ProviderID)
 	}
 	if out := logs.String(); strings.Contains(out, "cooldown_failed") || strings.Contains(out, "cooldown_skipped") {
@@ -71,8 +69,7 @@ func TestCooldownOnFailureKeepsBindingForReturn(t *testing.T) {
 //   - 成功改绑后 legacy 镜像与 canonical 逐字一致 —— 若写冷却改了一边而不改另一边，
 //     此后每条 Lua 命令都会撞 mirror_conflict，会话粘性从此再也改不动（静默、只记 warn）。
 //
-// 正常粘性本身（无保留事实时成功侧照旧 CAS）由 terminal/session_binding_keep_test.go 钉住，
-// 两侧合起来才是完整的「正常粘性不变」。
+// 成功终态跟随 winner 的接线行为另由 dataplane/session_binding_bypass_integration_test.go 钉住。
 func TestCooldownOnFailureLeavesSuccessPathStickiness(t *testing.T) {
 	binder, rdb, adapter, logs := clearFixture(t)
 	ctx := context.Background()
@@ -89,8 +86,7 @@ func TestCooldownOnFailureLeavesSuccessPathStickiness(t *testing.T) {
 		t.Fatalf("绑定正指向该家时应写下冷却；日志：%s", logs.String())
 	}
 
-	// 冷却期内由备用渠道作答成功：改绑的抑制在选路层（SessionBindingBypass），不在本层——
-	// 本层的 CAS 必须照旧可用，否则「选路层判定 + 终态层执行」这条链失去下半截。
+	// 冷却期内由备用渠道作答成功时，终态 CAS 必须仍可用。
 	moved, err := binder.CompareAndSet(ctx, sessionID, testKeyID, generation, winnerProviderID, testTTLSeconds)
 	if err != nil || !moved.OK {
 		t.Fatalf("写冷却不得旋转代际：同一代际的成功 CAS 仍须成立，实得 %+v err=%v（日志：%s）",
