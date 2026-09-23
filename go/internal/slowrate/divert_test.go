@@ -40,15 +40,45 @@ func divertBucketCount(t *testing.T, client redis.UniversalClient, providerID in
 // divertTestStore 建一个指向测试 Redis 的 DivertStore；未注入 CCH_TEST_REDIS_URL 时跳过。
 //
 // 复用本包既有的 recoveryRedis（它与 recovery_test.go 同一门控与库号约定）。
-func divertTestStore(t *testing.T) (*DivertStore, context.Context) {
+// providerIDs 是本用例会读写的渠道号：进门前先清掉它们名下的残留桶键，跑完再清一遍。
+func divertTestStore(t *testing.T, providerIDs ...int64) (*DivertStore, context.Context) {
 	t.Helper()
 	client := recoveryRedis(t)
+	clearDivertBuckets(t, client, providerIDs)
+	t.Cleanup(func() { clearDivertBuckets(t, client, providerIDs) })
 	return NewDivertStore(client, nil), context.Background()
+}
+
+// clearDivertBuckets 删掉这些渠道名下的全部桶键。
+//
+// 为什么非清不可：桶键活 25 小时，而 Record 走的是 INCR（非幂等）——上一轮跑剩的桶会被本轮
+// 再叠一层，读数又是对窗口内所有桶求和，于是「应读到 3」变成 6。用例与其它包共用同一个测试库
+// （CCH_TEST_REDIS_URL），不清就必然第二次跑红。
+//
+// 只删本用例自己的渠道号，故不误伤并行跑的其它包：`cch:slowdivert:` 的唯一写入实现是
+// DivertStore（见 divert.go），测试侧写它的只有本包——route 的 `cch:slowprobe:` 与
+// `cch:slow:` 是另外两族前缀，不重叠。
+func clearDivertBuckets(t *testing.T, client redis.UniversalClient, providerIDs []int64) {
+	t.Helper()
+	ctx := context.Background()
+	for _, providerID := range providerIDs {
+		keys, err := divertBucketKeys(t, client, providerID)
+		if err != nil {
+			t.Errorf("列渠道 %d 的残留桶键失败: %v", providerID, err)
+			return
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		if err := client.Del(ctx, keys...).Err(); err != nil {
+			t.Errorf("清渠道 %d 的残留桶键失败: %v", providerID, err)
+		}
+	}
 }
 
 // TestDivertCountsTwoCausesSeparately 钉住两个成因分开记（冷却 1、降权 1）。
 func TestDivertCountsTwoCausesSeparately(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 167)
 	now := time.Now()
 	store.Record(ctx, 167, route.DivertCauseCooldown, now)
 	store.Record(ctx, 167, route.DivertCausePenalty, now)
@@ -70,7 +100,7 @@ func TestDivertCountsTwoCausesSeparately(t *testing.T) {
 //
 // 这条只能靠「读出来是 0」来钉：把正常成功请求也计进去，这个数就退化成请求数。
 func TestDivertIgnoresUncountedRequests(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 168, 169)
 	now := time.Now()
 	// 只录两笔，然后断言总数恰为 2——若实现把「每次终态都计」当成改道，本条会读到更大值。
 	store.Record(ctx, 168, route.DivertCauseCooldown, now)
@@ -98,7 +128,7 @@ func TestDivertIgnoresUncountedRequests(t *testing.T) {
 // 故本用例造三个桶：当前桶（1）、窗内另一桶（2）、25 小时前的过期桶（4）。
 // 正确实现读到 3；取单桶读到 1；不裁剪读到 7。
 func TestDivertWindowExcludesExpiredBuckets(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 170)
 	now := time.Now()
 	// 窗内另一桶：当前整点往前 10 小时（仍在 24 桶内）。
 	store.Record(ctx, 170, route.DivertCauseCooldown, now)
@@ -125,7 +155,7 @@ func TestDivertWindowExcludesExpiredBuckets(t *testing.T) {
 // 为什么必须：求和依赖「桶起点」这一数值。若实现用「写入时刻」当字段名，
 // 每个请求都自成桶、24 小时窗口会装下成千上万个字段，且求和边界无法判定。
 func TestDivertBucketsAreHourAligned(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 171)
 	base := time.Date(2026, 9, 22, 10, 5, 0, 0, time.UTC)
 	store.Record(ctx, 171, route.DivertCauseCooldown, base)
 	store.Record(ctx, 171, route.DivertCauseCooldown, base.Add(50*time.Minute))
@@ -149,7 +179,7 @@ func TestDivertBucketsAreHourAligned(t *testing.T) {
 //
 // 若 TTL 等于窗口（24 小时），每个整点刚过时最老那一桶会被删掉，「最近 24 小时」恒少一桶。
 func TestDivertExpireLivesLongerThanWindow(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 172)
 	now := time.Now()
 	store.Record(ctx, 172, route.DivertCauseCooldown, now)
 

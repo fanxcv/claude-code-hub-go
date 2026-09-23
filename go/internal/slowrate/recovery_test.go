@@ -50,6 +50,29 @@ func recoveryRedis(t *testing.T) redis.UniversalClient {
 	return client
 }
 
+// clearSlowKeys 删掉一个组合名下本包自己写的那几把键：滑窗、状态、连续干净计数、基线，
+// 外加该渠道的低速事件流（readSlowLogs 读它）。
+//
+// 为什么进门先清：这些键的寿命都长过一次跑（滑窗/状态 = 2 倍窗长，事件流 = 24 小时），
+// 而断言全是精确值（滑窗成员数恰为 3、连续干净计数恰为 1）。上一轮被 kill 掉不执行 t.Cleanup、
+// 或同一天里别的进程用过同一 providerID，残留就会把断言顶掉——那是假失败，不是被测行为错了。
+//
+// 只删本用例自己的 `{pid:model}` 作用域与该渠道的事件流，故不误伤共用同一个测试库的其它包；
+// 尤其**不做 flushdb**（该库多包共用）。
+func clearSlowKeys(t *testing.T, client redis.UniversalClient, providerID int64, modelKey string) {
+	t.Helper()
+	err := client.Del(context.Background(),
+		samplesKey(providerID, modelKey),
+		stateKey(providerID, modelKey),
+		cleanStreakKey(providerID, modelKey),
+		baselineKey(providerID, modelKey),
+		slowlog.Key(providerID),
+	).Err()
+	if err != nil {
+		t.Errorf("清组合 {%d:%s} 的残留键失败: %v", providerID, modelKey, err)
+	}
+}
+
 // recoveryHarness 是恢复策略用例的夹具：真 Redis + 固定基线 + 可拨钟 + 可指定 N。
 //
 // providerID 取远离生产区间的值（键形制含 providerID，避免与真实键撞名）。
@@ -67,6 +90,7 @@ func newRecoveryHarness(t *testing.T, providerID int64, recoveryRequests int) *r
 	t.Helper()
 	client := recoveryRedis(t)
 	model := "recovery-probe-model"
+	clearSlowKeys(t, client, providerID, model)
 	h := &recoveryHarness{
 		t:        t,
 		client:   client,
@@ -97,11 +121,7 @@ func newRecoveryHarness(t *testing.T, providerID int64, recoveryRequests int) *r
 	if h.recorder == nil {
 		t.Fatal("Recorder 不应为 nil")
 	}
-	t.Cleanup(func() {
-		ctx := context.Background()
-		h.client.Del(ctx, samplesKey(providerID, model), stateKey(providerID, model),
-			cleanStreakKey(providerID, model), baselineKey(providerID, model))
-	})
+	t.Cleanup(func() { clearSlowKeys(t, client, providerID, model) })
 	return h
 }
 

@@ -15,8 +15,8 @@ import (
 // 本文件钉「提交前判慢」的闭环（见 recorder.go 的 RecordPrecommit）：
 // 判废事实必须**就地**写进被判废那家的滑窗，不等任何终态采样。
 //
-// 每个用例用**互不相同的 providerID**（键形制含 providerID），故共用同一个测试库也不会互相
-// 污染——本仓踩过「多进程共用 CCH_TEST_REDIS_URL 的库、计数被翻倍」的坑。
+// 每个用例用**互不相同的 providerID**（键形制含 providerID），且进门前各自清掉自己名下那几把
+// 键（见 clearSlowKeys）——本仓踩过「多进程共用 CCH_TEST_REDIS_URL 的库、计数被翻倍」的坑。
 
 // captureLogger 收 warn 事件：判废路径的失败面必须可见（本包测试此前没有日志替身）。
 type captureLogger struct {
@@ -63,10 +63,15 @@ type precommitCase struct {
 }
 
 // newPrecommitCase 建一个真 Redis + 已开启监控的 Recorder；log 为 nil 时不记日志。
+//
+// providerID 是本用例的专属渠道号（每用例互不相同）：进门前先清掉它名下的残留键，跑完再清一遍。
+// 不清的话，「同一请求只占一格」这类计数断言会被上一轮的残留顶掉（见 clearSlowKeys 的说明）。
 func newPrecommitCase(t *testing.T, providerID int64, enabled bool, log Logger) *precommitCase {
 	t.Helper()
 	client := recoveryRedis(t)
 	model := "precommit-probe-model"
+	clearSlowKeys(t, client, providerID, model)
+	t.Cleanup(func() { clearSlowKeys(t, client, providerID, model) })
 	now := time.UnixMilli(1790050000000)
 	recorder := New(Options{
 		Redis:  client,

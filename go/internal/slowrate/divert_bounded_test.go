@@ -26,7 +26,7 @@ import (
 // 这一条对应「连续逐小时有流量」的常态：写 30 小时 ⇒ 60 个键（不是 1 个键装 60 个字段），
 // 每个键都能独立到期，故稳态条目数上界是 25h × 2 = 50。
 func TestDivertBucketEntriesStayOnePerHourCause(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 200)
 	const providerID = 200
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
@@ -70,7 +70,7 @@ func TestDivertBucketEntriesStayOnePerHourCause(t *testing.T) {
 
 // TestDivertSingleHourKeepsTwoBuckets 钉住单小时只产生两个桶键、且累加在同一键上。
 func TestDivertSingleHourKeepsTwoBuckets(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 201)
 	const providerID = 201
 	now := time.Date(2026, 9, 1, 8, 30, 0, 0, time.UTC)
 
@@ -98,7 +98,7 @@ func TestDivertSingleHourKeepsTwoBuckets(t *testing.T) {
 // 断言旧键的寿命仍在分钟级（未被续成 25 小时）。旧形制下这个键根本不存在（桶是字段），
 // 故第一条断言即红。
 func TestDivertOldBucketLifetimeNotExtended(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 202)
 	const providerID = 202
 	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	oldAt := base.Add(-10 * time.Hour)
@@ -130,7 +130,7 @@ func TestDivertOldBucketLifetimeNotExtended(t *testing.T) {
 // 边界差一小时是「窗口桶数」这一口径的全部内容；错一小时不会报错，只会让「最近 24 小时」
 // 悄悄变成 23 或 25 小时。
 func TestDivertWindowIncludesBoundaryExcludesOlder(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 203)
 	const providerID = 203
 	now := time.Date(2026, 9, 1, 18, 20, 0, 0, time.UTC)
 
@@ -158,7 +158,7 @@ func TestDivertWindowIncludesBoundaryExcludesOlder(t *testing.T) {
 // 这条是 (B) 有界性的直接证据：不靠任何剪除逻辑，靠键自己的 TTL。手法是把刚写的桶键寿命压到
 // 1 秒、真等它过期，再断言读数归零、键也没了。
 func TestDivertExpiredBucketLeavesWindow(t *testing.T) {
-	store, ctx := divertTestStore(t)
+	store, ctx := divertTestStore(t, 204)
 	const providerID = 204
 	now := time.Date(2026, 9, 1, 9, 5, 0, 0, time.UTC)
 

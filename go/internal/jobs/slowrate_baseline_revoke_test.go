@@ -12,6 +12,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
@@ -204,6 +205,10 @@ func TestBaselineNoPublishRemovesKeyInRedis(t *testing.T) {
 		t.Fatalf("预置旧基线失败: %v", err)
 	}
 	t.Cleanup(func() { _ = rdb.Del(context.Background(), key).Err() })
+	// 撤键路径同时经 slowlog.Record 写 `baseline_revoked` 事件（见 slowrate_baseline.go 的旁路），
+	// 事件流 TTL 是 24 小时，同样要清——否则跨用例、跨包地残留在共用库里（与 internal/slowrate
+	// 的夹具同一类卫生要求：真 Redis 用例进门先认领自己那几把键）。
+	t.Cleanup(func() { _ = rdb.Del(context.Background(), slowlog.Key(167)).Err() })
 
 	b := &SlowRateBaseline{redis: rdb, logger: logx.New(io.Discard)}
 	if _, _, err := b.publishScope(
