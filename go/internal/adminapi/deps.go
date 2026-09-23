@@ -236,6 +236,25 @@ type SlowDivertsReader interface {
 	ReadDivert(ctx context.Context, providerID int64, now time.Time) (slowrate.DivertSnapshot, error)
 }
 
+// SlowRateStateReader 读某渠道全部 (模型) 组合的**隔离运行态**（同端点响应里的 `quarantine` 块）。
+//
+// 为何与 SlowLogsReader / SlowDivertsReader 分开：那两者回答「发生过什么」（事件流）与
+// 「挡掉了多少」（聚合计数），本读面回答「**机制现在处于哪一档**」——隔离是否落态、放行多少、
+// 滑窗里还有几条慢样本、探针租约在不在。三者数据源不同（键族不同），合成一个接口只会让
+// 「谁在读」变模糊。
+//
+// 参数取 `route.Provider` 而不是 id：读侧据渠道行上的四个降权参数算活窗下界与档位，
+// 传完整行才能让「参数改完立即生效」与数据面同口径（与 SlowRatePenaltyReader 同一条理由）。
+//
+// nil 表示未装配：响应里 `quarantine` 一律为 null，端点照常作答（事件流不依赖它）。
+//
+// 实现是 `*route.SlowRateReader`（见 internal/route/slowrate_observe.go）。
+// 签名与 `route.SlowRateReader.ObserveStates` 逐字一致，由 provider_slow_logs_test.go 的
+// 编译期断言钉住。
+type SlowRateStateReader interface {
+	ObserveStates(ctx context.Context, provider route.Provider) ([]route.SlowRateStateObservation, error)
+}
+
 // Fixed5hWindowReader 读 5h 固定窗口的累计值与重置时刻
 // （Node 的 RateLimitService.getFixed5hWindowState，src/lib/rate-limit/service.ts:160-183）。
 //
@@ -283,6 +302,9 @@ type Deps struct {
 	// SlowDiverts 读某渠道窗口内的改道请求数（同端点响应里的 `diverts` 字段）。
 	// nil 表示未装配：该字段为 null，端点照常作答（事件流不依赖它）。
 	SlowDiverts SlowDivertsReader
+	// SlowRateStates 读某渠道全部 (模型) 组合的隔离运行态（同端点响应里的 `quarantine` 块）。
+	// nil 表示未装配：该块为 null，端点照常作答（事件流不依赖它）。
+	SlowRateStates SlowRateStateReader
 	// ProviderSlowRates 读**per-渠道**的低速降权聚合读数（/providers/health 的 slowRate 字段）。
 	// nil 表示未装配：该响应里 `slowRate` 一律为 null，前端整段不显示这一维
 	// （不是「无降权」——两者必须可区分，故不用零值对象冒充）。

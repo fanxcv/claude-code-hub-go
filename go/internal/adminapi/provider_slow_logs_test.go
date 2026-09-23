@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
@@ -68,18 +69,69 @@ type slowLogsPayload struct {
 		Samples     *int64   `json:"samples"`
 		Reason      *string  `json:"reason"`
 	} `json:"events"`
+	// Quarantine 是本次新增块（只增不改）：nil 表示未装配读面。
+	Quarantine *struct {
+		Combinations []struct {
+			ModelKey            string `json:"modelKey"`
+			StateExists         bool   `json:"stateExists"`
+			Quarantined         bool   `json:"quarantined"`
+			Penalty             int    `json:"penalty"`
+			CleanStreak         int    `json:"cleanStreak"`
+			AdmissionPermille   int    `json:"admissionPermille"`
+			SampleLiveCount     int    `json:"sampleLiveCount"`
+			BaselineUsable      bool   `json:"baselineUsable"`
+			ProbeLeaseHeld      bool   `json:"probeLeaseHeld"`
+			ProbeLeaseTTLMillis int64  `json:"probeLeaseTtlMillis"`
+		} `json:"combinations"`
+		UnavailableReason *string `json:"unavailableReason"`
+	} `json:"quarantine"`
 	UnavailableReason *string `json:"unavailableReason"`
+}
+
+// slowLogsFakeStates 是 SlowRateStateReader 的替身。它同时记录收到的 provider，
+// 供「传的是渠道行而不是光一个 id」断言。
+//
+// 为什么隔离态面用替身而不是真 Redis：本文件要造的是**边界形态**（state 在 / 不在、读失败），
+// 那三类在真 Redis 上要凑夹具与故障注入，替身能逐字控制。
+// 「这个读面在真 Redis 下能不能读对」由 route 侧的 slowrate_observe_test.go 覆盖。
+type slowLogsFakeStates struct {
+	observations []route.SlowRateStateObservation
+	err          error
+	providers    []route.Provider
+}
+
+func (f *slowLogsFakeStates) ObserveStates(
+	_ context.Context,
+	provider route.Provider,
+) ([]route.SlowRateStateObservation, error) {
+	f.providers = append(f.providers, provider)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.observations, nil
 }
 
 // slowLogsRouter 造真路由表：真 Store（可见性门）+ 传入的慢日志读面。
 func slowLogsRouter(t *testing.T, pools *store.Pools, reader SlowLogsReader) *Router {
 	t.Helper()
+	return slowLogsRouterWithStates(t, pools, reader, nil)
+}
+
+// slowLogsRouterWithStates 在同一条路由上再装隔离态读面（nil 即未装配：该块为 null）。
+func slowLogsRouterWithStates(
+	t *testing.T,
+	pools *store.Pools,
+	reader SlowLogsReader,
+	states SlowRateStateReader,
+) *Router {
+	t.Helper()
 	deps := Deps{
-		Logger:   logx.New(nil),
-		Guard:    principalGuard{principal: Principal{UserID: 1, Username: "admin", IsAdmin: true}},
-		Store:    pools,
-		Problems: NewProblems(nil),
-		SlowLogs: reader,
+		Logger:         logx.New(nil),
+		Guard:          principalGuard{principal: Principal{UserID: 1, Username: "admin", IsAdmin: true}},
+		Store:          pools,
+		Problems:       NewProblems(nil),
+		SlowLogs:       reader,
+		SlowRateStates: states,
 	}
 	router := New(Options{Deps: deps})
 	RegisterProviderSlowLogs(router, deps)
@@ -89,20 +141,27 @@ func slowLogsRouter(t *testing.T, pools *store.Pools, reader SlowLogsReader) *Ro
 // slowLogsGet 打一发本端点并解出响应体。
 func slowLogsGet(t *testing.T, router *Router, providerID int64, query string) (int, slowLogsPayload) {
 	t.Helper()
+	status, body := slowLogsGetRaw(t, router, providerID, query)
+	if status != http.StatusOK {
+		return status, slowLogsPayload{}
+	}
+	var payload slowLogsPayload
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("解析低速日志响应失败: %v（原文 %.300s）", err, body)
+	}
+	return status, payload
+}
+
+// slowLogsGetRaw 返回状态码与**原始响应体**：钉「字段名与 null/[] 形态」这类契约只能用原文。
+func slowLogsGetRaw(t *testing.T, router *Router, providerID int64, query string) (int, string) {
+	t.Helper()
 	target := fmt.Sprintf("/api/v1/providers/%d/slow-logs", providerID)
 	if query != "" {
 		target += "?" + query
 	}
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
-	if recorder.Code != http.StatusOK {
-		return recorder.Code, slowLogsPayload{}
-	}
-	var payload slowLogsPayload
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("解析低速日志响应失败: %v（原文 %.300s）", err, recorder.Body.String())
-	}
-	return recorder.Code, payload
+	return recorder.Code, recorder.Body.String()
 }
 
 // TestProviderSlowLogsReturnsEmptyArrayOnNoData 钉住空数据契约：200 + `events: []`
@@ -278,5 +337,34 @@ func TestSlowLogsRetentionMatchesStorage(t *testing.T) {
 	want := int(slowlog.EventTTL / time.Hour)
 	if slowLogsRetentionHours != want {
 		t.Fatalf("端点声明的保留 %d 小时与存储 TTL %v 不一致", slowLogsRetentionHours, slowlog.EventTTL)
+	}
+}
+
+// TestProviderSlowLogsQuarantineSurvivesEventReadFailure 钉住两条读面互相独立。
+//
+// 事件流读失败时端点提前作答——若隔离态在那之后才读，就永远不会被读。而「事件流读不到」
+// 恰恰是运维最需要看隔离态的时候（两者是独立的键族，一条挂不等于另一条也挂）。
+func TestProviderSlowLogsQuarantineSurvivesEventReadFailure(t *testing.T) {
+	pools := testPools(t)
+	fixture := seedProviders(t, pools)
+	states := &slowLogsFakeStates{observations: []route.SlowRateStateObservation{{
+		ModelKey: "m1", StateExists: true, Quarantined: true, Penalty: 10,
+		CleanStreak: 3, AdmissionPermille: 100, SampleLiveCount: 3, BaselineUsable: true,
+	}}}
+	router := slowLogsRouterWithStates(t, pools,
+		&slowLogsFakeReader{err: errors.New("redis: connection refused")}, states)
+
+	status, payload := slowLogsGet(t, router, fixture.enabledID, "")
+	if status != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200", status)
+	}
+	if payload.UnavailableReason == nil || *payload.UnavailableReason != "redis_unavailable" {
+		t.Errorf("事件流的原因 = %v，期望 redis_unavailable", payload.UnavailableReason)
+	}
+	if payload.Quarantine == nil || len(payload.Quarantine.Combinations) != 1 {
+		t.Fatalf("事件流读失败时隔离态没被读到（quarantine = %+v）", payload.Quarantine)
+	}
+	if payload.Quarantine.Combinations[0].AdmissionPermille != 100 {
+		t.Errorf("admissionPermille = %d，期望 100", payload.Quarantine.Combinations[0].AdmissionPermille)
 	}
 }

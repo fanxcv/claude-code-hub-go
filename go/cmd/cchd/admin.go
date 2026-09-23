@@ -123,6 +123,10 @@ func openAdminPlane(options adminOptions) (http.Handler, func(), error) {
 	// 与 deps.ProviderCost 同一类读档读数；读不到不带任何降级（该维不降权），故不与选路共享装配。
 	slowRateReader := route.NewSlowRateReader(route.SlowRateOptions{Redis: redisClient, Logger: logger})
 	deps.SlowRatePenalties = slowRateReader
+	// /providers/{id}/slow-logs 的隔离运行态块（用户 2026-09-22「不再翻生产 Redis」）。
+	// 与上一行**同一个读取器**：准入门槛与活窗下界必须是选路侧那套，另建一份必然分叉。
+	// 缺 Redis 时为 nil，该块一律 null，事件流照常作答。
+	deps.SlowRateStates = slowRateReader
 	// /providers/health 的 per-渠道低速降权投影（界面要看「这家有没有被压、压了多少」）。
 	// 复用上面那一份读取实现做生效判定（两处判定必须只有一份）；缺 Redis 时为 nil，
 	// 那响应里 slowRate 一律 null，前端整段不显示。

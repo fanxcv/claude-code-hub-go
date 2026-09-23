@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fanxcv/claude-code-hub-go/go/internal/route"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/slowlog"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
 // 本文件是「供应商低速日志」端点：`GET /providers/{id}/slow-logs`。
@@ -67,6 +69,14 @@ type slowLogsResponse struct {
 	//
 	// nil 表示未装配该读面（不区分「无改道」与「读不了」）。
 	Diverts *slowLogsDiverts `json:"diverts"`
+	// Quarantine 是**当前隔离运行态**（每 (模型) 组合一行）。
+	//
+	// 与前两者回答的问题不同：Events/Diverts 是「历史上发生了什么」，本块是「机制现在在哪一档」
+	// ——隔离是否落态、放行多少比例、滑窗里还有几条慢样本、探针租约在不在。用户 2026-09-22
+	// 要求「不再翻生产 Redis」，本块就是那个替代品。
+	//
+	// nil 表示未装配该读面（不区分「无组合」与「读不了」）。
+	Quarantine *slowLogsQuarantine `json:"quarantine"`
 	// UnavailableReason 只在「读不到」时给出；此时 Events 为空数组而非 null
 	// （前端不必为 null 与 [] 各写一条分支）。
 	UnavailableReason *string `json:"unavailableReason"`
@@ -80,6 +90,46 @@ type slowLogsDiverts struct {
 	Total       int64 `json:"total"`
 	Cooldown    int64 `json:"cooldown"`
 	Penalty     int64 `json:"penalty"`
+}
+
+// slowLogsQuarantine 是隔离运行态的响应形状。
+//
+// 与 slowLogsDiverts 同一条纪律：读失败不把端点打成 5xx，而是给空表 + 明确原因——
+// 此时 `combinations` 为空数组而非 null（前端不必为 null 与 [] 各写一条分支）。
+type slowLogsQuarantine struct {
+	Combinations []slowLogsQuarantineCombination `json:"combinations"`
+	// UnavailableReason 只在「读不到」时给出（与顶层同名字段同一取值口径）。
+	UnavailableReason *string `json:"unavailableReason"`
+}
+
+// slowLogsQuarantineCombination 是一个 (渠道, 模型) 组合的隔离运行态。
+//
+// 字段分两层：原始事实（stateExists / cleanStreak / sampleLiveCount / baselineUsable / 租约）
+// 与派生读数（penalty / quarantined / admissionPermille）。只给派生值会让「为什么它没被挡」
+// 无从归因：没慢过？基线没了？还是窗里已经没样本了？
+type slowLogsQuarantineCombination struct {
+	ModelKey string `json:"modelKey"`
+	// StateExists 为真表示该组合真的被计过惩罚（状态键只由慢路径创建）。
+	StateExists bool `json:"stateExists"`
+	// Quarantined 是选路侧当前是否会把它当隔离（活窗派生的惩罚为正 + 基线可用）。
+	// 它与「状态里那个 quarantine 字段」不是一回事：状态键一创建就带着该字段，
+	// 而活窗空了就不再挡流量——本字段是「现在挡不挡」。
+	Quarantined bool `json:"quarantined"`
+	// Penalty 是当前生效降权量（活窗派生；参数缺失时回退状态快照）。
+	Penalty int `json:"penalty"`
+	// CleanStreak 是连续干净样本数，即准入阶梯的唯一输入。
+	CleanStreak int `json:"cleanStreak"`
+	// AdmissionPermille 是当前有效放行比例（千分比）：1000 = 不挡流量。
+	AdmissionPermille int `json:"admissionPermille"`
+	// SampleLiveCount 是活窗内的慢样本数（与选路同一下界）。
+	SampleLiveCount int `json:"sampleLiveCount"`
+	// BaselineUsable 为假表示这条组合**没在监控范围内**（写侧无可用基线即整段跳过），
+	// 此时上面所有计数必然为 0——读数的含义是「没在看」而非「看过没慢」。
+	BaselineUsable bool `json:"baselineUsable"`
+	// ProbeLeaseHeld 表示探针租约键存在（有探针在飞，或刚飞完还没到 TTL）。
+	ProbeLeaseHeld bool `json:"probeLeaseHeld"`
+	// ProbeLeaseTTLMillis 是租约剩余毫秒；-1 表示无租约键。
+	ProbeLeaseTTLMillis int64 `json:"probeLeaseTtlMillis"`
 }
 
 // RegisterProviderSlowLogs 注册低速日志端点。
@@ -126,7 +176,8 @@ func handleProviderSlowLogs(deps Deps) http.HandlerFunc {
 			return
 		}
 		// 可见性：与同族端点同一道门（隐藏类型的供应商对非 compat 请求不可见 -> 404）。
-		if _, err := providerFindVisible(request, deps, id); err != nil {
+		provider, err := providerFindVisible(request, deps, id)
+		if err != nil {
 			adminProblemWriter(deps).WriteActionError(writer, request, err)
 			return
 		}
@@ -145,6 +196,9 @@ func handleProviderSlowLogs(deps Deps) http.HandlerFunc {
 			},
 			Events: []slowLogsEvent{},
 		}
+		// 隔离运行态与事件流**互相独立**：先读它，因为下面事件流读失败会提前作答，
+		// 而「读不到事件流」恰恰是运维最需要看隔离态的时候。
+		slowLogsAttachQuarantine(&response, request, deps, provider)
 		events, err := deps.SlowLogs.Recent(request.Context(), id, limit)
 		if err != nil {
 			reason := "redis_unavailable"
@@ -178,6 +232,72 @@ func handleProviderSlowLogs(deps Deps) http.HandlerFunc {
 		adminWriteJSON(writer, http.StatusOK, response)
 	}
 }
+
+// slowLogsAttachQuarantine 把隔离运行态读进响应；读失败只补 unavailableReason，不改状态码。
+//
+// 候选构造复用 providers_health.go 的 slowRateCandidates：它带渠道行的四个降权参数，
+// 读侧据此算活窗下界与档位——只传 id 会让管理面回退状态里的旧参数，与数据面读数分叉。
+func slowLogsAttachQuarantine(
+	response *slowLogsResponse,
+	request *http.Request,
+	deps Deps,
+	provider *store.AdminProvider,
+) {
+	if deps.SlowRateStates == nil {
+		return
+	}
+	observations, err := deps.SlowRateStates.ObserveStates(
+		request.Context(),
+		slowRateCandidates([]store.AdminProvider{*provider})[0],
+	)
+	if err != nil {
+		reason := "redis_unavailable"
+		response.Quarantine = &slowLogsQuarantine{
+			Combinations:      []slowLogsQuarantineCombination{},
+			UnavailableReason: &reason,
+		}
+		adminLoggerOf(deps).Warn("admin_provider_slow_states_query_failed", map[string]any{
+			"providerId": provider.ID,
+			"error":      err.Error(),
+		})
+		return
+	}
+	response.Quarantine = &slowLogsQuarantine{
+		Combinations: slowLogsQuarantineCombinations(observations),
+	}
+}
+
+// slowLogsQuarantineCombinations 把读侧观测投影成响应形状。
+func slowLogsQuarantineCombinations(
+	observations []route.SlowRateStateObservation,
+) []slowLogsQuarantineCombination {
+	out := make([]slowLogsQuarantineCombination, 0, len(observations))
+	for _, observation := range observations {
+		// 无租约键时读侧的 TTL 为负（Redis PTTL 语义），对外统一成 -1：
+		// 消费方只需要「有没有」与「还剩多久」，不需要区分 Redis 内部的 -1/-2。
+		leaseMillis := int64(-1)
+		if observation.ProbeLeaseHeld {
+			leaseMillis = int64(observation.ProbeLeaseTTL / time.Millisecond)
+		}
+		out = append(out, slowLogsQuarantineCombination{
+			ModelKey:            observation.ModelKey,
+			StateExists:         observation.StateExists,
+			Quarantined:         observation.Quarantined,
+			Penalty:             observation.Penalty,
+			CleanStreak:         observation.CleanStreak,
+			AdmissionPermille:   observation.AdmissionPermille,
+			SampleLiveCount:     observation.SampleLiveCount,
+			BaselineUsable:      observation.BaselineUsable,
+			ProbeLeaseHeld:      observation.ProbeLeaseHeld,
+			ProbeLeaseTTLMillis: leaseMillis,
+		})
+	}
+	return out
+}
+
+// 编译期断言：数据面那份读取器同时是隔离态的读面（装配处直接把同一个实例塞进
+// Deps.SlowRateStates，不必再造一个实现）。
+var _ SlowRateStateReader = (*route.SlowRateReader)(nil)
 
 // slowLogsEventsFrom 把存储事件投影成响应形状。
 func slowLogsEventsFrom(events []slowlog.Event) []slowLogsEvent {
