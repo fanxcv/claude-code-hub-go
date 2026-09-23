@@ -81,3 +81,25 @@ func TestNormalizeChatEmptyToolArgsIgnoresMalformedBody(t *testing.T) {
 		}
 	}
 }
+
+// TestNormalizeChatEmptyToolArgsRejectsTrailingGarbage 钉住闸门：多值流与尾随垃圾不是单一完整
+// JSON 文档，即使能分词成功也一律不改。
+func TestNormalizeChatEmptyToolArgsRejectsTrailingGarbage(t *testing.T) {
+	for _, body := range []string{
+		`{"messages":[{"tool_calls":[{"function":{"arguments":""}}]}]} trailing`,
+		`{"messages":[{"tool_calls":[{"function":{"arguments":""}}]}]}{"a":1}`,
+	} {
+		if got := string(NormalizeChatEmptyToolArgs([]byte(body))); got != body {
+			t.Fatalf("正文 %q 应原样返回，实际 %q", body, got)
+		}
+	}
+}
+
+// TestNormalizeChatEmptyToolArgsIgnoresInvalidNestedArguments 钉住刻意边界：arguments 非空但本身
+// 是坏 JSON 时不改写（不替客户端补 JSON）。
+func TestNormalizeChatEmptyToolArgsIgnoresInvalidNestedArguments(t *testing.T) {
+	body := `{"messages":[{"tool_calls":[{"function":{"arguments":"{\"a\":"}}]}]}`
+	if got := string(NormalizeChatEmptyToolArgs([]byte(body))); got != body {
+		t.Fatalf("正文应原样返回，实际 %q", got)
+	}
+}

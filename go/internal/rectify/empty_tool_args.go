@@ -7,7 +7,7 @@ import (
 
 // 本文件承载 native（同协议）路上请求正文里 tool 调用**空参数**的一处定点归一：
 // `"arguments":""` 改写为规范无参形态 `"arguments":"{}"`。两条线共用一份按 JSON 路径匹配的
-// 词法扫描器（emptyStringSpansAt），只有目标路径不同：
+// 词法扫描器（emptyStringSpansAt），只有目标路径与类型条件不同：
 //
 //   - Responses 线：顶层 `input[]` 里 `type == "function_call"` 的项（NormalizeResponsesEmptyToolArgs）；
 //   - Chat 线：`messages[].tool_calls[].function` 对象（NormalizeChatEmptyToolArgs）。
@@ -59,7 +59,21 @@ func normalizeEmptyToolArgsAt(body []byte, path []string, key, requireType strin
 // emptyStringSpan 是正文里一处「值为空字符串」的两字节区间 [start, end)。
 type emptyStringSpan struct{ start, end int }
 
-// emptyStringSpansAt 用 JSON 词法游标找出所有「路径恰为 path 的对象里、key 的值为空串」的值区间。
+// emptyStringSpansAt 是 scanEmptyStringSpans 的闸门：只有正文是**单一完整**的 JSON 文档时才认扫描结果。
+//
+// 为什么需要：json.Decoder 是流式分词器，多值流（`{...}{...}`）与尾随垃圾（`{...} trailing`）它都能分词
+// 成功，走到 EOF 时栈已空、先前收集的 span 照样被返回——那不是合法正文，按「非法即不改」一律放弃
+// （同 dataplane 的 errorMessageSpan 的 json.Valid 闸）。只在**确实扫到候选**时才做这次校验，
+// 故「无候选」的常态路径不多付一次全量解析。
+func emptyStringSpansAt(body []byte, path []string, key, requireType string) []emptyStringSpan {
+	spans := scanEmptyStringSpans(body, path, key, requireType)
+	if len(spans) > 0 && !json.Valid(body) {
+		return nil
+	}
+	return spans
+}
+
+// scanEmptyStringSpans 用 JSON 词法游标找出所有「路径恰为 path 的对象里、key 的值为空串」的值区间。
 //
 // path 是相对顶层对象的键路径，数组元素用 "*" 表示（responses：{"input","*"}；
 // chat：{"messages","*","tool_calls","*","function"}）。判定用**整条路径完全相等**（长度也必须相等），
@@ -68,8 +82,8 @@ type emptyStringSpan struct{ start, end int }
 // 键序无关：type 可能在 arguments 之后，故两者都先记下、在对象闭合时一并判定。
 //
 // 用游标而不是正则或 convert.Value 树：只有它能在**不改动其余字节**的前提下给出位置。
-// 正文不是合法 JSON 时返回空（调用方原样透传，不新增失败模式）。
-func emptyStringSpansAt(body []byte, path []string, key, requireType string) []emptyStringSpan {
+// 正文中途断了时返回空；「单一完整 JSON 文档」这层校验在 emptyStringSpansAt 的闸门里。
+func scanEmptyStringSpans(body []byte, path []string, key, requireType string) []emptyStringSpan {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 
@@ -159,9 +173,13 @@ func emptyStringSpansAt(body []byte, path []string, key, requireType string) []e
 				top.hasType = true
 			case key:
 				// 空串的值字面量只可能是 `""`：定位起始引号，再看它与 token 末尾是否恰好两字节。
+				// 同键重复出现时以**最后**一个为准（与 JSON 解码语义一致）：非空串要清掉先前的候选，
+				// 否则会改写被后一个键遮蔽的那个空串。
 				quote := bytes.IndexByte(body[before:after], '"')
 				if quote >= 0 && int(after-before)-quote == 2 {
 					top.emptyArgs = &emptyStringSpan{start: int(before) + quote, end: int(after)}
+				} else {
+					top.emptyArgs = nil
 				}
 			}
 		default:

@@ -41,3 +41,43 @@ func TestNormalizeResponsesEmptyToolArgsIgnoresMalformedBody(t *testing.T) {
 		}
 	}
 }
+
+// TestNormalizeResponsesEmptyToolArgsRejectsTrailingGarbage 钉住闸门：json.Decoder 是流式分词器，
+// 多值流与尾随垃圾都能分词成功，但正文并非单一完整 JSON 文档，故一律不改。
+func TestNormalizeResponsesEmptyToolArgsRejectsTrailingGarbage(t *testing.T) {
+	for _, body := range []string{
+		`{"input":[{"type":"function_call","arguments":""}]} trailing`,
+		`{"input":[{"type":"function_call","arguments":""}]}{"a":1}`,
+	} {
+		if got := string(NormalizeResponsesEmptyToolArgs([]byte(body))); got != body {
+			t.Fatalf("正文 %q 应原样返回，实际 %q", body, got)
+		}
+	}
+}
+
+// TestNormalizeResponsesEmptyToolArgsIgnoresOtherShapes 钉住刻意边界：arguments 缺失、以及
+// arguments 非空但本身是坏 JSON 时都不补写（不替客户端修 JSON）。
+func TestNormalizeResponsesEmptyToolArgsIgnoresOtherShapes(t *testing.T) {
+	for _, body := range []string{
+		`{"input":[{"type":"function_call","name":"t"}]}`,
+		`{"input":[{"type":"function_call","arguments":"{\"a\":"}]}`,
+	} {
+		if got := string(NormalizeResponsesEmptyToolArgs([]byte(body))); got != body {
+			t.Fatalf("正文 %q 应原样返回，实际 %q", body, got)
+		}
+	}
+}
+
+// TestNormalizeResponsesEmptyToolArgsDuplicateArgumentsKey 钉住同键重复时以最后一个为准：
+// 后出现的非空串要清掉先前候选（前者被遮蔽，不该改）；后出现的空串才改写。
+func TestNormalizeResponsesEmptyToolArgsDuplicateArgumentsKey(t *testing.T) {
+	shadowed := `{"input":[{"type":"function_call","arguments":"","arguments":"x"}]}`
+	if got := string(NormalizeResponsesEmptyToolArgs([]byte(shadowed))); got != shadowed {
+		t.Fatalf("被遮蔽的空串不该改\n want = %s\n  got = %s", shadowed, got)
+	}
+	lastEmpty := `{"input":[{"type":"function_call","arguments":"x","arguments":""}]}`
+	want := `{"input":[{"type":"function_call","arguments":"x","arguments":"{}"}]}`
+	if got := string(NormalizeResponsesEmptyToolArgs([]byte(lastEmpty))); got != want {
+		t.Fatalf("最后一个空串应改成 {}\n want = %s\n  got = %s", want, got)
+	}
+}
