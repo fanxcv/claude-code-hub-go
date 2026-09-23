@@ -40,7 +40,8 @@ var authorizingAuth = fakeAuth{
 }
 
 // newNoProviderHandler 装配一个日志可捕获的数据面，选路恒为「无可用供应商」。
-func newNoProviderHandler(t *testing.T, adapter noProviderAdapter) (*Handler, *bytes.Buffer) {
+// binder 为 nil 表示本次未装配会话绑定实现（请求日志的两列写 NULL 的同一形态）。
+func newNoProviderHandler(t *testing.T, adapter noProviderAdapter, binder guard.SessionBinder) (*Handler, *bytes.Buffer) {
 	t.Helper()
 	dialClient, err := dial.New(dial.Options{})
 	if err != nil {
@@ -57,6 +58,7 @@ func newNoProviderHandler(t *testing.T, adapter noProviderAdapter) (*Handler, *b
 			Filters:        fakeEmptySource{},
 			Provider:       adapter,
 			MessageContext: &fakeMessageWriter{},
+			Sessions:       binder,
 		},
 		Candidates: fakeCandidates{url: "http://127.0.0.1:1"},
 		Settlers: func(*RequestState) Settler {
@@ -87,7 +89,7 @@ func TestNoProviderAvailableResponseContractUnchanged(t *testing.T) {
 				{ID: 1, Name: "p1", Reason: route.ReasonModelNotAllowed},
 			},
 		},
-	})
+	}, nil)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses",
@@ -145,7 +147,7 @@ func TestNoProviderAvailableLogsDiagnostic(t *testing.T) {
 				{ID: 3, Name: "p3", Reason: route.ReasonProtocolConversionDisabled},
 			},
 		},
-	})
+	}, nil)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses",
@@ -177,6 +179,54 @@ func TestNoProviderAvailableLogsDiagnostic(t *testing.T) {
 	if got := event["path"]; got != "/v1/responses" {
 		t.Errorf("原有 path 字段不得丢：%v", got)
 	}
+	// 身份：鉴权步在四个预设里都有，故 user/key id 必有；本次未装配会话绑定实现，
+	// 会话 id 取不到，字段必须缺席而不是零值冒充。
+	if _, ok := event["sessionId"]; ok {
+		t.Errorf("未装配会话绑定时不得写出 sessionId，实际 %v", event["sessionId"])
+	}
+	if got, ok := event["userId"].(float64); !ok || int(got) != 1 {
+		t.Errorf("日志 userId = %v，期望 1", event["userId"])
+	}
+	if got, ok := event["keyId"].(float64); !ok || int(got) != 2 {
+		t.Errorf("日志 keyId = %v，期望 2", event["keyId"])
+	}
+}
+
+// TestNoProviderAvailableLogsSessionIdentity 钉住另一半：会话步绑定成功时，
+// sessionId 必须出现在事件里，否则这条 503 仍只能靠时间对齐归因到具体会话。
+func TestNoProviderAvailableLogsSessionIdentity(t *testing.T) {
+	handler, logs := newNoProviderHandler(t, noProviderAdapter{
+		clientFormat: "responses",
+		context: route.DecisionContext{
+			RequestedModel:          "dsf4",
+			TotalProviders:          9,
+			ModelSupportedProviders: 0,
+			FilteredProviders: []route.Filtered{
+				{ID: 1, Name: "p1", Reason: route.ReasonModelNotAllowed},
+			},
+		},
+	}, &fakeBinder{result: guard.SessionResult{SessionID: "sess-abcd-1"}})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses",
+		strings.NewReader(`{"model":"dsf4","input":"hi"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-api-key", "fake-client-key")
+	handler.ServeHTTP(recorder, request)
+
+	event := findLogEvent(t, logs.String(), "dataplane.no_provider_available")
+	if event == nil {
+		t.Fatalf("应写出 dataplane.no_provider_available 事件，实际日志：%s", logs.String())
+	}
+	if got := event["sessionId"]; got != "sess-abcd-1" {
+		t.Errorf("日志 sessionId = %v，期望 sess-abcd-1", got)
+	}
+	if got, ok := event["userId"].(float64); !ok || int(got) != 1 {
+		t.Errorf("日志 userId = %v，期望 1", event["userId"])
+	}
+	if got, ok := event["keyId"].(float64); !ok || int(got) != 2 {
+		t.Errorf("日志 keyId = %v，期望 2", event["keyId"])
+	}
 }
 
 // TestNoProviderAvailableLogsDistinguishUnavailableProviders 是对照：
@@ -196,7 +246,7 @@ func TestNoProviderAvailableLogsDistinguishUnavailableProviders(t *testing.T) {
 				{ID: 3, Name: "p3", Reason: route.ReasonRateLimited},
 			},
 		},
-	})
+	}, nil)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/messages",

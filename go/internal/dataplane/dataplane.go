@@ -509,6 +509,20 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 				// 链上无从表达（压根没有候选），故直接记进请求状态，终态时与链留痕合并计数。
 				state.recordDiverts(noProviderDivertedAll(diagnostic))
 			}
+			// 身份归因：这条 503 不建 message_request 行，此事件是唯一的可观测面，
+			// 没有身份就只能靠时间对齐猜是哪个用户/会话。
+			//
+			// 会话 id 只有在会话步跑过且绑定成功时才拿得到（原始透传链没有会话步，
+			// 未装配绑定实现时也为空），取不到就不写字段——零值冒充真实身份会让归因反向误导。
+			// user/key id 来自鉴权步（四个预设都有 auth 步），但仍按 ok 判定而非假定；
+			// 两者都是标识不是凭据，可入日志（APIKey 明文绝不入日志）。
+			if state.sessionID != "" {
+				fields["sessionId"] = state.sessionID
+			}
+			if auth, ok := pc.Auth(); ok {
+				fields["userId"] = auth.UserID
+				fields["keyId"] = auth.KeyID
+			}
 			h.logger.Warn("dataplane.no_provider_available", fields)
 			h.settleFailure(requestCtx, state, http.StatusServiceUnavailable, "无可用供应商")
 			// 详细体只在 verbose_provider_error 打开时给出；关闭时是逐字节固定的简洁体
