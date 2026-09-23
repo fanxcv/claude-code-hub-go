@@ -6,12 +6,11 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import type {
-  ClientActionResult,
   WebhookTargetCreateInput,
-  WebhookTargetState,
   WebhookTargetUpdateInput,
-} from "../_lib/hooks";
-import type { NotificationType } from "../_lib/schemas";
+} from "@/lib/api/v1/schemas/webhook-targets";
+import type { NotificationType } from "@/types/notifications";
+import type { ClientActionResult, WebhookTargetState } from "../_lib/hooks";
 import { WebhookTargetCard } from "./webhook-target-card";
 import { WebhookTargetDialog } from "./webhook-target-dialog";
 

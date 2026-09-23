@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { NotificationType } from "../_lib/schemas";
+import type { NotificationType } from "@/types/notifications";
 
 const TEST_NOTIFICATION_TYPES = [
   "circuit_breaker",

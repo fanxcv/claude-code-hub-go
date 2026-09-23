@@ -25,8 +25,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
+import type { NotificationType } from "@/types/notifications";
 import type { WebhookTargetState } from "../_lib/hooks";
-import type { NotificationType } from "../_lib/schemas";
 import { TestWebhookButton } from "./test-webhook-button";
 
 interface WebhookTargetCardProps {

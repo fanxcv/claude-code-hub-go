@@ -8,13 +8,13 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { isCacheHitRateAlertSettingsWindowMode } from "@/lib/webhook/types";
+import type { NotificationType } from "@/types/notifications";
 import type {
   ClientActionResult,
   NotificationBindingState,
   NotificationSettingsState,
   WebhookTargetState,
 } from "../_lib/hooks";
-import type { NotificationType } from "../_lib/schemas";
 import { BindingSelector } from "./binding-selector";
 
 interface NotificationTypeCardProps {

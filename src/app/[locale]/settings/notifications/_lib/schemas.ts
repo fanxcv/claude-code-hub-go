@@ -1,23 +1,7 @@
 "use client";
 
 import { z } from "zod";
-
-export const NotificationTypeSchema = z.enum([
-  "circuit_breaker",
-  "daily_leaderboard",
-  "cost_alert",
-  "cache_hit_rate_alert",
-]);
-export type NotificationType = z.infer<typeof NotificationTypeSchema>;
-
-export const WebhookProviderTypeSchema = z.enum([
-  "wechat",
-  "feishu",
-  "dingtalk",
-  "telegram",
-  "custom",
-]);
-export type WebhookProviderType = z.infer<typeof WebhookProviderTypeSchema>;
+import { WebhookProviderTypeSchema } from "@/lib/api/v1/schemas/webhook-targets";
 
 export const WebhookTargetFormSchema = z
   .object({

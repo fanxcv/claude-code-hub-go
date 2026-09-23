@@ -1,6 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type {
+  WebhookTargetCreateInput,
+  WebhookTargetUpdateInput,
+} from "@/lib/api/v1/schemas/webhook-targets";
 import {
   getBindingsForTypeAction,
   updateBindingsAction,
@@ -20,7 +24,8 @@ import {
   type CacheHitRateAlertSettingsWindowMode,
   isCacheHitRateAlertSettingsWindowMode,
 } from "@/lib/webhook/types";
-import type { NotificationType, WebhookProviderType } from "./schemas";
+import type { NotificationType } from "@/types/notifications";
+import type { WebhookProviderType } from "@/types/webhook-targets";
 
 export interface ClientActionResult<T> {
   ok: boolean;
@@ -80,22 +85,6 @@ export interface WebhookTargetState {
   lastTestAt: string | Date | null;
   lastTestResult: WebhookTestResult | null;
 }
-
-export interface WebhookTargetCreateInput {
-  name: string;
-  providerType: WebhookProviderType;
-  webhookUrl?: string | null;
-  telegramBotToken?: string | null;
-  telegramChatId?: string | null;
-  dingtalkSecret?: string | null;
-  customTemplate?: Record<string, unknown> | null;
-  customHeaders?: Record<string, string> | null;
-  proxyUrl?: string | null;
-  proxyFallbackToDirect?: boolean;
-  isEnabled?: boolean;
-}
-
-export type WebhookTargetUpdateInput = Partial<WebhookTargetCreateInput>;
 
 export interface NotificationBindingState {
   id: number;

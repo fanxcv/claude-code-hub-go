@@ -25,19 +25,15 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import type {
-  ClientActionResult,
-  WebhookTargetCreateInput,
-  WebhookTargetState,
-  WebhookTargetUpdateInput,
-} from "../_lib/hooks";
 import {
-  type NotificationType,
-  type WebhookProviderType,
   WebhookProviderTypeSchema,
-  WebhookTargetFormSchema,
-  type WebhookTargetFormValues,
-} from "../_lib/schemas";
+  type WebhookTargetCreateInput,
+  type WebhookTargetUpdateInput,
+} from "@/lib/api/v1/schemas/webhook-targets";
+import type { NotificationType } from "@/types/notifications";
+import type { WebhookProviderType } from "@/types/webhook-targets";
+import type { ClientActionResult, WebhookTargetState } from "../_lib/hooks";
+import { WebhookTargetFormSchema, type WebhookTargetFormValues } from "../_lib/schemas";
 import { ProxyConfigSection } from "./proxy-config-section";
 import { TestWebhookButton } from "./test-webhook-button";
 import { WebhookTypeForm } from "./webhook-type-form";

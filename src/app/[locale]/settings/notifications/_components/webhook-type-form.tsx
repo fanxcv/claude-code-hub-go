@@ -5,7 +5,8 @@ import type { FieldErrors, UseFormRegister, UseFormSetValue, UseFormWatch } from
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { WebhookProviderType, WebhookTargetFormValues } from "../_lib/schemas";
+import type { WebhookProviderType } from "@/types/webhook-targets";
+import type { WebhookTargetFormValues } from "../_lib/schemas";
 import { TemplateEditor } from "./template-editor";
 
 interface WebhookTypeFormProps {
