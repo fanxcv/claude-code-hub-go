@@ -438,13 +438,22 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		}
 	}
 	// include_usage 补齐：Node 把它放在供应商覆写与 final-phase 过滤器之后（forwarder.ts:3743），
-	// 是 chat 线出站正文的最后一步改写（见 openai_chat_usage_options.go）。
+	// 是 chat 线出站正文的一处改写（见 openai_chat_usage_options.go；其后还有空参数归一）。
 	if body != nil {
 		completed, _, err := applyOpenAIChatStreamUsageOption(body, provider.Type, in.Client.Path)
 		if err != nil {
 			return nil, fmt.Errorf("forward: include_usage 补齐失败: %w", err)
 		}
 		body = completed
+	}
+	// 空参数归一：native 路（无转换）时，把该线正文里 tool 调用的空参数 `"arguments":""` 改成规范
+	// 无参形态 `"{}"`。chat 线改 messages[].tool_calls[].function 的 arguments
+	// （见 rectify.NormalizeChatEmptyToolArgs 的「为什么」）。
+	//
+	// 为什么在**这里**：它必须是正文的最后一步，否则会被后续改写覆盖。
+	// 为什么只做 native：跨协议路在编解码器里（convert/codec_chat.go）已归一，重复处理无意义。
+	if plan.Conversion == nil && plan.Protocol == convert.ProtocolOpenAIChat && body != nil {
+		body = rectify.NormalizeChatEmptyToolArgs(body)
 	}
 	// 空参数归一：native 路（无转换）且目标线为 openai-responses 时，把 input[] 里 function_call 的
 	// `"arguments":""` 改成规范无参形态 `"{}"`（见 rectify.NormalizeResponsesEmptyToolArgs 的「为什么」）。
