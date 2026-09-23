@@ -41,10 +41,11 @@ func affinityDirectiveForNonStream(result *forward.Result, failure *forward.Fail
 //     499/CLIENT_ABORTED，errorMessage 非空，故同样写墓碑）。incomplete
 //     （response.incomplete：语义未完成但 2xx 且无错误）两边都不写。
 //
-// 本仓另加两类本类型未覆盖的收尾：
-//   - 客户端主动中断：前缀墓碑照写、会话绑定侧不动（Node 对齐，见下）；
-//   - 流尾缺协议终止标记但正文已按分帧交付完毕：两边都不写
-//     （见 streamBodyDeliveredWithoutMarker）。
+// 本仓另加一类本类型未覆盖的收尾：
+//   - 客户端主动中断：前缀墓碑照写、会话绑定侧不动（Node 对齐，见下）。
+//
+// 关于「流尾缺协议终止标记但正文已按分帧交付完毕」：**这一类不存在**，故本函数不再有
+// 对应分支，见下方注记。
 func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.AffinityDirective {
 	success := outcome.StatusCode >= 200 && outcome.StatusCode < 300
 	incomplete := outcome.Observation.SawIncomplete && outcome.Observation.ErrorText == "" && success
@@ -53,9 +54,6 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 	}
 	if success && outcome.Kind == forward.TerminalCompleted {
 		return terminal.AffinityDirective{WinnerProviderID: outcome.Provider.ID}
-	}
-	if streamBodyDeliveredWithoutMarker(outcome, success) {
-		return terminal.AffinityDirective{}
 	}
 
 	// 客户端主动中断不是供应商故障：前缀墓碑照写（Node 对齐），但会话绑定侧不得动作——
@@ -69,35 +67,19 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 	return terminal.AffinityDirective{TombstoneProviderID: outcome.Provider.ID}
 }
 
-// streamBodyDeliveredWithoutMarker 报告「上游把响应正文正常收尾、只漏了协议终止标记」。
+// 注记：曾经的 streamBodyDeliveredWithoutMarker 及其调用点（「流尾缺协议终止标记但正文已交付
+// ⇒ 两边都不写墓碑」）已删除，因为它的前提是错的，且现在**结构上不可能成立**：
 //
-// 判据的核心是 CompletionMarker：它记录观测器是否真见到了与协议族匹配的终止标记
-// （[DONE] / message_stop / response.completed）。TerminalUpstreamTruncated 有**两条来路**
-// （见 forward/terminalKindFor）：泵报 io.EOF 的提前返回（不看标记），以及「无错误、无错误帧、
-// 无标记」的兜底。**两条来路都不保证正文已交付**——生产实证（2026-09-23，wb 池代理）里，
-// 上游在 tool_calls 参数中间干净地 FIN，正文被切断，终态同样是本类型，而它的尾部既无
-// finish_reason 也无 [DONE]。故原判据「本类型即正文已交付」是错的，必须显式要求标记已见：
-// 标记已见 ⇒ 正文按分帧交付完毕，缺的只是分类没归到 TerminalCompleted（io.EOF 提前返回所致）；
-// 标记未见 ⇒ 正文可能被中途切断，属供应商侧真故障，必须走墓碑与冷却。
+//   terminalKindFor 只在**未见到终止标记**时落 TerminalUpstreamTruncated（CompletionMarker
+//   为真时走 TerminalCompleted；其 io.EOF 分支不可达且已补齐标记判断，见 forward/stream.go）。
+//   故「本类型」与「正文已交付」互斥，该函数恒为假——留着它只会让读者以为存在这一类收尾。
 //
-// 为何两边都不写（既不写 winner 也不写故障墓碑）：
-//   - 落库行与可用性投影对这类收尾按「成功」记账（终态层刻意不给它写 error_message，
-//     见 dataplane 的 Stream 结算；DB 侧成功率判据按 2xx 判 success），选路侧不该反过来
-//     记成「这家刚失败过」——生产事故正是这条误判把 60 秒会话冷却写给了一家健康渠道；
-//   - 奖励也不行：把跨会话的前缀亲和 tip 写回给一个漏发终止标记的渠道，是另一件未被求的事；
-//   - 与 Node 的判据同源：它写墓碑的前提是「存在错误文案」，本例没有；与同文件的 incomplete
-//     分支同形——证据不足的收尾不做判定。
+// 为何原前提看着合理却错了：它断言「本类型 = 干净的 EOF，正文被中途切断会落 LocalError」。
+// 前半句对（上游 FIN 确实是干净 EOF），后半句不对——**上游在正文中途干净 FIN 也落本类型**。
+// 生产实证（2026-09-23，wb 池代理）：客户端拿到残流（尾部既无 finish_reason 也无 [DONE]），
+// 终态正是本类型，而原实现把它当成功放过去了 ⇒ 客户端可见的失败既不计账也不冷却。
 //
-// 四个显式条件缺一不可：非 2xx 是上游明说失败；ErrorText 非空是流内错误帧（Err==io.EOF
-// 的收尾路径不看 ErrorText，故必须在这里判）；Bytes 为 0 是「200 后立刻干净 EOF」即正文
-// 从未送达；CompletionMarker 为假是正文可能被中途切断——这四种都不放过，照旧写墓碑与冷却。
-func streamBodyDeliveredWithoutMarker(outcome forward.StreamOutcome, success bool) bool {
-	return success &&
-		outcome.Kind == forward.TerminalUpstreamTruncated &&
-		outcome.Observation.CompletionMarker &&
-		outcome.Observation.ErrorText == "" &&
-		outcome.Observation.Bytes > 0
-}
+// 故本类型一律落到下方默认返回（墓碑 + 会话冷却），不再有例外分支。
 
 // tombstoneDirective 按 Node 的类别判据给出墓碑指令。
 //

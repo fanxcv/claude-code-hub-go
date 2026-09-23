@@ -986,6 +986,18 @@ func terminalKindFor(completion PumpCompletion, observation Observation) Termina
 	}
 	if completion.Err != nil {
 		if errors.Is(completion.Err, io.EOF) {
+			// 本分支当前**不可达**：泵在读源返回 io.EOF 时调 settle(true, nil, nil)，
+			// 故 completion.Err 永远不会是 io.EOF（见 pump.go 的 readSourceOnce 与全部
+			// settle 调用点，Err 只可能是读错误或取消原因）。
+			//
+			// 保留它并在此处补齐标记判断，是为了让「TerminalUpstreamTruncated 蕴含
+			// !CompletionMarker」这条不变式**不依赖分支是否可达**：若将来真有路径传入
+			// io.EOF，「已见终止标记」仍归 TerminalCompleted，不会把正文已交付的健康流
+			// 误判成截断（那会给健康渠道写冷却）。该不变式是 dataplane 侧判「正文是否
+			// 交付」的唯一依据（见 streamErrorMessage 与 affinity 的墓碑判定）。
+			if observation.CompletionMarker {
+				return TerminalCompleted
+			}
 			return TerminalUpstreamTruncated
 		}
 		return TerminalLocalError

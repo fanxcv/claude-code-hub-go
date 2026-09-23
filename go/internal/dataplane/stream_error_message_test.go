@@ -37,7 +37,10 @@ func TestStreamErrorMessage(t *testing.T) {
 			want:        upstreamStreamCutMessage,
 		},
 		{
-			name:        "截断但已见终止标记：按成功记账",
+			// 本格钉的是不变式守卫（见 forward/terminal_kind_test.go 的 TestTerminalKindForInvariant）：
+			// 「已见标记 + 截断」结构上不可达，但守卫在场时它归成功——错误方向取「少记失败」，
+			// 因为反过来会连带写渠道冷却。
+			name:        "截断但已见终止标记：按成功记账（守卫，该组合结构上不可达）",
 			outcome:     forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200},
 			observation: forward.Observation{Bytes: 60332, Frames: 242, CompletionMarker: true},
 			wantNil:     true,

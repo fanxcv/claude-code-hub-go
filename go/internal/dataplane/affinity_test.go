@@ -125,33 +125,25 @@ func TestAffinityDirectiveForStream(t *testing.T) {
 				Provider: forward.Provider{ID: 7}},
 			want: terminal.AffinityDirective{TombstoneProviderID: 7},
 		},
-		// 以下六条钉住「流尾缺终止标记」的判据与其四条边界。
+		// 以下五条钉住「流尾缺终止标记」的判据与其边界。
 		//
-		// 判据的分水岭是 CompletionMarker（观测器是否真见到协议终止标记），**不是**终态类型：
-		// TerminalUpstreamTruncated 有两条来路（见 forward/terminalKindFor）——泵报 io.EOF 的
-		// 提前返回（不看标记）与「无错误、无错误帧、无标记」的兜底，两者都不保证正文已交付。
-		// 生产实证（2026-09-23，wb 池代理）：上游在 tool_calls 参数中间干净地 FIN，正文被切断，
-		// 终态也是本类型，而尾部既无 finish_reason 也无 [DONE]。故：
-		//   标记已见 ⇒ 正文已按分帧交付，只是分类没归到 TerminalCompleted，不算供应商故障；
-		//   标记未见 ⇒ 正文可能被中途切断，属供应商侧真故障，必须写墓碑与冷却。
+		// 判据是：TerminalUpstreamTruncated **结构上蕴含**未见到协议终止标记
+		// （terminalKindFor 只在 !CompletionMarker 时落本类型；其 io.EOF 分支不可达，且已补齐
+		// 标记判断，见 forward/stream.go 与 forward 包的同名钉子）。故本类型一律写墓碑与冷却。
 		//
-		// 历史注记：本组曾断言「TerminalUpstreamTruncated 就是干净的 EOF，故只缺协议标记」
-		// 并把 Bytes=60332/Frames=242 那一形态钉成「两边都不写」——那条断言与生产事实相抵，
-		// 现已随判据修正一并改期望值（该夹具正是被切断的那类流）。
+		// 生产实证（2026-09-23，wb 池代理）：上游在 tool_calls 参数中间干净地 FIN，客户端拿到
+		// 残流（尾部既无 finish_reason 也无 [DONE]），终态正是本类型。
+		//
+		// 历史注记：本组曾断言「TerminalUpstreamTruncated 就是干净的 EOF，故只缺协议标记」，
+		// 并把 Bytes=60332/Frames=242 那一形态钉成「两边都不写」——那条断言与生产事实相抵
+		// （该夹具正是被切断的那类流），现已改期望值。原先那条「标记已见 ⇒ 两边都不写」的用例
+		// 已删除：该组合结构上不可达，留着会让人以为存在这一类收尾。
 		{
 			name: "流尾无终止标记且正文被中途切断：写墓碑与冷却",
 			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
 				Provider:    forward.Provider{ID: 7},
 				Observation: forward.Observation{Bytes: 60332, Frames: 242, Model: "deepseek-v4.1-flash"}},
 			want: terminal.AffinityDirective{TombstoneProviderID: 7},
-		},
-		{
-			name: "流尾缺终止标记但标记已见（分类未归到 Completed）：两边都不写",
-			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
-				Provider: forward.Provider{ID: 7},
-				Observation: forward.Observation{
-					Bytes: 60332, Frames: 242, CompletionMarker: true}},
-			want: terminal.AffinityDirective{},
 		},
 		{
 			name: "流尾缺终止标记且正文未送达（零字节）：仍写墓碑",

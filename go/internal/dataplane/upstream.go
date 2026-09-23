@@ -384,7 +384,7 @@ func (s *storeSettler) NonStream(
 // upstreamStreamCutMessage 是「上游在正文中途断流」的终态文案。
 //
 // 用机器可读的稳定 token 而非人话，与同函数其他分支（`string(outcome.Kind)`）同风格：
-// 它进 message_request.error_message，是可 grep警、可对账的判据，不是给终端用户读的文案。
+// 它进 message_request.error_message，是可 grep、可告警、可对账的判据，不是给终端用户读的文案。
 const upstreamStreamCutMessage = "upstream_stream_cut"
 
 // streamErrorMessage 派生流式终态的错误文案；返回 nil 表示本次终态按成功记账。
@@ -399,10 +399,11 @@ const upstreamStreamCutMessage = "upstream_stream_cut"
 //     客户端拿到的是残流（生产 2026-09-23：wb 池代理在 tool_calls 参数中间 FIN），记失败；
 //  3. 其余非正常完成（非 TerminalCompleted 也非 TerminalUpstreamTruncated）⇒ 用终态名。
 //
-// 为何 TerminalUpstreamTruncated 要分两种（见 forward/terminalKindFor 的两条来路与
-// streamBodyDeliveredWithoutMarker）：**见到过终止标记**的只是分类没归到 TerminalCompleted，
-// 正文已按分帧交付完毕，不算失败——这条是刻意的，历史上把它记成失败曾让 60 秒会话冷却
-// 挂到健康渠道上。
+// 第 2 条里的「且未见标记」是**不变式守卫**，不是主判据：terminalKindFor 保证
+// TerminalUpstreamTruncated 蕴含 !CompletionMarker（见 forward/terminal_kind_test.go 的
+// TestTerminalKindForInvariant），故它当前恒成立。留着它，是为了将来若有人把「已见标记」
+// 也归进截断时，这里**不会**把一条正文已交付的健康流记成失败——错误方向取「少记一次失败」，
+// 而反过来（误记失败）会连带写渠道冷却，代价高得多。
 func streamErrorMessage(outcome forward.StreamOutcome, observation forward.Observation) *string {
 	if outcome.Err != nil {
 		message := outcome.Err.Error()
