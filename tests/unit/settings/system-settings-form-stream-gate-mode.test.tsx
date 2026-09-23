@@ -182,6 +182,28 @@ describe("SystemSettingsForm stream gate switch", () => {
     unmount();
   });
 
+  test("switch reflects initial mode in checked state and label", () => {
+    const labels = loadMessages("en").settings.config.form.streamGateModeOptions;
+
+    for (const mode of ["enforce", "off"] as const) {
+      const { unmount } = render(
+        <SystemSettingsForm initialSettings={{ ...baseSettings, streamGateMode: mode }} />
+      );
+
+      const trigger = document.getElementById("stream-gate-mode");
+      if (!trigger) {
+        throw new Error("未找到流式内容门控开关");
+      }
+
+      // 钉住初始极性：checked 必须与配置值同向，标签文字必须与该状态一致。
+      // 只断言「点击后的提交值」挡不住「checked 与标签一起整体翻转」。
+      expect(trigger.getAttribute("aria-checked")).toBe(mode === "enforce" ? "true" : "false");
+      expect(trigger.parentElement?.textContent).toContain(labels[mode]);
+
+      unmount();
+    }
+  });
+
   test("all locales define gate switch labels and no shadow option", () => {
     for (const locale of ["zh-CN", "en"] as const) {
       const form = loadMessages(locale).settings.config.form;
