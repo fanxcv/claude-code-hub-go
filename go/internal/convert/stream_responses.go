@@ -201,7 +201,17 @@ func (d *responsesStreamDecoder) flushSeed(out *[]Chunk, decoded *responsesDecod
 	d.emitDeltaChunk(out, decoded, seed)
 }
 
+// emitDeltaChunk 是本线交付载荷的**唯一出口**（正文 / 工具参数 / 推理三条都经此）。
+//
+// 消息级回放对账就落在这个出口，而不是各条入口：入口不止一条，而「整段回放」可以从任何
+// 一条进来——正文增量、声明式对账（reconcile）之外，还有 handleDone 的「跳过 added/delta
+// 直接给 done」兜底、以及 closeBlock / flushSeed / releaseSuspended 的 seed 与 pending 兜底。
+// 这些兜底建出的块 `emitted` 必然为空（块级记账在新块上无从比对），出口不兜就整段二次下发。
+// 判据本身见 messageReplay（stream.go）：与消息级已发全文逐字相等且该全文由多帧拼成。
 func (d *responsesStreamDecoder) emitDeltaChunk(out *[]Chunk, decoded *responsesDecodedBlock, delta string) {
+	if decoded.kind == responsesKindText && messageReplay(d.messageText, d.messageTextParts, delta) {
+		return
+	}
 	decoded.emitted += delta
 	chunk := Chunk{Kind: ChunkBlockDelta, BlockIndex: intPtr(decoded.blockIndex)}
 	switch decoded.kind {
