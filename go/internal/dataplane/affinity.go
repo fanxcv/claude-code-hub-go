@@ -71,12 +71,14 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 
 // streamBodyDeliveredWithoutMarker 报告「上游把响应正文正常收尾、只漏了协议终止标记」。
 //
-// 判据的核心是 TerminalUpstreamTruncated 的语义：它是**干净的 EOF**。报文体被中途切断
-// （分块未终结、Content-Length 不足、读错误）在 forward 的终态分类里是
-// TerminalLocalError，不是本类型（见 forward/terminalKindFor：只有 `Err != nil` 且非
-// io.EOF 才落 LocalError；本类型出自「Err 为空、无错误帧、无终止标记」）。
-// 故本条成立即「正文按分帧交付完毕」，缺的只是 message_stop / [DONE] /
-// response.completed 这类**协议级**标记。
+// 判据的核心是 CompletionMarker：它记录观测器是否真见到了与协议族匹配的终止标记
+// （[DONE] / message_stop / response.completed）。TerminalUpstreamTruncated 有**两条来路**
+// （见 forward/terminalKindFor）：泵报 io.EOF 的提前返回（不看标记），以及「无错误、无错误帧、
+// 无标记」的兜底。**两条来路都不保证正文已交付**——生产实证（2026-09-23，wb 池代理）里，
+// 上游在 tool_calls 参数中间干净地 FIN，正文被切断，终态同样是本类型，而它的尾部既无
+// finish_reason 也无 [DONE]。故原判据「本类型即正文已交付」是错的，必须显式要求标记已见：
+// 标记已见 ⇒ 正文按分帧交付完毕，缺的只是分类没归到 TerminalCompleted（io.EOF 提前返回所致）；
+// 标记未见 ⇒ 正文可能被中途切断，属供应商侧真故障，必须走墓碑与冷却。
 //
 // 为何两边都不写（既不写 winner 也不写故障墓碑）：
 //   - 落库行与可用性投影对这类收尾按「成功」记账（终态层刻意不给它写 error_message，
@@ -88,10 +90,11 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 //
 // 四个显式条件缺一不可：非 2xx 是上游明说失败；ErrorText 非空是流内错误帧（Err==io.EOF
 // 的收尾路径不看 ErrorText，故必须在这里判）；Bytes 为 0 是「200 后立刻干净 EOF」即正文
-// 从未送达——这四种都不放过，照旧写墓碑与冷却。
+// 从未送达；CompletionMarker 为假是正文可能被中途切断——这四种都不放过，照旧写墓碑与冷却。
 func streamBodyDeliveredWithoutMarker(outcome forward.StreamOutcome, success bool) bool {
 	return success &&
 		outcome.Kind == forward.TerminalUpstreamTruncated &&
+		outcome.Observation.CompletionMarker &&
 		outcome.Observation.ErrorText == "" &&
 		outcome.Observation.Bytes > 0
 }

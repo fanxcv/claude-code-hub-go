@@ -381,6 +381,44 @@ func (s *storeSettler) NonStream(
 	return s.logSettle(ctx, pc, settlement)
 }
 
+// upstreamStreamCutMessage 是「上游在正文中途断流」的终态文案。
+//
+// 用机器可读的稳定 token 而非人话，与同函数其他分支（`string(outcome.Kind)`）同风格：
+// 它进 message_request.error_message，是可 grep警、可对账的判据，不是给终端用户读的文案。
+const upstreamStreamCutMessage = "upstream_stream_cut"
+
+// streamErrorMessage 派生流式终态的错误文案；返回 nil 表示本次终态按成功记账。
+//
+// 为何它是记账的开关而不是单纯日志：`message_request.is_success` 由 DB 触发器按
+// `error_message` 是否为空算（见 drizzle/0073_magical_manta.sql 的 v_is_success），
+// 仪表盘的错误数（`NOT is_success`）同源。故「哪些终态算失败」就是在这里定的。
+//
+// 三条判据，优先级从高到低：
+//  1. 有错误对象 ⇒ 用它（上游读错、本地错、静默超时等都走这条）；
+//  2. TerminalUpstreamTruncated 且**未见到终止标记** ⇒ 上游在正文中途干净地断流，
+//     客户端拿到的是残流（生产 2026-09-23：wb 池代理在 tool_calls 参数中间 FIN），记失败；
+//  3. 其余非正常完成（非 TerminalCompleted 也非 TerminalUpstreamTruncated）⇒ 用终态名。
+//
+// 为何 TerminalUpstreamTruncated 要分两种（见 forward/terminalKindFor 的两条来路与
+// streamBodyDeliveredWithoutMarker）：**见到过终止标记**的只是分类没归到 TerminalCompleted，
+// 正文已按分帧交付完毕，不算失败——这条是刻意的，历史上把它记成失败曾让 60 秒会话冷却
+// 挂到健康渠道上。
+func streamErrorMessage(outcome forward.StreamOutcome, observation forward.Observation) *string {
+	if outcome.Err != nil {
+		message := outcome.Err.Error()
+		return &message
+	}
+	if outcome.Kind == forward.TerminalUpstreamTruncated && !observation.CompletionMarker {
+		message := upstreamStreamCutMessage
+		return &message
+	}
+	if outcome.Kind != forward.TerminalCompleted && outcome.Kind != forward.TerminalUpstreamTruncated {
+		message := string(outcome.Kind)
+		return &message
+	}
+	return nil
+}
+
 // Stream 承接流式终态。
 func (s *storeSettler) Stream(ctx context.Context, pc *pctx.Context, outcome forward.StreamOutcome) error {
 	settlement := s.baseSettlement(pc, nil, outcome.Provider.ID)
@@ -454,16 +492,7 @@ func (s *storeSettler) Stream(ctx context.Context, pc *pctx.Context, outcome for
 	settlement.RoutingTrace = s.routingTrace(outcome.Attempts, outcome.At, outcome.StatusCode, settlement.TTFTMS, settlement.FirstByteMS)
 	// 终态追加的审计：与信息式路径同一口径（取转换器产物而非二次推导）。
 	settlement.SpecialSettingsAppend = specialSettingsAppendEntries(s.state, outcome.Plan)
-	if outcome.Err != nil {
-		message := outcome.Err.Error()
-		settlement.ErrorMessage = &message
-	}
-	if outcome.Kind != forward.TerminalCompleted && outcome.Kind != forward.TerminalUpstreamTruncated {
-		if settlement.ErrorMessage == nil {
-			message := string(outcome.Kind)
-			settlement.ErrorMessage = &message
-		}
-	}
+	settlement.ErrorMessage = streamErrorMessage(outcome, observation)
 	redirected := s.state.Model
 	if outcome.Plan != nil && outcome.Plan.Redirect != nil {
 		redirected = outcome.Plan.Redirect.Target
