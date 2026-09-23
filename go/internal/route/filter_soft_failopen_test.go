@@ -329,7 +329,7 @@ func TestSoftSignalFailOpenNeedsRejectedCandidate(t *testing.T) {
 // 为何逐条列全：这张表是「无替代候选时能不能放行」的唯一判据来源。多放一条（例如把熔断也
 // 算软信号）= 上游已知故障仍被打过去；少放一条（低速冷却不算）= 本缺陷复发（唯一候选被剔 ⇒ 503）。
 func TestSoftSignalRejectionClassifiesSoftSignals(t *testing.T) {
-	soft := []Reason{ReasonSlowRateCooldown, ReasonUpstreamStreamCutCooldown}
+	soft := []Reason{ReasonSlowRateCooldown, ReasonSlowRateQuarantine, ReasonUpstreamStreamCutCooldown}
 	hard := []Reason{
 		ReasonCircuitOpen,
 		ReasonProviderErrorCooldown,
