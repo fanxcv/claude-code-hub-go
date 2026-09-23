@@ -1,6 +1,7 @@
 package forward
 
 import (
+	"context"
 	"errors"
 	"io"
 	"sync"
@@ -268,6 +269,54 @@ func TestPumpUpstreamErrorIsTerminal(t *testing.T) {
 	}
 	if pump.Completion().StreamEndedNormally {
 		t.Fatal("上游错误不应算正常结束")
+	}
+}
+
+// TestPumpMarksClientAbortWhenSourceReadFailsWithClientCancel 断言「上游读阻塞中客户端撤 ctx」
+// 归因为**客户端中断**，而不是本地/上游错误。
+//
+// 生产实证（2026-09-23，session 01a0b3af…）：这条路径不经过 ClientCancel，只靠它置位的
+// 归因会漏，终态落 TerminalLocalError，亲和侧随即按「供应商故障」写 60 秒会话冷却，
+// 把健康渠道上的会话赶到优先级最高的另一家。
+func TestPumpMarksClientAbortWhenSourceReadFailsWithClientCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	source := newFakeSource()
+	source.terminalErr = context.Canceled
+	pump := NewPump(PumpOptions{Source: source, ChunkBytes: 16, ClientCtx: ctx})
+	defer func() { pump.CancelSource(errPumpTestCleanup) }()
+
+	cancel()
+	if _, err := pump.Read(make([]byte, 8)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("错误未被交给下游: %v", err)
+	}
+	completion := pump.Completion()
+	if !completion.ClientAborted {
+		t.Fatal("客户端撤 ctx 后终态应记为客户端中断")
+	}
+	if completion.StreamEndedNormally {
+		t.Fatal("客户端中断不应算正常结束")
+	}
+}
+
+// TestPumpKeepsNormalCompletionWhenClientCancelsLate 断言终态标记已到之后的客户端断开
+// 不改归因：那是「协议终态之后断开仍算成功」的一半，反过来会让真成功被记成中断。
+func TestPumpKeepsNormalCompletionWhenClientCancelsLate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	source := newFakeSource([]byte("aaaa"))
+	pump := NewPump(PumpOptions{Source: source, ChunkBytes: 16, ClientCtx: ctx})
+	defer func() { pump.CancelSource(errPumpTestCleanup) }()
+
+	buffer := make([]byte, 8)
+	if n, err := pump.Read(buffer); err != nil || n != 4 {
+		t.Fatalf("Read = %d, %v", n, err)
+	}
+	cancel()
+	if n, err := pump.Read(buffer); !errors.Is(err, io.EOF) || n != 0 {
+		t.Fatalf("结束读取 = %d, %v", n, err)
+	}
+	completion := pump.Completion()
+	if !completion.StreamEndedNormally || completion.ClientAborted {
+		t.Fatalf("终态 = %+v", completion)
 	}
 }
 

@@ -735,6 +735,7 @@ func newStream(
 		OnClientCancel:       func(reason error) { stream.onClientCancel(reason) },
 		ChunkBytes:           options.ChunkBytes,
 		PendingChunkDeadline: options.PendingChunkDeadline,
+		ClientCtx:            ctx,
 		Logger:               options.Logger,
 	})
 

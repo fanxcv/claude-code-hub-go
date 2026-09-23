@@ -1,6 +1,7 @@
 package forward
 
 import (
+	"context"
 	"errors"
 	"io"
 	"runtime"
@@ -71,6 +72,11 @@ type PumpOptions struct {
 	ChunkBytes int
 	// PendingChunkDeadline 是 pending chunk 未被下游取走的时限；0 取默认 60s，负值关闭。
 	PendingChunkDeadline time.Duration
+	// ClientCtx 是下游请求的上下文；nil 表示调用方不提供归因依据。
+	//
+	// 它只用于一处归因修正，见 settle：客户端在上游读阻塞中断开时，错误对象只会是
+	// context.Canceled（不是写回失败），单靠 ClientCancel 置位会漏掉这条路径。
+	ClientCtx context.Context
 	// Logger 用于记录 pending 超时；nil 时静默。
 	Logger *logx.Logger
 }
@@ -364,6 +370,18 @@ func (p *Pump) settle(normal bool, err error, cancelReason error) bool {
 	if p.settled {
 		p.mu.Unlock()
 		return false
+	}
+	// 归因修正：上游读阻塞中客户端断开时，net/http 撤掉请求 ctx，上游读即以
+	// context.Canceled 出错，而这条路径**不经过** ClientCancel（置 clientAborted 的唯一入口），
+	// 故终态会落 TerminalLocalError —— 亲和侧据此按「供应商故障」写 60 秒会话冷却，
+	// 把健康渠道上的会话无故赶走（生产实证 2026-09-23：session 01a0b3af…）。
+	//
+	// 只认 context.Canceled（不是 DeadlineExceeded）：上游静默由 IdleTimeout 这条独立通道
+	// 归因，本仓不给请求 ctx 加时限，故 Canceled 只能是下游断开。
+	// 正常结束分支不修正：终态标记已到，客户端事后断开仍算成功（见 affinity 的墓碑判定）。
+	// 客户端与上游同时出事的极端情形按「客户端中断」记——错误方向取少记一次失败。
+	if !normal && p.opts.ClientCtx != nil && errors.Is(p.opts.ClientCtx.Err(), context.Canceled) {
+		p.clientAborted = true
 	}
 	p.settled = true
 	p.state = PumpFinalizing

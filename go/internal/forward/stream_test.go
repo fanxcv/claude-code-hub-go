@@ -312,6 +312,64 @@ func TestStreamClientCancelSettlesExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestStreamCtxCancelDuringUpstreamReadIsClientAbort 是上面那条归因修正的端到端钉子：
+// 客户端在上游读**阻塞中**断开（只撤请求 ctx，不调 ClientCancel）时，终态必须是
+// TerminalClientAborted。
+//
+// 为何单独立一条：本路径只在上游读错误处现身，错误对象是 context.Canceled，与真故障
+// 无法从错误值上区分，只能靠「下游 ctx 是否已撤」判。落成 TerminalLocalError 的后果不是
+// 少记一条错误，而是亲和侧按供应商故障写 60 秒会话冷却，把会话从健康渠道赶走（生产实证
+// 2026-09-23：session 01a0b3af… 的两次 wb 接管）。
+func TestStreamCtxCancelDuringUpstreamReadIsClientAbort(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"首块\"}}\n\n"))
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(func() { close(release) })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	settler := newCountingSettler()
+	deps := Deps{Dial: newTestDial(t), Facts: newStreamFacts(), Limits: Limits{RetryDelay: time.Millisecond}}
+	result, err := ForwardStream(ctx, newTestPctx(t), newTestCandidate(1, "供应商甲", server.URL, 1), deps,
+		StreamOptions{Format: convert.FormatClaude, Settle: settler})
+	if err != nil {
+		t.Fatalf("ForwardStream 失败: %v", err)
+	}
+	stream := result.Stream
+
+	// 先消费一个块，再只撤请求 ctx：上游读随即以取消出错，整条路径不经过 ClientCancel。
+	if _, err := stream.Read(make([]byte, 4096)); err != nil {
+		t.Fatalf("首次读取失败: %v", err)
+	}
+	// 生产里是数据面循环持续在读：上游读必须**在途**，撤销才会以读错误现身。
+	go func() {
+		for {
+			if _, err := stream.Read(make([]byte, 4096)); err != nil {
+				return
+			}
+		}
+	}()
+	cancel()
+
+	select {
+	case <-settler.settled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("撤 ctx 后未结算")
+	}
+	outcome := settler.outcome()
+	if outcome.Kind != TerminalClientAborted {
+		t.Fatalf("终态 = %q（%v），期望客户端中断", outcome.Kind, outcome.Err)
+	}
+	if !outcome.ClientAbort {
+		t.Fatal("终态应记录客户端中断")
+	}
+}
+
 func TestStreamResidencyStaysBoundedForLargeStream(t *testing.T) {
 	const totalBytes = 8 << 20
 	chunk := "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"" +
