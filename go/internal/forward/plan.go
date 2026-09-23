@@ -440,10 +440,7 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 	// include_usage 补齐：Node 把它放在供应商覆写与 final-phase 过滤器之后（forwarder.ts:3743），
 	// 是 chat 线出站正文的一处改写（见 openai_chat_usage_options.go；其后还有空参数归一）。
 	if body != nil {
-		completed, _, err := applyOpenAIChatStreamUsageOption(body, provider.Type, in.Client.Path)
-		if err != nil {
-			return nil, fmt.Errorf("forward: include_usage 补齐失败: %w", err)
-		}
+		completed, _ := applyOpenAIChatStreamUsageOption(body, provider.Type, in.Client.Path)
 		body = completed
 	}
 	// 空参数归一：native 路（无转换）时，把该线正文里 tool 调用的空参数 `"arguments":""` 改成规范

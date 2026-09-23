@@ -40,21 +40,21 @@ func applyOpenAIChatStreamUsageOption(
 	body []byte,
 	providerType convert.ProviderType,
 	requestPath string,
-) ([]byte, bool, error) {
+) ([]byte, bool) {
 	if len(body) == 0 || providerType != convert.ProviderOpenAICompatible || requestPath != includeUsageChatPath {
-		return body, false, nil
+		return body, false
 	}
 	decoded, err := convert.ParseJSON(body)
 	if err != nil || !decoded.IsObject() {
-		return body, false, nil
+		return body, false
 	}
 	// `stream` 严格为 true：Node 判的是 `body.stream !== true`，故 1 / "true" 都不算。
 	stream, ok := decoded.Get("stream")
 	if !ok {
-		return body, false, nil
+		return body, false
 	}
 	if streaming, isBool := stream.Bool(); !isBool || !streaming {
-		return body, false, nil
+		return body, false
 	}
 
 	options, present := decoded.Get("stream_options")
@@ -62,16 +62,16 @@ func applyOpenAIChatStreamUsageOption(
 	case !present || options.IsNull():
 		decoded.Set("stream_options", convert.NewObject().Set("include_usage", convert.NewBool(true)))
 	case includeUsageIsTrue(options):
-		return body, false, nil
+		return body, false
 	default:
 		if !options.IsObject() {
 			// 数组或标量：Node 不动它（这种形态上游本来也不认）。
-			return body, false, nil
+			return body, false
 		}
 		options.Set("include_usage", convert.NewBool(true))
 	}
 
-	return []byte(decoded.MarshalCompact()), true, nil
+	return []byte(decoded.MarshalCompact()), true
 }
 
 // includeUsageIsTrue 报告 `stream_options` 已经是「对象且 include_usage 为 true」。

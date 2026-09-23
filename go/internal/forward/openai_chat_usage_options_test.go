@@ -22,10 +22,7 @@ func decodeUsageBody(t *testing.T, body []byte) map[string]any {
 func TestApplyOpenAIChatStreamUsageOptionAddsIncludeUsage(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}],"stream":true}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil {
-		t.Fatalf("不该报错: %v", err)
-	}
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
 	if !changed {
 		t.Fatalf("应报告已改写")
 	}
@@ -42,9 +39,9 @@ func TestApplyOpenAIChatStreamUsageOptionAddsIncludeUsage(t *testing.T) {
 func TestApplyOpenAIChatStreamUsageOptionPreservesExistingOptions(t *testing.T) {
 	body := []byte(`{"stream":true,"stream_options":{"foo":"bar","include_usage":false}}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if !changed {
+		t.Fatalf("changed=%v", changed)
 	}
 	options := decodeUsageBody(t, rewritten)["stream_options"].(map[string]any)
 	if options["foo"] != "bar" {
@@ -58,9 +55,9 @@ func TestApplyOpenAIChatStreamUsageOptionPreservesExistingOptions(t *testing.T) 
 func TestApplyOpenAIChatStreamUsageOptionLeavesNonStreaming(t *testing.T) {
 	body := []byte(`{"stream":false}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || changed {
-		t.Fatalf("非流式不该动: changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if changed {
+		t.Fatalf("非流式不该动: changed=%v", changed)
 	}
 	if string(rewritten) != string(body) {
 		t.Fatalf("正文被改写了: %s", rewritten)
@@ -73,7 +70,7 @@ func TestApplyOpenAIChatStreamUsageOptionLeavesOtherProviderTypes(t *testing.T) 
 	for _, providerType := range []convert.ProviderType{
 		convert.ProviderClaude, convert.ProviderCodex, convert.ProviderGemini,
 	} {
-		if _, changed, _ := applyOpenAIChatStreamUsageOption(body, providerType, "/v1/chat/completions"); changed {
+		if _, changed := applyOpenAIChatStreamUsageOption(body, providerType, "/v1/chat/completions"); changed {
 			t.Fatalf("供应商类型 %s 不该被改写", providerType)
 		}
 	}
@@ -83,7 +80,7 @@ func TestApplyOpenAIChatStreamUsageOptionLeavesOtherPaths(t *testing.T) {
 	body := []byte(`{"stream":true}`)
 
 	for _, path := range []string{"/v1/messages", "/v1/responses", "/v1/chat/completions/extra"} {
-		if _, changed, _ := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, path); changed {
+		if _, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, path); changed {
 			t.Fatalf("路径 %s 不该被改写", path)
 		}
 	}
@@ -92,9 +89,9 @@ func TestApplyOpenAIChatStreamUsageOptionLeavesOtherPaths(t *testing.T) {
 func TestApplyOpenAIChatStreamUsageOptionSkipsWhenAlreadyTrue(t *testing.T) {
 	body := []byte(`{"stream":true,"stream_options":{"include_usage":true}}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || changed {
-		t.Fatalf("已是 true 不该重编码: changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if changed {
+		t.Fatalf("已是 true 不该重编码: changed=%v", changed)
 	}
 	if string(rewritten) != string(body) {
 		t.Fatalf("正文被改写了: %s", rewritten)
@@ -105,9 +102,9 @@ func TestApplyOpenAIChatStreamUsageOptionLeavesArrayOptions(t *testing.T) {
 	// Node 的 `typeof !== "object" || Array.isArray` 同判：数组形态不动它。
 	body := []byte(`{"stream":true,"stream_options":[{"include_usage":false}]}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || changed {
-		t.Fatalf("数组形态不该动: changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if changed {
+		t.Fatalf("数组形态不该动: changed=%v", changed)
 	}
 	if string(rewritten) != string(body) {
 		t.Fatalf("正文被改写了: %s", rewritten)
@@ -118,9 +115,9 @@ func TestApplyOpenAIChatStreamUsageOptionTreatsNullOptionsAsAbsent(t *testing.T)
 	// 显式 null 与缺省同判（Node 的 `streamOptions == null`）。
 	body := []byte(`{"stream":true,"stream_options":null}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if !changed {
+		t.Fatalf("changed=%v", changed)
 	}
 	options := decodeUsageBody(t, rewritten)["stream_options"].(map[string]any)
 	if options["include_usage"] != true {
@@ -131,7 +128,7 @@ func TestApplyOpenAIChatStreamUsageOptionTreatsNullOptionsAsAbsent(t *testing.T)
 func TestApplyOpenAIChatStreamUsageOptionIgnoresTruthyNonBooleanStream(t *testing.T) {
 	// Node 判的是 `body.stream !== true`，故 1 / "true" 都不算。
 	for _, body := range []string{`{"stream":1}`, `{"stream":"true"}`, `{}`} {
-		if _, changed, _ := applyOpenAIChatStreamUsageOption([]byte(body), convert.ProviderOpenAICompatible, "/v1/chat/completions"); changed {
+		if _, changed := applyOpenAIChatStreamUsageOption([]byte(body), convert.ProviderOpenAICompatible, "/v1/chat/completions"); changed {
 			t.Fatalf("正文 %s 的 stream 非布尔真，不该改写", body)
 		}
 	}
@@ -177,9 +174,9 @@ func TestBuildPlanLeavesClaudeBodyUntouchedByUsageOption(t *testing.T) {
 func TestApplyOpenAIChatStreamUsageOptionKeepsNumberLiterals(t *testing.T) {
 	body := []byte(`{"stream":true,"max_int":9007199254740993,"meta":{"huge":1e21,"nested_int":9007199254740993}}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if !changed {
+		t.Fatalf("changed=%v", changed)
 	}
 	decoded, err := convert.ParseJSON(rewritten)
 	if err != nil {
@@ -208,9 +205,9 @@ func TestApplyOpenAIChatStreamUsageOptionKeepsTopLevelKeyOrder(t *testing.T) {
 	// 顶层键故意非字典序：z_flag 在 stream 之前。
 	body := []byte(`{"z_flag":true,"stream":true,"a_flag":false}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if !changed {
+		t.Fatalf("changed=%v", changed)
 	}
 	decoded, err := convert.ParseJSON(rewritten)
 	if err != nil {
@@ -236,9 +233,9 @@ func TestApplyOpenAIChatStreamUsageOptionKeepsTopLevelKeyOrder(t *testing.T) {
 func TestApplyOpenAIChatStreamUsageOptionPreservesNestedStructure(t *testing.T) {
 	body := []byte(`{"stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object","required":["a","b"]}}}],"meta":{"n":{"deep":[1,2,{"x":null}]}}}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if !changed {
+		t.Fatalf("changed=%v", changed)
 	}
 	original := decodeUsageBody(t, body)
 	got := decodeUsageBody(t, rewritten)
@@ -264,9 +261,9 @@ func TestApplyOpenAIChatStreamUsageOptionPreservesNestedStructure(t *testing.T) 
 func TestApplyOpenAIChatStreamUsageOptionKeepsExistingOptionKeys(t *testing.T) {
 	body := []byte(`{"stream":true,"stream_options":{"alpha":1,"include_usage":false,"beta":{"n":2}}}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if !changed {
+		t.Fatalf("changed=%v", changed)
 	}
 	decoded, err := convert.ParseJSON(rewritten)
 	if err != nil {
@@ -313,9 +310,9 @@ func TestApplyOpenAIChatStreamUsageOptionKeepsExistingOptionKeys(t *testing.T) {
 func TestApplyOpenAIChatStreamUsageOptionNormalizesEscapeForm(t *testing.T) {
 	body := []byte(`{"stream":true,"content":"\u003cdiv\u003e"}`)
 
-	rewritten, changed, err := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
+	rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, "/v1/chat/completions")
+	if !changed {
+		t.Fatalf("changed=%v", changed)
 	}
 	if got := decodeUsageBody(t, rewritten)["content"]; got != "<div>" {
 		t.Fatalf("转义归一后语义应不变: %v", got)
