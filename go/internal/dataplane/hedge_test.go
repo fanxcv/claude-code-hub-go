@@ -326,6 +326,38 @@ func TestHedgeDecisionConditions(t *testing.T) {
 	}
 }
 
+// TestHedgeDecisionDisabledForSlowProbe 钉住「低速隔离的探针请求不开竞速」。
+//
+// 为何单独成例：其余条件与「全满足即开」逐字相同，只多一个探针标记——竞速一旦开启，
+// 首字节阈值到期就会并行起第二家，快的那家先赢即取消探针 attempt，该组合拿不到干净样本，
+// 隔离阶梯永远抬不回档（见 route.quarantinePermilleForStreak）。
+//
+// 反证：摘掉 hedgeDecision 里的 slowProbeTarget 判据 ⇒ 本例红。
+func TestHedgeDecisionDisabledForSlowProbe(t *testing.T) {
+	handler, _, _ := newHedgeTestAssembly(t, hedgeTestAssembly{
+		settings:     hedgeTestSettings{settings: store.SystemSettings{LegacyHedgeMaxInFlight: 2, BillHedgeLosers: true}},
+		candidates:   hedgeTestCandidates{},
+		losers:       &hedgeTestLosers{},
+		costs:        newTestResolverOnly(t),
+		hedgeEnabled: true,
+	})
+	pc, err := pctx.New(pctx.Init{Method: "POST", Path: "/v1/messages"})
+	if err != nil {
+		t.Fatalf("请求上下文构造失败: %v", err)
+	}
+	pc.SetProvider(pctx.ProviderSelection{ProviderID: 7, SlowProbe: true})
+	deps := forward.Deps{Facts: forward.PlanFacts{Client: forward.ClientRequest{
+		Body: []byte(`{"model":"` + hedgeTestModel + `","stream":true}`),
+	}}}
+	candidate := &forward.Candidate{Provider: forward.Provider{ID: 7, FirstByteTimeoutStreamingMS: 100}}
+	if _, enabled := handler.hedgeDecision(
+		context.Background(), routeSpec{Policy: guard.ChatPolicy()}, deps, candidate,
+		&RequestState{PC: pc},
+	); enabled {
+		t.Fatal("探针请求必须不开竞速（否则探针被快家取消，该组合拿不到干净样本）")
+	}
+}
+
 // TestHedgeDecisionClampsMaxInFlight 钉住并发上限的钳制（Node clampLegacyHedgeMaxInFlight）。
 func TestHedgeDecisionClampsMaxInFlight(t *testing.T) {
 	for _, testCase := range []struct {

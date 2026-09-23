@@ -30,10 +30,13 @@ import (
 //
 // 花括号是 Redis Cluster 的 hash tag：同一组合的多个键落同一槽，pipeline 才能压成一次往返。
 const (
-	slowRateKeyPrefix      = "cch:slow:"
-	slowRateSamplesSuffix  = ":samples"
-	slowRateStateSuffix    = ":state"
-	slowRateBaselineSuffix = ":baseline"
+	slowRateKeyPrefix         = "cch:slow:"
+	slowRateSamplesSuffix     = ":samples"
+	slowRateStateSuffix       = ":state"
+	slowRateBaselineSuffix    = ":baseline"
+	slowRateCleanStreakSuffix = ":streak"
+	// slowRateProbeKeyPrefix 是探针租约键的前缀（形制见 probe_lease.go）。
+	slowRateProbeKeyPrefix = "cch:slowprobe:"
 
 	// 状态 Hash 的字段名：与写侧（internal/slowrate）逐字节一致。本包因 import 环不能引用
 	// 那边的常量，两侧各写一遍字面量，由外部测试包的镜像钉子比对（slowrate_keys_mirror_test.go）。
@@ -47,6 +50,11 @@ const (
 	SlowRateStateFieldTriggerCount  = "triggerCount"
 	SlowRateStateFieldPenaltyStep   = "penaltyStep"
 	SlowRateStateFieldPenaltyMax    = "penaltyMax"
+	// SlowRateStateFieldQuarantine 是「本组合由**低速隔离**机制标慢过」的标记（值 "1"）。
+	//
+	// 它只由新代码的慢路径写下：存量 state Hash（旧版本写的、含 penalty 的那些）没有这个字段，
+	// 故历史惩罚数据天然不被当作隔离——这正是设计要求的「可区分来源的标记」。
+	SlowRateStateFieldQuarantine = "quarantine"
 
 	slowRateCooldownKeyPattern = "session-binding:v1:{%s}:provider:%s:cooldown"
 )
@@ -81,6 +89,14 @@ func SlowRateStateKey(providerID int64, modelKey string) string {
 // SlowRateBaselineKey 是该组合的历史基线键（String JSON，B3 产出）。
 func SlowRateBaselineKey(providerID int64, modelKey string) string {
 	return slowRateKeyPrefix + slowRateScopeTag(providerID, modelKey) + slowRateBaselineSuffix
+}
+
+// SlowRateCleanStreakKey 是该组合的「连续干净样本」计数键（STRING，INCR 累加）。
+//
+// 隔离的准入阶梯直接读它：任何一条慢事实（实测慢样本或提交前判废）都会删掉这个键（写侧
+// 既有行为），于是「任何慢样本立即回到 0%」是既有语义的自然结果，读侧无需额外判定。
+func SlowRateCleanStreakKey(providerID int64, modelKey string) string {
+	return slowRateKeyPrefix + slowRateScopeTag(providerID, modelKey) + slowRateCleanStreakSuffix
 }
 
 // SlowRateSamplesKey 是该组合的慢样本滑窗键（ZSET，成员为请求 id，分数为写入毫秒）。
@@ -140,11 +156,11 @@ func NewSlowRateReader(opts SlowRateOptions) *SlowRateReader {
 	return &SlowRateReader{redis: opts.Redis, logger: opts.Logger, now: now}
 }
 
-// Penalties 批量读候选渠道的渠道级惩罚。
+// Assess 批量读候选渠道的本地低速判定（渠道级惩罚 + 隔离态）。
 //
-// 返回「providerID -> penalty」，只含**惩罚为正**且**基线可用**的渠道：基线键缺失、读失败、
-// 坏 JSON、extended_stale（A4）一律不收录（见 slowRateBaselineUsable）；状态读不到、惩罚非正
-// 同样不收录——调用方按「无惩罚」继续选路（fail-open）。
+// 返回「providerID -> 判定」，只含**惩罚为正或处于隔离**且**基线可用**的渠道：基线键缺失、
+// 读失败、坏 JSON、extended_stale（A4）一律不收录（见 slowRateBaselineUsable）；状态读不到
+// 同样不收录——调用方按「无判定」继续选路（fail-open）。
 //
 // 为什么 fail-open 而不是 fail-closed：低速是**软降权**，不是硬故障。Redis 抖动时把候选
 // 整批降权（或反过来全部排除）会让一次故障变成选路行为突变，而低速机制本身并不承担
@@ -160,12 +176,12 @@ func NewSlowRateReader(opts SlowRateOptions) *SlowRateReader {
 //
 // 为何是区间计数而不是取回全量成员：本方法**每次选路**都走，而成员数的上界是「一个 TTL
 // （2 倍窗长）内的慢样本数」，不是常数；ZCount 只回一个整数，载荷 O(1)。
-func (r *SlowRateReader) Penalties(
+func (r *SlowRateReader) Assess(
 	ctx context.Context,
 	candidates []Provider,
 	requestModel string,
-) map[int64]int {
-	out := make(map[int64]int, len(candidates))
+) map[int64]SlowRateAssessment {
+	out := make(map[int64]SlowRateAssessment, len(candidates))
 	if r == nil || r.redis == nil || len(candidates) == 0 {
 		return out
 	}
@@ -195,6 +211,7 @@ func (r *SlowRateReader) Penalties(
 				SlowRateStateFieldTriggerCount,
 				SlowRateStateFieldPenaltyStep,
 				SlowRateStateFieldPenaltyMax,
+				SlowRateStateFieldQuarantine,
 			)
 			baselines[index] = pipe.Get(ctx, SlowRateBaselineKey(provider.ID, modelKey))
 		}
@@ -210,6 +227,8 @@ func (r *SlowRateReader) Penalties(
 	decoded := make([]slowRateState, len(enabled))
 	resolved := make([]slowRatePenaltyParams, len(enabled))
 	derivable := make([]bool, len(enabled))
+	cleanStreaks := make([]int, len(enabled))
+	leaseBusy := make([]bool, len(enabled))
 	needsCount := make([]int, 0, len(enabled))
 	for index := range enabled {
 		decoded[index] = decodeSlowRateState(states[index])
@@ -232,6 +251,8 @@ func (r *SlowRateReader) Penalties(
 	if len(needsCount) > 0 {
 		nowMS := r.now().UnixMilli()
 		counts := make([]*redis.IntCmd, len(needsCount))
+		streaks := make([]*redis.StringCmd, len(needsCount))
+		leases := make([]*redis.IntCmd, len(needsCount))
 		_, err := r.redis.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 			for offset, index := range needsCount {
 				// 下界取闭区间，与「窗内」的既有定义（score >= now-窗长）逐字一致。
@@ -243,6 +264,13 @@ func (r *SlowRateReader) Penalties(
 					strconv.FormatInt(lower, 10),
 					"+inf",
 				)
+				// 连续干净计数与区间计数同批取：它是隔离准入阶梯的唯一输入，
+				// 而本批只对「有过慢历史」的候选发命令（通常是 0~1 家），不构成热路径负担。
+				streaks[offset] = pipe.Get(ctx, SlowRateCleanStreakKey(enabled[index].ID, modelKey))
+				// 探针租约存在性：它是「这次能不能发探针」的**只读**前置闸门。
+				// 先读再写的意义在于控写量：无这道闸门就退化成每请求一次 SET NX，
+				// 有它之后写入只发生在「读到租约为空」的时刻（每租约期至多一次）。
+				leases[offset] = pipe.Exists(ctx, SlowProbeLeaseKey(enabled[index].ID, modelKey))
 			}
 			return nil
 		})
@@ -254,6 +282,16 @@ func (r *SlowRateReader) Penalties(
 			if value, err := counts[offset].Result(); err == nil {
 				liveCounts[index] = int(value)
 			}
+			// 计数键缺失（未慢过之后还没来得及产出干净样本、或已过 TTL）与「0 个干净样本」同判。
+			if value, err := streaks[offset].Result(); err == nil {
+				if parsed, convErr := strconv.Atoi(value); convErr == nil {
+					cleanStreaks[index] = parsed
+				}
+			}
+			// 读不到租约键与「租约空闲」同判（fail-open：最坏是多发一次探针）。
+			if value, err := leases[offset].Result(); err == nil {
+				leaseBusy[index] = value > 0
+			}
 		}
 	}
 
@@ -264,10 +302,11 @@ func (r *SlowRateReader) Penalties(
 		}
 		// 参数齐备即由活窗计数当场派生；只有「行与状态都没参数」的旧状态才回退到快照值。
 		penalty := state.penalty
-		if derivable[index] {
+		derived := derivable[index]
+		if derived {
 			penalty = deriveSlowRatePenalty(liveCounts[index], resolved[index])
 		}
-		if penalty <= 0 {
+		if penalty <= 0 && !derived {
 			continue
 		}
 		// 只有**有效**基线才支撑渠道级惩罚：设计稿 §3 对 A3（无基线）明定「不生成 penalty」、
@@ -275,7 +314,54 @@ func (r *SlowRateReader) Penalties(
 		if !slowRateBaselineUsable(baselines[index]) {
 			continue
 		}
-		out[enabled[index].ID] = penalty
+		assessment := SlowRateAssessment{Penalty: penalty}
+		// 隔离只对**新机制标过**的组合生效，且要求惩罚来自**活窗派生**：
+		//   - 存量 state 没有 quarantine 字段（旧代码写的）⇒ 保留原来的「降优先级」语义，不被隔离；
+		//   - 参数缺失而回退快照惩罚（旧数据）同理不入隔离——快照是历史判定，不该升级成真排除。
+		if derived && state.quarantined && penalty > 0 {
+			assessment.Quarantine = &SlowRateQuarantine{
+				AdmissionPermille: quarantinePermilleForStreak(cleanStreaks[index]),
+				CleanStreak:       cleanStreaks[index],
+				ProbeLeaseFree:    !leaseBusy[index],
+			}
+		}
+		if assessment.Penalty <= 0 && assessment.Quarantine == nil {
+			continue
+		}
+		out[enabled[index].ID] = assessment
+	}
+	return out
+}
+
+// SlowRateAssessment 是选路侧对某候选的一次低速判定结果。
+//
+// 惩罚与隔离一起返回而不是分两次读：两者的输入（state Hash + 滑窗计数）本来就相同，
+// 分两次会让选路热路径多出一整轮往返，还会让「惩罚为 0 但处于隔离」这种组合在两侧之间
+// 出现不一致的中间态。
+//
+// Quarantine 为 nil 表示**不入隔离**（未达阈值、无有效基线、或该组合不在新机制覆盖范围内）。
+type SlowRateAssessment struct {
+	// Penalty 是渠道级降权量（0 表示无降权）。
+	Penalty int
+	// Quarantine 非 nil 表示该组合被隔离，值为它的准入档位。
+	Quarantine *SlowRateQuarantine
+}
+
+// Penalties 是 Assess 的**兼容投影**：只取惩罚为正的组合（既有调用方与接口签名不变）。
+//
+// 为什么还留着它：管理面的健康投影只需要降权量，让它跟着换签名会把隔离这一新概念无谓地
+// 扩散到管理面；隔离的呈现属另一项（报告里记为待接线项）。
+func (r *SlowRateReader) Penalties(
+	ctx context.Context,
+	candidates []Provider,
+	requestModel string,
+) map[int64]int {
+	assessment := r.Assess(ctx, candidates, requestModel)
+	out := make(map[int64]int, len(assessment))
+	for providerID, item := range assessment {
+		if item.Penalty > 0 {
+			out[providerID] = item.Penalty
+		}
 	}
 	return out
 }
@@ -376,6 +462,10 @@ type slowRateState struct {
 	exists bool
 	// penalty 是写侧留下的快照值，**仅在参数缺失**（旧版本写下的状态）时回退使用。
 	penalty int
+	// quarantined 是「本组合由低速隔离机制标慢过」的标记（state Hash 的 quarantine 字段）。
+	//
+	// 存量状态没有这个字段（旧代码写的），故历史惩罚数据不会被当作隔离。
+	quarantined bool
 	// params 齐备时 hasParams 为真，惩罚改由滑窗计数当场派生。
 	params    slowRatePenaltyParams
 	hasParams bool
@@ -389,7 +479,7 @@ type slowRateState struct {
 // 「有没有任一字段非 nil」判定键是否存在。
 func decodeSlowRateState(cmd *redis.SliceCmd) slowRateState {
 	raw, err := cmd.Result()
-	if err != nil || len(raw) < 5 {
+	if err != nil || len(raw) < 6 {
 		return slowRateState{}
 	}
 	exists := false
@@ -406,9 +496,10 @@ func decodeSlowRateState(cmd *redis.SliceCmd) slowRateState {
 		penaltyMax:    slowRateInt(raw[4]),
 	}
 	return slowRateState{
-		exists:  exists,
-		penalty: slowRateInt(raw[0]),
-		params:  params,
+		exists:      exists,
+		penalty:     slowRateInt(raw[0]),
+		quarantined: slowRateInt(raw[5]) == 1,
+		params:      params,
 		// 四项都要为正才派生：写侧 normalize 已保证生效参数非零，缺任一即为旧数据。
 		hasParams: params.windowMinutes > 0 && params.triggerCount > 0 &&
 			params.penaltyStep > 0 && params.penaltyMax > 0,

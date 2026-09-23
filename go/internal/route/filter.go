@@ -56,12 +56,23 @@ type filterInput struct {
 	// 成因必须带过来：同一个冷却键有两个写入者（故障回避 / 低速降权），两者记的理由不同，
 	// 而「渠道故障」不该在链上被写成「渠道慢」（见 cooldownRejection）。
 	cooldown map[int64]CooldownKind
+	// quarantined 是本次「因低速隔离而不该参与竞争」的候选集合（值为真即排除）。
+	//
+	// 判定（准入档位 + 按请求的准入闸门）在 resolve 里一次算好再传进来：applyFilters 是纯过滤，
+	// 不该自己拿时钟与请求身份去掷骰子（那会让同一次选路在不同调用处得出不同结论）。
+	quarantined map[int64]bool
 }
 
 // filterResult 是候选过滤的结果与留痕。
 type filterResult struct {
 	healthy []Provider
 	context DecisionContext
+	// quarantined 是**仅因低速隔离**被排除的候选（与 healthy 互斥）。
+	//
+	// 为什么要单独留一份：探针租约的消费者需要「被隔离的那几家」这个集合——它是唯一能
+	// 把请求定向回去的入口。从 context.FilteredProviders 反推需要再走一遍理由匹配，
+	// 而那里已经过软信号 fail-open 的改写（理由会被改成 no_alternative_fail_open）。
+	quarantined []Provider
 }
 
 // applyFilters 复刻 pickRandomProvider 的过滤顺序与留痕口径。
@@ -183,6 +194,7 @@ func (s *Selector) applyFilters(
 	// 需要回头改写其中的理由，边滤边写会让同一家既在留痕里「被排除」又无法标出回退。
 	healthFiltered := make([]Filtered, 0, len(enabled))
 	softRejected := make([]Provider, 0, len(enabled))
+	quarantineRejected := make([]Provider, 0, len(enabled))
 	hardRejected := false
 	reject := func(p Provider, record Filtered) {
 		healthFiltered = append(healthFiltered, record)
@@ -201,6 +213,17 @@ func (s *Selector) applyFilters(
 		// 它不改变 afterHealthCheck 的口径：那个计数是熔断步的产物，本判定属另一个维度。
 		if blocked, record := s.cooldownRejection(p, in); blocked {
 			reject(p, record)
+			continue
+		}
+		// 渠道级低速隔离在**会话冷却之后**判定：顺序决定归因——本会话刚在这家出过事时记的是
+		// 会话冷却（那件事更具体），隔离只覆盖「没有更具体的会话级理由」的其余请求。
+		if in.quarantined[p.ID] {
+			quarantineRejected = append(quarantineRejected, p)
+			reject(p, Filtered{
+				ID: p.ID, Name: p.Name,
+				Reason:  ReasonSlowRateQuarantine,
+				Details: string(ReasonSlowRateQuarantine),
+			})
 			continue
 		}
 		healthy = append(healthy, p)
@@ -225,7 +248,7 @@ func (s *Selector) applyFilters(
 	dc.FilteredProviders = append(dc.FilteredProviders, healthFiltered...)
 	dc.AfterHealthCheck = len(healthy)
 
-	return filterResult{healthy: healthy, context: dc}
+	return filterResult{healthy: healthy, context: dc, quarantined: quarantineRejected}
 }
 
 // basicFilterRejection 判定「基础过滤」维度：启用态、排除列表、调度窗口、格式兼容、
@@ -260,10 +283,11 @@ func (s *Selector) cooldownRejection(p Provider, in filterInput) (bool, Filtered
 // 但语义不同——合并会让任一侧的改动无声影响另一侧。逐条依据：
 //
 //	slow_rate_cooldown        低速降权写下的本会话回避，等窗口过去即自愈，非上游故障
+//	slow_rate_quarantine      渠道级低速隔离：有替代时让开，无替代时必须放行（否则可用性更差）
 //	provider_error_cooldown    上游 5xx/超时后的回避：上游确实出过事，放行等于继续打过去
 //	circuit_open / rate_limited  硬故障与限额，需改配置或等窗口，放行会让失败请求继续
 func softSignalRejection(reason Reason) bool {
-	return reason == ReasonSlowRateCooldown
+	return reason == ReasonSlowRateCooldown || reason == ReasonSlowRateQuarantine
 }
 
 // cooldownReason 把冷却成因折算成过滤理由与 i18n 键。

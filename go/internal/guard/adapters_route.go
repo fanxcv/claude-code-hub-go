@@ -257,6 +257,9 @@ func (r *ProviderRouter) Select(ctx context.Context, req *pctx.Context) (pctx.Pr
 		Type:       string(result.Provider.ProviderType),
 		// Endpoint 给供应商自身 URL；厂级端点（provider_endpoints）由转发层按厂与类型再取。
 		Endpoint: result.Provider.URL,
+		// 探针事实：本次请求是被隔离组合的定向试探。数据面据此关掉竞速（否则探针被快家
+		// 取消，样本失真），见 pctx.ProviderSelection.SlowProbe 与 dataplane.slowProbeTarget。
+		SlowProbe: result.SlowProbe != nil,
 	}, nil
 }
 

@@ -174,6 +174,7 @@ func sessionBindingBypass(
 //
 //	circuit_open             设计稿 §4 明定「跳过、不清空绑定、待恢复后仍粘回去」
 //	slow_rate_cooldown       低速写侧只写冷却、不清绑定（设计稿 §4 同源语义）
+//	slow_rate_quarantine     渠道级低速隔离：准入档位会随连续干净样本抬回，属临时（同源语义）
 //	no_alternative_fail_open 同一条低速冷却的**回退形态**（无替代候选时被重新纳入）：
 //	                         底层条件与 slow_rate_cooldown 逐字相同（冷却到期即恢复），
 //	                         只是链上为标记回退而换了词。漏登会让「绑定候选被回退使用」
@@ -184,7 +185,8 @@ func sessionBindingBypass(
 //	excluded                 本次请求内已试过并失败（故障转移），不是该渠道的结构性结论
 func transientRejection(reason Reason) bool {
 	switch reason {
-	case ReasonCircuitOpen, ReasonSlowRateCooldown, ReasonProviderErrorCooldown,
+	case ReasonCircuitOpen, ReasonSlowRateCooldown, ReasonSlowRateQuarantine,
+		ReasonProviderErrorCooldown,
 		ReasonNoAlternativeFailOpen,
 		ReasonScheduleInactive, ReasonRateLimited, ReasonExcluded:
 		return true

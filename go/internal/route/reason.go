@@ -38,6 +38,17 @@ const (
 	// 唯一未覆盖的是 `provider-chain-formatter.ts` 的图标映射（一个三元表达式，本取值落默认分支）：
 	// 图标属装饰，链上的理由与详情文本已足以事后归因，故不为它新增图标。
 	ReasonSlowRateCooldown Reason = "slow_rate_cooldown"
+	// ReasonSlowRateQuarantine 该渠道×模型组合被**低速隔离**：窗内慢事实已达触发阈值，
+	// 故在有替代候选时不再参与正常选路（只在探针租约命中、或「无替代候选」时放行）。
+	//
+	// 为何与 ReasonSlowRateCooldown 分开：那条是**本会话**对该渠道的短期回避（60 秒，只影响
+	// 单个会话）；本条是**渠道级**隔离（影响所有会话，直到连续干净样本把准入档位抬回）。
+	// 合并会把「这家渠道整体被隔离」误报成「这个会话在回避它」。
+	//
+	// 为何必须算**软信号**（见 softSignalRejection）：隔离的意图是「有替代时让开」，而剔除
+	// 唯一候选会让可用性反而变差（与 ReasonNoAlternativeFailOpen 同一条口径）。隔离本身也
+	// 不承担「保证不选慢渠道」的职责——那是提交前速率闸门的事。
+	ReasonSlowRateQuarantine Reason = "slow_rate_quarantine"
 	// ReasonProviderErrorCooldown 本会话对该渠道正在**故障**冷却期内：该家刚在**本会话**里发生供应商侧
 	// 失败（上游 5xx / 超时），60 秒内先绕开它。
 	//

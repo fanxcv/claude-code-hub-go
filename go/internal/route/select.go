@@ -193,12 +193,17 @@ type Result struct {
 	// 因为身份事实只依赖指纹链与键，不依赖 Redis。请求日志的 session_identity_kind 取它。
 	AffinityIdentity *AffinityIdentity
 
-	// SessionBindingBypass 说明既有会话绑定为何未被本次采用，供终态判定「成功侧能否改绑」。
-	//
+	// SessionBindingBypass 说明既有会话绑定为何未被本次采用，供终态判定「成功侧能否改绑」。	//
 	// 零值（SessionBindingBypassNone）即允许改绑：无既有绑定、绑定被采用、或绑定因结构性
 	// 原因被跳过。SessionBindingBypassTransient（熔断/会话冷却等活动时段、限额、本次已试过，
 	// 以及**读绑定行失败**）要求保留原绑定——设计稿 §4：熔断是暂时的，待恢复后会话仍粘回去。
 	SessionBindingBypass SessionBindingBypass
+
+	// SlowProbe 非 nil 表示本次是**探针请求**：被隔离的组合因持有探针租约而被定向到。
+	//
+	// 为何是进程内事实而不进链 JSON：provider_chain 的键集有黄金样本的精确相等断言，
+	// 加键即破坏对拍；而它需要被消费的场所（禁用竞速、终态释放租约、日志）全在进程内。
+	SlowProbe *SlowProbeGrant
 
 	// timestamp 是结果产出的毫秒时间戳，仅供落链使用，不参与选路语义。
 	timestamp int64
@@ -272,7 +277,8 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 	if s.opts.Source == nil {
 		return Result{}, errNoSource
 	}
-	nowMS := s.nowOr().UnixMilli()
+	now := s.nowOr()
+	nowMS := now.UnixMilli()
 
 	providers, err := s.opts.Source.Providers(ctx)
 	if err != nil {
@@ -292,8 +298,9 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 	//
 	// 为何传全量 providers 而不是过滤后的集：过滤结果依赖冷却集本身（先有鸡先有蛋），
 	// 而多读几家未开启渠道的键代价为零（它们不进 Redis）。
-	penalties := s.slowRatePenalties(ctx, providers, req)
+	penalties, quarantineStates := s.slowRateAssessments(ctx, providers, req)
 	cooldown := s.slowRateCooldown(ctx, providers, req)
+	quarantineExcluded := quarantineExclusions(quarantineStates, req.KeyID, req.SessionID, now)
 
 	filtered := s.applyFilters(ctx, providers, filterInput{
 		requestedModel: req.Model,
@@ -306,8 +313,31 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 		scheduleGate:   req.ScheduleGate,
 		clientGate:     req.ClientGate,
 		cooldown:       cooldown,
+		quarantined:    quarantineExcluded,
 	})
 	dc := filtered.context
+
+	// 探针租约：被隔离的组合只在「有替代候选」时让开；完全没人探它就会永远停在隔离里
+	// （干净样本只能由真的打到它的请求产出）。命中租约的本次请求被**定向**到该渠道。
+	//
+	// 只在**首次选择**路径上发探针（withAffinity 为真即首次选择）：故障转移路径此时已经
+	// 带着排除列表在重挑，再塞一个慢渠道进去会把「换家」变成「回头撞同一家」。
+	if withAffinity {
+		if grant, probeProvider := s.nominateSlowProbe(ctx, req, filtered, quarantineStates, quarantineExcluded, now); grant != nil {
+			dc.SelectedPriority = resolveEffectivePriority(*probeProvider, req.Group, penalties)
+			return Result{
+				Provider:     probeProvider,
+				Context:      dc,
+				Method:       MethodWeightedRandom,
+				Reason:       ReasonSelectedInitial,
+				CircuitState: s.circuitState(ctx, probeProvider.ID),
+				SlowProbe:    grant,
+				// 探针命中不得改写会话绑定：否则一个被隔离的渠道会靠探针把会话「拽」过去。
+				SessionBindingBypass: SessionBindingBypassTransient,
+				timestamp:            nowMS,
+			}, nil
+		}
+	}
 
 	// 亲和与会话绑定提名优先于加权随机（Node：显式 session 绑定 > 亲和 > 加权随机）。
 	//
@@ -341,7 +371,9 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 	if withAffinity && s.opts.Affinity != nil && switches.Enabled {
 		if !switches.ForcePrefix {
 			bound, nomination := s.nominateBySessionBinding(ctx, req, excluded)
-			if nomination == sessionBindingNominated {
+			// 隔离必须能拦住**会话绑定**（否则被粘住的会话会一次次绕过隔离撞回同一家）。
+			// 拦下后不直接返回：走后续层级（绑定会被保留，见 sessionBindingBypass 的临时判定）。
+			if nomination == sessionBindingNominated && !quarantineExcluded[bound.ID] {
 				selectedPriority := resolveEffectivePriority(bound, req.Group, penalties)
 				survivors := affinitySurvivors(filtered.healthy, bound.ID, req.Group, penalties)
 				dc.SurvivingCandidates = survivors
@@ -386,7 +418,7 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 			nominate, lookup, writeback, affinityIdentity, nominated = s.nominateByAffinity(ctx, req, dc.FilteredProviders, excluded)
 		}
 	}
-	if nominated {
+	if nominated && !quarantineExcluded[nominate.Provider.ID] {
 		// 留痕「因亲和短路而未参与竞争」的那批候选。必须在短路返回之前记下：此后
 		// filtered.health 就不再被读过，漏在这里即永久丢失（用户看到的「1/2/3 都没参与决策」
 		// 就是漏记造成的）。

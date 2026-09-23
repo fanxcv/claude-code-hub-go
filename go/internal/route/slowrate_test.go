@@ -49,6 +49,25 @@ func (f *slowRateRedis) Pipelined(
 	return pending.cmds, pending.firstErr
 }
 
+// SetNX 实现探针租约的取用：本替身其余部分只覆盖读侧，这里是唯一的写路径。
+//
+// 为何要真做「键存在即失败」而不是恒真：租约唯一性（最多 1 个在飞）就是靠这个语义，
+// 替身比真依赖宽容的话，那条钉子会退化成假绿。
+func (f *slowRateRedis) SetNX(_ context.Context, key string, value any, _ time.Duration) *redis.BoolCmd {
+	cmd := redis.NewBoolCmd(context.Background())
+	if f.values == nil {
+		f.values = map[string]string{}
+	}
+	if _, ok := f.values[key]; ok {
+		cmd.SetVal(false)
+		return cmd
+	}
+	text, _ := value.(string)
+	f.values[key] = text
+	cmd.SetVal(true)
+	return cmd
+}
+
 // slowRatePipeline 把命令落到 map 上，语义对齐 Redis：键不存在即 redis.Nil。
 type slowRatePipeline struct {
 	redis.Pipeliner
@@ -103,6 +122,21 @@ func (p *slowRatePipeline) HMGet(_ context.Context, key string, fields ...string
 	return cmd
 }
 
+// Exists 报告键是否存在。本读侧只用它做「探针租约是否空闲」的只读闸门（见 AcquireSlowProbe）。
+func (p *slowRatePipeline) Exists(_ context.Context, keys ...string) *redis.IntCmd {
+	cmd := redis.NewIntCmd(p.ctx)
+	found := int64(0)
+	for _, key := range keys {
+		p.redis.readKeys = append(p.redis.readKeys, key)
+		if _, ok := p.redis.values[key]; ok {
+			found++
+		}
+	}
+	cmd.SetVal(found)
+	p.cmds = append(p.cmds, cmd)
+	return cmd
+}
+
 // ZCount 按分数区间数成员。
 //
 // 为什么不给个「恒等于全量」的简化替身：读侧改走区间计数后，替身假设区间语义，「窗外成员
@@ -134,6 +168,13 @@ func (p *slowRatePipeline) ZCount(_ context.Context, key string, min, max string
 // slowRateFailingRedis 让每条命令都报连接错，用于钉住 fail-open。
 type slowRateFailingRedis struct {
 	redis.UniversalClient
+}
+
+// SetNX 让探针租约在 Redis 故障时也走「取不到 ⇒ 不探」的 fail-open 分支。
+func (f *slowRateFailingRedis) SetNX(_ context.Context, _ string, _ any, _ time.Duration) *redis.BoolCmd {
+	cmd := redis.NewBoolCmd(context.Background())
+	cmd.SetErr(errors.New("redis: connection refused"))
+	return cmd
 }
 
 func (f *slowRateFailingRedis) Pipelined(
@@ -190,13 +231,35 @@ func slowRateStateValue(t *testing.T, penalty int) string {
 // 窗长单位是**分钟**（与写侧 StateFieldWindowMinutes 同单位）。
 func slowRateStateValueWithParams(t *testing.T, penalty, windowMinutes, triggerCount, step, max int) string {
 	t.Helper()
-	raw, err := json.Marshal(map[string]string{
+	return slowRateStateJSON(t, map[string]string{
 		SlowRateStateFieldPenalty:       strconv.Itoa(penalty),
 		SlowRateStateFieldWindowMinutes: strconv.Itoa(windowMinutes),
 		SlowRateStateFieldTriggerCount:  strconv.Itoa(triggerCount),
 		SlowRateStateFieldPenaltyStep:   strconv.Itoa(step),
 		SlowRateStateFieldPenaltyMax:    strconv.Itoa(max),
 	})
+}
+
+// slowRateStateValueQuarantined 在上一者的基础上补上隔离标记（新机制标过慢的组合才有它）。
+//
+// 两个构造器分开正是为了能分别造出「有惩罚无标记」（存量数据）与「有标记」（新机制）两种状态，
+// 而「存量数据不被当作隔离」这条钉子必须能真的构造出前者。
+func slowRateStateValueQuarantined(t *testing.T, penalty, windowMinutes, triggerCount, step, max int) string {
+	t.Helper()
+	return slowRateStateJSON(t, map[string]string{
+		SlowRateStateFieldPenalty:       strconv.Itoa(penalty),
+		SlowRateStateFieldWindowMinutes: strconv.Itoa(windowMinutes),
+		SlowRateStateFieldTriggerCount:  strconv.Itoa(triggerCount),
+		SlowRateStateFieldPenaltyStep:   strconv.Itoa(step),
+		SlowRateStateFieldPenaltyMax:    strconv.Itoa(max),
+		SlowRateStateFieldQuarantine:    "1",
+	})
+}
+
+// slowRateStateJSON 把字段表折成状态 Hash 的 JSON 形态（替身用 JSON 存 Hash）。
+func slowRateStateJSON(t *testing.T, fields map[string]string) string {
+	t.Helper()
+	raw, err := json.Marshal(fields)
 	if err != nil {
 		t.Fatalf("构造状态值失败: %v", err)
 	}

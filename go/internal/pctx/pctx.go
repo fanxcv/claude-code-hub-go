@@ -66,6 +66,11 @@ type ProviderSelection struct {
 	Type string
 	// Endpoint 是选定的上游端点基址。
 	Endpoint string
+	// SlowProbe 为真表示本次选路是**低速隔离的探针**：选路层把请求定向到被隔离的组合，
+	// 去量一次「是不是还慢」（见 route.SlowProbeGrant）。消费点在数据面——探针请求不开竞速，
+	// 理由是竞速会在首字节阈值到期时并行起第二家，快的那家先赢即取消探针 attempt，
+	// 量到的就变成「别家有多快」，阶梯恢复永远等不到干净样本（见 dataplane.slowProbeTarget）。
+	SlowProbe bool
 }
 
 // Settlement 是终态结算的入账结果。

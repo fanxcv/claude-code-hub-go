@@ -64,10 +64,16 @@ func newFailOpenSelector(t *testing.T, client redis.UniversalClient, providers .
 		source.byID[p.ID] = p
 	}
 	return NewSelector(Options{
-		Source:   source,
-		SlowRate: NewSlowRateReader(SlowRateOptions{Redis: client}),
+		Source: source,
+		// 总闸开（Affinity 非 nil）：会话绑定是亲和的一层，总闸关时整层不参与（见 resolve）。
+		// 本组夹具里只用它把「绑定短路」这条路径打开，不触发任何 Redis 读写（无 lookup）。
+		Affinity: NewAffinityStore(AffinityOptions{Window: 8}),
+		// 时钟与夹具的样本基准（slowRateTestNowMS）对齐：否则滑窗里的样本会落在窗外，
+		// 计数恒为 0，隔离用例会静默退化成「什么都没发生」。
+		SlowRate: NewSlowRateReader(SlowRateOptions{Redis: client, Now: func() time.Time { return time.UnixMilli(slowRateTestNowMS) }}),
 		Health:   NewHealthReader(HealthOptions{Redis: client, Now: func() time.Time { return failOpenNow }}),
 		Rand:     func() float64 { return 0 },
+		Now:      func() time.Time { return time.UnixMilli(slowRateTestNowMS) },
 	})
 }
 

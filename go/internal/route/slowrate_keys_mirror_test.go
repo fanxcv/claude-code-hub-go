@@ -162,6 +162,8 @@ func TestStateFieldNamesMirrorWriteSide(t *testing.T) {
 		{"triggerCount", slowrate.StateFieldTriggerCount, route.SlowRateStateFieldTriggerCount},
 		{"penaltyStep", slowrate.StateFieldPenaltyStep, route.SlowRateStateFieldPenaltyStep},
 		{"penaltyMax", slowrate.StateFieldPenaltyMax, route.SlowRateStateFieldPenaltyMax},
+		// 隔离标记同样逐字比对：改名会让读侧永远看不到标记 ⇒ 隔离静默失效（读侧判成「存量数据」）。
+		{"quarantine", slowrate.StateFieldQuarantine, route.SlowRateStateFieldQuarantine},
 	} {
 		if tc.readSide != tc.writeSide {
 			t.Errorf("状态字段 %s 不一致：\n  route    = %q\n  slowrate = %q",

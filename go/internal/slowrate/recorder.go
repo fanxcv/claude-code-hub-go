@@ -308,6 +308,10 @@ func (r *Recorder) advanceSlowState(
 		StateFieldTriggerCount, params.TriggerCount,
 		StateFieldPenaltyStep, params.PenaltyStep,
 		StateFieldPenaltyMax, params.PenaltyMax,
+		// 隔离标记：能在本函数里走到这一行，就说明窗内慢样本已达触发阈值（上面的门槛）。
+		// 与惩罚同一次 HSet、同一条 pipeline，故不新增任何往返；它也是「慢事实达阈值 ⇒ 进隔离」
+		// 的唯一实现点（实测慢样本与提交前判废共用本函数）。
+		StateFieldQuarantine, 1,
 		"slowCount", count,
 		"enteredAt", at,
 	)
@@ -660,6 +664,14 @@ const (
 	StateFieldTriggerCount  = "triggerCount"
 	StateFieldPenaltyStep   = "penaltyStep"
 	StateFieldPenaltyMax    = "penaltyMax"
+	// StateFieldQuarantine 是「本组合由低速隔离机制标慢过」的标记（值 "1"）。
+	//
+	// 为何必须有这个字段（而不是让读侧直接按「惩罚为正」隔离）：读侧的"惩罚为正"可以是
+	// **存量旧数据**算出来的（本字段不存在时，旧代码写的 state 依然带着 penalty），
+	// 而「真排除」比「降优先级」激进得多，不能因为一次上线就把历史慢渠道全部改成不再接新流量。
+	// 本字段只由下面这条慢路径写下，故「有这个字段」严格等价于「这条渠道被新机制标过慢」。
+	// 读侧镜像常量：route.SlowRateStateFieldQuarantine（由镜像钉子比对）。
+	StateFieldQuarantine = "quarantine"
 )
 
 func samplesKey(providerID int64, modelKey string) string {

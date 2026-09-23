@@ -104,6 +104,21 @@ func (h *Handler) forwardStream(
 	return forward.ForwardStreamHedge(ctx, pc, candidate, deps, options, hedge)
 }
 
+// slowProbeTarget 报告本次请求是否为**低速隔离的探针**，是则给出被探的渠道 id。
+//
+// 事实由选路层写在 pctx 上（守卫链的 provider 步骤转交，见 pctx.ProviderSelection.SlowProbe）。
+// 经 pctx 而不是 route.Result 取：本包拿到的选路结果只有 pctx 槽位那一份。
+func slowProbeTarget(state *RequestState) (int64, bool) {
+	if state == nil || state.PC == nil {
+		return 0, false
+	}
+	selection, ok := state.PC.Provider()
+	if !ok || !selection.SlowProbe {
+		return 0, false
+	}
+	return selection.ProviderID, true
+}
+
 // hedgeDecision 判定本次请求是否走竞速，并给出竞速选项。
 //
 // 逐条对齐 Node 的 shouldUseStreamingHedge（forwarder.ts:4910-4921）：
@@ -123,6 +138,11 @@ func (h *Handler) forwardStream(
 // 设置读不到时不开竞速并留一条 warn：并发上限与输家计费开关都在设置里，猜一个值等于
 // 用错误的并发压上游。Node 在更早的步骤（读设置失败即整条请求失败）不会走到这里，
 // 故这不构成语义分叉。
+//
+// 探针请求（低速隔离的定向试探）**一律不开竞速**，这一条与本函数的其余条件无关：它存在的
+// 意义就是「让这一个请求真的打到被隔离的那家去量一次」，而竞速会在首字节阈值到期时并行起
+// 第二家，快的那家先赢即把探针 attempt 取消——量到的成了「别家有多快」，该组合拿不到干净
+// 样本，阶梯恢复永远抬不回档。探针仍可经故障转移换家（那是「还慢就换」想要的）。
 func (h *Handler) hedgeDecision(
 	ctx context.Context,
 	spec routeSpec,
@@ -130,6 +150,10 @@ func (h *Handler) hedgeDecision(
 	candidate *forward.Candidate,
 	state *RequestState,
 ) (forward.HedgeOptions, bool) {
+	if providerID, probe := slowProbeTarget(state); probe {
+		h.logger.Debug("dataplane.hedge_skipped_slow_probe", map[string]any{"providerId": providerID})
+		return forward.HedgeOptions{}, false
+	}
 	wiring := h.options.Hedge
 	if !wiring.Enabled {
 		return forward.HedgeOptions{}, false
