@@ -310,3 +310,30 @@ func TestFailoverCaptureKeepsDecisionContext(t *testing.T) {
 		t.Fatalf("无候选时应整份取选路侧：%+v", empty)
 	}
 }
+
+// TestTailPreview 钉住「缺用量现场」的尾部截取：它决定现场里能看到什么。
+//
+// 为何按字符而非字节切：窗口文本是上游 SSE 原文，中英混排时按字节切会把最后一个字符
+// 劈成半个 UTF-8 序列，日志里就成了乱码，反而看不出尾部停在哪里。
+func TestTailPreview(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		n    int
+		want string
+	}{
+		{"空文本", "", 10, ""},
+		{"非正长度", "abc", 0, ""},
+		{"短于上限原样返回", "abc", 10, "abc"},
+		{"恰好等长原样返回", "abcde", 5, "abcde"},
+		{"超长取末 n 字符", "abcdefg", 3, "efg"},
+		{"多字节不劈字符", "中文尾部", 2, "尾部"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := tailPreview(c.text, c.n); got != c.want {
+				t.Fatalf("tailPreview(%q, %d) = %q，期望 %q", c.text, c.n, got, c.want)
+			}
+		})
+	}
+}

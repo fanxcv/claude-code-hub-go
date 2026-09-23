@@ -416,8 +416,10 @@ func (s *storeSettler) Stream(ctx context.Context, pc *pctx.Context, outcome for
 			"frames":          observation.Frames,
 			"buffer_overflow": observation.BufferOverflow,
 			"completion":      observation.CompletionMarker,
+			"truncated":       observation.Truncated,
 			"model":           observation.Model,
 			"kind":            string(outcome.Kind),
+			"tail_preview":    tailPreview(observation.Snapshot, 400),
 		})
 	}
 	if observation.TTFT > 0 {
@@ -1003,6 +1005,24 @@ func numericToFloat(value json.Number) *float64 {
 		return nil
 	}
 	return &parsed
+}
+
+// tailPreview 取窗口文本的末 n 个字符，供「缺用量」现场判定归属。
+//
+// 为何要它：同一现象（流式成功、一条用量都没解析到）有两种成因，且处置相反——
+//   - 尾部含 usage/finish_reason：字节到了本进程而我们没接住，是本进程的缺陷；
+//   - 尾部停在正文中间：上游提前断流，是本进程之外的故障。
+//
+// 没这段现场就只能靠猜，故结算层在缺用量时一并落盘。
+func tailPreview(text string, n int) string {
+	if text == "" || n <= 0 {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= n {
+		return text
+	}
+	return string(runes[len(runes)-n:])
 }
 
 // ErrNoStore 表示没有数据库时无法装配数据面。
