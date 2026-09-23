@@ -270,7 +270,7 @@ func (a *Attacher) writeAuditRow(
 	endpoint := identity.Endpoint
 	requestSequence := 0
 	// 审计行只靠行标识（这里连它也不用），用窄路径开行：避免 jsonb 大列随 RETURNING 回传。
-	if _, err := a.pools.CreateMessageRequestID(ctx, store.CreateMessageRequestData{
+	createdID, err := a.pools.CreateMessageRequestID(ctx, store.CreateMessageRequestData{
 		ProviderID:            0,
 		UserID:                identity.UserID,
 		Key:                   auth.APIKey,
@@ -281,9 +281,45 @@ func (a *Attacher) writeAuditRow(
 		RequestSequence:       &requestSequence,
 		UserAgent:             userAgentPtr,
 		Endpoint:              &endpoint,
-	}); err != nil {
+	})
+	if err != nil {
 		return
 	}
+	a.settleAuditRow(ctx, createdID, statusCode)
+}
+
+// auditSettleTimeout 是审计行补终态的独立时限（见 settleAuditRow）。
+const auditSettleTimeout = 5 * time.Second
+
+// settleAuditRow 给刚开的审计行补终态。
+//
+// 为何必须补：message_request 的终态列只允许写一次（谓词 `status_code IS NULL`），建行而不落
+// 终态的行会永远停在「请求中」，随后被 patrol 以 499/CLIENT_ABORTED 补写（见 patrol.RepairStatusCode）
+// ——那是「客户端断开」的语义，与事实相反：本次请求是**成功**由回放存档返回的。生产实测：近 24h
+// 全部未终态与 499 行里 290/306 都是这个缺口（`provider_id=0`、`is_replay=true`、无 provider_chain）。
+//
+// 为何用 context.WithoutCancel：客户端可能在命中返回后立刻断开，请求上下文随之取消；而「已由回放
+// 服务」是已经发生的事实，终态不得因客户端离开而丢失。时限自建，与同仓 terminal/rollup.go、
+// terminal/slow_rate_seam.go 的异步终态写同法。
+func (a *Attacher) settleAuditRow(ctx context.Context, id int64, statusCode int) {
+	if id <= 0 {
+		return
+	}
+	code := statusCode
+	if code <= 0 {
+		code = http.StatusOK
+	}
+	duration := 0
+	zero := int64(0)
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditSettleTimeout)
+	defer cancel()
+	// 失败即放弃：这是一行审计，不值得让回放命中失败（与建行同为尽力而为）。
+	_, _ = a.pools.UpdateDetailsIfUnfinalized(writeCtx, id, store.DetailsPatch{
+		StatusCode:   &code,
+		DurationMS:   &duration,
+		InputTokens:  &zero,
+		OutputTokens: &zero,
+	})
 }
 
 // remainingTTLSeconds 计算到固定到期点的剩余秒（负值取 0）。
