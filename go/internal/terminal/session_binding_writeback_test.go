@@ -22,12 +22,13 @@ import (
 
 // sessionBindingRecorder 是 pctx.SessionBindingWriteback 的最小替身：只记事件与参数。
 type sessionBindingRecorder struct {
-	mu          sync.Mutex
-	events      []string
-	casIDs      []int64
-	cooldownIDs []int64
-	clearIDs    []int64
-	ctxErrs     []error
+	mu           sync.Mutex
+	events       []string
+	casIDs       []int64
+	cooldownIDs  []int64
+	streamCutIDs []int64
+	clearIDs     []int64
+	ctxErrs      []error
 }
 
 func (r *sessionBindingRecorder) CompareAndSet(ctx context.Context, providerID int64) bool {
@@ -44,6 +45,15 @@ func (r *sessionBindingRecorder) CooldownOnFailure(ctx context.Context, provider
 	defer r.mu.Unlock()
 	r.events = append(r.events, "binding_cooldown")
 	r.cooldownIDs = append(r.cooldownIDs, providerID)
+	r.ctxErrs = append(r.ctxErrs, ctx.Err())
+	return true
+}
+
+func (r *sessionBindingRecorder) CooldownOnUpstreamStreamCut(ctx context.Context, providerID int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, "binding_stream_cut_cooldown")
+	r.streamCutIDs = append(r.streamCutIDs, providerID)
 	r.ctxErrs = append(r.ctxErrs, ctx.Err())
 	return true
 }

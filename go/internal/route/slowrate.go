@@ -555,13 +555,15 @@ func deriveSlowRatePenalty(liveCount int, params slowRatePenaltyParams) int {
 
 // CooldownKind 是「本会话对该渠道正在冷却中」的成因。
 //
-// 为什么必须分种类：同一个冷却键有**两个写入者**，语义完全不同——
+// 为什么必须分种类：同一个冷却键有**三个写入者**，语义不同——
 //   - 绑定写入侧（`session.Binder.Clear` 的 cooldown 参数，由供应商侧失败触发，见
 //     `terminal/settle.go` 的 `sessionBindingFailure`）写的是下一代的 generation（正整数字符串），
 //     这是**故障回避**：刚失败的家本会话先绕开它；
+//   - 绑定写入侧的断流分支（`session.sessionBindingWriteback.CooldownOnUpstreamStreamCut`）
+//     写固定标记 `stream_cut`，这是**偶发收尾瑕疵的回避**（唯一一条可 fail-open 的冷却）；
 //   - 低速写入侧（`slowrate.Recorder.writeCooldown`）写的是固定标记 `slow`，这是**低速降权**。
 //
-// 两者的开关也不同：低速那条受「渠道是否开启低速监控」约束（关掉监控就该立即停止该渠道的低速
+// 三者的开关也不同：低速那条受「渠道是否开启低速监控」约束（关掉监控就该立即停止该渠道的低速
 // 降级），而故障回避与「渠道慢不慢」无关，**不能**被那个开关吞掉——本仓踩过的正是这一条
 // （见 InCooldown 的说明）。
 type CooldownKind string
@@ -574,6 +576,12 @@ const (
 	CooldownProviderError CooldownKind = "provider_error"
 	// CooldownSlowRate 是低速降权写下的会话冷却（低速写入侧所写）。
 	CooldownSlowRate CooldownKind = "slow_rate"
+	// CooldownUpstreamStreamCut 是「上游在正文中途干净断流」后的会话冷却（绑定写入侧的
+	// CooldownOnUpstreamStreamCut 所写，值与故障冷却不同）。
+	//
+	// 为何单列：它与故障冷却共用同一个键与 TTL，但成因是上游偶发的收尾瑕疵而非持续故障；
+	// 只有它在健康候选为空时允许 fail-open（见 softSignalRejection）。
+	CooldownUpstreamStreamCut CooldownKind = "upstream_stream_cut"
 )
 
 // SlowRateCooldownMarker 是低速写入侧写进冷却键的固定值，镜像
@@ -583,6 +591,13 @@ const (
 // 不能 import slowrate（slowrate → session → guard → route，成环，见文件头）。故两侧各写一遍，
 // 由 `slowrate_keys_mirror_test.go` 的源码结构性钉子比对——与键形制同一手法、同一道防线。
 const SlowRateCooldownMarker = "slow"
+
+// UpstreamStreamCutCooldownMarker 是断流写入侧（`session.sessionBindingWriteback.
+// CooldownOnUpstreamStreamCut`）写进冷却键的固定值，镜像 `session.UpstreamStreamCutCooldownMarker`。
+//
+// 与 SlowRateCooldownMarker 同理由：读侧只能按值分流，而本包不能 import `session`（同一条环）。
+// 由 `slowrate_keys_mirror_test.go` 的 TestUpstreamStreamCutMarkerMirrorsWriteSide 逐字钉住。
+const UpstreamStreamCutCooldownMarker = "stream_cut"
 
 // InCooldown 批量判定候选里哪些「对本会话正在冷却期内」，并给出成因。
 //
@@ -635,18 +650,23 @@ func (r *SlowRateReader) InCooldown(
 
 // slowRateCooldownKind 把冷却键的值折算成成因；第二个返回值为假表示「本次不算冷却」。
 //
-// 判据只有值本身，因为两个写入者的值空间不相交：低速写的是固定标记，绑定写的是正整数字符串
-// （`lua/clear-session-binding.lua` 对 ARGV[3] 有 `is_positive_integer` 校验，写不出标记值）。
+// 判据只有值本身，因为三个写入者的值空间不相交：低速写固定标记 `slow`，断流写固定标记
+// `stream_cut`，绑定故障写本次代际（`lua/clear-session-binding.lua` 对 ARGV[3] 有
+// `is_positive_integer` 校验，写不出标记值）。
 //
 // 非标记值一律算故障冷却，而不是「不认识就放过」：键形制含会话与 key，能写进这个键的只有上述
-// 两个写入者；真出现第三种值时按故障回避处理更保守，且该键自带 60 秒 TTL，不会长期挂住。
+// 三个写入者；真出现第四种值时按故障回避处理更保守，且该键自带 60 秒 TTL，不会长期挂住。
 func slowRateCooldownKind(value string, monitorEnabled bool) (CooldownKind, bool) {
-	if value == SlowRateCooldownMarker {
+	switch value {
+	case SlowRateCooldownMarker:
 		// 低速写入侧所写：受低速监控开关约束——关掉监控即立即停止该渠道的低速降级。
 		if !monitorEnabled {
 			return "", false
 		}
 		return CooldownSlowRate, true
+	case UpstreamStreamCutCooldownMarker:
+		// 断流写入侧所写：与低速监控开关无关（写入者本来就不看它），无替代候选时可放行。
+		return CooldownUpstreamStreamCut, true
 	}
 	return CooldownProviderError, true
 }

@@ -106,6 +106,8 @@ type AffinityDirective struct {
 // 依据 design-session-sticky.md §4 的失效规则表：provider_error 写冷却，而
 // resource_not_found（上游 404、本地模型缺口）只清绑定——模型不支持不是故障，
 // 冷却会把一家只是缺模型的渠道记成「慢」，等它补上模型还会白背一段冷却。
+// upstream_stream_cut 也写冷却（同一冷却键、同一 TTL），但读侧按值把它与故障冷却分开，
+// 只有它在无替代候选时允许 fail-open。
 type AffinityTombstoneKind int
 
 const (
@@ -120,6 +122,13 @@ const (
 	//
 	// 前缀侧仍写墓碑：这次请求确实没成，同前缀的后续请求该绕开它（Node 对齐）。
 	AffinityTombstonePrefixOnly
+	// AffinityTombstoneUpstreamStreamCut 是「上游在正文中途干净断流、无协议终止标记」这一类终态
+	// （forward.TerminalUpstreamTruncated 且内部状态码 2xx）。
+	//
+	// 为何与 AffinityTombstoneProviderError 分开：两者都会写会话冷却键，但成因不同——本条是
+	// 上游偶发的收尾瑕疵（生产实证 wb 池代理 3.4% 概率），不是渠道持续故障；只有本类冷却在
+	// 「健康候选为空」时允许 fail-open 放行（读侧按写入值分流，见 route.CooldownKind）。
+	AffinityTombstoneUpstreamStreamCut
 )
 
 // ErrIncompleteTerminalPatch 表示终态 patch 会写出残缺的终态：要么没有状态码，

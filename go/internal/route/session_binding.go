@@ -186,7 +186,7 @@ func sessionBindingBypass(
 func transientRejection(reason Reason) bool {
 	switch reason {
 	case ReasonCircuitOpen, ReasonSlowRateCooldown, ReasonSlowRateQuarantine,
-		ReasonProviderErrorCooldown,
+		ReasonProviderErrorCooldown, ReasonUpstreamStreamCutCooldown,
 		ReasonNoAlternativeFailOpen,
 		ReasonScheduleInactive, ReasonRateLimited, ReasonExcluded:
 		return true

@@ -58,6 +58,18 @@ const (
 	// 为何不并进 ReasonCircuitOpen：熔断是**全局**硬故障排除（整家渠道对所有会话都不可用），
 	// 本理由是**本会话**对该家的短期回避（其他会话照常选它），两者不可互换。
 	ReasonProviderErrorCooldown Reason = "provider_error_cooldown"
+	// ReasonUpstreamStreamCutCooldown 本会话对该渠道正在**断流**冷却期内：该家刚在**本会话**里
+	// 于正文中途干净断流（无协议终止标记），60 秒内先绕开它。
+	//
+	// 为何与 ReasonProviderErrorCooldown 分开：两者共用同一个冷却键与 TTL，但成因不同——
+	// 本条是上游偶发的收尾瑕疵（生产实证 wb 池代理约 3.4% 概率），不是渠道持续故障；
+	// 读侧据写入值分流（见 `CooldownKind`），只有本条属**软信号**：健康候选为空时允许
+	// fail-open 放行（与 ReasonSlowRateCooldown 同级），否则单渠道分组会把一次断流升级成
+	// 60 秒 100% 不可用（生产实证 8 波 × 5 次 503）。
+	//
+	// 为何不并进 ReasonSlowRateCooldown：那条受低速监控开关约束、且语义是「渠道慢」，
+	// 合并会把断流误报成低速降权，并让关掉监控的渠道断流冷却永不生效。
+	ReasonUpstreamStreamCutCooldown Reason = "upstream_stream_cut_cooldown"
 	// ReasonNoAlternativeFailOpen 表示该候选本因**软信号**（本网关自己加的回避，见
 	// softSignalRejection）被排除，但排除后一个候选都不剩，于是被**重新纳入**本次选路。
 	//

@@ -259,11 +259,13 @@ func (s *Selector) applyFilters(
 // 本判定是「本会话刚在这家出过事」的软回避，只作用于**本会话**。因此先跑熔断、再跑本判定，
 // 且本判定命中时记的是专门理由（而不是 circuit_open）。
 //
-// 两种成因分开记理由，因为它们是两件事：
-//   - provider_error_cooldown：供应商侧失败（上游 5xx/超时）后的 60 秒回避，与「渠道慢不慢」无关；
+// 三种成因分开记理由，因为它们是三件事：
+//   - provider_error_cooldown：供应商侧真实故障（上游 5xx/超时/连接错）后的 60 秒回避，与「渠道慢不慢」无关；
+//   - upstream_stream_cut_cooldown：上游在正文中途干净断流（无标记）后的 60 秒回避；
 //   - slow_rate_cooldown：低速降权写下的冷却。
 //
-// 把后者当成前者会误报（「渠道故障」写成「渠道慢」），反之则会让故障冷却在界面上消失。
+// 把后者当成前者会误报（「渠道故障」写成「渠道慢」），反之则会让故障冷却在界面上消失；
+// 断流与故障冷却共用键与 TTL，不分开就只能在「硬/软」二选一里牺牲一侧。
 //
 // 只在 Options.SlowRate 已装配且本次请求带会话身份时判定；in.cooldown 为 nil 时直接返回。
 func (s *Selector) cooldownRejection(p Provider, in filterInput) (bool, Filtered) {
@@ -276,18 +278,22 @@ func (s *Selector) cooldownRejection(p Provider, in filterInput) (bool, Filtered
 	return true, record
 }
 
-// softSignalRejection 报告某条排除理由是否属**软信号**：本网关自己加的、非上游故障的回避。
+// softSignalRejection 报告某条排除理由是否属**软信号**：本网关按**本会话**加的、等窗口过去
+// 即自愈的回避（不代表上游持续故障）。
 //
 // 分界原则与 transientRejection 同源但不共用：那条回答「绑定要不要留着等它回来」，本条回答
-// 「无替代候选时能不能把它放行」。两者今天取值相同（会话冷却两类里只有低速那条算软信号），
-// 但语义不同——合并会让任一侧的改动无声影响另一侧。逐条依据：
+// 「无替代候选时能不能把它放行」。逐条依据：
 //
-//	slow_rate_cooldown        低速降权写下的本会话回避，等窗口过去即自愈，非上游故障
-//	slow_rate_quarantine      渠道级低速隔离：有替代时让开，无替代时必须放行（否则可用性更差）
-//	provider_error_cooldown    上游 5xx/超时后的回避：上游确实出过事，放行等于继续打过去
-//	circuit_open / rate_limited  硬故障与限额，需改配置或等窗口，放行会让失败请求继续
+//	slow_rate_cooldown          低速降权写下的本会话回避，等窗口过去即自愈，非上游故障
+//	slow_rate_quarantine        渠道级低速隔离：有替代时让开，无替代时必须放行（否则可用性更差）
+//	upstream_stream_cut_cooldown 上游偶发的收尾瑕疵（正文中途干净 FIN）后的本会话回避：
+//	                            它不是渠道持续故障的证据，无替代候选时必须放行
+//	provider_error_cooldown     上游 5xx/超时后的回避：上游确实出过事，放行等于继续打过去
+//	circuit_open / rate_limited 硬故障与限额，需改配置或等窗口，放行会让失败请求继续
 func softSignalRejection(reason Reason) bool {
-	return reason == ReasonSlowRateCooldown || reason == ReasonSlowRateQuarantine
+	return reason == ReasonSlowRateCooldown ||
+		reason == ReasonSlowRateQuarantine ||
+		reason == ReasonUpstreamStreamCutCooldown
 }
 
 // cooldownReason 把冷却成因折算成过滤理由与 i18n 键。
@@ -296,8 +302,11 @@ func softSignalRejection(reason Reason) bool {
 // 查词表，查不到才回落原值。写死中文会让英文界面露出中文，违反「用户可见文案走 i18n」。
 // 两个取值同名（理由与详情逐字一致），是因为它们本就是一回事；分开取名只会多一处可漂移的映射。
 func cooldownReason(kind CooldownKind) (Reason, string) {
-	if kind == CooldownSlowRate {
+	switch kind {
+	case CooldownSlowRate:
 		return ReasonSlowRateCooldown, string(ReasonSlowRateCooldown)
+	case CooldownUpstreamStreamCut:
+		return ReasonUpstreamStreamCutCooldown, string(ReasonUpstreamStreamCutCooldown)
 	}
 	return ReasonProviderErrorCooldown, string(ReasonProviderErrorCooldown)
 }

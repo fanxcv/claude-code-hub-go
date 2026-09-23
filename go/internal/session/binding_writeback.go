@@ -86,11 +86,28 @@ func (w *sessionBindingWriteback) CompareAndSet(ctx context.Context, providerID 
 //     默认（监控关闭）渠道的故障冷却就会写了永不生效；
 //   - **写入值不是固定标记 `slow`**（取本次请求的代际）：与低速写入侧的标记不重叠——
 //     这是读侧分辨两者的唯一依据，而低速侧刻意不清绑定（recorder.go），本侧从 2026-09-24 起同。
+//     断流冷却同样不重叠（写 UpstreamStreamCutCooldownMarker，见 cooldownOn）。
 //
 // 仍然只对「绑定恰好指向失败的那家」写（防羊群，与原 Lua 的 provider fence 同判据）。
 // 不再看代际：那一半 fence 原本只是「同时旋转代际」的配套，绑定不动之后，
 // 同会话并发成功请求推进会误杀本该写下的冷却（旧实现下这类误杀只记 warn，静默）。
 func (w *sessionBindingWriteback) CooldownOnFailure(ctx context.Context, providerID int64) bool {
+	return w.cooldownOn(ctx, providerID, w.generation)
+}
+
+// CooldownOnUpstreamStreamCut 在「上游在正文中途干净断流」后写会话级冷却键。
+//
+// 与 CooldownOnFailure 的差别**只在写入值**：本方法写固定标记（UpstreamStreamCutCooldownMarker），
+// 故障冷却写本次代际。两者共用同一冷却键与 60 秒 TTL，fence 语义也逐字相同（只对绑定恰好
+// 指向该家的情形写）。读侧只能按值分流，故这个标记是「断流冷却可在无替代候选时放行」
+// 唯一的依据（见 route.CooldownKind）。
+func (w *sessionBindingWriteback) CooldownOnUpstreamStreamCut(ctx context.Context, providerID int64) bool {
+	return w.cooldownOn(ctx, providerID, UpstreamStreamCutCooldownMarker)
+}
+
+// cooldownOn 是两类冷却的共同实现：同一 fence（绑定恰好指向该家）+ 同一冷却键与 TTL，
+// 只有写入值不同。
+func (w *sessionBindingWriteback) cooldownOn(ctx context.Context, providerID int64, value string) bool {
 	if w == nil || providerID <= 0 {
 		return false
 	}
@@ -106,7 +123,7 @@ func (w *sessionBindingWriteback) CooldownOnFailure(ctx context.Context, provide
 		return false
 	}
 	if err := w.binder.writeProviderCooldown(
-		ctx, w.sessionID, w.keyID, providerID, w.generation, sessionCooldownTTL,
+		ctx, w.sessionID, w.keyID, providerID, value, sessionCooldownTTL,
 	); err != nil {
 		w.warn("session.binding.cooldown_failed", err)
 		return false
@@ -186,3 +203,11 @@ func (w *sessionBindingWriteback) warn(event string, err error, kv ...any) {
 
 // sessionCooldownTTL 是会话级供应商冷却时长，与设计稿 §4 的 60s 一致。
 const sessionCooldownTTL = 60 * time.Second
+
+// UpstreamStreamCutCooldownMarker 是「上游中途断流」类冷却写进冷却键的固定值，与故障冷却
+// （写本次代际）和低速冷却（写 "slow"，见 internal/slowrate）的值空间不相交。
+//
+// 为何必须是独立标记：两类冷却共用同一个键与 TTL，读侧（route）只能按值把它们分开；
+// 用同一个值会让「断流冷却可在无替代候选时放行」无法实现。route 侧镜像一份常量，
+// 由 route 包的 TestUpstreamStreamCutMarkerMirrorsWriteSide 逐字钉住。
+const UpstreamStreamCutCooldownMarker = "stream_cut"

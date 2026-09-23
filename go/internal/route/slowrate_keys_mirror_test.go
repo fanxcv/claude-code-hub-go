@@ -125,6 +125,18 @@ func TestCooldownMarkerMirrorsWriteSide(t *testing.T) {
 	}
 }
 
+// TestUpstreamStreamCutMarkerMirrorsWriteSide 钉住断流冷却标记逐字节一致。
+//
+// 写侧在 `session.UpstreamStreamCutCooldownMarker`，读侧因 import 环只能自拼一份
+// （`route.UpstreamStreamCutCooldownMarker`）。两侧不一致的表现是「断流冷却被读侧当成
+// 故障冷却」——即本修复静默失效，无替代候选时又回到 503。
+func TestUpstreamStreamCutMarkerMirrorsWriteSide(t *testing.T) {
+	if route.UpstreamStreamCutCooldownMarker != session.UpstreamStreamCutCooldownMarker {
+		t.Errorf("断流冷却标记不一致：\n  route   = %q\n  session = %q",
+			route.UpstreamStreamCutCooldownMarker, session.UpstreamStreamCutCooldownMarker)
+	}
+}
+
 // TestSamplesKeyMirrorsWriteSide 钉住慢样本滑窗键逐字节一致。
 //
 // 读侧（route）因 import 环只能自拼这个键，而它现在是**惩罚的唯一真源**：读侧据窗内活成员

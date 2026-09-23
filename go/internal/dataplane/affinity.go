@@ -62,6 +62,15 @@ func affinityDirectiveForStream(outcome forward.StreamOutcome) terminal.Affinity
 			TombstoneKind:       terminal.AffinityTombstonePrefixOnly,
 		}
 	}
+	// 上游在正文中途干净断流（无协议终止标记、内部状态码 2xx）：写墓碑 + 会话冷却，但冷却
+	// 走**独立种类**，读侧据此把它与真实故障冷却分开（无替代候选时可 fail-open）。
+	// 非 2xx 的截断（上游先给错误状态再断）不走本支，照旧按供应商故障冷却。
+	if outcome.Kind == forward.TerminalUpstreamTruncated && success {
+		return terminal.AffinityDirective{
+			TombstoneProviderID: outcome.Provider.ID,
+			TombstoneKind:       terminal.AffinityTombstoneUpstreamStreamCut,
+		}
+	}
 	return terminal.AffinityDirective{TombstoneProviderID: outcome.Provider.ID}
 }
 

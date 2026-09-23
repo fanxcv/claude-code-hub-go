@@ -24,6 +24,12 @@ type SessionBindingWriteback interface {
 	// 绑定留着，选路侧据冷却键跳过该家并抑制成功侧改绑（SessionBindingBypassTransient），
 	// 冷却过期即粘回。
 	CooldownOnFailure(ctx context.Context, providerID int64) bool
+	// CooldownOnUpstreamStreamCut 与 CooldownOnFailure 同为「写本会话对供应商的 60 秒冷却、
+	// 绑定不动」，但写入值是一个独立标记（见 session.UpstreamStreamCutCooldownMarker），
+	// 使读侧能把「上游中途干净断流」这类偶发收尾与「上游 5xx/超时」的真实故障分开——
+	// 前者在健康候选为空时允许 fail-open 放行，后者仍为硬信号。
+	// 返回 false 表示未写（同一 fence：绑定此刻指向别家或本会话无绑定，或 Redis 失败）。
+	CooldownOnUpstreamStreamCut(ctx context.Context, providerID int64) bool
 	// ClearBinding 在「资源/配置类失效」时清空绑定且**不写冷却**。
 	//
 	// 设计稿 §4：模型不支持、渠道停用属配置决策而非故障，不该染污「低速」语义。

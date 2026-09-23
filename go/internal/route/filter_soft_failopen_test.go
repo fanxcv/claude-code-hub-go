@@ -57,6 +57,16 @@ func (f *failOpenRedis) coolDown(sessionID string, keyID, providerID int64) {
 	f.values[SlowRateCooldownKey(sessionID, keyID, providerID)] = SlowRateCooldownMarker
 }
 
+// streamCutCoolDown 写一条「上游中途断流」冷却键（新引入的软信号）。
+func (f *failOpenRedis) streamCutCoolDown(sessionID string, keyID, providerID int64) {
+	f.values[SlowRateCooldownKey(sessionID, keyID, providerID)] = UpstreamStreamCutCooldownMarker
+}
+
+// providerErrorCoolDown 写一条故障冷却键（值取正整数代际，与真实写入侧同形）。
+func (f *failOpenRedis) providerErrorCoolDown(sessionID string, keyID, providerID int64) {
+	f.values[SlowRateCooldownKey(sessionID, keyID, providerID)] = "42"
+}
+
 func newFailOpenSelector(t *testing.T, client redis.UniversalClient, providers ...Provider) *Selector {
 	t.Helper()
 	source := &stubSource{providers: providers, byID: map[int64]Provider{}}
@@ -115,6 +125,106 @@ func TestSoftSignalFailOpenReinstatesSoleCandidate(t *testing.T) {
 	// decisionContext 的子数组，SQL 侧不读它（grep drizzle/ 与 lua/ 无消费点）——两者必须分开。
 	if result.Reason != ReasonSelectedInitial {
 		t.Errorf("链项 reason = %q，期望 %q（回退词只属 filteredProviders）", result.Reason, ReasonSelectedInitial)
+	}
+}
+
+// TestUpstreamStreamCutCooldownSkipsWhenAlternativeExists 钉住读侧确实把断流标记认作冷却，
+// 且理由是独立的新理由（不是 slow_rate_cooldown、也不是 provider_error_cooldown）。
+//
+// 为何必须有：回退用例（下一条）在「断流冷却根本未被识别」时也能走到选 1，只是没留痕；
+// 本用例多候选下断流候选被真的跳过，才证明读侧按值分流到了新种类。
+func TestUpstreamStreamCutCooldownSkipsWhenAlternativeExists(t *testing.T) {
+	redisClient := newFailOpenRedis()
+	redisClient.streamCutCoolDown("s1", 7, 2)
+	selector := newFailOpenSelector(t, redisClient, slowRateProvider(1), slowRateProvider(2))
+
+	result, err := selector.Select(context.Background(), Request{Model: "m1", SessionID: "s1", KeyID: 7})
+	if err != nil {
+		t.Fatalf("选路失败: %v", err)
+	}
+	if result.Provider == nil || result.Provider.ID != 1 {
+		t.Fatalf("选中 = %v，期望 1（2 在断流冷却中，应逃到 1）", result.Provider)
+	}
+	if got := reasonOf(t, result.Context, 2); got != ReasonUpstreamStreamCutCooldown {
+		t.Errorf("供应商 2 的理由 = %q，期望 %q", got, ReasonUpstreamStreamCutCooldown)
+	}
+}
+
+// TestUpstreamStreamCutCooldownReleasesSoleCandidate 钉住本次修复的核心：唯一候选 + 断流冷却
+// 必须被 fail-open 放行、不返回 503，且留痕为回退词。
+//
+// 反证：把 ReasonUpstreamStreamCutCooldown 从 softSignalRejection 白名单里摘掉 ⇒ 本用例红。
+func TestUpstreamStreamCutCooldownReleasesSoleCandidate(t *testing.T) {
+	redisClient := newFailOpenRedis()
+	redisClient.streamCutCoolDown("s1", 7, 1)
+	selector := newFailOpenSelector(t, redisClient, slowRateProvider(1))
+
+	result, err := selector.Select(context.Background(), Request{Model: "m1", SessionID: "s1", KeyID: 7})
+	if err != nil {
+		t.Fatalf("选路失败: %v", err)
+	}
+	if result.Provider == nil || result.Provider.ID != 1 {
+		t.Fatalf("选中 = %v，期望 1（唯一候选虽在断流冷却中，但无替代可逃，须回退使用）", result.Provider)
+	}
+	record, filtered := cooldownRecordOf(result.Context, 1)
+	if !filtered {
+		t.Fatalf("回退后仍无留痕记录（断流冷却未被识别？）：%+v", result.Context.FilteredProviders)
+	}
+	if record.Reason != ReasonNoAlternativeFailOpen {
+		t.Errorf("理由 = %q，期望 %q", record.Reason, ReasonNoAlternativeFailOpen)
+	}
+	if record.Details != string(ReasonNoAlternativeFailOpen) {
+		t.Errorf("详情 = %q，期望 %q", record.Details, string(ReasonNoAlternativeFailOpen))
+	}
+	if result.Context.AfterHealthCheck != 1 {
+		t.Errorf("afterHealthCheck = %d，期望 1", result.Context.AfterHealthCheck)
+	}
+}
+
+// TestProviderErrorCooldownStillHardForSoleCandidate 钉住应拒负例：唯一候选 + **故障**冷却
+// （非断流）仍为硬信号，不得放行，仍走 503 路径。
+//
+// 反证：把 softSignalRejection 改成对任何冷却都返回 true ⇒ 本用例红。
+func TestProviderErrorCooldownStillHardForSoleCandidate(t *testing.T) {
+	redisClient := newFailOpenRedis()
+	redisClient.providerErrorCoolDown("s1", 7, 1)
+	selector := newFailOpenSelector(t, redisClient, slowRateProvider(1))
+
+	result, err := selector.Select(context.Background(), Request{Model: "m1", SessionID: "s1", KeyID: 7})
+	if err != nil {
+		t.Fatalf("选路失败: %v", err)
+	}
+	if result.Provider != nil {
+		t.Fatalf("选中 = %v，期望 nil（故障冷却属硬信号，唯一候选不得放行）", result.Provider)
+	}
+	if result.Context.AfterHealthCheck != 0 {
+		t.Errorf("afterHealthCheck = %d，期望 0", result.Context.AfterHealthCheck)
+	}
+	if got := reasonOf(t, result.Context, 1); got != ReasonProviderErrorCooldown {
+		t.Errorf("理由 = %q，期望 %q（不得被改写成回退词）", got, ReasonProviderErrorCooldown)
+	}
+}
+
+// TestUpstreamStreamCutCooldownDoesNotSoftenCircuitOpen 钉住应拒负例：同一候选同时有断流冷却
+// 与 circuit_open 时，硬信号先行排除，断流冷却不得把它放行。
+func TestUpstreamStreamCutCooldownDoesNotSoftenCircuitOpen(t *testing.T) {
+	redisClient := newFailOpenRedis()
+	redisClient.openCircuit(1)
+	redisClient.streamCutCoolDown("s1", 7, 1)
+	selector := newFailOpenSelector(t, redisClient, slowRateProvider(1))
+
+	result, err := selector.Select(context.Background(), Request{Model: "m1", SessionID: "s1", KeyID: 7})
+	if err != nil {
+		t.Fatalf("选路失败: %v", err)
+	}
+	if result.Provider != nil {
+		t.Fatalf("选中 = %v，期望 nil（熔断属硬信号，断流冷却不得放行）", result.Provider)
+	}
+	if result.Context.AfterHealthCheck != 0 {
+		t.Errorf("afterHealthCheck = %d，期望 0", result.Context.AfterHealthCheck)
+	}
+	if got := reasonOf(t, result.Context, 1); got != ReasonCircuitOpen {
+		t.Errorf("理由 = %q，期望 %q（硬信号先行，不得被改写成回退词）", got, ReasonCircuitOpen)
 	}
 }
 
@@ -218,8 +328,8 @@ func TestSoftSignalFailOpenNeedsRejectedCandidate(t *testing.T) {
 //
 // 为何逐条列全：这张表是「无替代候选时能不能放行」的唯一判据来源。多放一条（例如把熔断也
 // 算软信号）= 上游已知故障仍被打过去；少放一条（低速冷却不算）= 本缺陷复发（唯一候选被剔 ⇒ 503）。
-func TestSoftSignalRejectionClassifiesOnlySelfInflictedAvoidance(t *testing.T) {
-	soft := []Reason{ReasonSlowRateCooldown}
+func TestSoftSignalRejectionClassifiesSoftSignals(t *testing.T) {
+	soft := []Reason{ReasonSlowRateCooldown, ReasonUpstreamStreamCutCooldown}
 	hard := []Reason{
 		ReasonCircuitOpen,
 		ReasonProviderErrorCooldown,

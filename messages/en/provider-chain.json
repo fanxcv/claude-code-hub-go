@@ -92,6 +92,7 @@
     "client_restriction": "Client Restriction",
     "slow_rate_cooldown": "Slow Rate Cooldown",
     "provider_error_cooldown": "Provider Error Cooldown (this session, 60s)",
+    "upstream_stream_cut_cooldown": "Upstream Stream Cut Cooldown (this session, 60s)",
     "no_alternative_fail_open": "No Alternative, Fell Back"
   },
   "filterDetails": {
@@ -108,6 +109,7 @@
     "providerBlocklist": "Blocklist: {list}",
     "slow_rate_cooldown": "This session recently hit a slow response on this provider; skipped during cooldown",
     "provider_error_cooldown": "This session recently hit a provider-side failure on this provider (e.g. upstream 5xx, idle timeout); skipped for 60s, then the session sticks back to it",
+    "upstream_stream_cut_cooldown": "This session recently hit an upstream mid-stream cut on this provider (the body ended without a protocol terminator); skipped for 60s. This is an occasional upstream finish defect rather than a provider failure, so it is still used when there is no alternative",
     "no_alternative_fail_open": "This session is cooling down on this provider, but there is no alternative to escape to, so it is still used"
   },
   "details": {

@@ -16,6 +16,7 @@ type stubSessionBinding struct {
 	clearCount int
 	clearIDs   []int64
 	cooldowns  []int64
+	streamCuts []int64
 	winners    []int64
 }
 
@@ -29,6 +30,11 @@ func (s *stubSessionBinding) CooldownOnFailure(_ context.Context, providerID int
 	return true
 }
 
+func (s *stubSessionBinding) CooldownOnUpstreamStreamCut(_ context.Context, providerID int64) bool {
+	s.streamCuts = append(s.streamCuts, providerID)
+	return true
+}
+
 func (s *stubSessionBinding) ClearBinding(_ context.Context, providerID int64) bool {
 	s.clearCount++
 	s.clearIDs = append(s.clearIDs, providerID)
@@ -37,13 +43,14 @@ func (s *stubSessionBinding) ClearBinding(_ context.Context, providerID int64) b
 
 func TestSessionBindingWritebackSplitsByTombstoneKind(t *testing.T) {
 	cases := []struct {
-		name         string
-		directive    AffinityDirective
-		committed    bool
-		wantClear    int
-		wantClearIDs []int64
-		wantCooldown []int64
-		wantWinner   []int64
+		name          string
+		directive     AffinityDirective
+		committed     bool
+		wantClear     int
+		wantClearIDs  []int64
+		wantCooldown  []int64
+		wantStreamCut []int64
+		wantWinner    []int64
 	}{
 		{
 			name:      "资源类墓碑只清绑定、不写冷却",
@@ -56,6 +63,12 @@ func TestSessionBindingWritebackSplitsByTombstoneKind(t *testing.T) {
 			name:         "故障墓碑写冷却、不清绑定",
 			directive:    AffinityDirective{TombstoneProviderID: 9},
 			wantCooldown: []int64{9},
+		},
+		{
+			// 上游中途断流：仍写冷却（同一键与 TTL），但走独立方法，读侧据此归为软信号。
+			name:          "断流墓碑写断流冷却、不清绑定",
+			directive:     AffinityDirective{TombstoneProviderID: 9, TombstoneKind: AffinityTombstoneUpstreamStreamCut},
+			wantStreamCut: []int64{9},
 		},
 		{
 			name:       "成功且已提交写 CAS",
@@ -110,6 +123,14 @@ func TestSessionBindingWritebackSplitsByTombstoneKind(t *testing.T) {
 			}
 			if len(recorder.clearIDs) != len(tc.wantClearIDs) {
 				t.Errorf("清除的供应商个数 = %v，期望 %v", recorder.clearIDs, tc.wantClearIDs)
+			}
+			if len(recorder.streamCuts) != len(tc.wantStreamCut) {
+				t.Fatalf("断流冷却 = %v，期望 %v", recorder.streamCuts, tc.wantStreamCut)
+			}
+			for i := range tc.wantStreamCut {
+				if recorder.streamCuts[i] != tc.wantStreamCut[i] {
+					t.Errorf("断流冷却的供应商 = %v，期望 %v", recorder.streamCuts, tc.wantStreamCut)
+				}
 			}
 			for i := range tc.wantWinner {
 				if recorder.winners[i] != tc.wantWinner[i] {

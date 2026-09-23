@@ -25,6 +25,7 @@ type recordingSessionBinding struct {
 	clearCount int
 	clearIDs   []int64
 	cooldowns  []int64
+	streamCuts []int64
 	winners    []int64
 }
 
@@ -35,6 +36,11 @@ func (r *recordingSessionBinding) CompareAndSet(_ context.Context, providerID in
 
 func (r *recordingSessionBinding) CooldownOnFailure(_ context.Context, providerID int64) bool {
 	r.cooldowns = append(r.cooldowns, providerID)
+	return true
+}
+
+func (r *recordingSessionBinding) CooldownOnUpstreamStreamCut(_ context.Context, providerID int64) bool {
+	r.streamCuts = append(r.streamCuts, providerID)
 	return true
 }
 
@@ -139,6 +145,46 @@ func TestClientAbortWritesPrefixTombstoneOnly(t *testing.T) {
 				t.Errorf("墓碑路径不该有 CompareAndSet，实得 %v", recorder.winners)
 			}
 		})
+	}
+}
+
+// TestUpstreamStreamCutWritesStreamCutCooldown 是本次修复的**跨包**钉子：真实的流式指令产出
+// （TerminalUpstreamTruncated，2xx）喂给真实的终态写回，断言走的是断流冷却方法而非故障冷却。
+//
+// 为何必须跨包：把 affinityDirectiveForStream 里那个新分支或 settle 里的那个 case 任一摘掉，
+// 两半的单测都可能全绿，而生产上断流冷却又会落回故障冷却——回到「唯一候选被剔 ⇒ 503」。
+func TestUpstreamStreamCutWritesStreamCutCooldown(t *testing.T) {
+	pc, err := pctx.New(pctx.Init{Method: "POST", Path: "/v1/chat/completions"})
+	if err != nil {
+		t.Fatalf("构造上下文失败: %v", err)
+	}
+	if err := pc.SetMessageRequestID(79); err != nil {
+		t.Fatalf("写入行标识失败: %v", err)
+	}
+	recorder := &recordingSessionBinding{}
+	pc.SetSessionBindingWriteback(recorder)
+
+	directive := affinityDirectiveForStream(forward.StreamOutcome{
+		Kind: forward.TerminalUpstreamTruncated, StatusCode: 200, Provider: forward.Provider{ID: 9},
+	})
+	if directive.TombstoneKind != terminal.AffinityTombstoneUpstreamStreamCut {
+		t.Fatalf("墓碑种类 = %d，期望 %d", directive.TombstoneKind, terminal.AffinityTombstoneUpstreamStreamCut)
+	}
+	if _, err := terminal.New(alwaysCommitWriter{}, terminal.Options{}).SettleContext(
+		context.Background(), pc,
+		terminal.Settlement{StatusCode: 200, Affinity: directive},
+		nil,
+	); err != nil {
+		t.Fatalf("终态结算失败: %v", err)
+	}
+	if len(recorder.cooldowns) != 0 {
+		t.Errorf("断流不得走故障冷却（硬信号），收到 %v", recorder.cooldowns)
+	}
+	if len(recorder.streamCuts) != 1 || recorder.streamCuts[0] != 9 {
+		t.Fatalf("断流冷却 = %v，期望 [9]", recorder.streamCuts)
+	}
+	if len(recorder.clearIDs) != 0 {
+		t.Errorf("不得清绑定，收到 %v", recorder.clearIDs)
 	}
 }
 

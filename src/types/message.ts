@@ -238,6 +238,7 @@ export interface ProviderChainItem {
         | "client_restriction" // Provider filtered due to client restriction
         | "slow_rate_cooldown" // This session recently hit a slow response on this provider
         | "provider_error_cooldown" // This session recently hit a provider error on this provider
+        | "upstream_stream_cut_cooldown" // This session recently hit an upstream mid-stream cut on this provider
         | "no_alternative_fail_open"; // Soft-signal exclusion was reinstated: no alternative candidate to fall back to
       details?: string; // 额外信息（如费用：$15.2/$15）
       clientRestrictionContext?: {

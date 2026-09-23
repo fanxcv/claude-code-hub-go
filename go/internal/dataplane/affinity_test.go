@@ -123,7 +123,7 @@ func TestAffinityDirectiveForStream(t *testing.T) {
 			name: "未正常结束（截断）写墓碑",
 			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
 				Provider: forward.Provider{ID: 7}},
-			want: terminal.AffinityDirective{TombstoneProviderID: 7},
+			want: terminal.AffinityDirective{TombstoneProviderID: 7, TombstoneKind: terminal.AffinityTombstoneUpstreamStreamCut},
 		},
 		// 以下五条钉住「流尾缺终止标记」的判据与其边界。
 		//
@@ -143,21 +143,21 @@ func TestAffinityDirectiveForStream(t *testing.T) {
 			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
 				Provider:    forward.Provider{ID: 7},
 				Observation: forward.Observation{Bytes: 60332, Frames: 242, Model: "deepseek-v4.1-flash"}},
-			want: terminal.AffinityDirective{TombstoneProviderID: 7},
+			want: terminal.AffinityDirective{TombstoneProviderID: 7, TombstoneKind: terminal.AffinityTombstoneUpstreamStreamCut},
 		},
 		{
 			name: "流尾缺终止标记且正文未送达（零字节）：仍写墓碑",
 			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
 				Provider:    forward.Provider{ID: 7},
 				Observation: forward.Observation{Frames: 1}},
-			want: terminal.AffinityDirective{TombstoneProviderID: 7},
+			want: terminal.AffinityDirective{TombstoneProviderID: 7, TombstoneKind: terminal.AffinityTombstoneUpstreamStreamCut},
 		},
 		{
 			name: "流尾缺终止标记但流内错误帧：仍写墓碑",
 			outcome: forward.StreamOutcome{Kind: forward.TerminalUpstreamTruncated, StatusCode: 200,
 				Provider:    forward.Provider{ID: 7},
 				Observation: forward.Observation{Bytes: 1024, ErrorText: "overloaded_error"}},
-			want: terminal.AffinityDirective{TombstoneProviderID: 7},
+			want: terminal.AffinityDirective{TombstoneProviderID: 7, TombstoneKind: terminal.AffinityTombstoneUpstreamStreamCut},
 		},
 		{
 			name: "流尾缺终止标记且非 2xx：仍写墓碑",

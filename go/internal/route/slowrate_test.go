@@ -874,6 +874,9 @@ func TestCooldownKindDistinguishesTwoWriters(t *testing.T) {
 		{"监控关闭+低速冷却不排除", false, SlowRateCooldownMarker, "", false},
 		{"监控开启+低速冷却排除", true, SlowRateCooldownMarker, ReasonSlowRateCooldown, true},
 		{"监控开启+故障冷却排除", true, "42", ReasonProviderErrorCooldown, true},
+		// 断流冷却不看监控开关（写入者本来就不看它）：两种开关下都应识别为独立的冷却理由。
+		{"监控关闭+断流冷却排除", false, UpstreamStreamCutCooldownMarker, ReasonUpstreamStreamCutCooldown, true},
+		{"监控开启+断流冷却排除", true, UpstreamStreamCutCooldownMarker, ReasonUpstreamStreamCutCooldown, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			first := baseProvider(1, convert.ProviderClaude)

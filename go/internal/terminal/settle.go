@@ -453,11 +453,16 @@ func (s *Settler) sessionBindingWriteback(
 	}
 	defer cancel()
 	if phase == sessionBindingFailure {
-		if directive.TombstoneKind == AffinityTombstoneResourceNotFound {
+		switch directive.TombstoneKind {
+		case AffinityTombstoneResourceNotFound:
 			writeback.ClearBinding(writeCtx, directive.TombstoneProviderID)
-			return
+		case AffinityTombstoneUpstreamStreamCut:
+			// 上游中途断流：同一冷却键与 TTL，但写入值与故障冷却不同，读侧据此把它归为软信号
+			// （无替代候选时 fail-open 放行）。
+			writeback.CooldownOnUpstreamStreamCut(writeCtx, directive.TombstoneProviderID)
+		default:
+			writeback.CooldownOnFailure(writeCtx, directive.TombstoneProviderID)
 		}
-		writeback.CooldownOnFailure(writeCtx, directive.TombstoneProviderID)
 		return
 	}
 	writeback.CompareAndSet(writeCtx, directive.WinnerProviderID)
