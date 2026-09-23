@@ -74,6 +74,13 @@ func (r *sessionBindingRecorder) clearedIDs() []int64 {
 	return append([]int64(nil), r.clearIDs...)
 }
 
+// streamCutProviderIDs 单开一个取数口，理由同 clearedIDs。
+func (r *sessionBindingRecorder) streamCutProviderIDs() []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]int64(nil), r.streamCutIDs...)
+}
+
 func (r *sessionBindingRecorder) snapshot() (events []string, casIDs []int64, cooldownIDs []int64, ctxErrs []error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -310,6 +317,41 @@ func TestAsyncSessionBindingProviderErrorWritesCooldown(t *testing.T) {
 	events, _, _, _ = recorder.snapshot()
 	if len(events) != 1 {
 		t.Fatalf("冷却只应发放一次，收到 %v", events)
+	}
+}
+
+// 异步 + 上游中途断流：仍写冷却（同一键与 TTL），但走独立方法，读侧据此归为软信号。
+// 与上面「供应商故障写冷却」成对，补齐 TombstoneKind 三路分流在异步（生产）路径上的最后一路。
+func TestAsyncSessionBindingUpstreamStreamCutWritesStreamCutCooldown(t *testing.T) {
+	writer := &fakeWriter{unfinalizedQueue: []unfinalizedResult{{committed: false}}}
+	queue, settler := newAsyncFixture(t, writer, AsyncOptions{
+		MaxPending: 8, BatchSize: 8, FlushInterval: time.Hour,
+	})
+	recorder := &sessionBindingRecorder{}
+	pc := newSessionBindingContext(t, recorder, 60)
+
+	settlement := okSettlement(nil)
+	settlement.Affinity = AffinityDirective{
+		TombstoneProviderID: 9,
+		TombstoneKind:       AffinityTombstoneUpstreamStreamCut,
+	}
+	if _, err := settler.SettleContext(context.Background(), pc, settlement, nil); err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+
+	events, _, _, _ := recorder.snapshot()
+	if len(events) != 1 || events[0] != "binding_stream_cut_cooldown" {
+		t.Fatalf("上游断流应走独立方法写冷却，收到 %v", events)
+	}
+	if ids := recorder.streamCutProviderIDs(); len(ids) != 1 || ids[0] != 9 {
+		t.Fatalf("断流冷却指向的供应商 = %v，期望 [9]", ids)
+	}
+
+	flushQueue(t, queue)
+
+	events, _, _, _ = recorder.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("断流冷却只应发放一次，收到 %v", events)
 	}
 }
 
