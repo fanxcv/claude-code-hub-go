@@ -31,7 +31,7 @@ interface DateRangePickerProps {
   ) => void;
 }
 
-type QuickPeriod = "daily" | "weekly" | "monthly" | "allTime";
+export type QuickPeriod = "daily" | "weekly" | "monthly" | "allTime";
 
 const QUICK_PERIODS: QuickPeriod[] = ["daily", "weekly", "monthly", "allTime"];
 
@@ -50,7 +50,7 @@ function parseDate(dateStr: string): Date {
   return new Date(year, month - 1, day);
 }
 
-function getDateRangeForPeriod(
+export function getDateRangeForPeriod(
   period: QuickPeriod,
   timeZone: string,
   now: Date = new Date()

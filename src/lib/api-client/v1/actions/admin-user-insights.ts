@@ -2,6 +2,7 @@ import { apiGet, searchParams, toActionResult, unwrapItems } from "./_compat";
 
 type InsightBreakdownItem = {
   model: string;
+  providerId?: number;
   providerName: string;
   requests: number;
   cost: number;

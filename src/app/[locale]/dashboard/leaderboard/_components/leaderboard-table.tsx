@@ -59,6 +59,8 @@ interface LeaderboardTableProps<TParent, TSub = TParent> {
     parentIndex: number,
     subIndex: number
   ) => string | number;
+  /** 展开区渲染任意节点（提供后即视为可展开，忽略 getSubRows 的子行） */
+  renderExpanded?: (row: TParent, index: number) => React.ReactNode;
 }
 
 export function LeaderboardTable<TParent, TSub = TParent>({
@@ -68,6 +70,7 @@ export function LeaderboardTable<TParent, TSub = TParent>({
   getRowKey,
   getSubRows,
   getSubRowKey,
+  renderExpanded,
 }: LeaderboardTableProps<TParent, TSub>) {
   const t = useTranslations("dashboard.leaderboard");
   type TableRow = TParent | TSub;
@@ -279,7 +282,7 @@ export function LeaderboardTable<TParent, TSub = TParent>({
                 const isTopThree = rank <= 3;
                 const rowKey = getRowKey ? (getRowKey(row, index) ?? index) : index;
                 const subRows = getSubRows ? getSubRows(row, index) : null;
-                const hasExpandable = (subRows?.length ?? 0) > 0;
+                const hasExpandable = (subRows?.length ?? 0) > 0 || Boolean(renderExpanded);
                 const isExpanded = hasExpandable && expandedRows.has(rowKey);
 
                 return (
@@ -321,7 +324,15 @@ export function LeaderboardTable<TParent, TSub = TParent>({
                         );
                       })}
                     </TableRow>
+                    {isExpanded && renderExpanded ? (
+                      <TableRow className="bg-muted/30 hover:bg-muted/30">
+                        <TableCell colSpan={columns.length + 1} className="p-0">
+                          {renderExpanded(row, index)}
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
                     {isExpanded &&
+                      !renderExpanded &&
                       (subRows ?? []).map((subRow, subIndex) => {
                         const rawSubKey = getSubRowKey
                           ? getSubRowKey(subRow, row, index, subIndex)

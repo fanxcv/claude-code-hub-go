@@ -40,6 +40,7 @@ import type {
 import type { ProviderType } from "@/types/provider";
 import { DateRangePicker } from "./date-range-picker";
 import { type ColumnDef, LeaderboardTable } from "./leaderboard-table";
+import { LeaderboardUserExpanded } from "./leaderboard-user-expanded";
 import { getSuccessRateCellDisplay } from "./success-rate-display";
 
 interface LeaderboardViewProps {
@@ -587,8 +588,9 @@ export function LeaderboardView({ isAdmin }: LeaderboardViewProps) {
       getRowKey={(row) => row.userId}
       {...(isAdmin
         ? {
-            getSubRows: (row) => row.modelStats,
-            getSubRowKey: (subRow) => subRow.model ?? "__null__",
+            renderExpanded: (row: UserEntry) => (
+              <LeaderboardUserExpanded userId={row.userId} period={period} dateRange={dateRange} />
+            ),
           }
         : {})}
     />
