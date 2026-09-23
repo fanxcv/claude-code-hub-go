@@ -1,13 +1,9 @@
 "use client";
 
-import { RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { RefreshCacheButton as RefreshCacheButtonBase } from "@/components/ui/refresh-cache-button";
 import { refreshCacheAction } from "@/lib/api-client/v1/actions/error-rules";
-import { cn } from "@/lib/utils";
 
 interface RefreshCacheButtonProps {
   stats: {
@@ -23,45 +19,21 @@ interface RefreshCacheButtonProps {
 export function RefreshCacheButton({ stats }: RefreshCacheButtonProps) {
   const t = useTranslations("settings");
   const router = useRouter();
-  const [isRefreshing, setIsRefreshing] = useState(false);
-
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-
-    try {
-      const result = await refreshCacheAction();
-
-      if (result.ok) {
-        const count = result.data.stats.totalCount;
-        toast.success(t("errorRules.refreshCacheSuccess", { count }));
-        router.refresh();
-      } else {
-        toast.error(result.error);
-      }
-    } catch {
-      toast.error(t("errorRules.refreshCacheFailed"));
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
 
   return (
-    <Button
-      variant="outline"
-      onClick={handleRefresh}
-      disabled={isRefreshing}
-      className="bg-muted/50 border-border hover:bg-muted hover:border-border"
+    <RefreshCacheButtonBase
+      stats={stats}
+      label={t("errorRules.refreshCache")}
       title={
         stats
-          ? t("errorRules.cacheStats", {
-              totalCount: stats.totalCount,
-            })
+          ? t("errorRules.cacheStats", { totalCount: stats.totalCount })
           : t("errorRules.refreshCache")
       }
-    >
-      <RefreshCw className={cn("mr-2 h-4 w-4", isRefreshing && "animate-spin")} />
-      {t("errorRules.refreshCache")}
-      {stats && <span className="ml-2 text-xs text-muted-foreground">({stats.totalCount})</span>}
-    </Button>
+      className="bg-muted/50 border-border hover:bg-muted hover:border-border"
+      refresh={refreshCacheAction}
+      successMessage={(count) => t("errorRules.refreshCacheSuccess", { count })}
+      failureMessage={t("errorRules.refreshCacheFailed")}
+      onRefreshed={() => router.refresh()}
+    />
   );
 }

@@ -4,13 +4,17 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { Section } from "@/components/section";
 import { QueryErrorState } from "@/components/ui/query-error-state";
+import { RefreshCacheButton } from "@/components/ui/refresh-cache-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UiSessionGate } from "@/components/ui-session-gate";
-import { getCacheStats, listSensitiveWords } from "@/lib/api-client/v1/actions/sensitive-words";
+import {
+  getCacheStats,
+  listSensitiveWords,
+  refreshCacheAction,
+} from "@/lib/api-client/v1/actions/sensitive-words";
 import type { SensitiveWord } from "@/types/sensitive-words";
 import { SettingsPageHeader } from "../_components/settings-page-header";
 import { AddWordDialog } from "./_components/add-word-dialog";
-import { RefreshCacheButton } from "./_components/refresh-cache-button";
 import { SensitiveWordsTableSkeleton } from "./_components/sensitive-words-skeleton";
 import { WordListTable } from "./_components/word-list-table";
 
@@ -48,6 +52,7 @@ export default function SensitiveWordsPage() {
 }
 
 function SensitiveWordsRefreshAction() {
+  const t = useTranslations("settings");
   const tErrors = useTranslations("settings.errors");
   const statsQuery = useQuery({
     queryKey: ["sensitive-words", "cache-stats"],
@@ -70,7 +75,25 @@ function SensitiveWordsRefreshAction() {
     );
   }
 
-  return <RefreshCacheButton stats={stats} />;
+  return (
+    <RefreshCacheButton
+      stats={stats}
+      label={t("sensitiveWords.refreshCache")}
+      title={
+        stats
+          ? t("sensitiveWords.cacheStats", {
+              containsCount: stats.containsCount,
+              exactCount: stats.exactCount,
+              regexCount: stats.regexCount,
+            })
+          : t("sensitiveWords.refreshCache")
+      }
+      className="bg-muted/50 border-border hover:bg-white/10 hover:border-white/20"
+      refresh={refreshCacheAction}
+      successMessage={(count) => t("sensitiveWords.refreshCacheSuccess", { count })}
+      failureMessage={t("sensitiveWords.refreshCacheFailed")}
+    />
+  );
 }
 
 function SensitiveWordsTableContent() {
