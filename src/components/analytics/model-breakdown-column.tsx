@@ -15,6 +15,7 @@ import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
 import { formatTokenAmount } from "@/lib/utils";
+import { cacheHitRateColorClass, cacheHitRatePercent } from "@/lib/utils/cache-hit-rate";
 import { type CurrencyCode, formatCurrency } from "@/lib/utils/currency";
 
 export interface ModelBreakdownItem {
@@ -151,18 +152,15 @@ export function ModelBreakdownRow({
   const l = useLabels(labels);
 
   const totalAllTokens = inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens;
-  const totalInputTokens = inputTokens + cacheCreationTokens + cacheReadTokens;
-  const cacheHitRate =
-    totalInputTokens > 0 ? ((cacheReadTokens / totalInputTokens) * 100).toFixed(1) : "0.0";
+  const cacheHitRateNum = cacheHitRatePercent({
+    inputTokens,
+    cacheCreationTokens,
+    cacheReadTokens,
+  });
+  const cacheHitRate = cacheHitRateNum.toFixed(1);
   const costPercentage = totalCost > 0 ? ((cost / totalCost) * 100).toFixed(1) : "0.0";
 
-  const cacheHitRateNum = Number.parseFloat(cacheHitRate);
-  const cacheHitColor =
-    cacheHitRateNum >= 85
-      ? "text-green-600 dark:text-green-400"
-      : cacheHitRateNum >= 60
-        ? "text-yellow-600 dark:text-yellow-400"
-        : "text-orange-600 dark:text-orange-400";
+  const cacheHitColor = cacheHitRateColorClass(cacheHitRateNum);
 
   return (
     <>

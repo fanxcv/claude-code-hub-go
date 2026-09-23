@@ -24,6 +24,7 @@ import { TagInput } from "@/components/ui/tag-input";
 import { Link } from "@/i18n/routing";
 import { getAllUserKeyGroups, getAllUserTags } from "@/lib/api-client/v1/actions/users";
 import { formatTokenAmount } from "@/lib/utils";
+import { cacheHitRateColorClass } from "@/lib/utils/cache-hit-rate";
 import type {
   DateRangeParams,
   LeaderboardEntry,
@@ -432,13 +433,7 @@ export function LeaderboardView({ isAdmin }: LeaderboardViewProps) {
       className: "text-right",
       cell: (row) => {
         const rate = Number(row.cacheHitRate || 0) * 100;
-        const colorClass =
-          rate >= 85
-            ? "text-green-600 dark:text-green-400"
-            : rate >= 60
-              ? "text-yellow-600 dark:text-yellow-400"
-              : "text-orange-600 dark:text-orange-400";
-        return <span className={colorClass}>{rate.toFixed(1)}%</span>;
+        return <span className={cacheHitRateColorClass(rate)}>{rate.toFixed(1)}%</span>;
       },
       sortKey: "cacheHitRate",
       getValue: (row) => row.cacheHitRate,
@@ -502,13 +497,7 @@ export function LeaderboardView({ isAdmin }: LeaderboardViewProps) {
       className: "text-right",
       cell: (row) => {
         const rate = Number(row.cacheHitRate || 0) * 100;
-        const colorClass =
-          rate >= 85
-            ? "text-green-600 dark:text-green-400"
-            : rate >= 60
-              ? "text-yellow-600 dark:text-yellow-400"
-              : "text-orange-600 dark:text-orange-400";
-        return <span className={colorClass}>{rate.toFixed(1)}%</span>;
+        return <span className={cacheHitRateColorClass(rate)}>{rate.toFixed(1)}%</span>;
       },
       sortKey: "cacheHitRate",
       getValue: (row) => row.cacheHitRate,
@@ -588,8 +577,13 @@ export function LeaderboardView({ isAdmin }: LeaderboardViewProps) {
       getRowKey={(row) => row.userId}
       {...(isAdmin
         ? {
-            renderExpanded: (row: UserEntry) => (
-              <LeaderboardUserExpanded userId={row.userId} period={period} dateRange={dateRange} />
+            renderExpanded: (row: UserEntry, _index: number, columnCount: number) => (
+              <LeaderboardUserExpanded
+                userId={row.userId}
+                period={period}
+                dateRange={dateRange}
+                columnCount={columnCount}
+              />
             ),
           }
         : {})}

@@ -60,7 +60,7 @@ interface LeaderboardTableProps<TParent, TSub = TParent> {
     subIndex: number
   ) => string | number;
   /** 展开区渲染任意节点（提供后即视为可展开，忽略 getSubRows 的子行） */
-  renderExpanded?: (row: TParent, index: number) => React.ReactNode;
+  renderExpanded?: (row: TParent, index: number, columnCount: number) => React.ReactNode;
 }
 
 export function LeaderboardTable<TParent, TSub = TParent>({
@@ -324,13 +324,9 @@ export function LeaderboardTable<TParent, TSub = TParent>({
                         );
                       })}
                     </TableRow>
-                    {isExpanded && renderExpanded ? (
-                      <TableRow className="bg-muted/30 hover:bg-muted/30">
-                        <TableCell colSpan={columns.length + 1} className="p-0">
-                          {renderExpanded(row, index)}
-                        </TableCell>
-                      </TableRow>
-                    ) : null}
+                    {isExpanded && renderExpanded
+                      ? renderExpanded(row, index, columns.length + 1)
+                      : null}
                     {isExpanded &&
                       !renderExpanded &&
                       (subRows ?? []).map((subRow, subIndex) => {

@@ -3,31 +3,40 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useTimeZone, useTranslations } from "next-intl";
-import { useState } from "react";
-import {
-  ModelBreakdownColumn,
-  type ModelBreakdownItem,
-  type ModelBreakdownLabels,
-  ModelBreakdownRow,
-} from "@/components/analytics/model-breakdown-column";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { type ReactNode, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TableCell, TableRow } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   getUserInsightsModelBreakdown,
   getUserInsightsProviderBreakdown,
 } from "@/lib/api-client/v1/actions/admin-user-insights";
-import type { CurrencyCode } from "@/lib/utils/currency";
+import { formatTokenAmount } from "@/lib/utils";
+import { cacheHitRateColorClass, cacheHitRatePercent } from "@/lib/utils/cache-hit-rate";
+import { type CurrencyCode, formatCurrency } from "@/lib/utils/currency";
 import type { LeaderboardPeriod } from "@/types/leaderboard";
 import { getDateRangeForPeriod } from "./date-range-picker";
 
-type Translate = (key: string) => string;
-type ProviderBreakdownItem = ModelBreakdownItem & { providerId: number };
+interface BreakdownEntry {
+  name: string | null;
+  requests: number;
+  cost: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+}
+
+interface ProviderBreakdownEntry extends BreakdownEntry {
+  providerId: number;
+}
 
 interface LeaderboardUserExpandedProps {
   userId: number;
   period: LeaderboardPeriod;
   dateRange?: { startDate: string; endDate: string };
+  /** 主表列数（含排名列），展开行逐列对齐用 */
+  columnCount: number;
 }
 
 // 排行榜 period → 用户洞察接口的闭区间日期。
@@ -52,28 +61,7 @@ function resolvePeriodDates(
   return getDateRangeForPeriod(period, timeZone);
 }
 
-function buildLabels(tStats: Translate, unknownName: string): ModelBreakdownLabels {
-  return {
-    unknownModel: unknownName,
-    modal: {
-      requests: tStats("modal.requests"),
-      cost: tStats("modal.cost"),
-      inputTokens: tStats("modal.inputTokens"),
-      outputTokens: tStats("modal.outputTokens"),
-      cacheCreationTokens: tStats("modal.cacheWrite"),
-      cacheReadTokens: tStats("modal.cacheRead"),
-      totalTokens: tStats("modal.totalTokens"),
-      costPercentage: tStats("modal.cost"),
-      cacheHitRate: tStats("modal.cacheHitRate"),
-      cacheTokens: tStats("modal.cacheTokens"),
-      performanceHigh: tStats("modal.performanceHigh"),
-      performanceMedium: tStats("modal.performanceMedium"),
-      performanceLow: tStats("modal.performanceLow"),
-    },
-  };
-}
-
-function toBreakdownItem(item: {
+function toBreakdownEntry(item: {
   model: string | null;
   requests: number;
   cost: number;
@@ -81,9 +69,9 @@ function toBreakdownItem(item: {
   outputTokens: number;
   cacheCreationTokens: number;
   cacheReadTokens: number;
-}): ModelBreakdownItem {
+}): BreakdownEntry {
   return {
-    model: item.model,
+    name: item.model,
     requests: item.requests,
     cost: item.cost,
     inputTokens: item.inputTokens,
@@ -93,50 +81,82 @@ function toBreakdownItem(item: {
   };
 }
 
-interface BreakdownListProps {
-  isLoading: boolean;
-  isError: boolean;
-  items: ModelBreakdownItem[];
+// 名称列之后的四格：请求数 / Token 数（含缓存命中率）/ 消耗金额。
+function BreakdownCells({
+  entry,
+  currencyCode,
+  indentClass,
+  fallbackName,
+}: {
+  entry: BreakdownEntry;
   currencyCode: CurrencyCode;
-  labels: ModelBreakdownLabels;
-  keyPrefix: string;
-  testId: string;
+  indentClass: string;
+  fallbackName: string;
+}) {
+  const totalAllTokens =
+    entry.inputTokens + entry.outputTokens + entry.cacheCreationTokens + entry.cacheReadTokens;
+  const cacheHitRate = cacheHitRatePercent(entry);
+
+  return (
+    <>
+      <TableCell>
+        <div className={indentClass}>
+          <span className="font-mono text-sm">{entry.name || fallbackName}</span>
+        </div>
+      </TableCell>
+      <TableCell className="text-right">{entry.requests.toLocaleString()}</TableCell>
+      <TableCell className="text-right">
+        {formatTokenAmount(totalAllTokens)}
+        {" · "}
+        <span className={cacheHitRateColorClass(cacheHitRate)}>{cacheHitRate.toFixed(1)}%</span>
+      </TableCell>
+      <TableCell className="text-right font-mono font-bold">
+        {formatCurrency(entry.cost, currencyCode)}
+      </TableCell>
+    </>
+  );
 }
 
-function BreakdownList({
-  isLoading,
-  isError,
-  items,
-  currencyCode,
-  labels,
-  keyPrefix,
-  testId,
-}: BreakdownListProps) {
-  const t = useTranslations("dashboard.leaderboard.userInsights");
-
-  if (isLoading) {
-    return <Skeleton className="h-16 w-full" />;
-  }
-  if (isError) {
-    return <div className="text-sm text-destructive">{t("loadError")}</div>;
-  }
-  if (items.length === 0) {
-    return <div className="text-sm text-muted-foreground">{t("noData")}</div>;
-  }
-
-  const totalCost = items.reduce((sum, item) => sum + item.cost, 0);
+function StateRow({ columnCount, children }: { columnCount: number; children: ReactNode }) {
   return (
-    <div data-testid={testId}>
-      <ModelBreakdownColumn
-        pageItems={items}
-        currencyCode={currencyCode}
-        totalCost={totalCost}
-        keyPrefix={keyPrefix}
-        pageOffset={0}
-        labels={labels}
-      />
-    </div>
+    <TableRow className="bg-muted/30 hover:bg-muted/30">
+      <TableCell colSpan={columnCount}>{children}</TableCell>
+    </TableRow>
   );
+}
+
+function ModelRows({
+  entries,
+  currencyCode,
+  indentClass,
+  testId,
+  fallbackName,
+}: {
+  entries: BreakdownEntry[];
+  currencyCode: CurrencyCode;
+  indentClass: string;
+  testId: string;
+  fallbackName: string;
+}) {
+  return entries.map((entry, index) => (
+    <TableRow
+      key={`${entry.name ?? "unknown"}-${index}`}
+      className="bg-muted/30 hover:bg-muted/30"
+      data-testid={testId}
+    >
+      <TableCell>
+        <div className="flex items-center gap-1">
+          <div className="h-4 w-4" />
+        </div>
+      </TableCell>
+      <BreakdownCells
+        entry={entry}
+        currencyCode={currencyCode}
+        indentClass={indentClass}
+        fallbackName={fallbackName}
+      />
+    </TableRow>
+  ));
 }
 
 interface ProviderModelsProps {
@@ -144,11 +164,18 @@ interface ProviderModelsProps {
   providerId: number;
   startDate?: string;
   endDate?: string;
-  labels: ModelBreakdownLabels;
+  columnCount: number;
 }
 
 // 只在供应商行展开时挂载，故请求天然懒加载。
-function ProviderModels({ userId, providerId, startDate, endDate, labels }: ProviderModelsProps) {
+function ProviderModels({
+  userId,
+  providerId,
+  startDate,
+  endDate,
+  columnCount,
+}: ProviderModelsProps) {
+  const t = useTranslations("dashboard.leaderboard.userInsights");
   const query = useQuery({
     queryKey: ["leaderboard-provider-models", userId, providerId, startDate, endDate],
     queryFn: async () => {
@@ -160,87 +187,107 @@ function ProviderModels({ userId, providerId, startDate, endDate, labels }: Prov
     },
   });
 
+  if (query.isLoading) {
+    return (
+      <StateRow columnCount={columnCount}>
+        <Skeleton className="h-4 w-full" />
+      </StateRow>
+    );
+  }
+  if (query.isError) {
+    return (
+      <StateRow columnCount={columnCount}>
+        <span className="text-sm text-destructive">{t("loadError")}</span>
+      </StateRow>
+    );
+  }
+
+  const entries = (query.data?.breakdown ?? []).map(toBreakdownEntry);
+  if (entries.length === 0) {
+    return (
+      <StateRow columnCount={columnCount}>
+        <span className="text-sm text-muted-foreground">{t("noData")}</span>
+      </StateRow>
+    );
+  }
+
   return (
-    <BreakdownList
-      isLoading={query.isLoading}
-      isError={query.isError}
-      items={(query.data?.breakdown ?? []).map(toBreakdownItem)}
+    <ModelRows
+      entries={entries}
       currencyCode={(query.data?.currencyCode ?? "USD") as CurrencyCode}
-      labels={labels}
-      keyPrefix={`leaderboard-provider-${providerId}`}
+      indentClass="pl-12"
       testId={`leaderboard-provider-models-${providerId}`}
+      fallbackName={t("unknownModel")}
     />
   );
 }
 
 interface ProviderBreakdownRowProps {
-  item: ProviderBreakdownItem;
+  entry: ProviderBreakdownEntry;
   currencyCode: CurrencyCode;
-  totalCost: number;
-  labels: ModelBreakdownLabels;
   userId: number;
   startDate?: string;
   endDate?: string;
+  columnCount: number;
+  fallbackName: string;
 }
 
 function ProviderBreakdownRow({
-  item,
+  entry,
   currencyCode,
-  totalCost,
-  labels,
   userId,
   startDate,
   endDate,
+  columnCount,
+  fallbackName,
 }: ProviderBreakdownRowProps) {
   const t = useTranslations("dashboard.leaderboard");
   const [open, setOpen] = useState(false);
 
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="flex items-center gap-1">
-        <CollapsibleTrigger asChild>
-          <button
-            type="button"
-            aria-expanded={open}
-            aria-label={open ? t("collapseModelStats") : t("expandModelStats")}
-            className="inline-flex cursor-pointer items-center rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          >
-            {open ? (
-              <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-            ) : (
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-            )}
-          </button>
-        </CollapsibleTrigger>
-        <div className="min-w-0 flex-1">
-          <ModelBreakdownRow
-            model={item.model}
-            requests={item.requests}
-            cost={item.cost}
-            inputTokens={item.inputTokens}
-            outputTokens={item.outputTokens}
-            cacheCreationTokens={item.cacheCreationTokens}
-            cacheReadTokens={item.cacheReadTokens}
-            currencyCode={currencyCode}
-            totalCost={totalCost}
-            labels={labels}
-          />
-        </div>
-      </div>
-      <CollapsibleContent className="pt-2 pl-6">
+    <>
+      <TableRow
+        className="bg-muted/30 hover:bg-muted/30"
+        data-testid="leaderboard-user-expanded-provider-list"
+      >
+        <TableCell>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-label={open ? t("collapseModelStats") : t("expandModelStats")}
+              className="inline-flex cursor-pointer items-center rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              onClick={() => setOpen((prev) => !prev)}
+            >
+              {open ? (
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+              )}
+            </button>
+          </div>
+        </TableCell>
+        <BreakdownCells
+          entry={entry}
+          currencyCode={currencyCode}
+          indentClass="pl-6"
+          fallbackName={fallbackName}
+        />
+      </TableRow>
+      {open ? (
         <ProviderModels
           userId={userId}
-          providerId={item.providerId}
+          providerId={entry.providerId}
           startDate={startDate}
           endDate={endDate}
-          labels={labels}
+          columnCount={columnCount}
         />
-      </CollapsibleContent>
-    </Collapsible>
+      ) : null}
+    </>
   );
 }
 
-// 用户视图行内展开区：供应商聚合（默认）与模型聚合两个 tab。
+// 用户视图行内展开区：供应商聚合（默认）与模型聚合两个 tab，行与主表逐列对齐。
 //
 // 两个 tab 同源同指标集——都取自 usage_ledger 的两条 breakdown 聚合（requests / cost /
 // inputTokens / outputTokens / cacheCreationTokens / cacheReadTokens），故可横向对账；
@@ -249,16 +296,13 @@ export function LeaderboardUserExpanded({
   userId,
   period,
   dateRange,
+  columnCount,
 }: LeaderboardUserExpandedProps) {
   const t = useTranslations("dashboard.leaderboard.userInsights");
-  const tStats = useTranslations("myUsage.stats");
   const timeZone = useTimeZone() ?? "UTC";
   const [tab, setTab] = useState("provider");
 
   const { startDate, endDate } = resolvePeriodDates(period, dateRange, timeZone);
-
-  const providerLabels = buildLabels(tStats, t("unknownProvider"));
-  const modelLabels = buildLabels(tStats, t("unknownModel"));
 
   const providerQuery = useQuery({
     queryKey: ["leaderboard-user-provider-breakdown", userId, startDate, endDate],
@@ -279,10 +323,12 @@ export function LeaderboardUserExpanded({
     enabled: tab === "model",
   });
 
-  const providerItems: ProviderBreakdownItem[] = (providerQuery.data?.breakdown ?? []).map(
+  const currencyCode = (providerQuery.data?.currencyCode ?? "USD") as CurrencyCode;
+  const modelEntries = (modelQuery.data?.breakdown ?? []).map(toBreakdownEntry);
+  const providerEntries: ProviderBreakdownEntry[] = (providerQuery.data?.breakdown ?? []).map(
     (item) => ({
       providerId: item.providerId as number,
-      model: item.providerName,
+      name: item.providerName,
       requests: item.requests,
       cost: item.cost,
       inputTokens: item.inputTokens,
@@ -291,57 +337,71 @@ export function LeaderboardUserExpanded({
       cacheReadTokens: item.cacheReadTokens,
     })
   );
-  const providerTotalCost = providerItems.reduce((sum, item) => sum + item.cost, 0);
 
   return (
-    <div className="p-3" data-testid="leaderboard-user-expanded">
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="provider" data-testid="leaderboard-user-expanded-provider-tab">
-            {t("providerBreakdown")}
-          </TabsTrigger>
-          <TabsTrigger value="model" data-testid="leaderboard-user-expanded-model-tab">
-            {t("modelBreakdown")}
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="provider" className="pt-2">
-          {providerQuery.isLoading ? (
+    <>
+      <TableRow>
+        <TableCell colSpan={columnCount} className="p-3">
+          <Tabs value={tab} onValueChange={setTab}>
+            <TabsList>
+              <TabsTrigger value="provider" data-testid="leaderboard-user-expanded-provider-tab">
+                {t("providerBreakdown")}
+              </TabsTrigger>
+              <TabsTrigger value="model" data-testid="leaderboard-user-expanded-model-tab">
+                {t("modelBreakdown")}
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </TableCell>
+      </TableRow>
+      {tab === "provider" ? (
+        providerQuery.isLoading ? (
+          <StateRow columnCount={columnCount}>
             <Skeleton className="h-16 w-full" />
-          ) : providerQuery.isError ? (
-            <div className="text-sm text-destructive">{t("loadError")}</div>
-          ) : providerItems.length === 0 ? (
-            <div className="text-sm text-muted-foreground">{t("noData")}</div>
-          ) : (
-            <div className="space-y-2" data-testid="leaderboard-user-expanded-provider-list">
-              {providerItems.map((item) => (
-                <ProviderBreakdownRow
-                  key={item.providerId}
-                  item={item}
-                  currencyCode={(providerQuery.data?.currencyCode ?? "USD") as CurrencyCode}
-                  totalCost={providerTotalCost}
-                  labels={providerLabels}
-                  userId={userId}
-                  startDate={startDate}
-                  endDate={endDate}
-                />
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        <TabsContent value="model" className="pt-2">
-          <BreakdownList
-            isLoading={modelQuery.isLoading}
-            isError={modelQuery.isError}
-            items={(modelQuery.data?.breakdown ?? []).map(toBreakdownItem)}
-            currencyCode={(modelQuery.data?.currencyCode ?? "USD") as CurrencyCode}
-            labels={modelLabels}
-            keyPrefix="leaderboard-user-models"
-            testId="leaderboard-user-expanded-model-list"
-          />
-        </TabsContent>
-      </Tabs>
-    </div>
+          </StateRow>
+        ) : providerQuery.isError ? (
+          <StateRow columnCount={columnCount}>
+            <span className="text-sm text-destructive">{t("loadError")}</span>
+          </StateRow>
+        ) : providerEntries.length === 0 ? (
+          <StateRow columnCount={columnCount}>
+            <span className="text-sm text-muted-foreground">{t("noData")}</span>
+          </StateRow>
+        ) : (
+          providerEntries.map((entry) => (
+            <ProviderBreakdownRow
+              key={entry.providerId}
+              entry={entry}
+              currencyCode={currencyCode}
+              userId={userId}
+              startDate={startDate}
+              endDate={endDate}
+              columnCount={columnCount}
+              fallbackName={t("unknownProvider")}
+            />
+          ))
+        )
+      ) : modelQuery.isLoading ? (
+        <StateRow columnCount={columnCount}>
+          <Skeleton className="h-16 w-full" />
+        </StateRow>
+      ) : modelQuery.isError ? (
+        <StateRow columnCount={columnCount}>
+          <span className="text-sm text-destructive">{t("loadError")}</span>
+        </StateRow>
+      ) : modelEntries.length === 0 ? (
+        <StateRow columnCount={columnCount}>
+          <span className="text-sm text-muted-foreground">{t("noData")}</span>
+        </StateRow>
+      ) : (
+        <ModelRows
+          entries={modelEntries}
+          currencyCode={(modelQuery.data?.currencyCode ?? "USD") as CurrencyCode}
+          indentClass="pl-6"
+          testId="leaderboard-user-expanded-model-list"
+          fallbackName={t("unknownModel")}
+        />
+      )}
+    </>
   );
 }

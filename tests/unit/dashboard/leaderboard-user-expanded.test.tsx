@@ -2,6 +2,7 @@
  * @vitest-environment happy-dom
  *
  * 排行榜用户视图行内展开区：默认供应商 tab、供应商行懒加载其模型、切到模型 tab 取模型聚合。
+ * 展开区产出的是 <tbody> 直接子行（真 <tr>），故渲染容器包在 <table><tbody> 中。
  */
 import type { ReactNode } from "react";
 import { act } from "react";
@@ -61,7 +62,9 @@ function renderExpanded(node: ReactNode) {
     root.render(
       <QueryClientProvider client={queryClient}>
         <NextIntlClientProvider locale="en" messages={messages} timeZone="UTC">
-          {node}
+          <table>
+            <tbody>{node}</tbody>
+          </table>
         </NextIntlClientProvider>
       </QueryClientProvider>
     );
@@ -89,6 +92,14 @@ function click(node: Element) {
     node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
     node.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
+}
+
+// 展开行须是 tbody 直接子行，且与主表列对齐（排名 + 4 列 = 5 格）。
+function expectTableRow(row: Element | null, columnCount = 5) {
+  expect(row).toBeTruthy();
+  expect(row!.tagName).toBe("TR");
+  expect(row!.parentElement?.tagName).toBe("TBODY");
+  expect(row!.children.length).toBe(columnCount);
 }
 
 describe("LeaderboardUserExpanded", () => {
@@ -124,7 +135,7 @@ describe("LeaderboardUserExpanded", () => {
 
   it("默认渲染供应商 tab，且不预先请求模型聚合", async () => {
     const { container, unmount } = renderExpanded(
-      <LeaderboardUserExpanded userId={7} period="daily" />
+      <LeaderboardUserExpanded userId={7} period="daily" columnCount={5} />
     );
     await flushMicrotasks();
 
@@ -138,8 +149,11 @@ describe("LeaderboardUserExpanded", () => {
     const providerList = container.querySelector(
       "[data-testid='leaderboard-user-expanded-provider-list']"
     );
+    expectTableRow(providerList);
     expect(providerList?.textContent).toContain("Provider Alpha");
     expect(providerList?.textContent).toContain("3");
+    // Token 格：总量 + 缓存命中率（5 / (100 + 10 + 5) = 4.3%）
+    expect(providerList?.textContent).toContain(" · 4.3%");
 
     const { startDate, endDate } = getDateRangeForPeriod("daily", "UTC");
     expect(mockGetUserInsightsProviderBreakdown).toHaveBeenCalledWith(7, startDate, endDate);
@@ -150,7 +164,7 @@ describe("LeaderboardUserExpanded", () => {
 
   it("展开某供应商后才懒加载并显示该供应商下的模型行", async () => {
     const { container, unmount } = renderExpanded(
-      <LeaderboardUserExpanded userId={7} period="daily" />
+      <LeaderboardUserExpanded userId={7} period="daily" columnCount={5} />
     );
     await flushMicrotasks();
 
@@ -172,6 +186,7 @@ describe("LeaderboardUserExpanded", () => {
     });
 
     const nested = container.querySelector("[data-testid='leaderboard-provider-models-11']");
+    expectTableRow(nested);
     expect(nested?.textContent).toContain("alpha-model");
 
     unmount();
@@ -179,7 +194,7 @@ describe("LeaderboardUserExpanded", () => {
 
   it("切到模型 tab 后请求并显示模型聚合", async () => {
     const { container, unmount } = renderExpanded(
-      <LeaderboardUserExpanded userId={7} period="daily" />
+      <LeaderboardUserExpanded userId={7} period="daily" columnCount={5} />
     );
     await flushMicrotasks();
 
@@ -195,11 +210,16 @@ describe("LeaderboardUserExpanded", () => {
     // 模型 tab 取的是无 providerId 过滤的全量模型聚合
     expect(mockGetUserInsightsModelBreakdown.mock.calls[0][3]).toBeUndefined();
 
-    const modelList = container.querySelector(
+    const modelList = container.querySelectorAll(
       "[data-testid='leaderboard-user-expanded-model-list']"
     );
-    expect(modelList?.textContent).toContain("model-a");
-    expect(modelList?.textContent).toContain("model-b");
+    expect(modelList.length).toBe(2);
+    expectTableRow(modelList[0]);
+    const modelListText = Array.from(modelList)
+      .map((row) => row.textContent)
+      .join(" ");
+    expect(modelListText).toContain("model-a");
+    expect(modelListText).toContain("model-b");
 
     unmount();
   });
