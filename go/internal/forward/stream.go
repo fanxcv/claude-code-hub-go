@@ -373,6 +373,11 @@ func (d Deps) gateStreamAttempt(
 	}
 
 	// 门控提交：前缀与上游正文都交给调用方，租约随之一并转移。
+	// 提交时若仍有在飞读，必须改读门控交回的续读句柄，否则那批已从上游取走的字节会丢。
+	source := response.Body
+	if result.Continuation != nil {
+		source = continuationSource{reader: result.Continuation, closer: response.Body}
+	}
 	return &attemptResponse{
 		StatusCode: response.StatusCode,
 		Status:     response.Status,
@@ -382,7 +387,7 @@ func (d Deps) gateStreamAttempt(
 			Status:              response.Status,
 			Header:              response.Header,
 			Prefix:              result.Prefix,
-			Source:              response.Body,
+			Source:              source,
 			ReaderDone:          result.ReaderDone,
 			Lease:               result.Lease,
 			Gated:               true,
@@ -755,6 +760,22 @@ func (d drainedSource) Close() error {
 		return nil
 	}
 	return d.closer.Close()
+}
+
+// continuationSource 把门控交回的续读句柄接成泵的源：Read 先交付门控提交时仍在飞
+// 的那次读已从上游取走的字节，再透传上游；Close 仍关闭上游正文。
+type continuationSource struct {
+	reader io.Reader
+	closer io.Closer
+}
+
+func (c continuationSource) Read(b []byte) (int, error) { return c.reader.Read(b) }
+
+func (c continuationSource) Close() error {
+	if c.closer == nil {
+		return nil
+	}
+	return c.closer.Close()
 }
 
 // Read 交付客户端可见的字节：先前缀，再上游。

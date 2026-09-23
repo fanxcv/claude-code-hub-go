@@ -247,6 +247,9 @@ type Result struct {
 	Marker *CommitMarker
 	// Lease 是提交后仅覆盖实际前缀占用的预算租约；调用方消费完前缀后必须 Release。
 	Lease *Lease
+	// Continuation 仅在提交时仍有一次「已从 source 取出但未交付」的在飞读时非 nil：
+	// 调用方须改读它（先交付那批在飞字节，再透传 source），否则那批字节会被丢弃。
+	Continuation io.Reader
 }
 
 // PrefixBytes 返回拼接后的前缀（无前缀时为 nil）。
@@ -287,6 +290,8 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 	var firstByteAt time.Time
 	var lease *Lease
 	leaseTransferred := false
+	// pending 跨循环迭代保留挂起的那次读（见 pendingRead 的注释：检查点唤醒不是终态）。
+	pending := newPendingRead(source)
 
 	// 分级速率闸：θ<=0 时为 nil，全部分支退回「首个内容帧即提交」的既有语义。
 	ladder := newLadderWithStages(opts.PrecommitRate, opts.ladderStages)
@@ -333,6 +338,11 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 			FramesSeen: framesSeen,
 			ReaderDone: readerDone,
 			Lease:      lease,
+		}
+		if !readerDone && pending.inFlight() {
+			// 检查点裁决路径上可能有一次读已从 source 取走字节但尚未交付；随结果交给
+			// 调用方续读，否则那批字节会凭空消失。
+			result.Continuation = pending
 		}
 		if opts.CaptureCommitMarker {
 			result.Marker = &CommitMarker{
@@ -415,8 +425,6 @@ func Run(ctx context.Context, source io.Reader, opts Options) (Result, error) {
 	}
 
 	buffer := make([]byte, readChunkBytes)
-	// pending 跨循环迭代保留挂起的那次读（见 pendingRead 的注释：检查点唤醒不是终态）。
-	pending := newPendingRead(source)
 	for {
 		// 速率闸的检查点早于任何读超时：先裁决，不依赖「上游恰好又发了字节」才推进。
 		// 否则一条彻底停住的上游会既不提交也不判慢，直到探测/静默超时兜底。
@@ -662,6 +670,13 @@ type pendingRead struct {
 	source  io.Reader
 	result  chan readOutcome
 	started bool
+
+	// buf 是在飞那次读写入的缓冲区；take 超时后仍要能从中取回已读出的字节。
+	buf []byte
+	// 未交付的在飞结果（take 超时、或结果已入 channel 但未取走），供 Read 续读。
+	pendingN   int
+	pendingErr error
+	offset     int
 }
 
 type readOutcome struct {
@@ -673,11 +688,43 @@ func newPendingRead(source io.Reader) *pendingRead {
 	return &pendingRead{source: source, result: make(chan readOutcome, 1)}
 }
 
+// inFlight 报告是否还有一次读在飞（结果可能已入 channel 但尚未取走）。
+func (p *pendingRead) inFlight() bool { return p.started }
+
+// Read 是续读句柄：先交付在飞那次读已从 source 取走的字节，再透传 source 的后续读。
+// 仅在 pendingRead 被当作 Result.Continuation 交给调用方后由下游调用。
+func (p *pendingRead) Read(b []byte) (int, error) {
+	if p.started {
+		outcome := <-p.result
+		p.started = false
+		p.pendingN = outcome.n
+		p.pendingErr = outcome.err
+		p.offset = 0
+	}
+	if p.offset < p.pendingN {
+		n := copy(b, p.buf[p.offset:p.pendingN])
+		p.offset += n
+		if p.offset < p.pendingN {
+			return n, nil
+		}
+		err := p.pendingErr
+		p.pendingN, p.pendingErr, p.offset = 0, nil, 0
+		return n, err
+	}
+	if p.pendingErr != nil {
+		err := p.pendingErr
+		p.pendingErr = nil
+		return 0, err
+	}
+	return p.source.Read(b)
+}
+
 // take 取一次读结果，超时返回 errIdleTimeout 并**保留**挂起的那次读。
 // buffer 必须在整个 Run 期间是同一块（挂起的 goroutine 已持有它）。
 func (p *pendingRead) take(ctx context.Context, buffer []byte, timeout time.Duration) (int, error) {
 	if !p.started {
 		p.started = true
+		p.buf = buffer
 		go func() {
 			n, err := p.source.Read(buffer)
 			p.result <- readOutcome{n: n, err: err}

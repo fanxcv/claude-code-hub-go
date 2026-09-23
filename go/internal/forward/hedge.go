@@ -642,12 +642,17 @@ func (r *hedgeRace) runGate(
 	if err != nil {
 		return nil, err
 	}
+	// 提交时若仍有在飞读，必须改读门控交回的续读句柄，否则那批已从上游取走的字节会丢。
+	source := response.Body
+	if result.Continuation != nil {
+		source = continuationSource{reader: result.Continuation, closer: response.Body}
+	}
 	return &streamAttempt{
 		StatusCode:          response.StatusCode,
 		Status:              response.Status,
 		Header:              response.Header,
 		Prefix:              result.Prefix,
-		Source:              response.Body,
+		Source:              source,
 		ReaderDone:          result.ReaderDone,
 		UpstreamFirstByteAt: upstreamFirstByteAt,
 		Lease:               result.Lease,
