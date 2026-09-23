@@ -1,4 +1,4 @@
-package forward
+package rectify
 
 import (
 	"bytes"
@@ -8,8 +8,10 @@ import (
 // 本文件承载 native（同协议）路上 Responses 正文的一处定点归一：
 // `input[]` 里 function_call 项的**空参数**（`"arguments":""`）改写为规范无参形态 `"arguments":"{}"`。
 //
-// 为什么需要：native 路把客户端正文字节原样透传（plan.go 正文分支里 `plan.Conversion == nil` 那一边），
-// 编解码器里本有的同名归一（convert/codec_responses.go 的 responsesFunctionCallItem）根本不跑。
+// 为什么是主动型：发送前直接归一，不带触发词、不带重试（同 StripBillingHeader / NormalizeResponseInput）。
+//
+// 为什么需要：native 路把客户端正文字节原样透传（调用方见 forward 的正文定稿处，`plan.Conversion == nil`
+// 那一边），编解码器里本有的同名归一（convert/codec_responses.go 的 responsesFunctionCallItem）根本不跑。
 // 而 codex 型上游用 `buger/jsonparser` 解析每个 function_call 的 arguments，空串一律回
 // `failed to parse function call arguments`（生产：ollama.com/v1/responses 的 400）。
 // 空参数改 `{}` 本就是 Responses 线的规范形态——跨协议路一直这么发，这里只是让两条路一致。
@@ -18,9 +20,9 @@ import (
 // 键序、数字字面量、空白与转义写法都不许动，而 map 往返会重排键并把大整数变成 float64
 // （同 dataplane 的 errorMessageSpan 的取舍）。
 
-// normalizeResponsesEmptyToolArgs 把正文里所有「顶层 input[] 的 function_call 项、arguments 为空串」
+// NormalizeResponsesEmptyToolArgs 把正文里所有「顶层 input[] 的 function_call 项、arguments 为空串」
 // 的值改写成 `{}`。无此类项时返回**原切片**（不重新序列化，零扰动）。
-func normalizeResponsesEmptyToolArgs(body []byte) []byte {
+func NormalizeResponsesEmptyToolArgs(body []byte) []byte {
 	spans := responsesEmptyArgsSpans(body)
 	if len(spans) == 0 {
 		return body

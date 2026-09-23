@@ -11,6 +11,7 @@ import (
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/rectify"
 )
 
 // 计划构造阶段的可判别错误。
@@ -446,12 +447,12 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		body = completed
 	}
 	// 空参数归一：native 路（无转换）且目标线为 openai-responses 时，把 input[] 里 function_call 的
-	// `"arguments":""` 改成规范无参形态 `"{}"`（见 responses_empty_tool_args.go 的「为什么」）。
+	// `"arguments":""` 改成规范无参形态 `"{}"`（见 rectify.NormalizeResponsesEmptyToolArgs 的「为什么」）。
 	//
 	// 为什么在**这里**：它必须是正文的最后一步，否则会被后续改写覆盖。
 	// 为什么只做 native：跨协议路在编解码器里（convert/codec_responses.go）已归一，重复处理无意义。
 	if plan.Conversion == nil && plan.Protocol == convert.ProtocolOpenAIResponses && body != nil {
-		body = normalizeResponsesEmptyToolArgs(body)
+		body = rectify.NormalizeResponsesEmptyToolArgs(body)
 	}
 	plan.Body = body
 	plan.ContentLength = int64(len(body))
