@@ -691,10 +691,7 @@ func TestUpstreamWSSkipIsObservable(t *testing.T) {
 	}
 }
 
-// 本文件的一处已知缺口（不在本轮范围，仅记事实）：竞速一轮**彻底失败**时
-// ForwardStreamHedge 返回 (nil, err)，数据面走 settleFailure，而那条结算造的 Result 不带
-// Attempts；链载荷只在 len(result.Attempts) > 0 时才写（storeSettler.NonStream）
-// ⇒ 失败轮次的 provider_chain 为空（本文件修前跑出的红就是一个空链）。
-//
-// 影响：上游 WS 的失败留痕只可能在**有胜者**的轮次里被看见（例如首候选失败、备选接手）。
-// 修它要给失败轮次补一条带 Attempts 的结算路径（属数据面结算缝的改动），本轮不做。
+// 竞速一轮**彻底失败**时的终态留痕（2026-09-24 已修）：ForwardStreamHedge 现在返回带 Attempts
+// 的 Result 并在 forward 内结算一次（见 hedge.go 的 exhaustedResultLocked 与 finish），
+// 于是失败轮次同样写出 provider_chain / routing_trace。
+// 回归钉子：forward/hedge_exhaust_test.go 与 dataplane/hedge_exhaustion_settle_test.go。

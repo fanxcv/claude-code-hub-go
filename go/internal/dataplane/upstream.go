@@ -688,6 +688,15 @@ func (s *storeSettler) slowDiverts() []terminal.SlowDivert {
 			appendDivert(divert.ProviderID, string(divert.Cause))
 		}
 	}
+	// 主路径（守卫链初选）的决策上下文**不在** selections 里：那条 capture 由 candidateSource
+	// 从 DB 投影（只含身份/权重/优先级/倍率/分组），选路器算出的 DecisionContext 只落在 pctx
+	// 的选择期链条目上（见 guard/adapters_route.go 的 SetSelectionChainEntry）。不补这一段，
+	// 主路径的改道恒为 0——生产实测：当日 slow_rate_cooldown 剔除 844 次，cch:slowdivert:* 零键。
+	if entry, ok := s.decodeSelectionChainEntry(); ok && entry.DecisionContext != nil {
+		for _, divert := range route.DivertedAll(*entry.DecisionContext) {
+			appendDivert(divert.ProviderID, string(divert.Cause))
+		}
+	}
 	// 无候选那条路径上的改道（503）单独收：那里没有选路结果可供扫描。
 	for _, divert := range s.state.divertsSnapshot() {
 		appendDivert(divert.ProviderID, string(divert.Cause))
@@ -900,6 +909,21 @@ func applyAttemptDetails(item *route.ChainItem, attempt forward.AttemptOutcome) 
 //
 // 留痕缺失时返回 false，调用方跳过链首，而不是编造一条。
 func (s *storeSettler) selectionChainEntry(attempts []forward.AttemptOutcome) (route.ChainItem, bool) {
+	entry, ok := s.decodeSelectionChainEntry()
+	if !ok {
+		return route.ChainItem{}, false
+	}
+	if entry.Reason == string(route.ReasonSelectedInitial) && !firstAttemptSucceeded(attempts) {
+		return route.ChainItem{}, false
+	}
+	return entry, true
+}
+
+// decodeSelectionChainEntry 解出守卫链的选路留痕（不做「该不该当链首」的取舍）。
+//
+// 两个消费方共用这份解码：provider_chain 的链首按 Node 的条件取舍（见 selectionChainEntry），
+// 而改道计数要的是**每一次选路的决策上下文**，与链首取舍无关（见 slowDiverts）。
+func (s *storeSettler) decodeSelectionChainEntry() (route.ChainItem, bool) {
 	if s == nil || s.state == nil || s.state.PC == nil {
 		return route.ChainItem{}, false
 	}
@@ -911,9 +935,6 @@ func (s *storeSettler) selectionChainEntry(attempts []forward.AttemptOutcome) (r
 	if err := json.Unmarshal(raw, &entry); err != nil {
 		// 留痕是自产自读的 JSON；解不动说明两侧版本不匹配，记一条告警后跳过。
 		s.logger.Warn("dataplane.selection_chain_entry_undecodable", map[string]any{"error": err.Error()})
-		return route.ChainItem{}, false
-	}
-	if entry.Reason == string(route.ReasonSelectedInitial) && !firstAttemptSucceeded(attempts) {
 		return route.ChainItem{}, false
 	}
 	return entry, true

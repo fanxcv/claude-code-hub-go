@@ -254,12 +254,29 @@ func ForwardStreamHedge(
 
 	race.launchAttempt(initial, maxInFlight)
 
+	// finish 是唯一的出口收口：竞速耗尽（有尝试留痕、无胜者）时终态必须在这里落库一次，
+	// 与串行路径 forwardLoop 的 defer 同口径。少了它，dataplane 只翻归因、不写终态，
+	// 尝试留痕无处可去——竞速耗尽的行 provider_chain=[]、routing_trace=null（生产实测）。
+	finish := func(out hedgeResult) (*StreamResult, error) {
+		if out.result != nil && out.result.Stream == nil && len(out.result.Attempts) > 0 && deps.Settle != nil {
+			var failure *Failure
+			_ = errors.As(out.err, &failure)
+			if err := deps.Settle(ctx, pc, &out.result.Result, failure); err != nil {
+				deps.logger().Warn("forward.hedge.settle_failed", map[string]any{
+					"status_code": out.result.StatusCode,
+					"error":       err.Error(),
+				})
+			}
+		}
+		return out.result, out.err
+	}
+
 	select {
 	case <-ctx.Done():
 		// 请求被客户端取消：若胜者同时到达，让胜者胜出。
 		select {
 		case result := <-race.resultCh:
-			return result.result, result.err
+			return finish(result)
 		default:
 		}
 		return nil, &Failure{
@@ -269,7 +286,7 @@ func ForwardStreamHedge(
 			Err:        ctx.Err(),
 		}
 	case result := <-race.resultCh:
-		return result.result, result.err
+		return finish(result)
 	}
 }
 
@@ -949,6 +966,11 @@ func (r *hedgeRace) startedOffset() time.Time { return r.options.StartedAt }
 func (r *hedgeRace) launchedSnapshot() []int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.launchedSnapshotLocked()
+}
+
+// launchedSnapshotLocked 见 launchedSnapshot；必须持有 mu。
+func (r *hedgeRace) launchedSnapshotLocked() []int64 {
 	return append([]int64(nil), r.launched...)
 }
 
@@ -1183,7 +1205,37 @@ func (r *hedgeRace) maybeFinishLocked() {
 		// 而不是一个「供应商耗尽」的 5xx。
 		err = r.statefulRejection
 	}
-	r.resultCh <- hedgeResult{err: err}
+	// 只有真的失败（err 非空）才附上结果：err 为空的穷尽路径与接线前逐字一致
+	// （err 为空的形态只在两个归因都缺失时出现，那不属于「尝试失败」）。
+	var result *StreamResult
+	if err != nil {
+		result = r.exhaustedResultLocked()
+	}
+	r.resultCh <- hedgeResult{result: result, err: err}
+}
+
+// exhaustedResultLocked 造「全部尝试失败」的终局结果；必须持有 mu。
+//
+// 与串行路径同一契约（见 stream.go 的 ForwardStream 返回值说明与 forwardLoop 的 exitWithError）：
+// 只要真的尝试过，Result 就必须非 nil 且带尝试留痕——终态链只在 len(Attempts) > 0 时才写
+// （见 storeSettler.NonStream）。缺了它，竞速耗尽的行 provider_chain=[]、routing_trace=null
+// （生产实测：16 行 provider_id=167 / status_code=524 的记录）。
+//
+// 零尝试（候选全在计划阶段被状态型字段拒掉）时交回 nil：那条路径由调用方翻成 400 并自行结算
+// （见 stateful_skip_test.go 的两条穷尽断言）。
+func (r *hedgeRace) exhaustedResultLocked() *StreamResult {
+	if len(r.outcomes) == 0 {
+		return nil
+	}
+	return &StreamResult{
+		Result: Result{
+			Attempts:                r.sortedOutcomesLocked(),
+			TotalProvidersAttempted: r.launchedSnapshotLocked(),
+			DetectorMissing:         r.deps.Detector == nil,
+			StartedAt:               r.options.StartedAt,
+			EndedAt:                 r.now(),
+		},
+	}
 }
 
 // finishIfExhausted 无 mu 版本：拿锁后检查耗尽。
@@ -1328,6 +1380,11 @@ func (r *hedgeRace) appendLoserOutcomeLocked(attempt *hedgeAttempt, reason strin
 func (r *hedgeRace) sortedOutcomes() []AttemptOutcome {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.sortedOutcomesLocked()
+}
+
+// sortedOutcomesLocked 见 sortedOutcomes；必须持有 mu。
+func (r *hedgeRace) sortedOutcomesLocked() []AttemptOutcome {
 	out := append([]AttemptOutcome(nil), r.outcomes...)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Attempt < out[j].Attempt })
 	return out
