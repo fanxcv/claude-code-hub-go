@@ -298,6 +298,20 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 	penalties, quarantineStates := s.slowRateAssessments(ctx, providers, req)
 	cooldown := s.slowRateCooldown(ctx, providers, req)
 	quarantineExcluded := quarantineExclusions(quarantineStates, req.KeyID, req.SessionID, now)
+	// underSlowQuarantine 是「本次不得被亲和粘住」的判据：**带隔离态**即真（含闸门放行的家）。
+	//
+	// 为何不能只看 quarantineExcluded：那只收「闸门拒」的家，而闸门放行（连续干净样本把放行
+	// 比例抬到 10%/30% 档）的家仍在 quarantineStates 里、却不进排除集。若亲和闸只认前者，
+	// 放行档的慢渠道会被会话绑定/前缀亲和短路选中，其余候选全部 affinitySkipped——生产 1081750
+	// 即此形态（慢渠道被粘住，健康候选一个没参与）。
+	//
+	// 不变量：quarantineExcluded 的键集恒为 quarantineStates 的子集——quarantineExclusions
+	// 唯一写入的键来自遍历 states。故本判据等价于「该家是否在 quarantineStates 里」。将来若
+	// 把别的排除来源并进 quarantineExcluded，须在此显式扩判据，勿依赖隐式兜底。
+	underSlowQuarantine := func(providerID int64) bool {
+		_, quarantined := quarantineStates[providerID]
+		return quarantined
+	}
 
 	filtered := s.applyFilters(ctx, providers, filterInput{
 		requestedModel: req.Model,
@@ -369,7 +383,7 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 			bound, nomination := s.nominateBySessionBinding(ctx, req, excluded)
 			// 隔离必须能拦住**会话绑定**（否则被粘住的会话会一次次绕过隔离撞回同一家）。
 			// 拦下后不直接返回：走后续层级，仍记录本次跳过的原因。
-			if nomination == sessionBindingNominated && !quarantineExcluded[bound.ID] {
+			if nomination == sessionBindingNominated && !underSlowQuarantine(bound.ID) {
 				selectedPriority := resolveEffectivePriority(bound, req.Group, penalties)
 				survivors := affinitySurvivors(filtered.healthy, bound.ID, req.Group, penalties)
 				dc.SurvivingCandidates = survivors
@@ -403,6 +417,11 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 				req.SessionBinding,
 				nomination == sessionBindingLookupFailed,
 			)
+			// 闸门放行的隔离家不在 FilteredProviders 里（它没被过滤），上面那条留痕会把它
+			// 误记成结构性失效；隔离是临时原因（放行档随连续干净样本抬回），据事实改记 transient。
+			if nomination == sessionBindingNominated && underSlowQuarantine(bound.ID) {
+				bindingBypass = SessionBindingBypassTransient
+			}
 		}
 		// 前缀层触发条件：客户端身份缺失，或强制前缀模式（忽略会话 ID）。
 		//
@@ -414,7 +433,7 @@ func (s *Selector) resolve(ctx context.Context, req Request, withAffinity bool) 
 			nominate, lookup, writeback, affinityIdentity, nominated = s.nominateByAffinity(ctx, req, dc.FilteredProviders, excluded)
 		}
 	}
-	if nominated && !quarantineExcluded[nominate.Provider.ID] {
+	if nominated && !underSlowQuarantine(nominate.Provider.ID) {
 		// 留痕「因亲和短路而未参与竞争」的那批候选。必须在短路返回之前记下：此后
 		// filtered.health 就不再被读过，漏在这里即永久丢失（用户看到的「1/2/3 都没参与决策」
 		// 就是漏记造成的）。
