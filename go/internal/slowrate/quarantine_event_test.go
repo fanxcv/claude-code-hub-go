@@ -13,8 +13,11 @@ import (
 // 成因混成一个，都不会报错——只会在界面上静默给出错的次数。
 
 // TestQuarantineEnteredRecordedOncePerEpisode 钉住：达标那一次记一条，其后每个慢样本不重复记。
+//
+// 用 recoveryTestRedis：本判据须在 CI 默认跑法（不设 CCH_TEST_REDIS_URL）下也真的能拦，
+// 否则把 RecordQuarantineEntered 注释掉都不会转红。
 func TestQuarantineEnteredRecordedOncePerEpisode(t *testing.T) {
-	h := newRecoveryHarness(t, 9310, 10)
+	h := newRecoveryHarnessOn(t, recoveryTestRedis(t), 9310, 10)
 	ctx := context.Background()
 
 	// 触发阈值是 3（harness 的 params）：前两条未达阈值，不推进状态、不记事件。
@@ -48,7 +51,7 @@ func TestQuarantineEnteredRecordedOncePerEpisode(t *testing.T) {
 
 // TestQuarantineEnteredCarriesPrecommitTrigger 钉住第二条写入路径的成因不被吞掉。
 func TestQuarantineEnteredCarriesPrecommitTrigger(t *testing.T) {
-	h := newRecoveryHarness(t, 9311, 10)
+	h := newRecoveryHarnessOn(t, recoveryTestRedis(t), 9311, 10)
 	ctx := context.Background()
 
 	for _, requestID := range []int64{2001, 2002, 2003} {

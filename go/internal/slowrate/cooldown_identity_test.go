@@ -11,8 +11,11 @@ import (
 //
 // 为什么必须一致：读侧（route.SlowRateReader.InCooldown）在 keyID==0 时直接返回空集，压根不会
 // 去查键；写侧若仍按 keyID=0 写下键，那把键永远读不到，只留下一个 60 秒后自灭的死键。
+//
+// 用 recoveryTestRedis：本判据须在 CI 默认跑法（不设 CCH_TEST_REDIS_URL）下也真的能拦，
+// 否则把 writeCooldown 的 KeyID 校验放宽都不会转红。
 func TestCooldownWriteRequiresKeyIdentity(t *testing.T) {
-	h := newRecoveryHarness(t, 9106, 10)
+	h := newRecoveryHarnessOn(t, recoveryTestRedis(t), 9106, 10)
 	ctx := context.Background()
 
 	// keyID=0：无 key 身份，不写。

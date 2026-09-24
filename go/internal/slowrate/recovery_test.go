@@ -3,6 +3,7 @@ package slowrate
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -61,14 +62,25 @@ func recoveryRedis(t *testing.T) redis.UniversalClient {
 // 尤其**不做 flushdb**（该库多包共用）。
 func clearSlowKeys(t *testing.T, client redis.UniversalClient, providerID int64, modelKey string) {
 	t.Helper()
-	err := client.Del(context.Background(),
+	ctx := context.Background()
+	// 冷却键也要清：写侧一旦判慢就 SETEX 一把 60 秒 TTL 的冷却键（session.ProviderCooldownKey）。
+	// 断言「keyID=0 不写冷却键」「重置后冷却键仍在」这类**存在性**判据时，上一轮的残留（或同一
+	// 天里相邻的同 provider 用例）会让紧随其后的用例假红——换 sessionID 看似不撞，但同一用例
+	// 重跑、或上一轮被 kill 掉不执行 t.Cleanup 时就会撞。键里带会话身份（hash tag 由
+	// sessionID×keyID 派生），无法逐个枚举，只能按渠道前缀扫。
+	cooldownKeys, err := client.Keys(ctx,
+		fmt.Sprintf("session-binding:v1:*:provider:%d:cooldown", providerID)).Result()
+	if err != nil {
+		t.Errorf("扫渠道 %d 的冷却键失败: %v", providerID, err)
+	}
+	keys := append([]string{
 		samplesKey(providerID, modelKey),
 		stateKey(providerID, modelKey),
 		cleanStreakKey(providerID, modelKey),
 		baselineKey(providerID, modelKey),
 		slowlog.Key(providerID),
-	).Err()
-	if err != nil {
+	}, cooldownKeys...)
+	if err := client.Del(ctx, keys...).Err(); err != nil {
 		t.Errorf("清组合 {%d:%s} 的残留键失败: %v", providerID, modelKey, err)
 	}
 }
@@ -88,7 +100,18 @@ type recoveryHarness struct {
 
 func newRecoveryHarness(t *testing.T, providerID int64, recoveryRequests int) *recoveryHarness {
 	t.Helper()
-	client := recoveryRedis(t)
+	return newRecoveryHarnessOn(t, recoveryRedis(t), providerID, recoveryRequests)
+}
+
+// newRecoveryHarnessOn 与 newRecoveryHarness 同构，只是显式收 Redis 客户端：
+// 需要在不设 CCH_TEST_REDIS_URL 时也真跑起来的判据（W1/W4）用 recoveryTestRedis 选真库或替身。
+func newRecoveryHarnessOn(
+	t *testing.T,
+	client redis.UniversalClient,
+	providerID int64,
+	recoveryRequests int,
+) *recoveryHarness {
+	t.Helper()
 	model := "recovery-probe-model"
 	clearSlowKeys(t, client, providerID, model)
 	h := &recoveryHarness{
