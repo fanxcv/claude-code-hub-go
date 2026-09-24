@@ -13,7 +13,7 @@ import (
 //
 //	① 无替代候选时不因隔离而失败（软信号 fail-open）
 //	② 存量惩罚数据不被当作隔离（可区分来源的标记）
-//	③ 探针租约唯一（最多 1 个在飞 / 每 30 秒最多 1 个）
+//	③ 探针租约唯一（同一组合最多 1 个在飞）
 //	④ 阶梯只升不降，任何慢样本回到 0%（由写侧删连续干净计数实现）
 //	⑤ 亲和不得绕过隔离
 //
@@ -166,12 +166,19 @@ func TestQuarantineFailsOpenForSoleCandidate(t *testing.T) {
 
 // TestSlowProbeLeaseIsExclusiveAndDirected 钉住 ③：租约唯一、命中者被**定向**到被隔离的渠道。
 //
+// 单飞的完整语义（续租、终态释放、compare-and-delete）另见 probe_lease_test.go；本用例只钉
+// 「选路层第二次拿不到」这一面。
+//
 // 反证：把 AcquireSlowProbe 的 `SetNX` 改成 `Set` ⇒ 第二次选路也会拿到租约，第二条断言红。
 func TestSlowProbeLeaseIsExclusiveAndDirected(t *testing.T) {
 	client := quarantineRedis(t, 1, "m1", true, 0)
 	selector := newFailOpenSelector(t, client, slowRateProvider(1), slowRateProvider(2))
+	// 请求级 ctx：探针租约的续租 goroutine 随它退出（见 keepSlowProbeAlive）；用
+	// context.Background() 会让该 goroutine 随测试进程一直存活。
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	first, err := selector.Select(context.Background(), Request{Model: "m1", SessionID: "s1", KeyID: 7})
+	first, err := selector.Select(ctx, Request{Model: "m1", SessionID: "s1", KeyID: 7})
 	if err != nil {
 		t.Fatalf("首次选路失败: %v", err)
 	}
@@ -189,12 +196,12 @@ func TestSlowProbeLeaseIsExclusiveAndDirected(t *testing.T) {
 		t.Errorf("探针选的 bypass = %v，期望 transient", first.SessionBindingBypass)
 	}
 
-	second, err := selector.Select(context.Background(), Request{Model: "m1", SessionID: "s1", KeyID: 7})
+	second, err := selector.Select(ctx, Request{Model: "m1", SessionID: "s1", KeyID: 7})
 	if err != nil {
 		t.Fatalf("第二次选路失败: %v", err)
 	}
 	if second.SlowProbe != nil {
-		t.Fatal("租约期内第二次选路仍拿到探针：最多 1 个在飞 / 每 30 秒最多 1 个的上界失效")
+		t.Fatal("租约期内第二次选路仍拿到探针：同一组合最多 1 个在飞的上界失效")
 	}
 	if second.Provider == nil || second.Provider.ID != 2 {
 		t.Fatalf("第二次选中 = %v，期望 2（租约被占，隔离生效，改选替代候选）", second.Provider)

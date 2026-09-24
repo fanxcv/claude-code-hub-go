@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +31,12 @@ type slowRateRedis struct {
 	zcountRanges []string
 	// readKeys 记录被读过的键，用于钉住「某个键根本没被读」（比「没调 Redis」更精确）。
 	readKeys []string
+	// renewalCalls 记录**成功续到自己租约**的次数，用于钉住「在飞期间真的在续租」。
+	// 值不匹配的续租不计入（它们什么都没做，见 Eval）。
+	renewalCalls int
+	// mu 保护 values / renewalCalls：探针租约的续租与释放发生在后台 goroutine 里，
+	// 用例从主 goroutine 读这两个状态，不加锁则在 `go test -race` 下是真数据竞争。
+	mu sync.Mutex
 	// getErrs 让指定键的 Get 返回**真实错误**（非 redis.Nil），用于钉住「基线读失败也不施惩罚」。
 	// 它与「键缺失」（values 未命中 ⇒ redis.Nil）是两条不同的路径，必须能分别构造。
 	getErrs map[string]error
@@ -55,6 +62,8 @@ func (f *slowRateRedis) Pipelined(
 // 替身比真依赖宽容的话，那条钉子会退化成假绿。
 func (f *slowRateRedis) SetNX(_ context.Context, key string, value any, _ time.Duration) *redis.BoolCmd {
 	cmd := redis.NewBoolCmd(context.Background())
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.values == nil {
 		f.values = map[string]string{}
 	}
@@ -66,6 +75,55 @@ func (f *slowRateRedis) SetNX(_ context.Context, key string, value any, _ time.D
 	f.values[key] = text
 	cmd.SetVal(true)
 	return cmd
+}
+
+// Eval 实现探针租约的续租与释放两条 Lua（compare-and-*）。
+//
+// 替身按脚本**内容**分派，不是按调用点硬编码：脚本里出现 GET 才做持有者比对，出现 DEL 才删，
+// 出现 PEXPIRE 才算一次成功续租，其余一律报错（不静默放过）。
+//
+// 为何必须真的解释脚本：把「比对」写进替身的调用点，生产脚本去掉比对（改成无条件 DEL）时
+// 替身仍会拒绝删别人的键，那条钉子就假绿了。
+func (f *slowRateRedis) Eval(_ context.Context, script string, keys []string, args ...any) *redis.Cmd {
+	cmd := redis.NewCmd(context.Background())
+	if len(keys) != 1 || len(args) < 1 {
+		cmd.SetErr(errors.New("slowRateRedis: 只支持单键 + 至少一个参数"))
+		return cmd
+	}
+	holder, _ := args[0].(string)
+	key := keys[0]
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if strings.Contains(script, "GET") && f.values[key] != holder {
+		cmd.SetVal(int64(0))
+		return cmd
+	}
+	switch {
+	case strings.Contains(script, "DEL"):
+		delete(f.values, key)
+	case strings.Contains(script, "PEXPIRE"):
+		f.renewalCalls++
+	default:
+		cmd.SetErr(errors.New("slowRateRedis: 不认识的脚本: " + script))
+		return cmd
+	}
+	cmd.SetVal(int64(1))
+	return cmd
+}
+
+// leaseValue 并发安全地读租约键（后台续租/释放 goroutine 与用例分属不同协程）。
+func (f *slowRateRedis) leaseValue(key string) (string, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	value, ok := f.values[key]
+	return value, ok
+}
+
+// renewalCount 并发安全地读成功续租计数。
+func (f *slowRateRedis) renewalCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.renewalCalls
 }
 
 // slowRatePipeline 把命令落到 map 上，语义对齐 Redis：键不存在即 redis.Nil。
