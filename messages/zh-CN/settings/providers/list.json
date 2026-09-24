@@ -134,16 +134,29 @@
       "kinds": {
         "penalty_up": "降权升档",
         "penalty_down": "降权降档",
+        "quarantine_entered": "进入隔离",
         "baseline_published": "基线发布",
         "baseline_revoked": "基线撤销"
       },
       "detail": {
         "penalty": "降权量 {from} → {to}",
+        "penaltyReason": "降权量 {from} → {to}（原因 {reason}）",
+        "quarantine": "触发原因 {reason}",
         "baseline": "中位数 {median} tok/s，样本 {samples}，来源 {source}",
         "revoked": "撤销原因 {reason}"
       },
       "diverts": {
         "summary": "最近 {hours} 小时：因低速被改道 {total} 次（会话冷却 {cooldown}、渠道降权 {penalty}）"
+      },
+      "quarantine": {
+        "title": "当前隔离态",
+        "enteredCount": "最近 {hours} 小时进入隔离 {count} 次",
+        "empty": "该渠道当前没有组合处于隔离中。",
+        "unavailable": "隔离态暂不可读（{reason}）。",
+        "stateQuarantined": "隔离中",
+        "stateNormal": "未隔离",
+        "penalty": "降权量 {value}",
+        "admission": "放行比例 {permille}/1000"
       }
     }
   }

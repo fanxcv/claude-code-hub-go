@@ -1,4 +1,4 @@
-// Package slowlog 记录低速降权的**事件**（不是样本）：惩罚升/降档、基线发布/撤销。
+// Package slowlog 记录低速降权的**事件**（不是样本）：惩罚升/降档、进入隔离、基线发布/撤销。
 //
 // 为什么是独立包：写侧在 internal/slowrate 与 internal/jobs 两处（那两处正由并行 lane 改动），
 // 读侧在 internal/adminapi（管理面端点）。把键形制、序列化与读写在同一个包里定死，两侧只各留
@@ -32,6 +32,12 @@ const (
 	// 读到的旧值就是 0，于是自然产生一条 `0 -> N` 的升档、以及此前删键时的 `N -> 0` 降档。
 	// 单列「reset」需要恢复策略那处多写一行，而那一行不在本包的文件里（见报告「未接线」）。
 	KindPenaltyDown Kind = "penalty_down"
+	// KindQuarantineEntered 渠道进入隔离：该组合窗内慢样本达触发阈值，读侧开始按惩罚挡流量。
+	//
+	// 与 KindPenaltyUp 的分工：升档记的是「降权量从多少变到多少」，本事件记的是「关进隔离了」。
+	// 一次隔离期内只应产生一条（进入时；恢复删键后再次达标才算新的一次），故界面可按它数
+	// 「今日隔离多少次」——此前四档事件里没有任何一条能回答这个问题。
+	KindQuarantineEntered Kind = "quarantine_entered"
 	// KindBaselinePublished 基线发布（含中位数与样本数）。
 	KindBaselinePublished Kind = "baseline_published"
 	// KindBaselineRevoked 基线撤销（陈旧基线不再支配读侧）。
@@ -163,6 +169,30 @@ func RecordPenaltyChange(
 		ModelKey:    modelKey,
 		PenaltyFrom: &from,
 		PenaltyTo:   &to,
+	})
+}
+
+// RecordQuarantineEntered 记一次「进入隔离」。
+//
+// 去重在写侧（旧惩罚为 0/缺失才调用，见 slowrate.advanceSlowState）：本函数无条件写，
+// 调用方负责只在「未隔离 -> 隔离」那一次调用它。reason 是触发原因（实测慢样本 / 提交前判废），
+// 与基线事件的 source 同形——原样透传，界面自行解释。
+func RecordQuarantineEntered(
+	ctx context.Context,
+	client redis.UniversalClient,
+	logger Logger,
+	providerID int64,
+	modelKey string,
+	reason string,
+) {
+	if client == nil || providerID <= 0 {
+		return
+	}
+	Record(ctx, client, logger, Event{
+		Kind:       KindQuarantineEntered,
+		ProviderID: providerID,
+		ModelKey:   modelKey,
+		Reason:     reason,
 	})
 }
 

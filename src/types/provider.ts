@@ -799,6 +799,7 @@ export interface ProviderCircuitLogs {
 export type ProviderSlowLogKind =
   | "penalty_up"
   | "penalty_down"
+  | "quarantine_entered"
   | "baseline_published"
   | "baseline_revoked";
 
@@ -836,6 +837,13 @@ export interface ProviderSlowLogs {
    * 两个分项不合并成一个总数：成因不同（会话冷却 vs 渠道降权），下一步动作也不同。
    */
   diverts: ProviderSlowLogsDiverts | null;
+  /**
+   * 当前隔离运行态（每「模型」组合一行）。
+   *
+   * 与 diverts/events 回答的问题不同：那两者是「历史上发生了什么」，本块是「机制现在在哪一档」。
+   * null 表示后端未装配该读面——与「无组合处于隔离」必须可区分。
+   */
+  quarantine: ProviderSlowLogsQuarantine | null;
   /** 仅在「读不到」时给出；此时 events 为空数组。 */
   unavailableReason: string | null;
 }
@@ -849,6 +857,36 @@ export interface ProviderSlowLogsDiverts {
   cooldown: number;
   /** 渠道级降权把该渠道挤出（它本会更优先）的次数。 */
   penalty: number;
+}
+
+/** 当前隔离运行态（存储侧 route.SlowRateStateObservation 投影）。 */
+export interface ProviderSlowLogsQuarantine {
+  combinations: ProviderSlowLogsQuarantineCombination[];
+  /** 仅在「读不到」时给出（与顶层同名字段同一取值口径）。 */
+  unavailableReason: string | null;
+}
+
+/** 一个 (渠道, 模型) 组合的当前隔离运行态。 */
+export interface ProviderSlowLogsQuarantineCombination {
+  modelKey: string;
+  /** 真表示该组合真的被计过惩罚（状态键只由慢路径创建）。 */
+  stateExists: boolean;
+  /** 选路侧当前是否把它当隔离（活窗派生的惩罚为正 + 基线可用）。 */
+  quarantined: boolean;
+  /** 当前生效降权量（活窗派生）。 */
+  penalty: number;
+  /** 当前有效放行比例（千分比）：1000 = 不挡流量。 */
+  admissionPermille: number;
+  /** 活窗内的慢样本数。 */
+  sampleLiveCount: number;
+  /** 连续干净样本数，即准入阶梯的唯一输入。 */
+  cleanStreak: number;
+  /** 假表示这条组合没在监控范围内（写侧无可用基线即整段跳过）。 */
+  baselineUsable: boolean;
+  /** 探针租约键存在（有探针在飞，或刚飞完还没到 TTL）。 */
+  probeLeaseHeld: boolean;
+  /** 租约剩余毫秒；-1 表示无租约键。 */
+  probeLeaseTtlMillis: number;
 }
 
 export interface CreateProviderData {

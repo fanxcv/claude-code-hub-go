@@ -433,6 +433,8 @@ function SlowLogsBlock({
           })}
         </span>
       </div>
+      {/* 隔离运行态（当前档位）先于改道汇总（历史后果）：运维最先要看的是「现在挡不挡」。 */}
+      <QuarantineBlock payload={payload} />
       {/* 改道汇总（用户 2026-09-22 需求）：回答「压下来之后实际挡掉了多少流量」。
           与下面的事件表分工——事件回答「什么时候被压/恢复」，本行回答「后果有多大」。
 
@@ -510,10 +512,16 @@ function formatSlowLogDetail(
   t: ReturnType<typeof useTranslations>
 ): string {
   if (event.kind === "penalty_up" || event.kind === "penalty_down") {
-    return t("slow.detail.penalty", {
-      from: event.penaltyFrom ?? 0,
-      to: event.penaltyTo ?? 0,
-    });
+    // 渲染 reason 才能区分「真恢复解除」（reason=recovery）与「滑窗衰减重算」——
+    // 两者都是 penalty_down，只看 from/to 在界面上同形（真恢复 from=N to=0，重算也可能 to=0）。
+    const from = event.penaltyFrom ?? 0;
+    const to = event.penaltyTo ?? 0;
+    return event.reason
+      ? t("slow.detail.penaltyReason", { from, to, reason: event.reason })
+      : t("slow.detail.penalty", { from, to });
+  }
+  if (event.kind === "quarantine_entered") {
+    return t("slow.detail.quarantine", { reason: event.reason ?? "-" });
   }
   if (event.kind === "baseline_published") {
     return t("slow.detail.baseline", {
@@ -523,6 +531,60 @@ function formatSlowLogDetail(
     });
   }
   return t("slow.detail.revoked", { reason: event.reason ?? "-" });
+}
+
+/**
+ * 隔离运行态块：回答「机制现在在哪一档」，与事件/改道读数（历史）分工。
+ *
+ * 为何必须有它：只有改道读数时，一个正在隔离的渠道若恰好改道数为 0，界面会显示「因低速被改道 0 次」
+ * 这个伪零，让人误判「没在挡流量」。本块直接给出每组合的隔离标记与放行比例。
+ */
+function QuarantineBlock({ payload }: { payload: ProviderSlowLogs }) {
+  const t = useTranslations("settings.providers.list.circuitLogs");
+  // null 表示后端未装配该读面（与「无组合处于隔离」不同），不渲染这一块。
+  if (!payload.quarantine) return null;
+  // 事件流保留窗内的进入隔离次数：一次隔离期一条（见后端 slowlog），故即「窗内隔离多少次」。
+  const enteredCount = payload.events.filter((event) => event.kind === "quarantine_entered").length;
+  return (
+    <div className="rounded-md border bg-muted/40 p-3 text-sm">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="font-medium">{t("slow.quarantine.title")}</span>
+        <span className="text-xs text-muted-foreground">
+          {t("slow.quarantine.enteredCount", {
+            hours: payload.window.retentionHours,
+            count: enteredCount,
+          })}
+        </span>
+      </div>
+      {payload.quarantine.unavailableReason !== null ? (
+        <div className="mt-1 text-muted-foreground">
+          {t("slow.quarantine.unavailable", { reason: payload.quarantine.unavailableReason })}
+        </div>
+      ) : payload.quarantine.combinations.length === 0 ? (
+        <div className="mt-1 text-muted-foreground">{t("slow.quarantine.empty")}</div>
+      ) : (
+        <div className="mt-2 space-y-1">
+          {payload.quarantine.combinations.map((combination) => (
+            <div
+              key={combination.modelKey}
+              className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs"
+            >
+              <span className="font-mono">{combination.modelKey}</span>
+              <Badge variant={combination.quarantined ? "destructive" : "outline"}>
+                {combination.quarantined
+                  ? t("slow.quarantine.stateQuarantined")
+                  : t("slow.quarantine.stateNormal")}
+              </Badge>
+              <span>{t("slow.quarantine.penalty", { value: combination.penalty })}</span>
+              <span>
+                {t("slow.quarantine.admission", { permille: combination.admissionPermille })}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**

@@ -223,6 +223,38 @@ func TestRecordPenaltyChangeRoundTrip(t *testing.T) {
 	}
 }
 
+// TestRecordQuarantineEnteredRoundTrip 钉住「进入隔离」事件的往返（含 kind / modelKey / reason）。
+//
+// 为什么单独钉：这条事件是「今日隔离多少次」的唯一数据源，kind 或 reason 写错都不会报错，
+// 只会让界面数不到、或把两个成因混成一个。
+func TestRecordQuarantineEnteredRoundTrip(t *testing.T) {
+	client := newFakeRedis()
+	logger := &recordingLogger{}
+	RecordQuarantineEntered(context.Background(), client, logger, 167, "deepseek-v4.1-flash", "precommit")
+
+	events, err := NewReader(client, logger).Recent(context.Background(), 167, DefaultLimit)
+	if err != nil {
+		t.Fatalf("读回失败: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("应有 1 条，实际 %d 条", len(events))
+	}
+	event := events[0]
+	if event.Kind != KindQuarantineEntered {
+		t.Errorf("应为进入隔离 %q，收到 %q", KindQuarantineEntered, event.Kind)
+	}
+	if event.ProviderID != 167 || event.ModelKey != "deepseek-v4.1-flash" {
+		t.Errorf("渠道与模型键应往返一致，收到 %+v", event)
+	}
+	if event.Reason != "precommit" {
+		t.Errorf("Reason 应带触发原因 precommit，收到 %q", event.Reason)
+	}
+	// 进入隔离不含惩罚/基线读数：必须是 nil 而不是 0——界面据此决定渲不渲染那一列。
+	if event.PenaltyFrom != nil || event.PenaltyTo != nil || event.Median != nil || event.Samples != nil {
+		t.Errorf("进入隔离事件不该带惩罚或基线读数，收到 %+v", event)
+	}
+}
+
 // TestRecordBaselineRoundTrip 钉住基线发布的往返（含 median / samples / source）。
 func TestRecordBaselineRoundTrip(t *testing.T) {
 	client := newFakeRedis()

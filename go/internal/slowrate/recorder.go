@@ -248,6 +248,7 @@ func (r *Recorder) Record(ctx context.Context, facts Facts) {
 		RequestID:  facts.RequestID,
 		SessionID:  facts.SessionID,
 		KeyID:      facts.KeyID,
+		Trigger:    triggerSlowSample,
 	}, params, stateKey, ttl, int(zcard.Val()), at)
 }
 
@@ -262,7 +263,16 @@ type slowFact struct {
 	RequestID  int64
 	SessionID  string
 	KeyID      int64
+	// Trigger 是本次状态推进的成因（triggerSlowSample / triggerPrecommit），只进「进入隔离」事件。
+	Trigger string
 }
+
+// 隔离进入事件的触发原因：advanceSlowState 由两条写入路径共用（终态速率样本、提交前判废），
+// 事件里必须能分辨是哪一条，否则「今日隔离多少次」只知次数、不知成因。
+const (
+	triggerSlowSample = "slow_sample"
+	triggerPrecommit  = "precommit"
+)
 
 // advanceSlowState 是慢状态推进的唯一实现点（终态速率样本与提交前判废共用）。
 func (r *Recorder) advanceSlowState(
@@ -325,6 +335,14 @@ func (r *Recorder) advanceSlowState(
 	slowlog.RecordPenaltyChange(
 		ctx, r.redis, r.logger, fact.ProviderID, fact.ModelKey, previousPenalty.Val(), penalty,
 	)
+	// 「进入隔离」事件：与惩罚升档同一旧值读数，但记的是另一件事——前者回答「压多重」，
+	// 后者回答「关进去了没有」，界面据后者数「今日隔离多少次」。旧值非 0 表示已在隔离中
+	// （state 键一创建就带着 quarantine 标记），不重复记，故一次隔离期只出一条。
+	if previous, err := strconv.Atoi(previousPenalty.Val()); err != nil || previous <= 0 {
+		slowlog.RecordQuarantineEntered(
+			ctx, r.redis, r.logger, fact.ProviderID, fact.ModelKey, fact.Trigger,
+		)
+	}
 	r.writeCooldown(ctx, fact, params)
 }
 
@@ -400,6 +418,7 @@ func (r *Recorder) RecordPrecommit(ctx context.Context, facts PrecommitFacts) {
 		RequestID:  facts.RequestID,
 		SessionID:  facts.SessionID,
 		KeyID:      facts.KeyID,
+		Trigger:    triggerPrecommit,
 	}, params, stateKey, ttl, int(zcard.Val()), at)
 }
 
@@ -540,7 +559,10 @@ func (r *Recorder) resetAfterRecovery(
 // 写侧不走 Binder.Clear：那是「带 CAS 清理绑定 + 顺带写冷却」的组合动作，而本处不打算清绑定
 // （清绑定会让会话重新走初选，正是要避免的）；直接 SETEX 只写冷却键，语义最小。
 func (r *Recorder) writeCooldown(ctx context.Context, fact slowFact, params Params) {
-	if fact.SessionID == "" {
+	// 与读侧前置条件对齐（route.SlowRateReader.InCooldown 在 keyID==0 时直接返回空集）：
+	// 无会话身份**或无 key 身份**都没有冷却概念。写侧若仍按 keyID=0 写下键，那把键永远读不到
+	// （读侧压根不会去查它），只留一个 60 秒后自灭的死键——故此处同样要求 KeyID 非零。
+	if fact.SessionID == "" || fact.KeyID == 0 {
 		return
 	}
 	key := session.ProviderCooldownKey(fact.SessionID, fact.KeyID, fact.ProviderID)

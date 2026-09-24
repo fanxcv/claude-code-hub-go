@@ -134,16 +134,29 @@
       "kinds": {
         "penalty_up": "Penalty up",
         "penalty_down": "Penalty down",
+        "quarantine_entered": "Quarantine entered",
         "baseline_published": "Baseline published",
         "baseline_revoked": "Baseline revoked"
       },
       "detail": {
         "penalty": "Penalty {from} → {to}",
+        "penaltyReason": "Penalty {from} → {to} (reason {reason})",
+        "quarantine": "Triggered by {reason}",
         "baseline": "Median {median} tok/s, {samples} samples, source {source}",
         "revoked": "Revoked: {reason}"
       },
       "diverts": {
         "summary": "Last {hours}h: {total} requests diverted by slow-rate handling (session cooldown {cooldown}, channel demotion {penalty})"
+      },
+      "quarantine": {
+        "title": "Current quarantine state",
+        "enteredCount": "Last {hours}h: entered quarantine {count} times",
+        "empty": "No combination of this provider is currently quarantined.",
+        "unavailable": "Quarantine state is unreadable ({reason}).",
+        "stateQuarantined": "Quarantined",
+        "stateNormal": "Not quarantined",
+        "penalty": "Penalty {value}",
+        "admission": "Admission {permille}/1000"
       }
     }
   }
