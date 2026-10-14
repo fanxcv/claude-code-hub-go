@@ -88,6 +88,9 @@ func goChainReasonVocabulary(t *testing.T) map[string]string {
 	if err != nil {
 		t.Fatalf("列举本包文件失败: %v", err)
 	}
+	if len(files) == 0 {
+		t.Fatalf("本包目录下没匹配到任何 .go 文件：测的 cwd 不对？否则下面的字面量扫描是空跑")
+	}
 	literalRe := regexp.MustCompile(`(?:Reason\s*[:=]\s*|reason\s*=\s*)"([a-z_]+)"`)
 	for _, file := range files {
 		if strings.HasSuffix(file, "_test.go") || file == constFile {
