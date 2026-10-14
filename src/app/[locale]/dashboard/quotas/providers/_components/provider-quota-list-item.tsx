@@ -232,7 +232,7 @@ export function ProviderQuotaListItem({
       </div>
 
       {/* 右侧：操作区域（预留） */}
-      <div className="flex items-center gap-2 flex-shrink-0">{/* 可以添加操作按钮 */}</div>
+      <div className="flex items-center gap-2 flex-shrink-0" />
     </div>
   );
 }
