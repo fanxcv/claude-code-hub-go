@@ -65,9 +65,9 @@ func New(options Options) *Router {
 
 // SetNotFound 设置未命中时的兜底处理器。
 //
-// 生产必须设为前门的 NodeFallback（egress.FrontDoor.NodeFallback）：未注册的管理路由要原样
-// 反代回 Node，而不是在 Go 侧作答。未设置时一律 503——宁可让调用方重试到 Node，也不要让
-// Go 用一个猜出来的 404 冒充 Node 的语义。
+// 生产装配为前门的 egress.FrontDoor.Unimplemented（见 go/cmd/cchd/boot.go）：Node 退役后不再有
+// 第三方承载者，未注册的管理路由在本进程就是没有实现，如实回 404，不存在「原样反代回 Node」。
+// 未设置时一律 503（serveNotFound）——宁可让调用方重试，也不要让 Go 用一个猜出来的响应冒充语义。
 func (r *Router) SetNotFound(handler http.Handler) {
 	r.notFound = handler
 }
