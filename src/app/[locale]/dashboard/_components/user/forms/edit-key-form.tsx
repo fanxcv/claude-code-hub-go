@@ -84,11 +84,17 @@ export function EditKeyForm({ keyData, user, isAdmin = false, onSuccess }: EditK
   useEffect(() => {
     // providerGroup 为 admin-only 字段：仅管理员允许编辑 Key.providerGroup
     if (!isAdmin) return;
+    let cancelled = false;
     getAvailableProviderGroups()
-      .then(setProviderGroupSuggestions)
+      .then((groups) => {
+        if (!cancelled) setProviderGroupSuggestions(groups);
+      })
       .catch((err) => {
         console.warn("[EditKeyForm] Failed to load provider group suggestions:", err);
       });
+    return () => {
+      cancelled = true;
+    };
   }, [isAdmin]);
 
   const handleResetLimitsOnly = async () => {
