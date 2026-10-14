@@ -546,6 +546,7 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		Now:    options.Now,
 	})
 
+	streamCapsEventCap, streamCapsByteCap := streamGateCapsEnv()
 	idleTimeouts := newIdleTimeoutCache(asProviderRowReader(options.Pools), options.Redis, options.Registry, logger)
 	idles := idleTimeouts.lookup
 
@@ -606,6 +607,10 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			RecordSuccess: recordSuccess,
 		},
 		Stream: forward.StreamOptions{
+			// 门控前缀上限取自 env 契约（STREAM_GATE_PREBUFFER_{EVENT,BYTE}_CAP，出厂 64 / 10MiB）。
+			// 不接线时两位留零，forward 落回它自己的 500 事件 / 4MiB 出厂值，与契约不一致。
+			PrebufferEventCap:      streamCapsEventCap,
+			PrebufferByteCap:       streamCapsByteCap,
 			Budget:                 budget,
 			Logger:                 logger,
 			Now:                    options.Now,

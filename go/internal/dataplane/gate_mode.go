@@ -30,6 +30,18 @@ var streamGateModeEnv = sync.OnceValue(func() gate.Mode {
 	return mode
 })
 
+// streamGateCapsEnv 读门控前缀上限（事件数 / 字节数）。
+//
+// 只在装配期调一次，故不用 streamGateModeEnv 那套 sync.OnceValue（那是给逐请求调用的）。
+// 读不到配置时返回零值，由 forward 侧落回它自己的出厂默认（见 forward 的 gateOptions）。
+func streamGateCapsEnv() (eventCap int, byteCap int) {
+	env, err := config.LoadEnv(config.LookupFromOS())
+	if err != nil {
+		return 0, 0
+	}
+	return env.StreamGatePrebufferEventCap, env.StreamGatePrebufferByteCap
+}
+
 // resolveStreamGateMode 复刻 Node 的 resolveStreamGateMode：快照优先，env 兜底。
 //
 // 快照里的取值非法（空串或未知值）时也回退 env：Node 的快照侧有枚举校验，Go 侧读的是
