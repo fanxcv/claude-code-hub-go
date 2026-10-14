@@ -135,9 +135,6 @@ export const EnvSchema = z.object({
   ).default(10_000),
   ENABLE_RATE_LIMIT: z.string().default("true").transform(booleanTransform),
   ENABLE_SECURE_COOKIES: z.string().default("true").transform(booleanTransform),
-  ENABLE_LEGACY_ACTIONS_API: z.string().default("true").transform(booleanTransform),
-  LEGACY_ACTIONS_DOCS_MODE: z.enum(["deprecated", "hidden"]).default("deprecated"),
-  LEGACY_ACTIONS_SUNSET_DATE: z.string().default("2026-12-31"),
   ENABLE_API_KEY_ADMIN_ACCESS: z.string().default("false").transform(booleanTransform),
   SESSION_TOKEN_MODE: z.enum(["legacy", "dual", "opaque"]).default("opaque"),
   AUTH_SESSION_TTL_SECONDS: z.coerce
@@ -175,7 +172,6 @@ export const EnvSchema = z.object({
     .min(64 * 1024)
     .max(64 * 1024 * 1024)
     .default(5 * 1024 * 1024),
-  DEBUG_MODE: z.string().default("false").transform(booleanTransform),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   TZ: z.string().default("Asia/Shanghai"),
   ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS: z.string().default("false").transform(booleanTransform),
@@ -313,10 +309,6 @@ export function getEnvConfig(): EnvConfig {
 }
 
 // isDevelopment 已迁往 ./env-flags：读一个布尔不该依赖整份 zod 环境校验器（见该文件注释）。
-
-export function isLegacyActionsApiEnabled(): boolean {
-  return getEnvConfig().ENABLE_LEGACY_ACTIONS_API;
-}
 
 export function isApiKeyAdminAccessEnabled(): boolean {
   return getEnvConfig().ENABLE_API_KEY_ADMIN_ACCESS;

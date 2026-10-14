@@ -86,8 +86,8 @@ func expectedDefaultText(spec envSpec) string {
 // 三处结构必须一一对应：规格表、结构体字段与标签、对账清单。
 // 任一方向多出或少掉一项都说明有变量会静默分叉。
 func TestEnvSpecsStructAndParityListAreBijective(t *testing.T) {
-	if len(envSpecs) != 70 {
-		t.Fatalf("规格表应为 70 项，收到 %d", len(envSpecs))
+	if len(envSpecs) != 66 {
+		t.Fatalf("规格表应为 66 项，收到 %d", len(envSpecs))
 	}
 
 	specNames := map[string]bool{}
@@ -321,13 +321,13 @@ func TestEnvBooleanSemantics(t *testing.T) {
 		})
 	}
 
-	// 默认值也走同一个 transform：DEBUG_MODE 默认 "false" → false。
+	// 默认值也走同一个 transform：ENABLE_API_KEY_ADMIN_ACCESS 默认 "false" → false。
 	env, err := LoadEnv(lookupMap(nil))
 	if err != nil {
 		t.Fatalf("装载失败: %v", err)
 	}
-	if env.DebugMode {
-		t.Fatal("DEBUG_MODE 未设置时应为 false")
+	if env.EnableAPIKeyAdminAccess {
+		t.Fatal("ENABLE_API_KEY_ADMIN_ACCESS 未设置时应为 false")
 	}
 	if !env.EnableRateLimit {
 		t.Fatal("ENABLE_RATE_LIMIT 未设置时应为 true")

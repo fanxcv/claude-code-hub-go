@@ -80,7 +80,6 @@ var envSpecs = []envSpec{
 	{name: "DB_POOL_IDLE_TIMEOUT", field: "DBPoolIdleTimeout", kind: kindOptionalNumber, hasMin: true, min: 0, hasMax: true, max: 3600},
 	{name: "DB_POOL_MAX", field: "DBPoolMax", kind: kindOptionalNumber, isInt: true, hasMin: true, min: 1, hasMax: true, max: 200},
 	{name: "DB_STATEMENT_TIMEOUT_MS", field: "DBStatementTimeoutMS", kind: kindOptionalNumber, def: "90000", isInt: true, hasMin: true, min: 1000, hasMax: true, max: 119000},
-	{name: "DEBUG_MODE", field: "DebugMode", kind: kindBool, def: "false"},
 	{name: "DETACHED_STREAM_BUDGET_BYTES", field: "DetachedStreamBudgetBytes", kind: kindNumber, def: "67108864", isInt: true, hasMin: true, min: 3211264, hasMax: true, max: 1073741824},
 	{name: "DETACHED_STREAM_MAX_CONCURRENCY", field: "DetachedStreamMaxConcurrency", kind: kindNumber, def: "64", isInt: true, hasMin: true, min: 1, hasMax: true, max: 4096},
 	{name: "DETACHED_STREAM_METERING_RESERVE_BYTES", field: "DetachedStreamMeteringReserveBytes", kind: kindNumber, def: "16777216", isInt: true, hasMin: true, min: 65536, hasMax: true, max: 1073741824},
@@ -89,7 +88,6 @@ var envSpecs = []envSpec{
 	{name: "ENABLE_CACHE_EFFECTIVENESS", field: "EnableCacheEffectiveness", kind: kindBool, def: "true"},
 	{name: "ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS", field: "EnableCircuitBreakerOnNetworkErrors", kind: kindBool, def: "false"},
 	{name: "ENABLE_ENDPOINT_CIRCUIT_BREAKER", field: "EnableEndpointCircuitBreaker", kind: kindBool, def: "false"},
-	{name: "ENABLE_LEGACY_ACTIONS_API", field: "EnableLegacyActionsAPI", kind: kindBool, def: "true"},
 	{name: "ENABLE_PREFIX_AFFINITY", field: "EnablePrefixAffinity", kind: kindBool, def: "false"},
 	{name: "ENABLE_PROVIDER_CACHE", field: "EnableProviderCache", kind: kindBool, def: "true"},
 	{name: "ENABLE_RATE_LIMIT", field: "EnableRateLimit", kind: kindBool, def: "true"},
@@ -108,8 +106,6 @@ var envSpecs = []envSpec{
 	{name: "LANGFUSE_PUBLIC_KEY", field: "LangfusePublicKey", kind: kindOptionalString},
 	{name: "LANGFUSE_SAMPLE_RATE", field: "LangfuseSampleRate", kind: kindNumber, def: "1", hasMin: true, min: 0, hasMax: true, max: 1},
 	{name: "LANGFUSE_SECRET_KEY", field: "LangfuseSecretKey", kind: kindOptionalString},
-	{name: "LEGACY_ACTIONS_DOCS_MODE", field: "LegacyActionsDocsMode", kind: kindEnum, def: "deprecated", enum: []string{"deprecated", "hidden"}},
-	{name: "LEGACY_ACTIONS_SUNSET_DATE", field: "LegacyActionsSunsetDate", kind: kindString, def: "2026-12-31"},
 	{name: "LOG_LEVEL", field: "LogLevel", kind: kindEnum, def: "info", enum: []string{"fatal", "error", "warn", "info", "debug", "trace"}},
 	{name: "MAX_RETRY_ATTEMPTS_DEFAULT", field: "MaxRetryAttemptsDefault", kind: kindNumber, def: "2", hasMin: true, min: 1, hasMax: true, max: 10},
 	{name: "MESSAGE_REQUEST_ASYNC_BATCH_SIZE", field: "MessageRequestAsyncBatchSize", kind: kindOptionalNumber, isInt: true, hasMin: true, min: 1, hasMax: true, max: 2000},
@@ -180,8 +176,6 @@ type EnvConfig struct {
 	DBPoolMax *int `env:"DB_POOL_MAX"`
 	// DB_STATEMENT_TIMEOUT_MS：活动语句超时（毫秒），必须早于流式结算的 120 秒应用层 deadline
 	DBStatementTimeoutMS *int `env:"DB_STATEMENT_TIMEOUT_MS"`
-	// DEBUG_MODE
-	DebugMode bool `env:"DEBUG_MODE"`
 	// DETACHED_STREAM_BUDGET_BYTES
 	DetachedStreamBudgetBytes int `env:"DETACHED_STREAM_BUDGET_BYTES"`
 	// DETACHED_STREAM_MAX_CONCURRENCY
@@ -198,8 +192,6 @@ type EnvConfig struct {
 	EnableCircuitBreakerOnNetworkErrors bool `env:"ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS"`
 	// ENABLE_ENDPOINT_CIRCUIT_BREAKER：端点级别熔断器开关
 	EnableEndpointCircuitBreaker bool `env:"ENABLE_ENDPOINT_CIRCUIT_BREAKER"`
-	// ENABLE_LEGACY_ACTIONS_API
-	EnableLegacyActionsAPI bool `env:"ENABLE_LEGACY_ACTIONS_API"`
 	// ENABLE_PREFIX_AFFINITY：**亲和总闸**的 env 覆写（与系统设置 affinity_enabled 取或）。
 	// 开 = 启用供应商粘性（会话绑定优先、前缀指纹作兜底；两者均走全套硬校验）。
 	// 变量名沿用历史的 prefix 称谓，但它管的是整套亲和，不只前缀层。
@@ -238,10 +230,6 @@ type EnvConfig struct {
 	LangfuseSampleRate float64 `env:"LANGFUSE_SAMPLE_RATE"`
 	// LANGFUSE_SECRET_KEY
 	LangfuseSecretKey *string `env:"LANGFUSE_SECRET_KEY"`
-	// LEGACY_ACTIONS_DOCS_MODE
-	LegacyActionsDocsMode string `env:"LEGACY_ACTIONS_DOCS_MODE"`
-	// LEGACY_ACTIONS_SUNSET_DATE
-	LegacyActionsSunsetDate string `env:"LEGACY_ACTIONS_SUNSET_DATE"`
 	// LOG_LEVEL
 	LogLevel string `env:"LOG_LEVEL"`
 	// MAX_RETRY_ATTEMPTS_DEFAULT
@@ -304,7 +292,7 @@ type EnvConfig struct {
 	TZ string `env:"TZ"`
 }
 
-// LoadEnv 按 envSpecs 装载并校验全部 70 个契约变量。
+// LoadEnv 按 envSpecs 装载并校验全部 66 个契约变量。
 func LoadEnv(lookup LookupEnvFunc) (EnvConfig, error) {
 	return loadEnv(lookup, nil)
 }

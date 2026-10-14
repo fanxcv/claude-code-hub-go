@@ -11,19 +11,13 @@ describe("management API env flags", () => {
   });
 
   test("uses safe defaults", async () => {
-    vi.stubEnv("ENABLE_LEGACY_ACTIONS_API", undefined);
     vi.stubEnv("ENABLE_API_KEY_ADMIN_ACCESS", undefined);
-    vi.stubEnv("LEGACY_ACTIONS_DOCS_MODE", undefined);
-    vi.stubEnv("LEGACY_ACTIONS_SUNSET_DATE", undefined);
     vi.stubEnv("CSRF_SECRET", undefined);
 
-    const { getEnvConfig, isApiKeyAdminAccessEnabled, isLegacyActionsApiEnabled } = await loadEnv();
+    const { getEnvConfig, isApiKeyAdminAccessEnabled } = await loadEnv();
     const env = getEnvConfig();
 
-    expect(isLegacyActionsApiEnabled()).toBe(true);
     expect(isApiKeyAdminAccessEnabled()).toBe(false);
-    expect(env.LEGACY_ACTIONS_DOCS_MODE).toBe("deprecated");
-    expect(env.LEGACY_ACTIONS_SUNSET_DATE).toBe("2026-12-31");
     expect(env.CSRF_SECRET).toBeUndefined();
   });
 
@@ -53,13 +47,13 @@ describe("management API env flags", () => {
   });
 
   test("parses explicit boolean strings without z.coerce.boolean pitfalls", async () => {
-    vi.stubEnv("ENABLE_LEGACY_ACTIONS_API", "false");
     vi.stubEnv("ENABLE_API_KEY_ADMIN_ACCESS", "true");
+    vi.stubEnv("ENABLE_SECURE_COOKIES", "false");
 
-    const { isApiKeyAdminAccessEnabled, isLegacyActionsApiEnabled } = await loadEnv();
+    const { getEnvConfig, isApiKeyAdminAccessEnabled } = await loadEnv();
 
-    expect(isLegacyActionsApiEnabled()).toBe(false);
     expect(isApiKeyAdminAccessEnabled()).toBe(true);
+    expect(getEnvConfig().ENABLE_SECURE_COOKIES).toBe(false);
   });
 
   test("parses zero as false", async () => {
@@ -68,18 +62,6 @@ describe("management API env flags", () => {
     const { isApiKeyAdminAccessEnabled } = await loadEnv();
 
     expect(isApiKeyAdminAccessEnabled()).toBe(false);
-  });
-
-  test("parses legacy docs mode and custom sunset date", async () => {
-    vi.stubEnv("LEGACY_ACTIONS_DOCS_MODE", "hidden");
-    vi.stubEnv("LEGACY_ACTIONS_SUNSET_DATE", "2027-03-31");
-
-    const { getEnvConfig } = await loadEnv();
-
-    expect(getEnvConfig()).toMatchObject({
-      LEGACY_ACTIONS_DOCS_MODE: "hidden",
-      LEGACY_ACTIONS_SUNSET_DATE: "2027-03-31",
-    });
   });
 
   test("parses dedicated CSRF secret", async () => {

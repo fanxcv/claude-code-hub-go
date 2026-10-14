@@ -10,7 +10,7 @@
 
 ## 覆盖范围
 
-`env.go` 的规格表 `envSpecs` 覆盖矩阵里的全部 **70** 项：
+`env.go` 的规格表 `envSpecs` 覆盖矩阵里的全部 **66** 项：
 
 | 类别 | 项数 | 说明 |
 | --- | ---: | --- |
@@ -33,7 +33,7 @@ Go 专有变量（`CCH_EGRESS_PAGES`、`CCH_GO_MAX_INFLIGHT_BYTES`、`CCH_GO_MAX
 因此不存在「清单里有、装载器没实现」这类静默分叉。三条不变量由测试钉住：
 
 - `TestEnvSpecsStructAndParityListAreBijective`：规格表 ↔ `EnvConfig` 字段与标签 ↔ 对账清单，
-  双向一一对应，总数 70。
+  双向一一对应，总数 66。
 - `TestEverySpecIsConsumedByLoader`：装载器必须真正读过每一项。
 - `TestParityListMatchesMatrix`：对账清单与矩阵真源逐名一致。
 

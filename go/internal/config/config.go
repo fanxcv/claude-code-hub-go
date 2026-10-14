@@ -203,7 +203,7 @@ type DBTimeouts struct {
 
 // Config 是本进程的完整配置快照。
 //
-// 分两层：Env 是与 TS 侧逐字段对齐的 70 项契约（见 env.go），其余字段是 Go 数据面自己的
+// 分两层：Env 是与 TS 侧逐字段对齐的 66 项契约（见 env.go），其余字段是 Go 数据面自己的
 // 运行视图（一部分由 Env 推导，另一部分为 Go 专有变量）。
 type Config struct {
 	// Env 是 env.schema.ts 的逐变量复刻，消费者应优先从这里取值。
@@ -507,7 +507,7 @@ func (c Config) Redacted() map[string]any {
 	}
 }
 
-// RedactedEnv 返回 70 项契约的脱敏摘要（计数、档位与凭据是否已配置）。
+// RedactedEnv 返回 66 项契约的脱敏摘要（计数、档位与凭据是否已配置）。
 func (c Config) RedactedEnv() map[string]any {
 	return c.Env.EnvSummary()
 }

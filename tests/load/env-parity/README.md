@@ -52,8 +52,8 @@ bun scripts/export-env-matrix.ts --check
 - 统计范围是 `src/**` 下的 `.ts` / `.tsx`，**排除** `*.test.*`、`__tests__/`、以及 schema 自身。
 - 口径是"文本级全大写 token 出现"，因此可能出现同名字符串常量导致的假阳性；`consumerFiles`
   只用于定位"这个变量在哪一层被读"，不作为唯一真源。
-- `无 src/ 内静态引用` 的变量通常是运行时消费（如 `PORT`/`TZ` 由 Next 与容器读，`ENABLE_LEGACY_ACTIONS_API`
-  由 `server.js` 读）——不是"死变量"，导出时会单独列出。
+- `无 src/ 内静态引用` 的变量通常是运行时消费（如 `PORT`/`TZ` 由 Next 与容器读）——不是"死变量"，
+  导出时会单独列出。
 
 ## Go 侧怎么用
 

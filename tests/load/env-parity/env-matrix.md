@@ -2,8 +2,8 @@
 
 由 `scripts/export-env-matrix.ts` 从 `src/lib/config/env.schema.ts` 生成，请勿手工编辑。
 
-- 变量总数：**70**
-- 源文件 SHA256：`266d0818e4c8b12620b9aeee5a70fefacbb273f3880129370a7e3aee3bb4f6c6`
+- 变量总数：**66**
+- 源文件 SHA256：`f7ec9cea4ed61caa9f69fc5b3aac2d4de22d44528246a3497544d879a53a8338`
 - 重生成：`bun scripts/export-env-matrix.ts`
 
 ## Redis 与缓存（4）
@@ -33,13 +33,12 @@
 | `FETCH_CONNECT_TIMEOUT` | number | `30000` | — | （无静态引用） |
 | `FETCH_HEADERS_TIMEOUT` | number | `600_000` | — | （无静态引用） |
 
-## 其它（17）
+## 其它（14）
 
 | 变量 | 类型 | 默认值 | 约束 | 主要消费方 |
 | --- | --- | --- | --- | --- |
 | `AUTO_MIGRATE` | string | `"true"` | — | （无静态引用） |
 | `DASHBOARD_LOGS_POLL_INTERVAL_MS` | number | `5000` | >= 250；<= 60000 | `src/app/[locale]/dashboard/logs/page.tsx` |
-| `DEBUG_MODE` | string | `"false"` | — | `src/lib/logger.ts` |
 | `ENABLE_CACHE_EFFECTIVENESS` | string | `"true"` | — | `src/lib/api/v1/schemas/system-config.ts` |
 | `ENABLE_PREFIX_AFFINITY` | string | `"false"` | — | （无静态引用） |
 | `ENABLE_REQUEST_REPLAY` | string | `"true"` | — | `src/app/[locale]/settings/config/page.tsx` |
@@ -48,8 +47,6 @@
 | `IP_GEO_API_URL` | string | `"https://ip-api.claude-code-hub.app"` | — | （无静态引用） |
 | `IP_GEO_CACHE_TTL_SECONDS` | number | `3600` | >= 60；<= 86400 | （无静态引用） |
 | `IP_GEO_TIMEOUT_MS` | number | `1500` | >= 100；<= 10000 | （无静态引用） |
-| `LEGACY_ACTIONS_DOCS_MODE` | enum | `"deprecated"` | ∈ {deprecated, hidden} | （无静态引用） |
-| `LEGACY_ACTIONS_SUNSET_DATE` | string | `"2026-12-31"` | — | （无静态引用） |
 | `MAX_RETRY_ATTEMPTS_DEFAULT` | number | `2` | >= 1；<= 10 | （无静态引用） |
 | `PREFIX_AFFINITY_TTL_SECONDS` | number | `3600` | >= 60；<= 86400 | （无静态引用） |
 | `PREFIX_AFFINITY_WINDOW` | number | `8` | >= 1；<= 64 | （无静态引用） |
@@ -112,14 +109,13 @@
 | `ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS` | string | `"false"` | — | （无静态引用） |
 | `HEDGE_LOSER_DRAIN_TIMEOUT_MS` | number | `120_000` | >= 1000 | （无静态引用） |
 
-## 管理与安全（4）
+## 管理与安全（3）
 
 | 变量 | 类型 | 默认值 | 约束 | 主要消费方 |
 | --- | --- | --- | --- | --- |
 | `ADMIN_TOKEN` | string（optionalPreprocessed） | — | 长度>= 1 | `src/app/[locale]/dashboard/providers/page.tsx` |
 | `CSRF_SECRET` | string（optionalPreprocessed） | — | 长度>= 16 | （无静态引用） |
 | `ENABLE_API_KEY_ADMIN_ACCESS` | string | `"false"` | — | （无静态引用） |
-| `ENABLE_LEGACY_ACTIONS_API` | string | `"true"` | — | （无静态引用） |
 
 ## 限流与会话（10）
 

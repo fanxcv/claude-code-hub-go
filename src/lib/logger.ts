@@ -44,11 +44,6 @@ function getInitialLogLevel(): LogLevel {
     return envLevel as LogLevel;
   }
 
-  // 向后兼容：如果设置了 DEBUG_MODE，使用 debug 级别
-  if (process.env.DEBUG_MODE === "true") {
-    return "debug";
-  }
-
   return isDevelopment() ? "debug" : "info";
 }
 

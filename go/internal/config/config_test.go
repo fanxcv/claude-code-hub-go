@@ -102,20 +102,20 @@ func TestLoadLookupDistinguishesUnsetFromEmpty(t *testing.T) {
 	}
 
 	// 兼容入口 Load 把空串当未设置，因此走默认值 true；两者的差异在「默认值为 false」的变量上才显现。
-	cfg, err = Load(envMap(map[string]string{"DEBUG_MODE": ""}))
+	cfg, err = Load(envMap(map[string]string{"ENABLE_API_KEY_ADMIN_ACCESS": ""}))
 	if err != nil {
 		t.Fatalf("装载失败: %v", err)
 	}
-	if cfg.Env.DebugMode {
-		t.Fatal("兼容入口 Load 把空串视为未设置，DEBUG_MODE 应回落到默认 false")
+	if cfg.Env.EnableAPIKeyAdminAccess {
+		t.Fatal("兼容入口 Load 把空串视为未设置，ENABLE_API_KEY_ADMIN_ACCESS 应回落到默认 false")
 	}
 
-	cfg, err = LoadLookup(lookupMap(map[string]string{"DEBUG_MODE": ""}))
+	cfg, err = LoadLookup(lookupMap(map[string]string{"ENABLE_API_KEY_ADMIN_ACCESS": ""}))
 	if err != nil {
 		t.Fatalf("装载失败: %v", err)
 	}
-	if !cfg.Env.DebugMode {
-		t.Fatal("LoadLookup 下 DEBUG_MODE 设为空串应为 true")
+	if !cfg.Env.EnableAPIKeyAdminAccess {
+		t.Fatal("LoadLookup 下 ENABLE_API_KEY_ADMIN_ACCESS 设为空串应为 true")
 	}
 }
 
@@ -318,7 +318,7 @@ func TestPlaceholderThinkingSignatureEnvSwitch(t *testing.T) {
 // TestRetiredNodeVarsAreIgnored 钉住旧部署文件的兼容边界：
 //
 // 已删除的 `CCH_EGRESS_MODE` / `CCH_INTERNAL_PORT` / `CCH_EGRESS_ROUTES` 不再解析；而「配置里
-// 多出未知变量」本就不报错（与 70 项契约表之外的变量同一处置），因此线上残留这三个变量不会
+// 多出未知变量」本就不报错（与 66 项契约表之外的变量同一处置），因此线上残留这三个变量不会
 // 导致启动失败——它们只是不再有任何作用，须由运维自行清理（本仓的双跑模板已删）。
 //
 // 与 `CCH_EGRESS_PAGES=node` 的区别：那个是**已知变量的已退役取值**，会响亮报错
