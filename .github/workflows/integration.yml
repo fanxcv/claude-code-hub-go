@@ -1,0 +1,88 @@
+name: Integration
+
+# 真库集成门禁（PG + Redis）：跑 AGENTS.md 与 ci.yml 末尾注释里那份**未接线**的配方。
+# 刻意不挂在 push/PR 上：集成用例依赖真实数据库、建表与 Redis 语义，噪点比纯单测高，
+# 故常态 PR 门禁仍由 ci.yml 的确定性部分承担。这里只在每夜与手动时跑。
+on:
+  schedule:
+    # 每日 18:00 UTC（= 次日 02:00 CST），避开 CI 白天的排队峰值。
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-integration:
+    name: Go（真库集成：PG + Redis）
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: cch
+          POSTGRES_PASSWORD: cch
+          POSTGRES_DB: cch_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U cch" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: 迁移建表
+        # 集成用例**自身不建 schema**（见 ci.yml 注释第 ① 条）：先跑一次 cchd 让
+        # AUTO_MIGRATE 把 drizzle 迁移逐条应用上，再跑测试。日志出现 migration_applied /
+        # migration_up_to_date 即视为 schema 就位；cchd 只在需要建表时被拉起，随即关掉。
+        # CCH_EGRESS_PAGES=off：不装配 UI 静态面，故无需先 bun run build 出嵌入产物。
+        working-directory: go
+        env:
+          DSN: postgres://cch:cch@127.0.0.1:5432/cch_test
+          REDIS_URL: redis://127.0.0.1:6379/15
+          AUTO_MIGRATE: "true"
+          CCH_EGRESS_PAGES: "off"
+          PORT: "18080"
+        run: |
+          go run ./cmd/cchd > /tmp/cchd-migrate.log 2>&1 &
+          cchd_pid=$!
+          for _ in $(seq 1 90); do
+            if grep -Eq "migration_applied|migration_up_to_date" /tmp/cchd-migrate.log; then break; fi
+            if ! kill -0 "$cchd_pid" 2>/dev/null; then
+              echo "::error::cchd 在迁移完成前退出"
+              cat /tmp/cchd-migrate.log
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -Eq "migration_applied|migration_up_to_date" /tmp/cchd-migrate.log || {
+            echo "::error::90s 内未见迁移完成日志"
+            cat /tmp/cchd-migrate.log
+            exit 1
+          }
+          kill "$cchd_pid" 2>/dev/null || true
+          wait "$cchd_pid" 2>/dev/null || true
+          cat /tmp/cchd-migrate.log
+
+      - name: 集成测试
+        # 注入 DSN / Redis 后，真库集成用例整组启用（未注入时它们会自行跳过）。
+        # Redis 用独立 db（/15）避免与其它用例互相刷键。
+        working-directory: go
+        env:
+          CCH_TEST_DSN: postgres://cch:cch@127.0.0.1:5432/cch_test
+          CCH_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+        run: go test -timeout 600s ./...
