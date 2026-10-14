@@ -849,7 +849,7 @@ func encodeAnthropicResponse(response *Response, ctx ConvertCtx) EncodeResult {
 		}
 	}
 	out.Set("content", NewArray(content...))
-	out.Set("stop_reason", NewString(stopReasonToAnthropic(response.StopReason)))
+	out.Set("stop_reason", NewString(stopReasonToAnthropic(response.StopReason, containsToolCall(response.Blocks))))
 	out.Set("stop_sequence", NewNull())
 	if response.Usage != nil && !response.Usage.IsEmpty() {
 		out.Set("usage", usageToAnthropic(response.Usage))

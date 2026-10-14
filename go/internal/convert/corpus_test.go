@@ -150,6 +150,9 @@ const (
 	// kindReasoningMergedIntoFollowingAssistant：Go 把 reasoning 项的思考**并入紧随其后的
 	// assistant 消息**（Node 会拆成两条）。该分歧**只为满足上游硬规则**，理由见登记处注释。
 	kindReasoningMergedIntoFollowingAssistant = "reasoning_merged_into_following_assistant"
+	// kindStopReasonToolUse：Go 在 Anthropic 出口按「响应里是否真有工具块」兜底 stop_reason；
+	// Node 只信上游给的 status/finish_reason，故其期望停留在 end_turn。理由见登记处注释。
+	kindStopReasonToolUse = "stop_reason_tool_use"
 )
 
 // intentionalRequestDivergences 是**逐条登记**的有意分歧。
@@ -196,6 +199,23 @@ var intentionalRequestDivergences = map[string]intentionalDivergence{
 			" must be passed back to the API.`（生产 OpenCode X Chat 实测，该 400 属 CategoryProviderError、" +
 			"计熔断器，故我方形状缺陷会把供应商推进熔断）。Go 改为并入：一条 assistant 消息同时带" +
 			"reasoning_content 与本轮正文/tool_calls，两侧语义等价而上游不再报错",
+	},
+}
+
+// intentionalResponseDivergences 是响应侧**逐条登记**的有意分歧（与请求侧同构）。
+//
+// 语料同样是 Node 行为的快照，不修改；但 Anthropic 出口的 stop_reason 必须按「响应里是否真有
+// 工具块」兜底（见 hub.go 的 stopReasonToAnthropic），而 Node 只信上游给的 status——
+// responses 上游的 `completed` 本身不含工具语义，照搬会让客户端拿到 tool_use 块却看到 end_turn。
+var intentionalResponseDivergences = map[string]intentionalDivergence{
+	"response.openai-responses.reasoning-refusal-webtool.to.anthropic-messages": {
+		Kind: kindStopReasonToolUse,
+		Reason: "上游 responses 的 status=completed 无工具语义，Node 因此回 end_turn，而响应里确有" +
+			"function_call；客户端收 end_turn 会当普通收尾、不去执行工具。Go 按工具块兜底为 tool_use",
+	},
+	"response.openai-responses.rewritten-tool-name.to.anthropic-messages": {
+		Kind:   kindStopReasonToolUse,
+		Reason: "同上（单 function_call 无正文的场景）",
 	},
 }
 
@@ -255,6 +275,8 @@ func assertIntentionalDivergence(t *testing.T, got, want string, divergence inte
 		assertReasoningAsContentDivergence(t, got, want, divergence)
 	case kindReasoningMergedIntoFollowingAssistant:
 		assertReasoningMergedDivergence(t, got, want, divergence)
+	case kindStopReasonToolUse:
+		assertStopReasonToolUseDivergence(t, got, want, divergence)
 	default:
 		t.Fatalf("有意分歧：未登记的类别 %q（原因：%s）", divergence.Kind, divergence.Reason)
 	}
@@ -279,6 +301,26 @@ func assertAddedFieldDivergence(t *testing.T, got, want string, divergence inten
 	if stripped != want {
 		t.Fatalf("有意分歧：摘掉派生字段后仍与 Node 期望不一致（说明还顺带改了其它字节）\n 摘掉后: %s\n want: %s",
 			stripped, want)
+	}
+}
+
+// assertStopReasonToolUseDivergence 断言：Go 的 stop_reason 为 tool_use，而 Node 期望为 end_turn，
+// 且**除此之外整个响应逐字节相等**（把 Go 输出里的 stop_reason 改回 end_turn 后必须等于 Node 期望）。
+func assertStopReasonToolUseDivergence(t *testing.T, got, want string, divergence intentionalDivergence) {
+	t.Helper()
+	value := mustParsePayload(t, got)
+	reason, present := value.Get("stop_reason")
+	if !present || reason == nil {
+		t.Fatalf("有意分歧：Go 输出缺 stop_reason（原因：%s）\n got: %s", divergence.Reason, got)
+	}
+	actual, isString := reason.String()
+	if !isString || actual != "tool_use" {
+		t.Fatalf("有意分歧：stop_reason = %q（是字符串：%v），期望 tool_use（原因：%s）", actual, isString, divergence.Reason)
+	}
+	value.Set("stop_reason", NewString("end_turn"))
+	if reverted := value.MarshalCompact(); reverted != want {
+		t.Fatalf("有意分歧：把 stop_reason 改回 end_turn 后仍与 Node 期望不一致（说明还顺带改了别的字节）\n 改回后: %s\n want: %s",
+			reverted, want)
 	}
 }
 
@@ -527,6 +569,10 @@ func TestCorpusResponses(t *testing.T) {
 				t.Fatalf("用例缺少 expected")
 			}
 			if got != *testCase.Expected {
+				if divergence, isRegistered := intentionalResponseDivergences[testCase.ID]; isRegistered {
+					assertIntentionalDivergence(t, got, *testCase.Expected, divergence)
+					return
+				}
 				t.Fatal(byteDiff(got, *testCase.Expected))
 			}
 		})

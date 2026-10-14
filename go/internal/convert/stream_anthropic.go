@@ -210,6 +210,10 @@ type anthropicStreamEncoder struct {
 
 	stopReason StopReason
 	usage      *Usage
+	// hasToolCall 记录流向客户端的块里是否出现过工具调用。stop_reason 的 tool_use 由
+	// 「响应里是否真有工具块」决定，不单看上游给的终止原因：chat/responses 上游常常不给对应的
+	// 终止语义（completed / finish_reason 缺失），只信上游会让客户端拿到工具块却看到 end_turn。
+	hasToolCall bool
 
 	wireCounter int
 	// openBlock 是当前未关闭的块（枢纽下标 ↔ 本线下标）。
@@ -296,7 +300,7 @@ func (e *anthropicStreamEncoder) ensureDelta() [][]byte {
 	payload := NewObject().
 		Set("type", NewString("message_delta")).
 		Set("delta", NewObject().
-			Set("stop_reason", NewString(stopReasonToAnthropic(e.stopReason))).
+			Set("stop_reason", NewString(stopReasonToAnthropic(e.stopReason, e.hasToolCall))).
 			Set("stop_sequence", NewNull()))
 	if e.usage != nil && !e.usage.IsEmpty() {
 		payload.Set("usage", usageToAnthropic(e.usage))
@@ -373,6 +377,9 @@ func (e *anthropicStreamEncoder) Push(chunk Chunk) [][]byte {
 		// 无签名的思考块（来自 chat/responses 线上游）：补占位签名，但签名走 signature_delta，
 		// 不塞进块起始——与官方流式形态一致。有真实签名时不动（保持既有透传形状）。
 		placeholderSignature := ""
+		if chunk.Block != nil && chunk.Block.Kind == BlockToolCall {
+			e.hasToolCall = true
+		}
 		if block := chunk.Block; block != nil && block.Kind == BlockThinking &&
 			!block.Redacted && block.Signature == "" && e.ctx.shouldPlaceholderThinkingSignature() {
 			placeholderSignature = PlaceholderThinkingSignature()

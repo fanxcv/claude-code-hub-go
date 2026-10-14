@@ -74,24 +74,27 @@ func NewParser(opts ParserOptions) *Parser {
 }
 
 // Push 喂入一个网络 chunk，返回其中完成的帧。
+//
+// 错误前已解析出的帧**照常返回**（调用方可能已消费前导帧，静默丢帧会让门控的帧序列出现空洞）。
 func (p *Parser) Push(chunk []byte) ([]Frame, error) {
 	frames := make([]Frame, 0, 4)
 	if _, err := p.Visit(chunk, func(frame Frame) bool {
 		frames = append(frames, frame)
 		return true
 	}); err != nil {
-		return nil, err
+		return frames, err
 	}
 	return frames, nil
 }
 
-// PushText 直接喂入已解码文本（供对完整 body 做一次性解析的调用方使用）。
+// PushText 直接喂入已解码的文本（供对完整 body 做一次性解析的调用方使用）。
+// 错误前已解析出的帧同样照常返回，语义见 Push。
 func (p *Parser) PushText(text string) ([]Frame, error) {
 	return p.Push([]byte(text))
 }
 
-// Visit 边解析边消费帧。返回的 drained 为 false 表示 visitor 提前终止了解析
-// （visitor 返回 false），此后该 parser 不可复用。
+// Visit 边解析边消费帧，不缓冲帧。错误时返回 (false, err)，
+// 此前已交给 visitor 的帧由调用方自行负责（与 Push 的差异：Visit 不把帧交回）。
 func (p *Parser) Visit(chunk []byte, visitor func(Frame) bool) (drained bool, err error) {
 	return p.consume(chunk, visitor)
 }

@@ -272,6 +272,17 @@ func NewStreamPipe(upstream WireProtocol, client WireProtocol, ctx ConvertCtx) (
 
 // Push 喂入一块上游字节，产出一块客户端字节（可能为空，表示本块尚未构成完整帧）。
 func (p *StreamPipe) Push(chunk []byte) []byte {
+	if len(p.pending) == 0 {
+		// 无残字：直接切分本块。避开 append(p.pending, chunk...) 的每块一次拷贝——pending 通常
+		// 为空，逐块拷贝在大正文下是纯多余的开销（行为与拷贝版一致，因为 pending 为空时
+		// append 就是 chunk 本身）。
+		text, rest := splitCompleteUTF8(chunk)
+		p.pending = rest
+		if text == "" {
+			return nil
+		}
+		return p.pipe(text)
+	}
 	text, rest := splitCompleteUTF8(append(p.pending, chunk...))
 	p.pending = rest
 	if text == "" {

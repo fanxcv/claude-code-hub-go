@@ -807,7 +807,16 @@ func stopReasonFromResponses(status string, hasStatus bool, incompleteReason str
 	}
 }
 
-func stopReasonToAnthropic(reason StopReason) string {
+// stopReasonToAnthropic 渲染 Anthropic 的 stop_reason。
+//
+// hasToolUse 是出口侧兜底，与 chat 线的 stopReasonToOpenAIChat 同形：上游线把工具调用交付在
+// 响应体里，而 stop_reason 只在 Anthropic 上游带得了 tool_use（responses 上游的 completed 无
+// 工具语义，chat 上游的 finish_reason 可能缺席）。少了这层兜底，客户端会收到 tool_use 块却拿到
+// end_turn，从而把结果当普通收尾、不去执行工具。
+func stopReasonToAnthropic(reason StopReason, hasToolUse bool) string {
+	if hasToolUse {
+		return "tool_use"
+	}
 	switch reason {
 	case StopEndTurn:
 		return "end_turn"
@@ -824,6 +833,7 @@ func stopReasonToAnthropic(reason StopReason) string {
 	}
 }
 
+// stopReasonToOpenAIChat 渲染 chat 的 finish_reason；hasToolCalls 语义见调用点。
 func stopReasonToOpenAIChat(reason StopReason, hasToolCalls bool) string {
 	if hasToolCalls || reason == StopToolUse {
 		return "tool_calls"

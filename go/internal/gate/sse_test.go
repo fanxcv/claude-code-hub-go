@@ -283,6 +283,19 @@ func TestParserVisitorStops(t *testing.T) {
 	}
 }
 
+func TestParserBufferedFramesSurviveBufferLimitError(t *testing.T) {
+	// 上限报错不得吞掉同一次 Push 里已经解析出的帧：调用方（门控）已按前导帧决定过提交与否，
+	// 丢帧会让它看到的帧序列出现空洞。
+	parser := NewParser(ParserOptions{MaxBufferedBytes: 64})
+	frames, err := parser.Push([]byte("data: one\n\ndata: two\n\ndata: " + strings.Repeat("x", 128) + "\n\n"))
+	var limitErr *BufferLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("超限应报 BufferLimitError，得到 %v", err)
+	}
+	want := []Frame{{Event: "", Data: "one"}, {Event: "", Data: "two"}}
+	assertFrames(t, frames, want)
+}
+
 func TestResolvePath(t *testing.T) {
 	parsed := mustParseJSON(t, `{
 		"choices": [{"delta": {"content": "a"}}, {"delta": {}}],
