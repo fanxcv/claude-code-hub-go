@@ -56,8 +56,13 @@ func New(ctx context.Context, cfg config.Config, rules *cfgsync.Snapshot) (*Bund
 		}
 		options.MaxRetries = 2
 		options.DialTimeout = 5 * time.Second
-		options.ReadTimeout = 10 * time.Second
-		options.WriteTimeout = 10 * time.Second
+		commandTimeout := redisCommandTimeout(cfg)
+		options.ReadTimeout = commandTimeout
+		options.WriteTimeout = commandTimeout
+		if options.TLSConfig != nil && !cfg.Env.RedisTLSRejectUnauthorized {
+			// 只在运维显式关掉校验（REDIS_TLS_REJECT_UNAUTHORIZED=false）时放行自签证书。
+			options.TLSConfig.InsecureSkipVerify = true
+		}
 		bundle.redis = redis.NewClient(options)
 	}
 
@@ -86,6 +91,20 @@ func (b *Bundle) PingPG(ctx context.Context) (httpapi.DependencyStatus, string) 
 		return httpapi.StatusError, b.sanitize(err).Error()
 	}
 	return httpapi.StatusOK, ""
+}
+
+// redisCommandTimeout 取 REDIS_COMMAND_TIMEOUT_MS；未设置即回退 10s（原硬编码值）。
+// 下限 100ms：与 envSpecs 的 min 一致，避免误配 0 让每条命令立即超时。
+func redisCommandTimeout(cfg config.Config) time.Duration {
+	const fallback = 10 * time.Second
+	if cfg.Env.RedisCommandTimeoutMS == nil {
+		return fallback
+	}
+	timeout := time.Duration(*cfg.Env.RedisCommandTimeoutMS) * time.Millisecond
+	if timeout < 100*time.Millisecond {
+		return 100 * time.Millisecond
+	}
+	return timeout
 }
 
 // PingRedis 探测 Redis。

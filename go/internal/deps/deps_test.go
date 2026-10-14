@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/cfgsync"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/config"
@@ -80,6 +81,36 @@ func TestUnreachableDependenciesReportError(t *testing.T) {
 		if strings.Contains(text, "pw") {
 			t.Fatalf("探测错误信息泄漏了口令片段: %q", text)
 		}
+	}
+}
+
+// 命令超时与 TLS 校验必须取环境配置，而不是沿用硬编码的 10s / 强制校验证书。
+func TestRedisOptionsHonorConfig(t *testing.T) {
+	cfg := loadConfig(t, map[string]string{
+		"REDIS_URL":                     "rediss://user:pw@host:6379/0",
+		"REDIS_COMMAND_TIMEOUT_MS":      "1500",
+		"REDIS_TLS_REJECT_UNAUTHORIZED": "false",
+	})
+	bundle, err := New(context.Background(), cfg, cfgsync.New())
+	if err != nil {
+		t.Fatalf("建依赖失败: %v", err)
+	}
+	defer func() { _ = bundle.Close() }()
+
+	options := bundle.redis.Options()
+	if options.ReadTimeout != 1500*time.Millisecond || options.WriteTimeout != 1500*time.Millisecond {
+		t.Fatalf("命令超时应取 REDIS_COMMAND_TIMEOUT_MS，收到 read=%s write=%s", options.ReadTimeout, options.WriteTimeout)
+	}
+	if options.TLSConfig == nil || !options.TLSConfig.InsecureSkipVerify {
+		t.Fatalf("REDIS_TLS_REJECT_UNAUTHORIZED=false 时应跳过证书校验")
+	}
+}
+
+// 未配置时回退到原硬编码值。
+func TestRedisCommandTimeoutFallback(t *testing.T) {
+	cfg := loadConfig(t, nil)
+	if got := redisCommandTimeout(cfg); got != 10*time.Second {
+		t.Fatalf("未配置时应回退 10s，收到 %s", got)
 	}
 }
 
