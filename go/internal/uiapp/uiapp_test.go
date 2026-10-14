@@ -319,6 +319,15 @@ func TestBootstrapInjection(t *testing.T) {
 // 夹具刻意按**生产形态**造：根壳是片段（无 <html>/<head>/</head>）。既有 testAssets 的根壳
 // 带 </head>（能正常注入），照它测不出本判定——那正是这条误报长期未被发现的原因。
 func TestBootstrapExemptOnlyAppliesToRootShell(t *testing.T) {
+	// 必须显式设档：本用例断言的是 debug 级的 `uiapp_shell_bootstrap_exempt` 痕迹，
+	// 而进程默认档取自 LOG_LEVEL（未配置时 info，见 internal/logx）——依赖默认档就是
+	// 隐性耦合：默认档一变，用例会以「日志里没这句」的形式假红，与本次要钉的行为无关。
+	previousLevel := logx.CurrentLevel()
+	if !logx.SetLevel(string(logx.LevelDebug)) {
+		t.Fatalf("无法把日志级别设为 debug（当前 %s）", previousLevel)
+	}
+	t.Cleanup(func() { logx.SetLevel(previousLevel) })
+
 	assets := fstest.MapFS{
 		"assets/.gitkeep":         &fstest.MapFile{},
 		"assets/BUILD_ID":         &fstest.MapFile{Data: []byte("build-test01\n")},

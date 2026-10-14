@@ -45,10 +45,12 @@ var ValidLevels = []Level{LevelFatal, LevelError, LevelWarn, LevelInfo, LevelDeb
 
 // currentLevel 是进程当前日志级别（原子存优先级，读热路径不加锁）。
 //
-// 默认值取自 LOG_LEVEL 环境变量；无值（或非法）时退到 debug。
-// **登记进白名单的差异**：Node 的默认级别按 NODE_ENV 分叉（开发 debug / 生产 info），
-// Go 侧不看 NODE_ENV，一律退到 debug——即「比 Node 生产更啰嗦，但不丢日志」，
-// 这与本包改动前的行为（不过滤）一致。
+// 默认值取自 LOG_LEVEL 环境变量；无值（或非法）时退到 info，与 config/env.go
+// 规格表里 LOG_LEVEL 的 def:info 对齐——两处默认值必须一致，改一处就要同步另一处。
+//
+// 为什么不能在 logx 内依赖 config：logx 是最底层的叶子包，任何层都要用它打日志，
+// 而 init() 早于配置装载；且配置装载失败（非法 LOG_LEVEL）本身就是靠日志报出的。
+// 故它只能自己读环境变量，靠这条注释与 config 的规格表约定一致。
 var currentLevel atomic.Int32
 
 func init() {
@@ -64,7 +66,7 @@ func levelFromEnv() Level {
 			return candidate
 		}
 	}
-	return LevelDebug
+	return LevelInfo
 }
 
 // SetLevel 设置进程日志级别（管理面 /api/admin/log-level 的写路径）。

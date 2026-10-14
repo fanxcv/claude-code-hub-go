@@ -69,6 +69,12 @@ func TestNilWriterFallsBackToStderr(t *testing.T) {
 func TestAllLevelsAreWritten(t *testing.T) {
 	buffer := &bytes.Buffer{}
 	logger := New(buffer)
+	// 默认级别已是 info，显式降到 debug 才能验证四个级别都落盘。
+	previous := CurrentLevel()
+	if !SetLevel("debug") {
+		t.Fatal("debug 应为合法级别")
+	}
+	defer SetLevel(previous)
 
 	logger.Debug("debug_event", nil)
 	logger.Info("info_event", nil)
@@ -88,6 +94,14 @@ func TestAllLevelsAreWritten(t *testing.T) {
 		if record["level"] != wantLevels[index] {
 			t.Fatalf("第 %d 行级别应为 %s，收到 %v", index, wantLevels[index], record["level"])
 		}
+	}
+}
+
+// LOG_LEVEL 未设置时的默认值必须与 config/env.go 规格表的 def:info 一致。
+func TestDefaultLevelIsInfo(t *testing.T) {
+	t.Setenv("LOG_LEVEL", "")
+	if got := levelFromEnv(); got != LevelInfo {
+		t.Fatalf("未配置 LOG_LEVEL 时默认应为 info，收到 %q", got)
 	}
 }
 
