@@ -314,3 +314,31 @@ func tail(text string, limit int) string {
 }
 
 var _ = io.Discard
+
+// rateLimitDisabledQuotaSource 是只读空快照的桩：装配一个必拦截不涉及真库，供接线断言用。
+type rateLimitDisabledQuotaSource struct{}
+
+func (rateLimitDisabledQuotaSource) KeyQuota(context.Context, int64) (limit.KeyQuota, error) {
+	return limit.KeyQuota{}, nil
+}
+
+func (rateLimitDisabledQuotaSource) UserQuota(context.Context, int64) (limit.UserQuota, error) {
+	return limit.UserQuota{}, nil
+}
+
+// ENABLE_RATE_LIMIT=false 只压制拦截：租约结算面必须照旧接线，否则终态结算会静默跳过扣减。
+//
+// 为什么单列这条：Disabled 是新加的装配开关，一旦有人把「关限流」实现成不装配实例（或返回 nil），
+// 防爆破节流、租约结算与供应商额度会一起消失，而账面上只剩「限流未接线」一行 gaps。
+func TestLeaseSettlerStaysWiredWhenRateLimitDisabled(t *testing.T) {
+	service, err := limit.New(limit.Config{
+		Quotas:   rateLimitDisabledQuotaSource{},
+		Disabled: true,
+	})
+	if err != nil {
+		t.Fatalf("组装限流服务失败: %v", err)
+	}
+	if settler := leaseSettlerFor(service); settler == nil {
+		t.Fatal("开关关闭时租约结算面仍须接线")
+	}
+}

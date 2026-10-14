@@ -243,8 +243,10 @@ func openRateLimiter(
 		// SESSION_TTL 单位与 Node 一致（秒，可小数）。
 		SessionTTL: time.Duration(cfg.Env.SessionTTL * float64(time.Second)),
 		// 数据面的防爆破阈值（auth-guard.ts:58-63 的 proxyAuthPolicy）：20 次 / 5 分钟 / 封 10 分钟。
-		Abuse:  limit.ProxyAuthAbuseConfig,
-		Logger: logger,
+		Abuse: limit.ProxyAuthAbuseConfig,
+		// ENABLE_RATE_LIMIT=false：只压制拦截，判定与三职旁路（防爆破、租约结算、供应商额度）照常。
+		Disabled: !cfg.Env.EnableRateLimit,
+		Logger:   logger,
 	})
 	if err != nil {
 		logger.Warn("ratelimit_unavailable", map[string]any{"reason": "assemble", "error": err.Error()})
@@ -253,6 +255,7 @@ func openRateLimiter(
 	logger.Info("ratelimit_ready", map[string]any{
 		"location": location.String(),
 		"abuse":    limit.ProxyAuthAbuseConfig,
+		"disabled": !cfg.Env.EnableRateLimit,
 	})
 	return service
 }

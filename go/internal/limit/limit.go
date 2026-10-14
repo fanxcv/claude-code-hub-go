@@ -77,6 +77,12 @@ type LedgerReader interface {
 
 // Config 是限流服务的装配依赖。
 type Config struct {
+	// Disabled 对应 ENABLE_RATE_LIMIT=false：只压制**拦截**，不跳过判定。
+	//
+	// 判定照常跑完（租约切片与并发记账照常写入、限额快照照常读），只是把触顶的拦截块
+	// 丢掉放行。为什么不干脆短路判定：本服务兼任防爆破节流、租约结算与供应商额度三职
+	// （装配见 cmd/cchd），跳过判定会把滥用保护与账务结算一起关掉，远超「关限流」的字面语义。
+	Disabled bool
 	// Quotas 必需：没有限额快照就无从判定。
 	Quotas QuotaSource
 	// Ledger 可空：为空时账本回退路径不可用（Redis 不可用即放行并留痕）。
@@ -191,7 +197,24 @@ func (s *Service) Sessions() *SessionTracker { return s.sessions }
 func (s *Service) Check(ctx context.Context, req *pctx.Context) (*guard.RateLimitBlock, error) {
 	// 会话 id 的默认来源是 cfg.SessionID（进程级装配时由接线方注入；为空则现场生成并留痕）。
 	// 每请求视图（WithSession）走 check 并自带来源，见 wire.go。
-	return s.check(ctx, req, func() (string, error) { return s.sessionID(req) })
+	return s.decide(ctx, req, func() (string, error) { return s.sessionID(req) })
+}
+
+// decide 是判定的唯一出口：Disabled 时丢弃拦截块，其余原样返回。
+//
+// 会话 id 的取值由调用方给定（进程级走 cfg.SessionID 兜底，每请求视图走会话绑定步骤的实际
+// 结果），与 check 的约定一致。两个入口（Service.Check / sessionBound.Check）都必须经此，
+// 否则 WithSession 视图会绕开 Disabled。
+func (s *Service) decide(
+	ctx context.Context,
+	req *pctx.Context,
+	sessionID func() (string, error),
+) (*guard.RateLimitBlock, error) {
+	block, err := s.check(ctx, req, sessionID)
+	if s.cfg.Disabled {
+		return nil, err
+	}
+	return block, err
 }
 
 // check 是限流判定的实现主体。会话 id 的取值由调用方给定：进程级调用走 cfg.SessionID 兜底，

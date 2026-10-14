@@ -50,7 +50,7 @@ func (b sessionBound) RecordAuthFailure(ctx context.Context, clientIP string, ca
 // 退回而不是短路成空串是必须的：空串会被当成一个合法会话 id 记进 Redis（于是同一个无会话身份的
 // 请求彼此看起来像“同一会话”），而退回至少还能得到「现场生成 + 留痕」的语义，与接线前一致。
 func (b sessionBound) Check(ctx context.Context, req *pctx.Context) (*guard.RateLimitBlock, error) {
-	return b.service.check(ctx, req, func() (string, error) {
+	return b.service.decide(ctx, req, func() (string, error) {
 		if b.source != nil {
 			id, err := b.source(req)
 			if err != nil {
