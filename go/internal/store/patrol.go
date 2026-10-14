@@ -23,6 +23,9 @@ type UnsettledRequest struct {
 // 而 NULL 行是极稀有的——那等于每轮全表扫。按 (created_at, id) 走
 // idx_message_request_created_at_id_active 的索引序，配合 created_at < cutoff 的范围，
 // 每页都只读「阈值之前」的那段。
+//
+// 成本缺口扫描（ListCostGapRequests）复用同一形状：它同样按 (created_at, id) 走同一索引，
+// 且同样稀有，没有另立一种游标的理由。
 type UnsettledCursor struct {
 	CreatedAt time.Time
 	ID        int64
@@ -39,6 +42,64 @@ WHERE status_code IS NULL
   AND (created_at, id) > ($2, $3)
 ORDER BY created_at ASC, id ASC
 LIMIT $4`
+
+// CostGapRequest 是一行「终态已提交、成本却未落库」的 message_request。
+//
+// 开行时 cost_usd 与 status_code 同为 NULL；结算分两步落库（先终态、后成本，见
+// terminal 的 ErrCostWriteFailed 路径）。两步之间进程被杀、或成本写入重试耗尽，就留下这一行：
+// 终态在、成本永久为空。它不进 usage_ledger，金额静默少算——因此需要可观测的兜底。
+type CostGapRequest struct {
+	ID        int64
+	CreatedAt time.Time
+}
+
+// listCostGapRequestsQuery 与 listUnsettledRequestsQuery 同形：行值游标、无 OFFSET，
+// 唯一区别是谓词取反（终态已提交、成本仍空）。
+const listCostGapRequestsQuery = `
+SELECT id, created_at
+FROM message_request
+WHERE status_code IS NOT NULL
+  AND cost_usd IS NULL
+  AND deleted_at IS NULL
+  AND created_at < $1
+  AND (created_at, id) > ($2, $3)
+ORDER BY created_at ASC, id ASC
+LIMIT $4`
+
+// ListCostGapRequests 取 cutoff 之前、游标之后的成本缺口行（有界）。
+// 走 control 分道，理由同 ListUnsettledRequests：后台巡检不挤占热路径与 writer 预算。
+func (p *Pools) ListCostGapRequests(
+	ctx context.Context,
+	cutoff time.Time,
+	after UnsettledCursor,
+	limit int,
+) ([]CostGapRequest, error) {
+	if limit <= 0 {
+		return nil, errors.New("store: 成本缺口行查询必须有正的批量上限")
+	}
+	pool, err := p.Control()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := pool.Query(ctx, listCostGapRequestsQuery, cutoff, after.CreatedAt, after.ID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: 查询成本缺口行失败: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]CostGapRequest, 0, limit)
+	for rows.Next() {
+		var item CostGapRequest
+		if err := rows.Scan(&item.ID, &item.CreatedAt); err != nil {
+			return nil, fmt.Errorf("store: 读取成本缺口行失败: %w", err)
+		}
+		results = append(results, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: 遍历成本缺口行失败: %w", err)
+	}
+	return results, nil
+}
 
 // ListUnsettledRequests 取 cutoff 之前、游标之后的未终态行（有界）。
 //

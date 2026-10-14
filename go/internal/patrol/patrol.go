@@ -30,6 +30,10 @@ const MarkerPrefix = "patrol:unsettled_settlement_lost"
 // 冻结的停止会让退出序列卡死在关依赖之前，那比丢一轮巡检糟得多。
 const stopTimeout = 5 * time.Second
 
+// defaultCostGapAfter 是成本缺口的默认宽限：结算里「先终态、后成本」的间隔在重试下
+// 至多到秒级，一小时足够宽，不会把在途写入报成缺口。
+const defaultCostGapAfter = time.Hour
+
 // UnsettledStore 是巡检需要的两件事：找出候选行、对单行补终态。
 // 窄接口使循环逻辑（分页、上界、错误容忍）可以脱离数据库单测。
 type UnsettledStore interface {
@@ -50,6 +54,29 @@ type DBStore struct {
 
 // NewDBStore 建立库存储。
 func NewDBStore(pools *store.Pools) *DBStore { return &DBStore{pools: pools} }
+
+// CostGapStore 是可选的「成本缺口扫描」能力：列出终态已提交、cost_usd 仍为空的旧行。
+//
+// 不做成 UnsettledStore 的必选方法：那会强制既有实现（测试替身 / 装配点）跟着改，
+// 而成本缺口阶段只告警、不写库——Store 未实现它时本轮跳过扫描，补终态职责不受影响。
+type CostGapStore interface {
+	ListCostGapRequests(
+		ctx context.Context,
+		cutoff time.Time,
+		after store.UnsettledCursor,
+		limit int,
+	) ([]store.CostGapRequest, error)
+}
+
+// ListCostGapRequests 见 store.Pools.ListCostGapRequests（同一条语句，走 control 分道）。
+func (s *DBStore) ListCostGapRequests(
+	ctx context.Context,
+	cutoff time.Time,
+	after store.UnsettledCursor,
+	limit int,
+) ([]store.CostGapRequest, error) {
+	return s.pools.ListCostGapRequests(ctx, cutoff, after, limit)
+}
 
 // ListUnsettledRequests 见 store.Pools.ListUnsettledRequests（同一条语句，走 control 分道）。
 func (s *DBStore) ListUnsettledRequests(
@@ -85,6 +112,10 @@ type Options struct {
 	// 它必须大于本部署可能的最长活跃流时长，否则会先给仍在流中的行补终态，把真实结算挡掉
 	// （见 doc.go 的残余风险段）。
 	UnsettledAfter time.Duration
+	// CostGapAfter 是「终态已提交多久、成本仍为空才认定是缺口」的宽限。
+	//
+	// 留宽限是因为成本写入在终态之后异步进行：零值取默认一小时，避免把在途写入报成缺口。
+	CostGapAfter time.Duration
 	// Interval 是巡检间隔。
 	Interval time.Duration
 	// BatchSize 是单次查询的行数上限。
@@ -107,6 +138,8 @@ type Result struct {
 	Skipped int
 	// Failed 是补写报错的行数。
 	Failed int
+	// CostGapFound 是本轮扫到的「终态已提交但成本未落库」行数（只告警，不补写）。
+	CostGapFound int
 }
 
 // Patrol 是巡检本体。
@@ -114,6 +147,7 @@ type Patrol struct {
 	store           UnsettledStore
 	logger          *logx.Logger
 	unsettledAfter  time.Duration
+	costGapAfter    time.Duration
 	interval        time.Duration
 	batchSize       int
 	maxRowsPerRound int
@@ -153,6 +187,10 @@ func New(options Options) (*Patrol, error) {
 	if roundTimeout <= 0 {
 		roundTimeout = 30 * time.Second
 	}
+	costGapAfter := options.CostGapAfter
+	if costGapAfter <= 0 {
+		costGapAfter = defaultCostGapAfter
+	}
 	logger := options.Logger
 	if logger == nil {
 		logger = logx.New(nil)
@@ -165,6 +203,7 @@ func New(options Options) (*Patrol, error) {
 		store:           options.Store,
 		logger:          logger,
 		unsettledAfter:  options.UnsettledAfter,
+		costGapAfter:    costGapAfter,
 		interval:        interval,
 		batchSize:       batchSize,
 		maxRowsPerRound: maxRows,
@@ -183,6 +222,7 @@ func (p *Patrol) RunOnce(ctx context.Context) (Result, error) {
 
 	cutoff := p.now().Add(-p.unsettledAfter)
 	var result Result
+	result.CostGapFound = p.scanCostGaps(ctx, p.now().Add(-p.costGapAfter))
 	cursor := store.UnsettledCursor{}
 	var firstID, lastID int64
 
@@ -258,6 +298,57 @@ func (p *Patrol) repairPatch(row store.UnsettledRequest) store.DetailsPatch {
 		ErrorMessage: &message,
 		ErrorStack:   &marker,
 	}
+}
+
+// 成本缺口扫描的样本上限：告警只带前几行 id，够反查即可；带全量会把日志变成数据导出。
+const costGapSampleLimit = 10
+
+// scanCostGaps 扫一轮「终态已提交、成本仍为空」的行：只计数并告警，不改任何行。
+//
+// 为什么不补写：补成本要复用 terminal 的 ResolveAndComputeCost，而它需要的输入链
+// （模型价、long-context 溢价、分组倍率、本波 hedge 结果）只有结算路径手上才有；巡检
+// 用近似价重算会静默错账，比留空更糟，也不得直写 usage_ledger（触发器才是它的真源）。
+// 因此本阶段只做结构化告警：让人拿样本 id 去查为什么那笔成本没写进去。
+func (p *Patrol) scanCostGaps(ctx context.Context, cutoff time.Time) int {
+	costStore, ok := p.store.(CostGapStore)
+	if !ok {
+		return 0
+	}
+	cursor := store.UnsettledCursor{}
+	found := 0
+	sample := make([]int64, 0, costGapSampleLimit)
+	for found < p.maxRowsPerRound {
+		limit := min(p.batchSize, p.maxRowsPerRound-found)
+		rows, err := costStore.ListCostGapRequests(ctx, cutoff, cursor, limit)
+		if err != nil {
+			p.logger.Warn("patrol_cost_gap_scan_failed", map[string]any{
+				"found": found,
+				"error": err.Error(),
+			})
+			break
+		}
+		if len(rows) == 0 {
+			break
+		}
+		found += len(rows)
+		for _, row := range rows {
+			cursor = store.UnsettledCursor{CreatedAt: row.CreatedAt, ID: row.ID}
+			if len(sample) < costGapSampleLimit {
+				sample = append(sample, row.ID)
+			}
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if found > 0 {
+		p.logger.Warn("patrol_cost_gap_found", map[string]any{
+			"found":      found,
+			"sampleIds":  sample,
+			"cutoffUnix": cutoff.Unix(),
+		})
+	}
+	return found
 }
 
 // logRound 按轮记三个事件：发现、补写、失败（失败也逐行记，见 RunOnce）。

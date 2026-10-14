@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
@@ -18,6 +19,10 @@ type fakeStore struct {
 	rows      []store.UnsettledRequest
 	listCalls []listCall
 	listErr   error
+	// gapRows 是成本缺口扫描的候选集；gapErr 注入查询失败。
+	gapRows  []store.CostGapRequest
+	gapErr   error
+	gapCalls []listCall
 	// repairErr 按 id 注入补写错误；applyLost 按 id 注入「谓词未命中」。
 	repairErr map[int64]error
 	applyLost map[int64]bool
@@ -69,6 +74,54 @@ func (f *fakeStore) ListUnsettledRequests(
 		}
 	}
 	return out, nil
+}
+
+// ListCostGapRequests 按与 SQL 相同的语义过滤（阈值 + (created_at,id) 游标）。
+func (f *fakeStore) ListCostGapRequests(
+	_ context.Context,
+	cutoff time.Time,
+	after store.UnsettledCursor,
+	limit int,
+) ([]store.CostGapRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.gapCalls = append(f.gapCalls, listCall{cutoff: cutoff, after: after, limit: limit})
+	if f.gapErr != nil {
+		return nil, f.gapErr
+	}
+	out := make([]store.CostGapRequest, 0, limit)
+	for _, row := range f.gapRows {
+		if !row.CreatedAt.Before(cutoff) {
+			continue
+		}
+		if after.ID != 0 || !after.CreatedAt.IsZero() {
+			if !(row.CreatedAt.After(after.CreatedAt) ||
+				(row.CreatedAt.Equal(after.CreatedAt) && row.ID > after.ID)) {
+				continue
+			}
+		}
+		out = append(out, row)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// unsettledOnlyStore 只实现 UnsettledStore：用于钉住「可选能力缺失时跳过扫描」。
+type unsettledOnlyStore struct{ inner *fakeStore }
+
+func (s unsettledOnlyStore) ListUnsettledRequests(
+	ctx context.Context,
+	cutoff time.Time,
+	after store.UnsettledCursor,
+	limit int,
+) ([]store.UnsettledRequest, error) {
+	return s.inner.ListUnsettledRequests(ctx, cutoff, after, limit)
+}
+
+func (s unsettledOnlyStore) RepairUnsettled(ctx context.Context, id int64, patch store.DetailsPatch) (bool, error) {
+	return s.inner.RepairUnsettled(ctx, id, patch)
 }
 
 func (f *fakeStore) RepairUnsettled(
@@ -270,6 +323,123 @@ func TestStopIsBounded(t *testing.T) {
 	}
 	// 幂等：重复 Stop 不阻塞、不 panic。
 	runner.Stop()
+}
+
+// TestRunOnceReportsCostGapWithoutRepair 钉住成本缺口那一步：计数 + 告警，但不碰任何行。
+func TestRunOnceReportsCostGapWithoutRepair(t *testing.T) {
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake := newFakeStore()
+	fake.gapRows = []store.CostGapRequest{
+		{ID: 11, CreatedAt: old},
+		{ID: 12, CreatedAt: old.Add(time.Second)},
+		{ID: 13, CreatedAt: old.Add(2 * time.Second)},
+	}
+	var logs strings.Builder
+	runner, err := New(Options{
+		Store:          fake,
+		Logger:         logx.New(&logs),
+		UnsettledAfter: time.Hour,
+		CostGapAfter:   time.Hour,
+		Now:            func() time.Time { return time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC) },
+	})
+	if err != nil {
+		t.Fatalf("构造巡检失败: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("巡检轮次报错: %v", err)
+	}
+	if result.CostGapFound != 3 {
+		t.Fatalf("应扫到 3 行成本缺口，实际 %d", result.CostGapFound)
+	}
+	if result.Repaired != 0 || result.Found != 0 {
+		t.Fatalf("成本缺口不得触发补写，实际 %+v", result)
+	}
+	if calls, _, _ := fake.snapshot(); len(calls) != 0 {
+		t.Fatalf("成本缺口阶段不得调用 RepairUnsettled，实际 %d 次", len(calls))
+	}
+	log := logs.String()
+	if !strings.Contains(log, "patrol_cost_gap_found") || !strings.Contains(log, "\"found\":3") {
+		t.Fatalf("应发出带行数的结构化告警，实际日志: %s", log)
+	}
+	if !strings.Contains(log, "sampleIds") {
+		t.Fatalf("告警应带样本 id，实际日志: %s", log)
+	}
+}
+
+// TestRunOnceCostGapPagesBounded 钉住成本缺口扫描与未终态扫描同一套上界：批量 × 单轮总行数。
+func TestRunOnceCostGapPagesBounded(t *testing.T) {
+	old := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	fake := newFakeStore()
+	for i := int64(1); i <= 5; i++ {
+		fake.gapRows = append(fake.gapRows, store.CostGapRequest{ID: i, CreatedAt: old.Add(time.Duration(i) * time.Second)})
+	}
+	runner := newPatrol(t, Options{
+		Store:           fake,
+		UnsettledAfter:  time.Hour,
+		CostGapAfter:    time.Hour,
+		BatchSize:       2,
+		MaxRowsPerRound: 3,
+		Now:             func() time.Time { return time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC) },
+	})
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("巡检轮次报错: %v", err)
+	}
+	if result.CostGapFound != 3 {
+		t.Fatalf("单轮总行数上限 3 应生效，实际 %d", result.CostGapFound)
+	}
+	if len(fake.gapCalls) != 2 {
+		t.Fatalf("应分两页取（3 行 / 每页 2），实际 %d 页", len(fake.gapCalls))
+	}
+	if fake.gapCalls[1].after.ID != 2 {
+		t.Fatalf("第二页游标应停在上一页最后一行 id=2，实际 %d", fake.gapCalls[1].after.ID)
+	}
+	if fake.gapCalls[1].limit != 1 {
+		t.Fatalf("第二页批量应被剩余额度收窄到 1，实际 %d", fake.gapCalls[1].limit)
+	}
+}
+
+// TestRunOnceSkipsCostGapWhenStoreLacksCapability：存储没实现可选接口时跳过该阶段，不报错。
+func TestRunOnceSkipsCostGapWhenStoreLacksCapability(t *testing.T) {
+	fake := newFakeStore()
+	runner := newPatrol(t, Options{Store: unsettledOnlyStore{inner: fake}, UnsettledAfter: time.Hour})
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("巡检轮次报错: %v", err)
+	}
+	if result.CostGapFound != 0 {
+		t.Fatalf("缺能力时不得报缺口，实际 %d", result.CostGapFound)
+	}
+}
+
+// TestRunOnceCostGapScanFailureDoesNotFailRound：扫描查询失败只告警，不把整轮判死。
+func TestRunOnceCostGapScanFailureDoesNotFailRound(t *testing.T) {
+	fake := newFakeStore()
+	fake.gapErr = errors.New("库连接断了")
+	var logs strings.Builder
+	runner, err := New(Options{
+		Store:          fake,
+		Logger:         logx.New(&logs),
+		UnsettledAfter: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("构造巡检失败: %v", err)
+	}
+
+	result, err := runner.RunOnce(context.Background())
+	if err != nil {
+		t.Fatalf("扫描失败不应让整轮报错: %v", err)
+	}
+	if result.CostGapFound != 0 {
+		t.Fatalf("扫描失败时缺口计数应为 0，实际 %d", result.CostGapFound)
+	}
+	if !strings.Contains(logs.String(), "patrol_cost_gap_scan_failed") {
+		t.Fatalf("扫描失败应有结构化告警，实际日志: %s", logs.String())
+	}
 }
 
 // TestNewRejectsZeroThreshold：阈值为 0 会把刚开行的请求当成丢失，必须在构造期拒绝。

@@ -31,6 +31,15 @@
 //	   provider_chain 非空时成立；编造一个时长比留空更糟。
 //	P3 不写任何成本列：巡检无从知道真实用量，写 0 或写估值都是伪造账目。
 //
+// 成本缺口（与补终态无关的另一类缺陷）：结算分两步（先终态、后成本，见
+// terminal.ErrCostWriteFailed），两步之间进程被杀或成本写入重试耗尽，就留下
+// 「status_code 非空、cost_usd 为空」的行——它不进 usage_ledger，金额静默少算。
+// 巡检对此**只做扫描 + 结构化告警**（patrol_cost_gap_found，带行数与样本 id），
+// 不补写：补写要 terminal.ResolveAndComputeCost 的完整输入链（模型价、long-context
+// 溢价、分组倍率、本波 hedge 结果），巡检手上没有；用近似价重算会静默错账，比留空更糟，
+// 也不得直写 usage_ledger（触发器才是它的真源）。阈值由 Options.CostGapAfter 给，
+// 默认一小时宽限，避免把在途的成本写入报成缺口。
+//
 // 残余风险（须在部署侧知道）：没有任何全局上限约束流式响应的总时长
 // （providers.streaming_idle_timeout_ms 默认 0 = 不限制，实测最长 347.5 s、p99.9 300 s），
 // 因此阈值取得不足时，巡检可能先给一条**仍在流中**的行补终态，随后真实的终态写入会被
