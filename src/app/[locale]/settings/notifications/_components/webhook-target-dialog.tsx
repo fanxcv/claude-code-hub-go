@@ -33,7 +33,7 @@ import {
 import type { NotificationType } from "@/types/notifications";
 import type { WebhookProviderType } from "@/types/webhook-targets";
 import type { ClientActionResult, WebhookTargetState } from "../_lib/hooks";
-import { WebhookTargetFormSchema, type WebhookTargetFormValues } from "../_lib/schemas";
+import { createWebhookTargetFormSchema, type WebhookTargetFormValues } from "../_lib/schemas";
 import { ProxyConfigSection } from "./proxy-config-section";
 import { TestWebhookButton } from "./test-webhook-button";
 import { WebhookTypeForm } from "./webhook-type-form";
@@ -145,6 +145,8 @@ export function WebhookTargetDialog({
     [target]
   );
 
+  const schema = useMemo(() => createWebhookTargetFormSchema(t), [t]);
+
   const {
     register,
     handleSubmit,
@@ -153,7 +155,7 @@ export function WebhookTargetDialog({
     reset,
     formState: { errors },
   } = useForm<WebhookTargetFormValues>({
-    resolver: zodResolver(WebhookTargetFormSchema),
+    resolver: zodResolver(schema),
     defaultValues,
   });
 

@@ -53,9 +53,16 @@
     "customHeaders": "自定义 Headers（JSON）",
     "customHeadersPlaceholder": "{\"X-Token\":\"...\"}",
     "errors": {
+      "customTemplateInvalidJson": "自定义模板不是有效 JSON",
+      "customTemplateMustBeObject": "自定义模板必须是 JSON 对象",
+      "customTemplateRequired": "自定义模板不能为空",
       "headersInvalidJson": "Headers 不是有效 JSON",
       "headersMustBeObject": "Headers 必须是 JSON 对象",
-      "headersValueMustBeString": "Headers 的值必须为字符串"
+      "headersValueMustBeString": "Headers 的值必须为字符串",
+      "telegramBotTokenRequired": "Telegram Bot Token 不能为空",
+      "telegramChatIdRequired": "Telegram Chat ID 不能为空",
+      "webhookUrlInvalid": "Webhook URL 格式不正确",
+      "webhookUrlRequired": "Webhook URL 不能为空"
     },
     "types": {
       "wechat": "企业微信",

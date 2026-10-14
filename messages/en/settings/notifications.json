@@ -100,9 +100,16 @@
     "editTitle": "Edit Push Target",
     "enable": "Enable",
     "errors": {
+      "customTemplateInvalidJson": "Custom template is not valid JSON",
+      "customTemplateMustBeObject": "Custom template must be a JSON object",
+      "customTemplateRequired": "Custom template is required",
       "headersInvalidJson": "Headers must be valid JSON",
       "headersMustBeObject": "Headers must be a JSON object",
-      "headersValueMustBeString": "Header values must be strings"
+      "headersValueMustBeString": "Header values must be strings",
+      "telegramBotTokenRequired": "Telegram Bot Token is required",
+      "telegramChatIdRequired": "Telegram Chat ID is required",
+      "webhookUrlInvalid": "Webhook URL format is invalid",
+      "webhookUrlRequired": "Webhook URL is required"
     },
     "name": "Target Name",
     "namePlaceholder": "e.g. Ops Group",
