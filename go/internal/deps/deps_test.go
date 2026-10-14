@@ -114,6 +114,21 @@ func TestRedisCommandTimeoutFallback(t *testing.T) {
 	}
 }
 
+// PG 探针的共享池契约：配了 DSN 但池未接上时报 not_configured（不自己拨号），
+// 接上后才探活。改前本包自建池，没有「未接上」这个中间态，也就没有这条分支。
+func TestPingPGWaitsForSharedPool(t *testing.T) {
+	cfg := loadConfig(t, map[string]string{"DSN": "postgresql://user:pw@127.0.0.1:9/db"})
+	bundle, err := New(context.Background(), cfg, cfgsync.New())
+	if err != nil {
+		t.Fatalf("建依赖失败: %v", err)
+	}
+	defer func() { _ = bundle.Close() }()
+
+	if status, note := bundle.PingPG(context.Background()); status != httpapi.StatusNotSet {
+		t.Fatalf("池未接上时应报 not_configured，收到 %q (%s)", status, note)
+	}
+}
+
 func TestRulesStatusFollowsSnapshot(t *testing.T) {
 	rules := cfgsync.New()
 	bundle, err := New(context.Background(), loadConfig(t, nil), rules)
