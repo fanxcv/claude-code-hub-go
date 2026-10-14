@@ -9,6 +9,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/cfgsync"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/config"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/httpapi"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
 func loadConfig(t *testing.T, env map[string]string) config.Config {
@@ -52,6 +53,16 @@ func TestUnreachableDependenciesReportError(t *testing.T) {
 		t.Fatalf("建池本身不应失败（惰性连接）: %v", err)
 	}
 	defer func() { _ = bundle.Close() }()
+
+	// PG 探针走共享池：接上 store 那条 control 道后，指向不可达地址才可探。
+	pools, err := store.Open(context.Background(), store.Options{
+		DSN: cfg.DSN, Budget: cfg.Pool, Timeouts: cfg.DB,
+	})
+	if err != nil {
+		t.Fatalf("开共享池不应失败（惰性连接）: %v", err)
+	}
+	defer func() { _ = pools.Close() }()
+	bundle.AttachStorePools(pools)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5e9)
 	defer cancel()

@@ -202,6 +202,10 @@ func runWith(rootCtx context.Context, options startup) error {
 		}
 		storePools = opened
 	}
+	// 把共享池接到依赖探针：/readyz 的 pg 项走 control 道，不再另建池。
+	if attacher, ok := bundle.(interface{ AttachStorePools(*store.Pools) }); ok && storePools != nil {
+		attacher.AttachStorePools(storePools)
+	}
 
 	// 通知的冷却去重连接（缓存命中率告警的「读」与「写」共用一条命令连接）。
 	// 与订阅连接分开：Pub/Sub 会长期占用一条连接，混用会挤占命令道的延迟。
