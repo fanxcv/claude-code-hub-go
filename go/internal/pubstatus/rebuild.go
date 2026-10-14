@@ -139,6 +139,35 @@ func (r *redisProjectionRedis) HGetAll(ctx context.Context, key string) (map[str
 	return r.client.HGetAll(ctx, key).Result()
 }
 
+// HGetAllMany 用一次 pipeline 取回多个桶，省掉逐桶的串行往返（读侧的可选加速面，
+// 见 rollup_payload.go 的 RollupBucketPipeliner）。
+//
+// 单键失败（键不存在或命令出错）只把该下标落成 nil，整体不返错：与逐桶路径
+// 「读不到就给空桶」同义，公开页宁少不脏。
+func (r *redisProjectionRedis) HGetAllMany(ctx context.Context, keys []string) []map[string]string {
+	results := make([]map[string]string, len(keys))
+	cmds := make([]*redis.MapStringStringCmd, len(keys))
+	pipe := r.client.Pipeline()
+	for i, key := range keys {
+		if key == "" {
+			continue
+		}
+		cmds[i] = pipe.HGetAll(ctx, key)
+	}
+	// Exec 的错误是「第一条非 nil 命令错误」的聚合，这里刻意忽略：逐条 cmd.Err() 已经
+	// 覆盖每一种失败，忽略它不会吞掉任何单键错误。
+	_, _ = pipe.Exec(ctx)
+	for i, cmd := range cmds {
+		if cmd == nil {
+			continue
+		}
+		if fields, err := cmd.Result(); err == nil {
+			results[i] = fields
+		}
+	}
+	return results
+}
+
 func (r *redisProjectionRedis) Scan(ctx context.Context, pattern string, limit int) ([]string, error) {
 	var cursor uint64
 	keys := make([]string, 0, limit)
@@ -836,4 +865,17 @@ func (r projectionBucketReader) HGetAll(ctx context.Context, key string) (map[st
 		return nil, nil
 	}
 	return r.redis.HGetAll(ctx, key)
+}
+
+// HGetAllMany 只在底层投影实现批量读时透传；否则本适配器不实现 RollupBucketPipeliner，
+// 读侧自动落回逐桶路径（两条路径降级语义相同）。
+func (r projectionBucketReader) HGetAllMany(ctx context.Context, keys []string) []map[string]string {
+	if r.redis == nil {
+		return nil
+	}
+	pipeliner, ok := r.redis.(RollupBucketPipeliner)
+	if !ok {
+		return nil
+	}
+	return pipeliner.HGetAllMany(ctx, keys)
 }

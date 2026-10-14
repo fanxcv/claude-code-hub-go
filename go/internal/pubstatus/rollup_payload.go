@@ -95,32 +95,68 @@ type RollupBucketReader interface {
 	HGetAll(ctx context.Context, key string) (map[string]string, error)
 }
 
+// RollupBucketPipeliner 是读侧可选的加速面：一次提交多键的 HGETALL，省掉逐桶的串行往返
+// （默认窗口 24h/5min = 288 次，上限 168h = 2016 次）。
+//
+// 返回值与 keys 等长、下标一一对应；**某键读失败或键不存在都落成 nil**（即空桶）——
+// 与单桶路径的降级口径相同，故上层不需要为「部分失败」另立一条分支。
+// 不实现本接口的读侧自动回退逐桶读，语义完全一致。
+type RollupBucketPipeliner interface {
+	HGetAllMany(ctx context.Context, keys []string) []map[string]string
+}
+
 // ReadRollupBuckets 复刻 readPublicStatusRollupBuckets（rollup-store.ts:489-543）。
 //
 // 读失败与「桶不存在」在 Node 里同判：都给一个空桶（公开页宁少不脏）。故本函数**不返回错误**——
 // 单个桶读不到就地降级为空桶，逐个返回错误会让上层在「Redis 抖一下」时丢掉整批桶。
+//
+// 读侧实现了 RollupBucketPipeliner 时批量取键（一次往返），否则逐桶读；两条路径的降级语义相同。
 func ReadRollupBuckets(
 	ctx context.Context,
 	reader RollupBucketReader,
 	bucketStarts []string,
 	prefix string,
 ) []RollupBucket {
-	buckets := make([]RollupBucket, 0, len(bucketStarts))
-	for _, bucketStart := range bucketStarts {
-		values := map[string]float64{}
-		if reader != nil {
-			key, err := BuildRollupKey(bucketStart, PublicStatusRollupBucketMinutes, prefix)
-			if err == nil {
-				if raw, err := reader.HGetAll(ctx, key); err == nil {
-					for field, rawValue := range raw {
-						parsed, parseErr := strconv.ParseFloat(rawValue, 64)
-						if parseErr != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
-							continue
-						}
-						values[field] = parsed
-					}
-				}
+	keys := make([]string, len(bucketStarts))
+	if reader != nil {
+		for i, bucketStart := range bucketStarts {
+			if key, err := BuildRollupKey(bucketStart, PublicStatusRollupBucketMinutes, prefix); err == nil {
+				keys[i] = key
 			}
+		}
+	}
+
+	var pipelined []map[string]string
+	// 「实现批量面」不等于「批量面可用」：适配器可能只是把调用透传给一个不支持的底层。
+	// 故只在结果与 keys 等长时才走批量路径——长度不符即当作未实现，落回逐桶读。
+	hasPipeline := false
+	if reader != nil {
+		if pipeliner, ok := reader.(RollupBucketPipeliner); ok {
+			pipelined = pipeliner.HGetAllMany(ctx, keys)
+			hasPipeline = len(pipelined) == len(keys)
+		}
+	}
+
+	buckets := make([]RollupBucket, 0, len(bucketStarts))
+	for i, bucketStart := range bucketStarts {
+		values := map[string]float64{}
+		var raw map[string]string
+		switch {
+		case hasPipeline:
+			if i < len(pipelined) {
+				raw = pipelined[i]
+			}
+		case reader != nil && keys[i] != "":
+			if fields, err := reader.HGetAll(ctx, keys[i]); err == nil {
+				raw = fields
+			}
+		}
+		for field, rawValue := range raw {
+			parsed, parseErr := strconv.ParseFloat(rawValue, 64)
+			if parseErr != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+				continue
+			}
+			values[field] = parsed
 		}
 		buckets = append(buckets, RollupBucket{BucketStart: bucketStart, Values: values})
 	}
