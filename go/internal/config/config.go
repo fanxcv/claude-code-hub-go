@@ -217,6 +217,9 @@ type Config struct {
 	// MaxInflightBytes 是所有在途请求正文的字节上限，超限即拒绝而非排队。
 	MaxInflightBytes int64
 	// MaxStreams 是同时存在的流式响应数上限。
+	//
+	// Go 侧无消费方（CCH_GO_MAX_STREAMS 只装载、无任何代码读取本字段）：同 ENABLE_PROVIDER_CACHE
+	// 一类，属 Node 契约残留，保留以维持配置面完整；接线后请删掉本注释。
 	MaxStreams int
 	// SameProtocolWeightK 是同协议候选的权重倍率（选路偏好）：优先级一致时优先走
 	// 不需要协议转换的供应商。1 表示不启用（与未设置同义）。

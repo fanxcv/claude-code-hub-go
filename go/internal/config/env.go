@@ -74,21 +74,27 @@ var envSpecs = []envSpec{
 	{name: "AUTH_SESSION_TTL_SECONDS", field: "AuthSessionTTLSeconds", kind: kindNumber, def: "604800", isInt: true, hasMin: true, min: 60, hasMax: true, max: 31536000},
 	{name: "AUTO_MIGRATE", field: "AutoMigrate", kind: kindBool, def: "true"},
 	{name: "CSRF_SECRET", field: "CSRFSecret", kind: kindCredential, minLen: 16},
+	// DASHBOARD_LOGS_POLL_INTERVAL_MS：Go 侧无消费方（日志页由 store 直读，无前端轮询间隔功能）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "DASHBOARD_LOGS_POLL_INTERVAL_MS", field: "DashboardLogsPollIntervalMS", kind: kindNumber, def: "5000", isInt: true, hasMin: true, min: 250, hasMax: true, max: 60000},
 	{name: "DB_LOCK_TIMEOUT_MS", field: "DBLockTimeoutMS", kind: kindOptionalNumber, def: "5000", isInt: true, hasMin: true, min: 100, hasMax: true, max: 60000},
 	{name: "DB_POOL_CONNECT_TIMEOUT", field: "DBPoolConnectTimeout", kind: kindOptionalNumber, hasMin: true, min: 1, hasMax: true, max: 120},
 	{name: "DB_POOL_IDLE_TIMEOUT", field: "DBPoolIdleTimeout", kind: kindOptionalNumber, hasMin: true, min: 0, hasMax: true, max: 3600},
 	{name: "DB_POOL_MAX", field: "DBPoolMax", kind: kindOptionalNumber, isInt: true, hasMin: true, min: 1, hasMax: true, max: 200},
 	{name: "DB_STATEMENT_TIMEOUT_MS", field: "DBStatementTimeoutMS", kind: kindOptionalNumber, def: "90000", isInt: true, hasMin: true, min: 1000, hasMax: true, max: 119000},
+	// DETACHED_STREAM_BUDGET_BYTES：Go 侧无消费方（分离流从未实现，仅剩跨字段校验）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "DETACHED_STREAM_BUDGET_BYTES", field: "DetachedStreamBudgetBytes", kind: kindNumber, def: "67108864", isInt: true, hasMin: true, min: 3211264, hasMax: true, max: 1073741824},
+	// DETACHED_STREAM_MAX_CONCURRENCY：Go 侧无消费方（分离流从未实现）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "DETACHED_STREAM_MAX_CONCURRENCY", field: "DetachedStreamMaxConcurrency", kind: kindNumber, def: "64", isInt: true, hasMin: true, min: 1, hasMax: true, max: 4096},
+	// DETACHED_STREAM_METERING_RESERVE_BYTES：Go 侧无消费方（分离流从未实现，仅剩跨字段校验）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "DETACHED_STREAM_METERING_RESERVE_BYTES", field: "DetachedStreamMeteringReserveBytes", kind: kindNumber, def: "16777216", isInt: true, hasMin: true, min: 65536, hasMax: true, max: 1073741824},
 	{name: "DSN", field: "DSN", kind: kindCredential},
 	{name: "ENABLE_API_KEY_ADMIN_ACCESS", field: "EnableAPIKeyAdminAccess", kind: kindBool, def: "false"},
 	{name: "ENABLE_CACHE_EFFECTIVENESS", field: "EnableCacheEffectiveness", kind: kindBool, def: "true"},
+	// ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS：Go 侧无消费方（熔断只按响应状态判定，无「网络错误单独触发」分支）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "ENABLE_CIRCUIT_BREAKER_ON_NETWORK_ERRORS", field: "EnableCircuitBreakerOnNetworkErrors", kind: kindBool, def: "false"},
 	{name: "ENABLE_ENDPOINT_CIRCUIT_BREAKER", field: "EnableEndpointCircuitBreaker", kind: kindBool, def: "false"},
 	{name: "ENABLE_PREFIX_AFFINITY", field: "EnablePrefixAffinity", kind: kindBool, def: "false"},
+	// ENABLE_PROVIDER_CACHE：Go 侧无消费方（无供应商级响应缓存功能）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "ENABLE_PROVIDER_CACHE", field: "EnableProviderCache", kind: kindBool, def: "true"},
 	{name: "ENABLE_RATE_LIMIT", field: "EnableRateLimit", kind: kindBool, def: "true"},
 	{name: "ENABLE_REQUEST_REPLAY", field: "EnableRequestReplay", kind: kindBool, def: "true"},
@@ -107,6 +113,7 @@ var envSpecs = []envSpec{
 	{name: "LANGFUSE_SAMPLE_RATE", field: "LangfuseSampleRate", kind: kindNumber, def: "1", hasMin: true, min: 0, hasMax: true, max: 1},
 	{name: "LANGFUSE_SECRET_KEY", field: "LangfuseSecretKey", kind: kindOptionalString},
 	{name: "LOG_LEVEL", field: "LogLevel", kind: kindEnum, def: "info", enum: []string{"fatal", "error", "warn", "info", "debug", "trace"}},
+	// MAX_RETRY_ATTEMPTS_DEFAULT：Go 侧无消费方（重试/竞速次数由 route 与 forward 决策）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "MAX_RETRY_ATTEMPTS_DEFAULT", field: "MaxRetryAttemptsDefault", kind: kindNumber, def: "2", hasMin: true, min: 1, hasMax: true, max: 10},
 	{name: "MESSAGE_REQUEST_ASYNC_BATCH_SIZE", field: "MessageRequestAsyncBatchSize", kind: kindOptionalNumber, isInt: true, hasMin: true, min: 1, hasMax: true, max: 2000},
 	{name: "MESSAGE_REQUEST_ASYNC_FLUSH_INTERVAL_MS", field: "MessageRequestAsyncFlushIntervalMS", kind: kindOptionalNumber, isInt: true, hasMin: true, min: 10, hasMax: true, max: 60000},
@@ -119,13 +126,17 @@ var envSpecs = []envSpec{
 	{name: "REDIS_COMMAND_TIMEOUT_MS", field: "RedisCommandTimeoutMS", kind: kindOptionalNumber, def: "10000", isInt: true, hasMin: true, min: 100, hasMax: true, max: 120000},
 	{name: "REDIS_TLS_REJECT_UNAUTHORIZED", field: "RedisTLSRejectUnauthorized", kind: kindBool, def: "true"},
 	{name: "REDIS_URL", field: "RedisURL", kind: kindOptionalString},
+	// REPLAY_LIVE_DEDUP_ENABLED：Go 侧无消费方（回放无实时去重语义）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "REPLAY_LIVE_DEDUP_ENABLED", field: "ReplayLiveDedupEnabled", kind: kindBool, def: "true"},
 	{name: "REPLAY_MAX_CONCURRENT_SPOOLS", field: "ReplayMaxConcurrentSpools", kind: kindNumber, def: "64", isInt: true, hasMin: true, min: 1, hasMax: true, max: 1024},
+	// REPLAY_MAX_DETACHED_MS：Go 侧无消费方（回放无分离时长语义）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "REPLAY_MAX_DETACHED_MS", field: "ReplayMaxDetachedMS", kind: kindNumber, def: "300000", isInt: true, hasMin: true, min: 10000, hasMax: true, max: 1800000},
 	{name: "REPLAY_MAX_PAYLOAD_BYTES", field: "ReplayMaxPayloadBytes", kind: kindNumber, def: "8388608", isInt: true, hasMin: true, min: 65536, hasMax: true, max: 67108864},
 	{name: "REPLAY_TTL_SECONDS", field: "ReplayTTLSeconds", kind: kindNumber, def: "600", isInt: true, hasMin: true, min: 60, hasMax: true, max: 7200},
 	{name: "SESSION_REQUEST_ARTIFACT_MAX_BYTES", field: "SessionRequestArtifactMaxBytes", kind: kindNumber, def: "5242880", isInt: true, hasMin: true, min: 65536, hasMax: true, max: 67108864},
+	// SESSION_RESPONSE_BODY_DEDUP_ENABLED：Go 侧无消费方（无会话响应体去重布局）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "SESSION_RESPONSE_BODY_DEDUP_ENABLED", field: "SessionResponseBodyDedupEnabled", kind: kindBool, def: "false"},
+	// SESSION_RESPONSE_BODY_MAX_BYTES：Go 侧无消费方（无会话响应体去重布局）；属 Node 契约残留，保留以维持 env-parity 对账。
 	{name: "SESSION_RESPONSE_BODY_MAX_BYTES", field: "SessionResponseBodyMaxBytes", kind: kindNumber, def: "5242880", isInt: true, hasMin: true, min: 65536, hasMax: true, max: 67108864},
 	{name: "SESSION_TOKEN_MODE", field: "SessionTokenMode", kind: kindEnum, def: "opaque", enum: []string{"legacy", "dual", "opaque"}},
 	{name: "SESSION_TTL", field: "SessionTTL", kind: kindNumber, def: "300"},
