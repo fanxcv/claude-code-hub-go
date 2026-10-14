@@ -258,6 +258,20 @@ func ForwardStreamHedge(
 	// 与串行路径 forwardLoop 的 defer 同口径。少了它，dataplane 只翻归因、不写终态，
 	// 尝试留痕无处可去——竞速耗尽的行 provider_chain=[]、routing_trace=null（生产实测）。
 	finish := func(out hedgeResult) (*StreamResult, error) {
+		if out.result == nil && out.err != nil {
+			// 有错误却交回裸错误（无结果）：竞速的两条这样的出口都会在客户端中断时被走到
+			// ——本函数外的 ctx.Done 分支，与某个在途 attempt 自己观测到取消后的
+			// finishAttemptFailed（那里的 hedgeResult 同样不带 result）。尝试结局是
+			// provider_chain 与 routing_trace 的唯一来源，故在这**一个**漏斗里补造，
+			// 而不是逐条出口各写一遍。
+			//
+			// 形态与竞速耗尽一致（见 exhaustedResultLocked）：零尝试时它返回 nil，
+			// 由调用方按「没有转发过」的口径结算；有留痕则连同归因一并入账，
+			// 落库条数与终态语义不变（仍是一行）。
+			race.mu.Lock()
+			out.result = race.exhaustedResultLocked()
+			race.mu.Unlock()
+		}
 		if out.result != nil && out.result.Stream == nil && len(out.result.Attempts) > 0 && deps.Settle != nil {
 			var failure *Failure
 			_ = errors.As(out.err, &failure)
@@ -279,12 +293,13 @@ func ForwardStreamHedge(
 			return finish(result)
 		default:
 		}
-		return nil, &Failure{
+		// 中断同样经 finish 收口：那里会把已收集的尝试结局连同 499 归因一并入账。
+		return finish(hedgeResult{err: &Failure{
 			Category:   CategoryClientAbort,
 			Message:    "Request aborted by client",
 			StatusCode: 499,
 			Err:        ctx.Err(),
-		}
+		}})
 	case result := <-race.resultCh:
 		return finish(result)
 	}
