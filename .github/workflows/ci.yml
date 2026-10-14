@@ -81,8 +81,28 @@ jobs:
         working-directory: go
         run: go test -timeout 300s ./...
 
+  go-race:
+    name: Go（-race：forward / limit / dataplane / route / session）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: 竞态检测
+        # 纯单测（不注入 DSN/Redis），与 go job 同一确定性口径；-race 需要 CGO 与 gcc，
+        # ubuntu-latest 自带。只覆盖并发最密的五个包：本地实测三包约 28s。
+        working-directory: go
+        run: >
+          go test -race -timeout 600s
+          ./internal/forward/... ./internal/limit/... ./internal/dataplane/...
+          ./internal/route/... ./internal/session/...
+
 # ---------------------------------------------------------------------------
-# 想在本工作流里跑**真库集成**（PG + Redis）时的配方（本地已验证过该形态，此处默认不开）：
+# 想在本工作流里跑**真库集成**（PG + Redis）时的配方（本地已验证过该形态；夜间与手动见 integration.yml）：
 #
 #   go:
 #     runs-on: ubuntu-latest
