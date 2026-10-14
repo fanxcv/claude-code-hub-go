@@ -42,6 +42,12 @@ jobs:
       - name: Lint
         run: bun run lint
 
+      - name: Lua 对拍
+        # 18 段 Lua（lua/*.lua）与 TS 常量（src/lib/lua-scripts.ts）逐字节一致，rc=0 才放行。
+        # 此前不在任何 CI 里：一次误删+回填把 TS 常量语义退回避免版（可绕过渠道并发上限）静默潜伏，
+        # 直到人工实跑才发现。纳入门禁后同类回退即红。
+        run: bun scripts/verify-lua-parity.ts
+
       - name: 单元测试
         # 退出码现在是**可信的**：本仓曾有 3 条 unhandled rejection（全屏浮层的 queryClient mock
         # 缺 getQueryData、user-menu 里 happy-dom abort 掉真实的登出请求），它们让 vitest 恒 exit=1；
