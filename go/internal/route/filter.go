@@ -393,11 +393,11 @@ func (s *Selector) healthRejection(ctx context.Context, p Provider) (bool, Filte
 		open, _ := s.opts.Health.ProviderOpen(ctx, p.ID)
 		if open {
 			record.Reason = ReasonCircuitOpen
-			if s.opts.Health.ProviderState(ctx, p.ID) == StateOpen {
-				record.Details = "circuit_open"
-			} else {
-				record.Details = "circuit_half_open"
-			}
+			// details 恒为 circuit_open：ProviderOpen 只在「窗口内的 open」拦下，窗口已过期或
+			// raw half-open 一律放行试探，故 Node 时代「否则记 circuit_half_open」的分支
+			// 不可达，已删。该 details 值在词表里仍有键（messages/*/provider-chain.json:101），
+			// 保留备查——那是 Node 时代真实落点的痕迹，不代表本处仍会产出。
+			record.Details = "circuit_open"
 			return true, record
 		}
 	}

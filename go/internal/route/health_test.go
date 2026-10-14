@@ -15,9 +15,12 @@ type fakeRedis struct {
 	redis.UniversalClient
 	hashes map[string]map[string]string
 	values map[string]string
+	// hgetAllCalls 累计 HGetAll 次数，供往返削减用例断言。
+	hgetAllCalls int
 }
 
 func (f *fakeRedis) HGetAll(_ context.Context, key string) *redis.MapStringStringCmd {
+	f.hgetAllCalls++
 	cmd := redis.NewMapStringStringCmd(context.Background())
 	cmd.SetVal(f.hashes[key])
 	return cmd
@@ -215,6 +218,30 @@ func TestHealthRejectionProducesCircuitReasons(t *testing.T) {
 	}
 	if details[1] != "vendor_type_circuit_open" || details[2] != "circuit_open" {
 		t.Errorf("熔断细节不符: %+v", details)
+	}
+}
+
+// TestHealthRejectionReadsProviderCircuitInTwoRoundTrips 钉住供应商熔断维度的往返削减：
+// 每个候选只读一次 state + 一次 config（2 次 HGetAll）。改前命中 open 分支时还会再调
+// ProviderState 重读 state+config（共 4 次），而该分支的 details 区分不可达；删后同为 2 次。
+func TestHealthRejectionReadsProviderCircuitInTwoRoundTrips(t *testing.T) {
+	now := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
+	provider := baseProvider(5, convert.ProviderClaude)
+	client := &fakeRedis{hashes: map[string]map[string]string{
+		providerStateKey(provider.ID): {
+			"circuitState":     string(StateOpen),
+			"circuitOpenUntil": strconv.FormatInt(now.Add(time.Hour).UnixMilli(), 10),
+		},
+		ProviderConfigKeyPrefix + strconv.FormatInt(provider.ID, 10): {"failureThreshold": "5"},
+	}}
+	selector := NewSelector(Options{Health: newTestHealth(t, client, true)})
+
+	open, record := selector.healthRejection(context.Background(), provider)
+	if !open || record.Details != "circuit_open" {
+		t.Fatalf("窗口内 open 应拦下并记 circuit_open，实际 open=%v details=%q", open, record.Details)
+	}
+	if client.hgetAllCalls != 2 {
+		t.Errorf("供应商熔断判定 HGetAll 次数 = %d，期望 2（state 1 + config 1）", client.hgetAllCalls)
 	}
 }
 
