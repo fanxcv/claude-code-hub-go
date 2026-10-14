@@ -33,28 +33,25 @@ return 0
  * Atomic concurrency check + session tracking (TC-041 fixed version)
  *
  * Features:
- * 1. Cleanup expired sessions (based on TTL window)
- * 2. Check if session is already tracked (avoid duplicate counting)
+ * 1. Cleanup expired attempts (based on TTL window)
+ * 2. Count in-flight attempts (ZCARD; 每个在飞尝试各占一个额度，不豁免任何成员)
  * 3. Check if current concurrency exceeds limit
- * 4. If not exceeded, track new session (atomic operation)
+ * 4. If not exceeded, track this attempt (atomic operation)
  *
  * KEYS[1]: provider:${providerId}:active_sessions
  * KEYS[2]: provider:${providerId}:active_session_refs
- * ARGV[1]: sessionId
+ * ARGV[1]: member (唯一 attempt token；会话身份只作关联，不作计数单位)
  * ARGV[2]: limit (concurrency limit)
  * ARGV[3]: now (current timestamp, ms)
  * ARGV[4]: ttlMs (optional, cleanup window in ms, default 300000)
  *
  * Return:
- * - {1, count, 1, 1} - allowed (new tracking), returns new count, tracked=1, referenced=1
- * - {1, count, 0, 1} - allowed (already tracked with refs), returns count, tracked=0, referenced=1
- * - {1, count, 0, 0} - allowed (legacy tracked without refs), returns count, tracked=0, referenced=0
+ * - {1, count, 1, 1} - allowed, returns new count, tracked=1, referenced=1
  * - {0, count, 0, 0} - rejected (limit reached), returns current count and tracked=0
  */
-export const CHECK_AND_TRACK_SESSION = `
-local provider_key = KEYS[1]
+export const CHECK_AND_TRACK_SESSION = `local provider_key = KEYS[1]
 local ref_key = KEYS[2]
-local session_id = ARGV[1]
+local member = ARGV[1]
 local limit = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4]) or 300000
@@ -64,56 +61,41 @@ if ttl <= 0 then
   ttl = 300000
 end
 
--- 1. Cleanup expired sessions (TTL window ago)
+-- 1. Cleanup expired attempts (TTL window ago)
 local cutoff = now - ttl
-local expired_sessions = redis.call('ZRANGEBYSCORE', provider_key, '-inf', cutoff)
+local expired_members = redis.call('ZRANGEBYSCORE', provider_key, '-inf', cutoff)
 redis.call('ZREMRANGEBYSCORE', provider_key, '-inf', cutoff)
-for _, expired_session_id in ipairs(expired_sessions) do
-  redis.call('HDEL', ref_key, expired_session_id)
+for _, expired_member in ipairs(expired_members) do
+  redis.call('HDEL', ref_key, expired_member)
 end
 
--- 2. Check if session is already tracked
-local is_tracked = redis.call('ZSCORE', provider_key, session_id)
-
--- Direct cleanup paths may remove the ZSET member before this script sees the session again.
--- When the member is absent, discard any stale reference hash value before acquiring a new ref.
-if not is_tracked then
-  redis.call('HDEL', ref_key, session_id)
-end
-
-local existing_refs = tonumber(redis.call('HGET', ref_key, session_id) or '0')
-
--- 3. Get current concurrency count
+-- 2. Count in-flight attempts.
+-- 成员是**每次在飞尝试的 token**（不是会话身份），故 ZCARD 就是「在飞尝试数」。
 local current_count = redis.call('ZCARD', provider_key)
 
--- 4. Check limit (exclude already tracked session)
-if limit > 0 and not is_tracked and current_count >= limit then
+-- 3. Check limit.
+-- **不豁免任何成员**：每个在飞尝试各占一个额度。旧实现豁免「已在集合里的成员」，
+-- 那是按会话计数时代的产物——它让同一会话的并行请求、竞速与重叠尝试只占一个额度，
+-- 从而绕过渠道并发上限（用户 2026-09-22 的裁决是「在飞请求数（每尝试计）」）。
+if limit > 0 and current_count >= limit then
   return {0, current_count, 0, 0}  -- {allowed=false, current_count, tracked=0, referenced=0}
 end
 
--- 5. Track session (ZADD updates timestamp for existing members)
-redis.call('ZADD', provider_key, now, session_id)
+-- 4. Track this attempt (member 唯一，重复登记只会刷新时间戳).
+redis.call('ZADD', provider_key, now, member)
 
-local referenced = 0
-if not is_tracked or existing_refs > 0 then
-  redis.call('HINCRBY', ref_key, session_id, 1)
-  referenced = 1
-end
+-- 5. Reference count: 每次尝试自带一个引用（与成员一一对应），释放一次即摘除。
+-- 保留这张 HASH 是为了让释放路径仍能判「重复释放」（refs 已为 0 时不再 ZREM）。
+redis.call('HSET', ref_key, member, 1)
 
--- 6. Set TTL based on session TTL (at least 1h to cover active sessions)
+-- 6. Set TTL (at least 1h to cover active attempts)
 local ttl_seconds = math.floor(ttl / 1000)
 local expire_ttl = math.max(3600, ttl_seconds)
 redis.call('EXPIRE', provider_key, expire_ttl)
 redis.call('EXPIRE', ref_key, expire_ttl)
 
 -- 7. Return success
-if is_tracked then
-  -- Already tracked, count unchanged
-  return {1, current_count, 0, referenced}  -- {allowed=true, count, tracked=0, referenced}
-else
-  -- New tracking, count +1
-  return {1, current_count + 1, 1, referenced}  -- {allowed=true, new_count, tracked=1, referenced=1}
-end
+return {1, current_count + 1, 1, 1}  -- {allowed=true, new_count, tracked=1, referenced=1}
 `;
 
 /**
