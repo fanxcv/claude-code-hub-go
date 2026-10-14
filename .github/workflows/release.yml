@@ -75,11 +75,66 @@ jobs:
           retention-days: 1
 
   # ---------------------------------------------------------------------------
+  # 发布门禁：发版前必须与 CI 同一套测试全绿。
+  #
+  # 为什么必须有：原先推 tag 直接进打包（见 ci.yml 的常态门禁只管 main 与 PR），
+  # 于是「tag 打在一个测试红的提交上」会静默产出并公开一个坏版本——产物一旦发出去就收不回。
+  # 步骤与 ci.yml 的 ui / go 两个 job 同形，命令不另立一套（两处漂移等于没有门禁）。
+  # ---------------------------------------------------------------------------
+  test:
+    name: 发布门禁（前端 + Go 测试）
+    needs: ui
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: 安装依赖
+        run: bun install --frozen-lockfile
+
+      - name: 类型检查
+        run: bun run typecheck
+
+      - name: 前端单元测试
+        run: bun run test
+
+      - name: gofmt
+        working-directory: go
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未格式化（本地跑 gofmt -w . 修）"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        working-directory: go
+        run: go vet ./...
+
+      - name: Go 单元测试
+        # 与 ci.yml 同口径：不注入 DSN/Redis，真库集成组整组跳过。
+        working-directory: go
+        run: go test -timeout 300s ./...
+
+  # ---------------------------------------------------------------------------
   # 二进制：原生交叉编译（runner 是 amd64，其余靠 GOOS/GOARCH 交叉编译，不走模拟）。
   # ---------------------------------------------------------------------------
   build:
     name: 二进制 ${{ matrix.os }}/${{ matrix.arch }}
-    needs: ui
+    needs: [ui, test]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
