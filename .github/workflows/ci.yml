@@ -81,6 +81,22 @@ jobs:
         working-directory: go
         run: go test -timeout 300s ./...
 
+  parity:
+    name: 环境变量契约对账
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: env 契约对账
+        # 比较 tests/load/env-parity/env-matrix.json（TS 侧契约真源）与 go/env-parity.txt
+        # （由 go run ./cmd/envlist 生成）。两侧已实测一致（本地 rc=0），故接入门禁；
+        # 任一侧漏配/多配即退出码 1，逼同步。
+        run: node scripts/check-env-parity.mjs --strict
+
   go-race:
     name: Go（-race：forward / limit / dataplane / route / session）
     runs-on: ubuntu-latest
