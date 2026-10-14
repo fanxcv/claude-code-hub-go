@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"testing"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/ingress"
@@ -348,5 +349,47 @@ func TestWarmupRecorderWritesFinalizedRow(t *testing.T) {
 	}
 	if blockedReason == "" {
 		t.Fatalf("拦截行应带 blocked_reason")
+	}
+}
+
+// TestBodyAccessorAdmissionRejected 校验进程级在途字节预算不足时正文读取被拒，且错误可被
+// forward 层的 ingress.IsCapacityError 识别为容量错误（503），而非被当成「正文缺失」fail-open。
+//
+// 改前必红：BodyAccessOptions 无 Admission 字段（编译失败），且读体路径不经过准入层。
+func TestBodyAccessorAdmissionRejected(t *testing.T) {
+	payload := []byte(`{"model":"claude-sonnet-4-5"}`)
+	header := http.Header{}
+	header.Set("Content-Length", strconv.Itoa(len(payload)))
+	ctx, err := pctx.New(pctx.Init{Method: "POST", Path: "/v1/messages", Headers: header, Body: io.NopCloser(bytes.NewReader(payload))})
+	if err != nil {
+		t.Fatalf("构造上下文失败: %v", err)
+	}
+	admission := ingress.NewAdmission(ingress.AdmissionOptions{MaxInflightBodyBytes: 4})
+	_, err = NewBodyAccessor(ctx, BodyAccessOptions{Admission: admission})
+	if !errors.Is(err, ingress.ErrBodyBudgetExhausted) {
+		t.Fatalf("超预算应返回 ErrBodyBudgetExhausted，得到 %v", err)
+	}
+	if !ingress.IsCapacityError(err) {
+		t.Fatalf("准入拒绝必须可被 IsCapacityError 识别，得到 %v", err)
+	}
+}
+
+// TestBodyAccessorAdmissionReleased 校验准入占位在读取完成后归还，否则第二次读取会自锁。
+func TestBodyAccessorAdmissionReleased(t *testing.T) {
+	payload := []byte(`{"model":"claude-sonnet-4-5"}`)
+	admission := ingress.NewAdmission(ingress.AdmissionOptions{MaxInflightBodyBytes: int64(len(payload))})
+	for range 2 {
+		header := http.Header{}
+		header.Set("Content-Length", strconv.Itoa(len(payload)))
+		ctx, err := pctx.New(pctx.Init{Method: "POST", Path: "/v1/messages", Headers: header, Body: io.NopCloser(bytes.NewReader(payload))})
+		if err != nil {
+			t.Fatalf("构造上下文失败: %v", err)
+		}
+		if _, err := NewBodyAccessor(ctx, BodyAccessOptions{Admission: admission}); err != nil {
+			t.Fatalf("占位未归还或误拒: %v", err)
+		}
+	}
+	if got := admission.Stats().Body.ActiveBytes; got != 0 {
+		t.Fatalf("读完应在途字节归零，得到 %d", got)
 	}
 }

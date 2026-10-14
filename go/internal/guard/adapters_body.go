@@ -20,7 +20,16 @@ type BodyAccessOptions struct {
 	Ingress ingress.Options
 	// MaxBytes 是解压后字节上限；<=0 时取 Ingress 的取值（再由 ingress 兜默认）。
 	MaxBytes int64
+	// Admission 是进程级正文准入（内存余量 + 在途字节）。nil 时用本包默认单例
+	// defaultAdmission；装配方（W3 接入 config.MaxInflightBytes 后）应显式注入，
+	// 使预算随配置与 GOMEMLIMIT 变化。
+	Admission *ingress.Admission
 }
+
+// defaultAdmission 是未显式注入准入层时的进程级单例。
+//
+// 必须进程级共享：限流器按「在途总量」记账，每次读体各建一份等于没有闸门。
+var defaultAdmission = ingress.DefaultAdmission()
 
 // BodyAccessor 是 BodyAccess 的真实实现：正文只解析一次，多处共用同一棵树。
 //
@@ -37,10 +46,28 @@ type BodyAccessor struct {
 	dirty bool
 }
 
+// reservationBytes 给出正文读取前的准入申请字节数。
+//
+// 优先用解压后下界（无编码时即精确值），其次用 content-length（压缩体的下界）。两者都未知
+// （分块且带编码的罕见情况）时申请 0：既不能用单请求解压上限顶额（它默认 100 MiB，大于进程
+// 预算默认 64 MiB，会把每条请求都顶死），也不宜按压缩比臆测。这类请求仍受单请求解压上限
+// 与在途解压限流器约束。
+func reservationBytes(decodedHint, compressed int64) int64 {
+	switch {
+	case decodedHint > 0:
+		return decodedHint
+	case compressed > 0:
+		return compressed
+	default:
+		return 0
+	}
+}
+
 // NewBodyAccessor 从上下文取出请求体并解析成 JSON 对象。
 //
-// 失败一律返回把 ErrBodyUnavailable 包在里面的错误：调用方（各守卫步骤）据此走各自
-// 的 fail-open 语义，而不是把「没有正文」误当成「守卫失败」翻成 500。
+// 正文不可解析系失败一律返回把 ErrBodyUnavailable 包在里面的错误：调用方（各守卫步骤）据此走
+// 各自的 fail-open 语义，而不是把「没有正文」误当成「守卫失败」翻成 500。
+// 例外是准入拒绝（容量不足）：原样返回，由 forward 映射为 503，不得 fail-open。
 func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccessor, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("%w: 上下文为空", ErrBodyUnavailable)
@@ -62,10 +89,23 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 
 	headers := ctx.Headers().Clone()
 	contentEncoding := headers.Get("Content-Encoding")
-	compressed, _, err := ingress.PeekSize(headers, ingressOptions)
+	compressed, decodedHint, err := ingress.PeekSize(headers, ingressOptions)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBodyUnavailable, err)
 	}
+
+	admission := options.Admission
+	if admission == nil {
+		admission = defaultAdmission
+	}
+	lease, err := admission.AcquireBody(reservationBytes(decodedHint, compressed))
+	if err != nil {
+		// 容量不足原样返回（不包 ErrBodyUnavailable）：forward 依据 ingress.IsCapacityError
+		// 判为本地过载 → 503，与「避免重试上游」的语义一致；包成 ErrBodyUnavailable 会被
+		// 守卫当成「正文缺失」fail-open，闸门即失效。
+		return nil, fmt.Errorf("guard: 正文准入被拒: %w", err)
+	}
+	defer lease.Release()
 
 	reader, err := ingress.NewReader(source, contentEncoding, compressed, ingressOptions)
 	if err != nil {

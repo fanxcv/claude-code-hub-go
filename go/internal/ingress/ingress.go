@@ -33,7 +33,9 @@ const (
 	DefaultMaxLayers = 1
 	// DefaultMaxInflightBodyBytes 是进程级在途请求体（含解压后明文）字节上限。
 	// 这是 Go 侧新增的总量闸门（CCH_GO_MAX_INFLIGHT_BYTES），与 GOMEMLIMIT 协同工作。
-	DefaultMaxInflightBodyBytes int64 = 256 * 1024 * 1024
+	// 默认值与 config 侧的 CCH_GO_MAX_INFLIGHT_BYTES 默认（64 MiB）保持一致：两处读的是同一个
+	// 环境变量，默认值再分叉只会让「没设变量」时的实际预算取决于读取方。
+	DefaultMaxInflightBodyBytes int64 = 64 * 1024 * 1024
 )
 
 // 环境变量名。解压三项与 Node 同名同默认，便于逐项对账；总量闸门是 Go 侧新增旋钮。
