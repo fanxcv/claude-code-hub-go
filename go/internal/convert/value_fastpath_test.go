@@ -160,7 +160,8 @@ func TestTopLevelBoolTrueKeyShapeFamilies(t *testing.T) {
 // 注：协议一致性语料目录（tests/load/protocol-conformance/corpus）已随 Node 退役删除，
 // 故这里取 go/testdata 下的既有样本；样本不是请求体也无妨——对拍只看两实现是否一致。
 func TestTopLevelBoolTrueGoldenFiles(t *testing.T) {
-	patterns := []string{"../testdata/golden/*.json", "../testdata/*.json"}
+	// 路径相对本包目录（go/internal/convert），故上溯两级才是 go/testdata。
+	patterns := []string{"../../testdata/golden/*.json", "../../testdata/*.json"}
 	found := 0
 	for _, pattern := range patterns {
 		paths, err := filepath.Glob(pattern)
@@ -168,13 +169,19 @@ func TestTopLevelBoolTrueGoldenFiles(t *testing.T) {
 			t.Fatalf("展开 %s 失败: %v", pattern, err)
 		}
 		for _, path := range paths {
-			raw, err := os.ReadFile(path)
-			if err != nil {
-				t.Fatalf("读取 %s 失败: %v", path, err)
-			}
-			assertProbeAgrees(t, raw)
+			t.Run(filepath.Base(path), func(t *testing.T) {
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("读取 %s 失败: %v", path, err)
+				}
+				assertProbeAgrees(t, raw)
+			})
 			found++
 		}
+	}
+	// 路径写错曾使本用例命中 0 文件却静默通过，故此处必须断言命中数。
+	if found == 0 {
+		t.Fatalf("样本 glob 命中 0 个文件（patterns=%v），对拍形同虚设", patterns)
 	}
 	t.Logf("既有 JSON 样本对拍 %d 个文件", found)
 }
