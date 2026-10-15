@@ -1,13 +1,19 @@
 name: Integration
 
-# 真库集成门禁（PG + Redis）：跑 AGENTS.md 与 ci.yml 末尾注释里那份**未接线**的配方。
-# 刻意不挂在 push/PR 上：集成用例依赖真实数据库、建表与 Redis 语义，噪点比纯单测高，
-# 故常态 PR 门禁仍由 ci.yml 的确定性部分承担。这里只在每夜与手动时跑。
+# 真库集成门禁（PG + Redis）：跑 AGENTS.md 与 ci.yml 末尾注释里那份配方。
+# 触发面：① 改动 go/** 的 PR；② 每夜 cron；③ 手动。
+# 为什么按 paths 收窄到 go/**：集成用例全是 Go 侧（PG/Redis 语义），前端或文档改动不该付这份代价。
+# 代价：改了 go/** 的 PR 会多一次真库作业（服务容器启动 + 迁移建表 + 全量 go test，比纯单测慢数分钟）；
+# 同一 ref 的旧作业由下面的 concurrency 取消，连推不会堆叠。仍嫌慢就把它改回「仅 cron + main」，
+# 判据是「改 go/** 的 PR 数 × 该作业时长」是否超过这份真库语义的漏检成本。
 on:
   schedule:
     # 每日 18:00 UTC（= 次日 02:00 CST），避开 CI 白天的排队峰值。
     - cron: "0 18 * * *"
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "go/**"
 
 permissions:
   contents: read

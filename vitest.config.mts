@@ -62,7 +62,7 @@ export default defineConfig({
         "src/hooks/useCountdown.ts",
       ],
 
-      // 覆盖率阈值（可选）
+      // 覆盖率阈值：CI 的 ui 作业跑 `bun run test:coverage`，不达即红（见 .github/workflows/ci.yml）。
       thresholds: {
         lines: 50,
         functions: 50,

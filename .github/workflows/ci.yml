@@ -48,13 +48,16 @@ jobs:
         # 直到人工实跑才发现。纳入门禁后同类回退即红。
         run: bun scripts/verify-lua-parity.ts
 
-      - name: 单元测试
-        # 退出码现在是**可信的**：本仓曾有 3 条 unhandled rejection（全屏浮层的 queryClient mock
+      - name: 单元测试（含覆盖率阈值）
+        # 必须带 --coverage：vitest.config.mts 的 coverage.thresholds 只在跑覆盖率时参与判定，
+        # 之前这里裸跑 `bun run test`，阈值从不生效（门禁假绿）。
+        # 阈值现状：lines 50 / functions 50 / branches 40 / statements 50，实测 74.4 / 62.9 / 62.8 / 72.6。
+        # 退出码是**可信的**：本仓曾有 3 条 unhandled rejection（全屏浮层的 queryClient mock
         # 缺 getQueryData、user-menu 里 happy-dom abort 掉真实的登出请求），它们让 vitest 恒 exit=1；
         # 噪声已从根上修掉，于是这里直接裸跑，不再需要「语义断言 + 棘轮」。
         # 纪律：若将来再出现基线噪声，请修噪声本身，而不要加棘轮把它容忍掉——棘轮会掩盖新增的
         # 未处理拒绝，而那些拒绝正是断言失真的温床。
-        run: bun run test
+        run: bun run test:coverage
 
   go:
     name: Go（gofmt / vet / test）
@@ -124,7 +127,8 @@ jobs:
           ./internal/route/... ./internal/session/...
 
 # ---------------------------------------------------------------------------
-# 想在本工作流里跑**真库集成**（PG + Redis）时的配方（本地已验证过该形态；夜间与手动见 integration.yml）：
+# 想在本工作流里跑**真库集成**（PG + Redis）时的配方（本地已验证过该形态；已接线在 integration.yml：
+# 每夜 cron、手动，以及改动 go/** 的 PR）：
 #
 #   go:
 #     runs-on: ubuntu-latest
