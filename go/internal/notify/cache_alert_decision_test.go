@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -55,8 +56,8 @@ func TestDecideCacheAnomalyAbsMinWithoutBaseline(t *testing.T) {
 	if anomaly.DeltaAbs != nil || anomaly.DeltaRel != nil || anomaly.DropAbs != nil {
 		t.Fatalf("无基线时跌幅字段应为空: %+v", anomaly)
 	}
-	if !containsString(anomaly.ReasonCodes, cacheReasonBaselineMissing) ||
-		!containsString(anomaly.ReasonCodes, cacheReasonAbsMin) {
+	if !slices.Contains(anomaly.ReasonCodes, cacheReasonBaselineMissing) ||
+		!slices.Contains(anomaly.ReasonCodes, cacheReasonAbsMin) {
 		t.Fatalf("原因码应含 baseline_missing 与 abs_min: %v", anomaly.ReasonCodes)
 	}
 }
@@ -124,7 +125,7 @@ func TestDecideCacheAnomalySortsBySeverityThenIds(t *testing.T) {
 	if anomalies[0].ProviderID != 3 || anomalies[1].ProviderID != 9 {
 		t.Fatalf("排序应为 providerId 3 在 9 前: %+v", anomalies)
 	}
-	if !containsString(anomalies[0].ReasonCodes, cacheReasonUseEligible) {
+	if !slices.Contains(anomalies[0].ReasonCodes, cacheReasonUseEligible) {
 		t.Fatalf("eligible 够量时应带 use_eligible: %v", anomalies[0].ReasonCodes)
 	}
 }
@@ -241,12 +242,3 @@ func (c *fakeCooldownReader) Set(_ context.Context, keys []string, ttl time.Dura
 }
 
 func intPtr(value int) *int { return &value }
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}

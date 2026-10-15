@@ -196,6 +196,7 @@ function run(argv) {
 }
 
 module.exports = {
+  EMOJI_RE,
   countEmojiCodepoints,
   fileToKeyPrefix,
   findMessagesEmoji,

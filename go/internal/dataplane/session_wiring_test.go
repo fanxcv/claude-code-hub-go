@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 
 	"github.com/redis/go-redis/v9"
@@ -103,14 +104,8 @@ func TestAssemblyReportsSessionBinderGap(t *testing.T) {
 	}
 }
 
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
-}
+// containsString 仅供同包测试沿用此名（另一测试文件仍在调用）；实现即标准库。
+func containsString(values []string, want string) bool { return slices.Contains(values, want) }
 
 // dataPlaneIntegrationRedis 建真实 Redis（DB >= 13 的仓库隔离纪律）。
 func dataPlaneIntegrationRedis(t *testing.T) redis.UniversalClient {

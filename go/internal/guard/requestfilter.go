@@ -3,6 +3,7 @@ package guard
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -870,7 +871,7 @@ func providerBoundFilters(filters []RequestFilter, selection pctx.ProviderSelect
 				continue
 			}
 			tag := groupTagFor(selection)
-			if tag != "" && containsString(filter.GroupTags, tag) {
+			if tag != "" && slices.Contains(filter.GroupTags, tag) {
 				selected = append(selected, filter)
 			}
 		}
@@ -880,16 +881,6 @@ func providerBoundFilters(filters []RequestFilter, selection pctx.ProviderSelect
 
 // containsInt64 报告切片是否含目标值。
 func containsInt64(values []int64, wanted int64) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
-}
-
-// containsString 报告切片是否含目标值。
-func containsString(values []string, wanted string) bool {
 	for _, value := range values {
 		if value == wanted {
 			return true

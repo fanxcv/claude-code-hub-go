@@ -3,6 +3,7 @@ package pubstatus
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -502,8 +503,8 @@ func FilterPublicStatusGroups(
 	groups []PublicStatusPayloadGroup,
 	query PublicStatusParsedQuery,
 ) []PublicStatusPayloadGroup {
-	includeTimeline := containsString(query.Include, "timeline")
-	if !containsString(query.Include, "groups") {
+	includeTimeline := slices.Contains(query.Include, "timeline")
+	if !slices.Contains(query.Include, "groups") {
 		return []PublicStatusPayloadGroup{}
 	}
 
@@ -574,15 +575,6 @@ func FilterPublicStatusGroups(
 	return filtered
 }
 
-func containsString(values []string, needle string) bool {
-	for _, value := range values {
-		if value == needle {
-			return true
-		}
-	}
-	return false
-}
-
 // mapRouteStatus 复刻 mapRouteStatus（public-api-contract.ts:489-507）。
 func mapRouteStatus(payload PublicStatusPayload, rebuildReason *string) PublicStatusRouteStatus {
 	switch payload.RebuildState {
@@ -624,11 +616,11 @@ func BuildPublicStatusRouteResponse(input PublicStatusRouteResponseInput) Public
 		ResolvedQuery: input.Query.ResolvedQuery,
 		Groups:        FilterPublicStatusGroups(input.Payload.Groups, input.Query),
 	}
-	if containsString(input.Query.Include, "defaults") {
+	if slices.Contains(input.Query.Include, "defaults") {
 		defaults := input.Defaults
 		response.Defaults = &defaults
 	}
-	if containsString(input.Query.Include, "meta") {
+	if slices.Contains(input.Query.Include, "meta") {
 		response.Meta = input.Meta
 	}
 	return response

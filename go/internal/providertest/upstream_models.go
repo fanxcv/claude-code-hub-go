@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -146,22 +147,13 @@ func fetchGeminiModels(ctx context.Context, client *http.Client, baseURL, apiKey
 	models := make([]string, 0, len(payload.Models))
 	for _, item := range payload.Models {
 		// 「部分代理返回 supportedGenerationMethods 为 null，此时不过滤」（Node 注释）。
-		if item.SupportedGenerationMethods != nil && !containsString(item.SupportedGenerationMethods, "generateContent") {
+		if item.SupportedGenerationMethods != nil && !slices.Contains(item.SupportedGenerationMethods, "generateContent") {
 			continue
 		}
 		models = append(models, strings.TrimPrefix(item.Name, "models/"))
 	}
 	sort.Strings(models)
 	return models, nil
-}
-
-func containsString(list []string, want string) bool {
-	for _, item := range list {
-		if item == want {
-			return true
-		}
-	}
-	return false
 }
 
 // doJSONRequest 发一次 GET 并读回正文（非 2xx 也读，交由调用方判状态码，与 Node 一致）。

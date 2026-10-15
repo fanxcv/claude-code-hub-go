@@ -1,6 +1,9 @@
 package convert
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // 本文件钉住「请求侧高层字段跨线无承载位」的两条处置：
 //   - 状态型字段（previous_response_id / conversation / store:true）：只**判定**冲突，由
@@ -145,7 +148,7 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 				got = append(got, entry.Capability+"/"+string(entry.Action)+"/"+entry.Detail)
 			}
 			for _, want := range tc.wantLoss {
-				if !containsString(got, want) {
+				if !slices.Contains(got, want) {
 					t.Fatalf("缺少损失条目 %s；实际：%v", want, got)
 				}
 			}
@@ -220,13 +223,4 @@ func TestPromptCacheKeyCarriedExceptAnthropic(t *testing.T) {
 	if losses, _ := run(t, ProtocolAnthropicMessages, []string{"prompt_cache_key"}); len(losses) != 0 {
 		t.Fatalf("网关注入的 prompt_cache_key 不算客户端约束，不得记损，实际 %v", losses)
 	}
-}
-
-func containsString(haystack []string, needle string) bool {
-	for _, item := range haystack {
-		if item == needle {
-			return true
-		}
-	}
-	return false
 }

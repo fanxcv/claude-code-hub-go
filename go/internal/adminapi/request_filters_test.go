@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -500,12 +501,5 @@ func requestFilterListContains(items []map[string]any, name string) bool {
 	return false
 }
 
-// containsString 判断字符串切片是否包含目标值。
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
+// containsString 仅供同包测试沿用此名（另一测试文件仍在调用）；实现即标准库。
+func containsString(values []string, target string) bool { return slices.Contains(values, target) }

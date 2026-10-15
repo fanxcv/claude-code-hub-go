@@ -235,15 +235,3 @@ func TestAdminSessionCanonicalConditionColumns(t *testing.T) {
 		t.Fatalf("参数 = %#v", args)
 	}
 }
-
-func TestContainsString(t *testing.T) {
-	if !containsString([]string{"a", "b"}, "b") {
-		t.Fatal("应命中")
-	}
-	if containsString([]string{"a", "b"}, "c") {
-		t.Fatal("不应命中")
-	}
-	if containsString(nil, "a") {
-		t.Fatal("空切片不应命中")
-	}
-}

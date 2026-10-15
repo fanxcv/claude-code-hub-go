@@ -724,13 +724,3 @@ func adminSessionProviderName(name *string, providerID int64) string {
 	}
 	return *name
 }
-
-// containsString 报 value 是否已在 items 里（Node 用 Array.includes）。
-func containsString(items []string, value string) bool {
-	for _, item := range items {
-		if item == value {
-			return true
-		}
-	}
-	return false
-}

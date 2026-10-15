@@ -2,10 +2,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const emojiAudit = require("./audit-messages-emoji.js");
 
-const EMOJI_RE =
-  /(\p{Extended_Pictographic}|\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3)/gu;
-
-const { loadJson, normalizeLocales } = emojiAudit;
+const { EMOJI_RE, loadJson, normalizeLocales } = emojiAudit;
 
 function toCodepoint(cp) {
   const hex = cp.toString(16).toUpperCase();
