@@ -3,6 +3,7 @@ package tracing
 import (
 	"context"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,6 +36,48 @@ func TestFullQueueDropsInsteadOfBlocking(t *testing.T) {
 	}
 	if counters.Enqueued+counters.Dropped != 200 {
 		t.Fatalf("入队与丢弃应覆盖全部 200 条: %+v", counters)
+	}
+}
+
+// 队列满的丢弃必须可见：首丢记一条 warn，字段带累计丢弃数与队列容量；同一轮抖动不逐条记
+// （限频见 client.go 的 dropWarnEvery 注释）——所以「丢了多少」既能从日志读，也能从
+// Counters 读，而日志量不随丢包数放大。
+func TestFullQueueDropIsVisibleInLog(t *testing.T) {
+	collector := newCollector(t, 207)
+	collector.hold() // 收集器不返回：后台 goroutine 卡在出站上，队列随即填满
+	logger := &recordingLogger{}
+	tracer := newTestTracer(t, collector, Options{
+		SampleRate:    1,
+		QueueSize:     2,
+		BatchSize:     1,
+		FlushInterval: time.Hour,
+		Logger:        logger,
+	})
+
+	for id := int64(1); id <= 20; id++ {
+		tracer.RecordTerminal(testRecord(id))
+	}
+
+	lines := make([]string, 0, 1)
+	for _, line := range logger.lines() {
+		if strings.Contains(line, "tracing.queue_full") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		t.Fatalf("队列满必须留痕，实际日志: %v", logger.lines())
+	}
+	if len(lines) != 1 {
+		t.Fatalf("限频下同一轮抖动只应记首丢那一条，实际 %d 条: %v", len(lines), lines)
+	}
+	// 首丢那条要自带「丢了第几条」与「队有多小」，运维不翻代码就能判断剂量。
+	for _, want := range []string{"dropped:1", "queue:2"} {
+		if !strings.Contains(lines[0], want) {
+			t.Fatalf("丢弃告警缺 %q: %s", want, lines[0])
+		}
+	}
+	if counters := tracer.Counters(); counters.Dropped == 0 {
+		t.Fatalf("丢弃计数不该为 0: %+v", counters)
 	}
 }
 

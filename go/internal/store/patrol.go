@@ -55,12 +55,25 @@ type CostGapRequest struct {
 
 // listCostGapRequestsQuery 与 listUnsettledRequestsQuery 同形：行值游标、无 OFFSET，
 // 唯一区别是谓词取反（终态已提交、成本仍空）。
+//
+// 谓词必须叠加 BillingCondition：cost_usd 为空的行里有一批是**设计上**就不该有成本的，
+// 它们不是缺口，每轮报出来只会把真缺口淹掉。已知三类：
+//   - 被拦截行（blocked_by 非空）：warmup 显式不写成本（见 guard 的 RecordWarmup：
+//     「成本 NULL（显式不写，避免前端显示 $0）」），敏感词等拦截行写 0 而非 NULL；
+//   - 回放审计行（is_replay）：成本归零、不经计费（见 drizzle/0116 的重放归一化）；
+//   - 不计费端点（count_tokens / responses/compact）：见 store.NonBillingEndpoints
+//     的注释——「这两类端点会写 message_request，但不得进入可计费口径」，
+//     它们的响应不带 usage，结算本就不计费。
+//
+// 复用 BillingCondition 而不是就地另抄一份排除清单：可计费口径只能有一个真源，
+// 否则账本与巡检会各自漂移。
 const listCostGapRequestsQuery = `
 SELECT id, created_at
 FROM message_request
 WHERE status_code IS NOT NULL
   AND cost_usd IS NULL
   AND deleted_at IS NULL
+  AND ` + BillingCondition + `
   AND created_at < $1
   AND (created_at, id) > ($2, $3)
 ORDER BY created_at ASC, id ASC
