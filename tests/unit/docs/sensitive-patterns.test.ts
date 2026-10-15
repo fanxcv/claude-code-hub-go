@@ -103,19 +103,40 @@ const PUBLIC_HOSTS: Record<string, string> = {
   "your-domain.com": "文档里的占位域名",
 };
 
-/** 占位主机形态：RFC 2606/6761 保留域、容器服务名、示例后缀与回环名。 */
+/**
+ * 占位主机形态：只认 RFC 2606/6761 保留域与「单段 .example」这类**形态**；
+ * 容器服务名与夹具占位名一律走下面的 PLACEHOLDER_HOST_NAMES 逐条登记。
+ */
 const PLACEHOLDER_HOST = new RegExp(
   [
     // RFC 2606/6761：example.com/net/org、`.test`、`.invalid`、`.local`、localhost
     "^(?:[a-z0-9-]+\\.)*(?:example\\.(?:com|net|org|test|invalid)|test|invalid|local|internal|localhost)$",
     // 上游 Node 测试惯用的「单段 .example」写法（relay.example、vendor.example）
     "^(?:[a-z0-9-]+\\.)*example$",
-    // 末段是「占位/服务」标签的主机（sentinel-redis-host、claude-code-hub-db、host、proxy…）
-    "^(?:[a-z0-9-]+\\.)*(?:[a-z0-9-]*-)?(?:host|proxy|relay|upstream|endpoint|client|vendor|hub|db|pg|postgres|redis|redacted)$",
     "^(?:[a-z0-9-]+\\.)*(?:tld|host-placeholder)$",
   ].join("|"),
   "u"
 );
+
+/**
+ * 明确列举的占位主机（容器服务名与夹具占位名）。
+ *
+ * 为什么改成逐条列举：旧规则放行「任意前缀 + `host`/`db`/`redis`/`proxy`…」的后缀形态，于是
+ * `zzz-prod-db`、`foo-internal-redis`、`bar.corp-host` 这类**真实内网主机名**会被当成占位放行——
+ * 钉子拦不住它本该拦的东西。要放行新的占位名，在这里加一行并写明它为什么是占位。
+ */
+const PLACEHOLDER_HOST_NAMES: Record<string, string> = {
+  // 通用占位主机名：文档/注释/夹具惯例（`user:password@host:port` 这一形态里的裸名，
+  // 见 .env.example 的 DSN 注释、src/lib/v1-url.ts、i18n 表单占位文案）。单段、无域名后缀，不是真实主机。
+  host: "通用占位主机名（模板 `user:password@host:port`）",
+  proxy: "通用占位主机名（i18n 表单示例 `http://user:pass@proxy:8080`）",
+  // 本仓 compose 里的容器服务名（服务发现名，不是任何真实主机）：
+  // dev/docker-compose.yaml 与 docker-compose.yaml 的 `postgres` 服务。
+  postgres: "dev compose 的容器服务名",
+  // go/internal/debugapi/metrics_test.go 的夹具主机，与同行的 sentinel_user/sentinel_db 同一组假值。
+  "sentinel-host": "debugapi 指标用例的 DSN 夹具主机",
+  "sentinel-redis-host": "debugapi 指标用例的 Redis URL 夹具主机",
+};
 
 /**
  * 镜像与注册表主机白名单。镜像引用出现在 compose / Dockerfile / 构建脚本里，自建 registry
@@ -256,6 +277,7 @@ function hostAllowed(host: string): boolean {
   if (isLoopbackOrAny(host)) return true;
   if (DOC_RANGE_IP.test(host)) return true;
   if (PLACEHOLDER_HOST.test(host)) return true;
+  if (Object.hasOwn(PLACEHOLDER_HOST_NAMES, host)) return true;
   return Object.hasOwn(PUBLIC_HOSTS, host);
 }
 
@@ -434,6 +456,33 @@ describe("受跟踪文件里的敏感信息", () => {
       violations,
       `发现敏感信息（放行要写进 ALLOWLIST 并写明理由）：\n${describeViolations(violations)}`
     ).toEqual([]);
+  });
+});
+
+describe("占位主机判定（收口回归）", () => {
+  test("真实内网主机名的形状不再被当成占位放行", () => {
+    // 这些样例在旧规则（「任意前缀 + -db/-host/-redis」一律放行）下全部判为占位，是本条钉子漏检的真值。
+    for (const host of ["zzz-prod-db", "foo-internal-redis", "bar.corp-host", "bar.corp-pg"]) {
+      expect(hostAllowed(host), `${host} 是真实内网主机名的形状，不得当占位放行`).toBe(false);
+    }
+  });
+
+  test("保留域与显式登记的占位名仍然放行", () => {
+    for (const host of [
+      "example.com",
+      "api.example.net",
+      "relay.example",
+      "localhost",
+      "dev.internal",
+      "127.0.0.1",
+      "192.0.2.10",
+      "host",
+      "proxy",
+      "postgres",
+      "sentinel-redis-host",
+    ]) {
+      expect(hostAllowed(host), `${host} 是登记的占位名，应当放行`).toBe(true);
+    }
   });
 });
 
