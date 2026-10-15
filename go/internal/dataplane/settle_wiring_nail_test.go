@@ -21,6 +21,8 @@ var (
 	// 行首允许有 tab 缩进；匹配的是调用语句本身。
 	costMultiplierCall = regexp.MustCompile(`(?m)^\s*applyCostMultipliers\(&settlement, s\.state\)\s*$`)
 	cacheScoreCall     = regexp.MustCompile(`(?m)^\s*s\.applyCacheScoreFields\(ctx, &settlement, pc, outcome\)\s*$`)
+	// 不锚行首：非流式那条写在一行赋值里，流式那条写在赋值语句的右侧。
+	appliedCacheTTLCall = regexp.MustCompile(`usageFromConvert\([^\n]*AppliedCacheTTL\(\)`)
 )
 
 // funcBody 取出某个方法/函数的函数体文本（从签名到下一个顶层 `}`）。
@@ -88,6 +90,23 @@ func TestSettleWiringCallsCacheScoreOnlyInStream(t *testing.T) {
 	nonStream := funcBody(t, source, "func (s *storeSettler) NonStream(")
 	if cacheScoreCall.MatchString(nonStream) {
 		t.Fatal("NonStream 不应调用 applyCacheScoreFields：Node 只在流式结算产出这五列")
+	}
+}
+
+// TestSettleWiringPassesAppliedCacheTTLInBothPaths 断言两条结算路径都把「实际应用的 TTL」
+// 交给用量投影：上游未分列 5m/1h 明细时，它是缓存写差额归档的唯一依据
+// （见 terminal 的 deriveCacheCreationTokens）。漏传的后果不是报错而是静默少收——1h 缓存写
+// 会整批按 5m 计（默认派生单价 1.25× vs 2×，相差 1.6 倍）。
+func TestSettleWiringPassesAppliedCacheTTLInBothPaths(t *testing.T) {
+	source := readUpstreamSource(t)
+
+	nonStream := funcBody(t, source, "func (s *storeSettler) NonStream(")
+	stream := funcBody(t, source, "func (s *storeSettler) Stream(")
+
+	for name, body := range map[string]string{"NonStream": nonStream, "Stream": stream} {
+		if !appliedCacheTTLCall.MatchString(body) {
+			t.Fatalf("%s 没有把 Plan.AppliedCacheTTL 交给 usageFromConvert：1h 缓存写会按 5m 计", name)
+		}
 	}
 }
 

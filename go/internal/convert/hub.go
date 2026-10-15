@@ -196,7 +196,12 @@ type Usage struct {
 	OutputTokens     *float64
 	CacheReadTokens  *float64
 	CacheWriteTokens *float64
-	ReasoningTokens  *float64
+	// CacheCreation5mTokens / CacheCreation1hTokens 是 Anthropic 的 usage.cache_creation
+	// 明细：上游按 TTL 分列的缓存写入量。nil 表示上游未分列，此时总量仍只由
+	// CacheWriteTokens 承载（差额归档见 terminal 的 deriveCacheCreationTokens）。
+	CacheCreation5mTokens *float64
+	CacheCreation1hTokens *float64
+	ReasoningTokens       *float64
 }
 
 func (u *Usage) IsEmpty() bool {
@@ -900,6 +905,10 @@ func usageFromAnthropic(raw *Value) *Usage {
 	usage.OutputTokens, _ = numberOrNil(fieldOrNil(raw, "output_tokens"))
 	usage.CacheReadTokens, _ = numberOrNil(fieldOrNil(raw, "cache_read_input_tokens"))
 	usage.CacheWriteTokens, _ = numberOrNil(fieldOrNil(raw, "cache_creation_input_tokens"))
+	if detail := fieldOrNil(raw, "cache_creation"); detail != nil {
+		usage.CacheCreation5mTokens, _ = numberOrNil(fieldOrNil(detail, "ephemeral_5m_input_tokens"))
+		usage.CacheCreation1hTokens, _ = numberOrNil(fieldOrNil(detail, "ephemeral_1h_input_tokens"))
+	}
 	return usage
 }
 

@@ -29,16 +29,23 @@ func TestNonStreamFactsDecodePerUpstreamProtocol(t *testing.T) {
 		output   float64
 		cache    float64
 		write    float64
+		// write5m / write1h 是 Anthropic usage.cache_creation 的按 TTL 分列（其它线没有）。
+		write5m float64
+		write1h float64
 	}{
 		{
 			name:     "anthropic 线取 usage.input_tokens",
 			protocol: convert.ProtocolAnthropicMessages,
-			body:     `{"id":"msg_1","model":"claude-sonnet-4-5","usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":3,"cache_creation_input_tokens":5}}`,
-			model:    "claude-sonnet-4-5",
-			input:    11,
-			output:   7,
-			cache:    3,
-			write:    5,
+			body: `{"id":"msg_1","model":"claude-sonnet-4-5","usage":{"input_tokens":11,"output_tokens":7,` +
+				`"cache_read_input_tokens":3,"cache_creation_input_tokens":5,` +
+				`"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":2}}}`,
+			model:   "claude-sonnet-4-5",
+			input:   11,
+			output:  7,
+			cache:   3,
+			write:   5,
+			write5m: 3,
+			write1h: 2,
 		},
 		{
 			name:     "openai-chat 线取 prompt_tokens 并减去 cached_tokens",
@@ -88,7 +95,41 @@ func TestNonStreamFactsDecodePerUpstreamProtocol(t *testing.T) {
 			assertToken(t, "输出", usage.OutputTokens, testCase.output)
 			assertToken(t, "缓存读", usage.CacheReadTokens, testCase.cache)
 			assertToken(t, "缓存写", usage.CacheWriteTokens, testCase.write)
+			assertToken(t, "缓存写 5m", usage.CacheCreation5mTokens, testCase.write5m)
+			assertToken(t, "缓存写 1h", usage.CacheCreation1hTokens, testCase.write1h)
 		})
+	}
+}
+
+// TestUsageFromConvertCarriesCacheCreationSplitAndTTL 钉住落库口径的两处携带：
+// 上游按 TTL 分列的 5m/1h，与本次尝试**实际应用**的 TTL（上游不分列时唯一的分档依据）。
+func TestUsageFromConvertCarriesCacheCreationSplitAndTTL(t *testing.T) {
+	write, fiveMinute, oneHour := 9.0, 4.0, 3.0
+	converted := usageFromConvert(convert.Usage{
+		CacheWriteTokens:      &write,
+		CacheCreation5mTokens: &fiveMinute,
+		CacheCreation1hTokens: &oneHour,
+	}, "mixed")
+
+	if converted.CacheTTL != "mixed" {
+		t.Errorf("CacheTTL = %q，期望 mixed", converted.CacheTTL)
+	}
+	for _, field := range []struct {
+		label string
+		got   *int64
+		want  int64
+	}{
+		{"缓存写总量", converted.CacheCreationInputTokens, 9},
+		{"缓存写 5m", converted.CacheCreation5mInputTokens, 4},
+		{"缓存写 1h", converted.CacheCreation1hInputTokens, 3},
+	} {
+		if field.got == nil {
+			t.Errorf("%s 缺失，期望 %d", field.label, field.want)
+			continue
+		}
+		if *field.got != field.want {
+			t.Errorf("%s = %d，期望 %d", field.label, *field.got, field.want)
+		}
 	}
 }
 

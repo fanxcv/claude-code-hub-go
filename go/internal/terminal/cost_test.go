@@ -157,6 +157,55 @@ func TestComputeCostDerivesCacheCreationTokensByTTL(t *testing.T) {
 	}
 }
 
+// 纯 1h：上游只给总量、未分列 5m/1h 时，差额全按 1h 单价计（1h 是基础输入价的 2 倍）。
+//
+// 这是修复前系统性少收的那一档：数据面从不填 CacheTTL，同一份用量会被按 5m（1.25×）计。
+func TestComputeCostBillsFlatCacheCreationAtOneHourRate(t *testing.T) {
+	cost, err := ComputeCost(CostInput{
+		Usage:              Usage{CacheCreationInputTokens: int64Ptr(300), CacheTTL: "1h"},
+		PriceData:          []byte(`{"input_cost_per_token":0.001}`),
+		ProviderMultiplier: floatPtr(1),
+		GroupMultiplier:    floatPtr(1),
+	})
+	if err != nil {
+		t.Fatalf("计算成本失败: %v", err)
+	}
+	// 300 × 0.002 = 0.6；若归到 5m 只有 0.375。
+	if got := normalizedCost(t, cost.Total); got != "0.6" {
+		t.Fatalf("total = %s, want 0.6", got)
+	}
+}
+
+// 5m/1h 混合：两桶各按自己的单价入账，成本明细的两列也随之拆开。
+func TestComputeCostSplitsMixedCacheCreationBuckets(t *testing.T) {
+	cost, err := ComputeCost(CostInput{
+		Usage: Usage{
+			CacheCreationInputTokens:   int64Ptr(200),
+			CacheCreation5mInputTokens: int64Ptr(100),
+			CacheCreation1hInputTokens: int64Ptr(100),
+			CacheTTL:                   "mixed",
+		},
+		PriceData:          []byte(`{"input_cost_per_token":0.001}`),
+		ProviderMultiplier: floatPtr(1),
+		GroupMultiplier:    floatPtr(1),
+	})
+	if err != nil {
+		t.Fatalf("计算成本失败: %v", err)
+	}
+	// 100×0.00125 + 100×0.002 = 0.325（总量已分列，差额为 0，TTL 不参与归档）
+	if got := normalizedCost(t, cost.Total); got != "0.325" {
+		t.Fatalf("total = %s, want 0.325", got)
+	}
+	var breakdown StoredCostBreakdown
+	if err := json.Unmarshal(cost.Breakdown, &breakdown); err != nil {
+		t.Fatalf("成本明细不是合法 json: %v", err)
+	}
+	if breakdown.CacheCreation != "0.325" || breakdown.CacheCreation5m != "0.125" || breakdown.CacheCreation1h != "0.2" {
+		t.Fatalf("缓存写分桶 = %s/%s/%s, want 0.325/0.125/0.2",
+			breakdown.CacheCreation, breakdown.CacheCreation5m, breakdown.CacheCreation1h)
+	}
+}
+
 // 按次计费价格并入 input 桶。
 func TestComputeCostIncludesPerRequestPrice(t *testing.T) {
 	price := []byte(`{"input_cost_per_request":0.01,"input_cost_per_token":0.001}`)

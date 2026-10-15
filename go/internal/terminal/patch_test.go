@@ -62,6 +62,28 @@ func TestSettlementAllowsBlockedWithoutProviderChain(t *testing.T) {
 	}
 }
 
+// cache_ttl_applied 由 Usage.CacheTTL 落列；空串表示本次没有可归属的 TTL，整列不写（保持 NULL）。
+func TestSettlementWritesCacheTTLApplied(t *testing.T) {
+	applied, err := Settlement{StatusCode: 200, Usage: Usage{CacheTTL: "1h"}}.toPatch()
+	if err != nil {
+		t.Fatalf("编译终态 patch 失败: %v", err)
+	}
+	if applied.CacheTTLApplied == nil {
+		t.Fatal("Usage.CacheTTL 非空时 cache_ttl_applied 必须写出")
+	}
+	if *applied.CacheTTLApplied != "1h" {
+		t.Fatalf("cache_ttl_applied = %q，期望 1h", *applied.CacheTTLApplied)
+	}
+
+	blank, err := Settlement{StatusCode: 200}.toPatch()
+	if err != nil {
+		t.Fatalf("编译终态 patch 失败: %v", err)
+	}
+	if blank.CacheTTLApplied != nil {
+		t.Fatalf("无 TTL 归属时不应写该列，收到 %q", *blank.CacheTTLApplied)
+	}
+}
+
 // outbox 的 5 个监视列必须能由终态 patch 表达，且落在同一条语句里——
 // 分成两条语句时，第二条不会再次派发 outbox 事件。
 func TestTerminalPatchCarriesAllOutboxColumnsInOneStatement(t *testing.T) {

@@ -139,6 +139,41 @@ func TestObserverExtractsUsageAndMarkers(t *testing.T) {
 	}
 }
 
+// TestObserverExtractsCacheCreationSplit 钉住上游按 TTL 分列的缓存写明细进观测器用量。
+//
+// 它是计费分档的唯一来源：不分列时只能靠「本次实际应用的 TTL」把差额归档
+// （见 Plan.AppliedCacheTTL 与 terminal 的 deriveCacheCreationTokens）。
+func TestObserverExtractsCacheCreationSplit(t *testing.T) {
+	frames := strings.Join([]string{
+		`event: message_start`,
+		`data: {"type":"message_start","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":100,"output_tokens":1,` +
+			`"cache_read_input_tokens":30,"cache_creation_input_tokens":50,` +
+			`"cache_creation":{"ephemeral_5m_input_tokens":20,"ephemeral_1h_input_tokens":30}}}}`,
+		"",
+		`event: message_delta`,
+		`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":42}}`,
+		"",
+		`event: message_stop`,
+		`data: {"type":"message_stop"}`,
+		"",
+		"",
+	}, "\n")
+
+	observer := newTestObserver(convert.FormatClaude, 4096, 4096)
+	observer.Push([]byte(frames))
+	snapshot := observer.Snapshot()
+
+	if got := deref(snapshot.Usage.CacheWriteTokens); got != 50 {
+		t.Fatalf("CacheWriteTokens = %v，期望 50", got)
+	}
+	if got := deref(snapshot.Usage.CacheCreation5mTokens); got != 20 {
+		t.Fatalf("CacheCreation5mTokens = %v，期望 20", got)
+	}
+	if got := deref(snapshot.Usage.CacheCreation1hTokens); got != 30 {
+		t.Fatalf("CacheCreation1hTokens = %v，期望 30（后到的帧未声明明细，不得被清零）", got)
+	}
+}
+
 // TestObserverUsageFamilies 覆盖四条线的用量映射，重点是「输入计数含缓存」的两条线。
 func TestObserverUsageFamilies(t *testing.T) {
 	cases := []struct {

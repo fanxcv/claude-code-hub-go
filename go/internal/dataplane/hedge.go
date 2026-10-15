@@ -229,7 +229,7 @@ func (b *hedgeLoserBiller) BillLoser(ctx context.Context, bill forward.HedgeLose
 	if b == nil || b.wiring.Costs == nil || b.wiring.Pools == nil || bill.RequestID == 0 {
 		return nil
 	}
-	usage := usageFromConvert(bill.Usage)
+	usage := usageFromConvert(bill.Usage, bill.CacheTTL)
 	if usageEmpty(usage) {
 		return nil
 	}

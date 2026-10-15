@@ -105,6 +105,9 @@ type HedgeLoserBill struct {
 	UpstreamStatusCode int
 	// Usage 是输家流内可解析到的用量（枢纽口径）。
 	Usage convert.Usage
+	// CacheTTL 是输家那次尝试出站正文里实际应用的缓存 TTL（见 Plan.AppliedCacheTTL）：
+	// 每条尝试各有一份正文，输家与实际服务的供应商可能不同，故这一头也跟着尝试走。
+	CacheTTL string
 	// Model 是输家流内最后一次声明的模型名。
 	Model string
 	// DrainComplete 为真表示输家正文读到自然结束或见到终态标记。
@@ -1023,6 +1026,7 @@ func (r *hedgeRace) billLoser(
 		Sequence:           attempt.seq,
 		UpstreamStatusCode: content.StatusCode,
 		Usage:              evidence.Usage,
+		CacheTTL:           attempt.plan.AppliedCacheTTL(),
 		Model:              evidence.Model,
 		DrainComplete:      drained,
 		At:                 r.now(),

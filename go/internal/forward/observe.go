@@ -474,6 +474,8 @@ func (o *Observer) mergeUsage(usage *convert.Usage) {
 	merge(&o.observation.Usage.OutputTokens, usage.OutputTokens)
 	merge(&o.observation.Usage.CacheReadTokens, usage.CacheReadTokens)
 	merge(&o.observation.Usage.CacheWriteTokens, usage.CacheWriteTokens)
+	merge(&o.observation.Usage.CacheCreation5mTokens, usage.CacheCreation5mTokens)
+	merge(&o.observation.Usage.CacheCreation1hTokens, usage.CacheCreation1hTokens)
 	merge(&o.observation.Usage.ReasoningTokens, usage.ReasoningTokens)
 	o.observation.UsageSeen = true
 }
@@ -524,6 +526,9 @@ func usageFromPayload(format convert.ClientFormat, payload *convert.Value) *conv
 			OutputTokens:     numberField(usage, "output_tokens"),
 			CacheReadTokens:  numberField(usage, "cache_read_input_tokens"),
 			CacheWriteTokens: numberField(usage, "cache_creation_input_tokens"),
+			// cache_creation 是上游按 TTL 分列的缓存写明细（5m/1h，计费分档的唯一来源）。
+			CacheCreation5mTokens: numberField(usage.ObjectField("cache_creation"), "ephemeral_5m_input_tokens"),
+			CacheCreation1hTokens: numberField(usage.ObjectField("cache_creation"), "ephemeral_1h_input_tokens"),
 		}
 	case convert.FormatOpenAI:
 		usage := payload.ObjectField("usage")

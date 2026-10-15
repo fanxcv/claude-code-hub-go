@@ -334,7 +334,7 @@ func (s *storeSettler) NonStream(
 		settlement.TTFTMS = settlement.DurationMS
 		usage, actualModel := nonStreamFacts(result.Plan, result.Body)
 		if usage != nil {
-			settlement.Usage = usageFromConvert(*usage)
+			settlement.Usage = usageFromConvert(*usage, result.Plan.AppliedCacheTTL())
 		}
 		if actualModel != "" {
 			settlement.ActualResponseModel = &actualModel
@@ -485,7 +485,7 @@ func (s *storeSettler) Stream(ctx context.Context, pc *pctx.Context, outcome for
 		settlement.ActualResponseModel = &model
 	}
 	if observation.UsageSeen {
-		usage := usageFromConvert(observation.Usage)
+		usage := usageFromConvert(observation.Usage, outcome.Plan.AppliedCacheTTL())
 		settlement.Usage = usage
 	}
 	// 流式请求的 provider_chain 只能在这一次终态写里落库（终态列只允许写一次），故它是
@@ -1030,10 +1030,11 @@ func nonStreamFacts(plan *forward.Plan, body []byte) (*convert.Usage, string) {
 // usageFromConvert 把枢纽用量投影成落库口径。
 //
 // 枢纽用量是 float64（各协议线的上游用量并不都是整数），落库列是 bigint：一律就近截断。
-// 缺口如实记录：cache_creation 的 5m/1h 拆分来自 Anthropic 的 usage 明细，观测器只保留
-// 总量，故这里只填 cache_creation_input_tokens（拆分留给 usage 归一化波次）。
-func usageFromConvert(usage convert.Usage) terminal.Usage {
-	out := terminal.Usage{}
+// cacheTTL 是本次尝试**实际应用**的缓存 TTL 归属（见 forward.Plan.AppliedCacheTTL）：
+// 上游未分列 5m/1h 明细时，cache_creation_input_tokens 的差额按它归档
+// （见 terminal 的 deriveCacheCreationTokens）。
+func usageFromConvert(usage convert.Usage, cacheTTL string) terminal.Usage {
+	out := terminal.Usage{CacheTTL: cacheTTL}
 	if usage.InputTokens != nil {
 		value := int64(*usage.InputTokens)
 		out.InputTokens = &value
@@ -1049,6 +1050,14 @@ func usageFromConvert(usage convert.Usage) terminal.Usage {
 	if usage.CacheWriteTokens != nil {
 		value := int64(*usage.CacheWriteTokens)
 		out.CacheCreationInputTokens = &value
+	}
+	if usage.CacheCreation5mTokens != nil {
+		value := int64(*usage.CacheCreation5mTokens)
+		out.CacheCreation5mInputTokens = &value
+	}
+	if usage.CacheCreation1hTokens != nil {
+		value := int64(*usage.CacheCreation1hTokens)
+		out.CacheCreation1hInputTokens = &value
 	}
 	return out
 }
