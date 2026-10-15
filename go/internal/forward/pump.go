@@ -349,9 +349,11 @@ func (p *Pump) armDeadlineLocked() {
 				"deadline_ms": p.opts.PendingChunkDeadline.Milliseconds(),
 			})
 		}
-		// 先转引流再取消：与 TS 的 startDrain(error, false) + cancelSource(error) 同序，
-		// 且不把归因写成「客户端中断」——真正的原因是下游不消费。
-		p.startDrain(reason, false)
+		// 只取消、不引流：TS 的 startDrain 是同步的，Go 的 drain 是并发 goroutine——
+		// 先 startDrain 会让它在读到上游 EOF 时抢先用 settle(true, nil, nil) 定下「正常结束」，
+		// 把超时归因淹掉（CI 实证：pump_test.go 的 pending 超时用例偶发红）。
+		// 上游由 settle 的取消分支异步关闭，故不引流也不会漏放连接。
+		// 归因是「下游不消费」，不是「客户端中断」。
 		p.CancelSource(reason)
 	})
 }
