@@ -64,6 +64,9 @@ type authEntry struct {
 	userProviderGroup string
 }
 
+// AuthKeyRows 读一把密钥的归并行（keys ⨝ users 的 row_to_json 文本，列名即 JSON 键名）。
+type AuthKeyRows func(ctx context.Context, key string) ([]string, error)
+
 // authStoreOptions 是 AuthStore 的构造参数。
 type authStoreOptions struct {
 	pools    *store.Pools
@@ -71,6 +74,7 @@ type authStoreOptions struct {
 	userTTL  time.Duration
 	logger   *logx.Logger
 	registry *cfgsync.Registry
+	rows     AuthKeyRows
 }
 
 // AuthStore 用真实库实现 AuthResolver、UserDirectory 与 UserExpiryMarker。
@@ -85,18 +89,26 @@ type AuthStore struct {
 	users    *cfgsync.TTLMap[int64, User]
 	logger   *logx.Logger
 	registry *cfgsync.Registry
+	rows     AuthKeyRows
 
 	keyLoads  counter
 	userLoads counter
 }
 
 func newAuthStore(opts authStoreOptions) *AuthStore {
+	rows := opts.rows
+	if rows == nil {
+		rows = func(ctx context.Context, key string) ([]string, error) {
+			return queryJSONRows(ctx, opts.pools, authKeysQuery, key)
+		}
+	}
 	return &AuthStore{
 		pools:    opts.pools,
 		keys:     cfgsync.NewKeyedCache[authEntry](opts.keyTTL, DefaultAPIKeyCacheSize),
 		users:    cfgsync.NewTTLMap[int64, User](opts.userTTL, DefaultUserCacheSize),
 		logger:   opts.logger,
 		registry: opts.registry,
+		rows:     rows,
 	}
 }
 
@@ -154,7 +166,7 @@ func (a *AuthStore) entries(ctx context.Context, key string) ([]authEntry, error
 
 // loadKey 读库并分类失败原因。
 func (a *AuthStore) loadKey(ctx context.Context, key string) ([]authEntry, error) {
-	rows, err := queryJSONRows(ctx, a.pools, authKeysQuery, key)
+	rows, err := a.rows(ctx, key)
 	a.keyLoads.add()
 	if err != nil {
 		return nil, err
@@ -285,10 +297,16 @@ func (a *AuthStore) ProviderGroup(ctx context.Context, req *pctx.Context) string
 	return route.GroupDefault
 }
 
-// Invalidate 清空密钥缓存（绑定 api_keys 失效通道）。
+// Invalidate 清空密钥缓存与用户缓存（绑定 api_keys 失效通道）。
 //
-// 不清用户缓存：用户缓存的失效由管理面在用户变更时单独发布（Node 侧同样分两条路径）。
-func (a *AuthStore) Invalidate() { a.keys.Invalidate() }
+// 为什么连用户缓存一起清：管理面没有用户域通道，用户被禁用/删除/改名单时能用的只有这一条
+// 广播（见 adminapi 的 InvalidateUserAuth）；而用户行同时是鉴权判定（is_enabled）与身份判定的
+// 输入，留在缓存里就是一个能在 TTL 内放行的旧事实。清空是只读直通缓存的安全操作，代价只是
+// 下一次按需重读。
+func (a *AuthStore) Invalidate() {
+	a.keys.Invalidate()
+	a.users.Clear()
+}
 
 // KeyLoads 返回密钥装载次数（观测与「不每请求查库」断言用）。
 func (a *AuthStore) KeyLoads() int64 { return a.keyLoads.get() }

@@ -28,8 +28,10 @@ type exportITStubGuard struct {
 
 func (guard exportITStubGuard) Wrap(_ AccessLevel, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// CanLoginWebUI=true：本文件测的是属主隔离与非 admin 的强制过滤，不是写会话门；
+		// 非管理员身份按「能登录 Web UI 的普通用户」建（只读会话的拒绝见 write_gate_test.go）。
 		next.ServeHTTP(writer, request.WithContext(WithPrincipal(request.Context(), Principal{
-			UserID: guard.userID, Username: "tester", IsAdmin: guard.isAdmin,
+			UserID: guard.userID, Username: "tester", IsAdmin: guard.isAdmin, CanLoginWebUI: true,
 		})))
 	})
 }

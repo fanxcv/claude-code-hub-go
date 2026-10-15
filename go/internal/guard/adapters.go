@@ -55,6 +55,12 @@ type AdapterOptions struct {
 	// APIKeyCacheTTL / UserCacheTTL 为 0 时取 Node 侧默认值。
 	APIKeyCacheTTL time.Duration
 	UserCacheTTL   time.Duration
+	// AuthKeyRows 是密钥归并行的读取面；nil 时走本包自带的 SQL（生产路径）。
+	//
+	// 它对应本包文件头里那条待办：归并行的归属本是 store 的管理面视图，store 补上视图后
+	// 由接线方从这里换实现。在换掉之前，它还是「管理面失效广播 → 下一次请求按新数据作答」
+	// 这条链唯一的假数据注入点——不起 PG 就能验证整条链，而不是只验证两段各自正确。
+	AuthKeyRows AuthKeyRows
 	// BodyOptions 是入站正文解压的限额；零值时用 ingress 的默认值。
 	BodyOptions BodyAccessOptions
 	// RouteOptions 覆盖选路器的构造参数（Source 由 Adapters 填 StoreSource）。
@@ -152,6 +158,7 @@ func NewAdapters(opts AdapterOptions) (*Adapters, error) {
 		keyTTL:   apiKeyTTL,
 		logger:   logger,
 		registry: opts.Registry,
+		rows:     opts.AuthKeyRows,
 	})
 	bind(cfgsync.DomainAPIKeys, adapters.Auth.Invalidate)
 	adapters.Settings = newSettingsCache(opts.Pools, opts.Registry, logger)

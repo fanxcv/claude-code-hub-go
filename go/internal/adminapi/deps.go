@@ -158,8 +158,10 @@ type AuditSink interface {
 // （api-key-auth-cache 以 key 串为键，cost-cache 以 id 为键，配置域走 cfgsync 通道）。
 type Invalidator interface {
 	// InvalidateKeyAuth 使某个 API key 的认证缓存失效（src/lib/security/api-key-auth-cache）。
+	// 实现除删 Redis 键外**必须**广播 cfgsync.DomainAPIKeys：鉴权缓存已搬到 guard 进程内，
+	// 只删 Redis 键等于没失效（键形制与两半的关系见 CacheInvalidator.InvalidateKeyAuth）。
 	InvalidateKeyAuth(ctx context.Context, apiKey string)
-	// InvalidateUserAuth 使某个用户的认证缓存失效。
+	// InvalidateUserAuth 使某个用户的认证缓存失效；同样必须广播 cfgsync.DomainAPIKeys。
 	InvalidateUserAuth(ctx context.Context, userID int64)
 	// InvalidateKeyCost 使某个 key 的成本缓存失效（src/lib/redis/cost-cache-cleanup）。
 	InvalidateKeyCost(ctx context.Context, keyID int64)

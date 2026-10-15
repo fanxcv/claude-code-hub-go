@@ -82,12 +82,11 @@ type sessionBatchTerminateResult struct {
 // handleTerminateSession 复刻 terminateActiveSession。
 func (api *sessionAPI) handleTerminateSession(writer http.ResponseWriter, request *http.Request) {
 	ctx := request.Context()
-	principal, ok := PrincipalFrom(ctx)
-	if !ok || principal.UserID == 0 {
-		api.problems.WriteProblem(writer, request, http.StatusUnauthorized, "auth.missing",
-			"Authentication is required.")
+	if !requireWriteSession(api.problems, api.logger, writer, request,
+		"Read-only sessions cannot terminate sessions.") {
 		return
 	}
+	principal, _ := PrincipalFrom(ctx)
 
 	sessionID := ParamsFrom(ctx)["sessionId"]
 	if sessionID == "" {
@@ -223,12 +222,11 @@ func (api *sessionAPI) handleBatchTerminateSessions(
 	request *http.Request,
 ) {
 	ctx := request.Context()
-	principal, ok := PrincipalFrom(ctx)
-	if !ok || principal.UserID == 0 {
-		api.problems.WriteProblem(writer, request, http.StatusUnauthorized, "auth.missing",
-			"Authentication is required.")
+	if !requireWriteSession(api.problems, api.logger, writer, request,
+		"Read-only sessions cannot terminate sessions.") {
 		return
 	}
+	principal, _ := PrincipalFrom(ctx)
 
 	body, issues := parseSessionBatchBody(request)
 	if len(issues) > 0 {

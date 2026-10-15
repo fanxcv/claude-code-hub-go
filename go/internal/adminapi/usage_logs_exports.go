@@ -83,6 +83,11 @@ func registerUsageLogsExports(router *Router, module *usageLogsModule, kv UsageL
 
 // handleCreate 复刻 createUsageLogsExport。
 func (exports *usageLogsExportsModule) handleCreate(writer http.ResponseWriter, request *http.Request) {
+	// 写门先于请求体解析：只读会话不得建导出作业（作业要占队列与 Redis 配额，不是读）。
+	if !requireWriteSession(exports.problems(), exports.module.deps.Logger, writer, request,
+		"Read-only sessions cannot create exports.") {
+		return
+	}
 	input, issues := parseUsageLogsExportCreateBody(request)
 	if len(issues) > 0 {
 		writeUsageLogsValidationProblem(writer, request, issues)

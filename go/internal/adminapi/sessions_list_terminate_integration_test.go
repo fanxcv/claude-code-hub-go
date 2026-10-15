@@ -596,7 +596,10 @@ func TestBatchTerminateSessionsOnRealDependencies(t *testing.T) {
 	body := fmt.Sprintf(`{"sessionIds":[%q,%q,%q]}`, mine, theirs, absent)
 
 	// 1. 非管理员：他人的会话在 SQL 侧被所有者条件挡掉 → 计入 missing（不是 unauthorized）。
-	router := sessionsRouterWithDeps(t, deps.Pools, Principal{UserID: userA}, deps)
+	// CanLoginWebUI=true：走写会话门（能登录 Web UI 的普通用户）；只读会话整条被 403 拒，
+	// 那是 write_gate_test.go 的用例。
+	member := Principal{UserID: userA, CanLoginWebUI: true, WebSession: true}
+	router := sessionsRouterWithDeps(t, deps.Pools, member, deps)
 	status, parsed, raw := sessionsRequest(t, router, http.MethodPost,
 		"/sessions:batchTerminate", body)
 	if status != http.StatusOK {

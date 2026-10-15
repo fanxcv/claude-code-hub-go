@@ -82,9 +82,24 @@ func NewCacheInvalidator(deps Deps, options InvalidatorOptions) *CacheInvalidato
 	}
 }
 
-// InvalidateKeyAuth 复刻 invalidateCachedKey（api-key-auth-cache.ts:307-319）。
+// InvalidateKeyAuth 使一把 API key 的认证缓存失效（api-key-auth-cache.ts:307-319）。
+//
+// 两件事都要做，缺一不可：
+//  1. 广播 api_keys 域。Go 的密钥认证缓存是**进程内**的（guard 的 cfgsync.NewKeyedCache，
+//     订阅绑在 guard/adapters.go 的 DomainAPIKeys 上），下面那个 Redis 键当前无人读。
+//     不广播就只剩密钥 TTL 一条自愈路径：密钥被禁/被删后，本实例与其它实例都还能用满一个
+//     TTL（默认 60s）。广播经 cfgsync 通道，本实例同样在投递范围内。
+//  2. 删 Node 时代的 Redis 键：保留它只因为成本是一次 DEL、键形制不该在别处复写；它**不是**
+//     本次失效的生效路径（见第 1 点）。
+//
+// 顺序是先广播后删键：广播只依赖 Bus、不依赖命令连接，故不能被 client == nil 的早退挡掉——
+// 「接了 Bus 却没接命令连接」的部署里，进程内缓存仍然必须失效。
 func (i *CacheInvalidator) InvalidateKeyAuth(ctx context.Context, apiKey string) {
-	if i == nil || i.client == nil || apiKey == "" {
+	if i == nil {
+		return
+	}
+	i.PublishDomain(ctx, cfgsync.DomainAPIKeys)
+	if i.client == nil || apiKey == "" {
 		return
 	}
 	digest := sha256.Sum256([]byte(apiKey))
@@ -94,9 +109,18 @@ func (i *CacheInvalidator) InvalidateKeyAuth(ctx context.Context, apiKey string)
 	}
 }
 
-// InvalidateUserAuth 复刻 invalidateCachedUser（api-key-auth-cache.ts:378-386）。
+// InvalidateUserAuth 使用户的认证缓存失效（api-key-auth-cache.ts:378-386）。
+//
+// 同样要广播 api_keys 域：guard 缓存的认证条目是「密钥 ⨝ 用户」的归并结果，用户被禁用/删除/
+// 改归属后，缓存里那一行仍会按旧状态放行。只有把密钥缓存整表打掉，下一次鉴权才会读回新的
+// 用户状态（用户是否禁用由鉴权步骤判定，见 guard/auth.go 的 user_disabled 分支）。
+// 下面那个 Redis 用户键同样无人读，保留理由与 InvalidateKeyAuth 一致。
 func (i *CacheInvalidator) InvalidateUserAuth(ctx context.Context, userID int64) {
-	if i == nil || i.client == nil {
+	if i == nil {
+		return
+	}
+	i.PublishDomain(ctx, cfgsync.DomainAPIKeys)
+	if i.client == nil {
 		return
 	}
 	if err := i.client.Del(ctx, fmt.Sprintf("%s%d", apiKeyAuthUserPrefix, userID)).Err(); err != nil {
@@ -166,6 +190,8 @@ func (i *CacheInvalidator) InvalidateUserCost(ctx context.Context, userID int64)
 //
 // 通道取 cfgsync.Spec(domain).Channel（空 Channel 表示该域不参与广播，此时只记 warn）：
 // 通道名不许在本文件里拼，拼错不会报错，只会让另一侧的缓存静静过期。
+//
+// 本进程的订阅者也会收到：Redis 的 Pub/Sub 投递给全部订阅连接，而发布走的是另一条命令连接。
 func (i *CacheInvalidator) PublishDomain(ctx context.Context, domain cfgsync.Domain) {
 	if i == nil {
 		return

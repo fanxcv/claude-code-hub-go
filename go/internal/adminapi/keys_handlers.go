@@ -88,24 +88,8 @@ func keysActionError(code string, status int, err error) *ActionError {
 //
 // 返回 false 表示已作答拒绝，调用方必须立即返回。
 func (api *keysAPI) requireKeyWriteSession(writer http.ResponseWriter, request *http.Request) bool {
-	principal, ok := PrincipalFrom(request.Context())
-	if !ok || principal.UserID == 0 {
-		api.problems.WriteProblem(writer, request, http.StatusUnauthorized, "auth.missing",
-			"Authentication is required.")
-		return false
-	}
-	if principal.IsAdmin || principal.CanLoginWebUI {
-		return true
-	}
-	api.logger.Warn("admin_key_write_denied", map[string]any{
-		"path":        request.URL.Path,
-		"userId":      principal.UserID,
-		"webSession":  principal.WebSession,
-		"canLoginWeb": principal.CanLoginWebUI,
-	})
-	api.problems.WriteProblem(writer, request, http.StatusForbidden, "auth.forbidden",
+	return requireWriteSession(api.problems, api.logger, writer, request,
 		"Read-only sessions cannot manage keys.")
-	return false
 }
 
 // listUserKeys 复刻 listUserKeys（keys/handlers.ts:30-47）。
@@ -268,17 +252,11 @@ func (api *keysAPI) createUserKey(writer http.ResponseWriter, request *http.Requ
 // canLoginWebUi 必须为 true——读档认证会放行 false 的只读会话，若这里放过，只读密钥就能
 // 铸造一把可登录 Web UI 的新密钥。
 func (api *keysAPI) createSelfKey(writer http.ResponseWriter, request *http.Request) {
-	principal, ok := PrincipalFrom(request.Context())
-	if !ok || principal.UserID == 0 {
-		api.problems.WriteProblem(writer, request, http.StatusUnauthorized, "auth.missing",
-			"Authentication is required.")
+	if !requireWriteSession(api.problems, api.logger, writer, request,
+		"Read-only sessions cannot create keys.") {
 		return
 	}
-	if !principal.CanLoginWebUI {
-		api.problems.WriteProblem(writer, request, http.StatusForbidden, "auth.forbidden",
-			"Read-only sessions cannot create keys.")
-		return
-	}
+	principal, _ := PrincipalFrom(request.Context())
 	api.createKeyForUser(writer, request, principal.UserID, true)
 }
 
