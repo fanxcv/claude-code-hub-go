@@ -36,7 +36,22 @@ type ProviderCircuitConfigWriter interface {
 		failureThreshold, openDurationMS, halfOpenSuccessThreshold,
 		releaseIncrementMS, maxOpenCount int64,
 	) error
+	// WriteProviderCircuitConfigFields 只覆盖 fields 里点名的哈希字段（键用下面的
+	// providerCircuitField* 常量），未点名的字段原样不动。
+	//
+	// 批量补丁用它：批量载荷只带「本次改动的字段」，手里没有行里其余字段的值，
+	// 走全量写会把没读到的字段冲成出厂默认（例如把管理员先前设的 openDuration 抹回 30 分钟）。
+	WriteProviderCircuitConfigFields(ctx context.Context, providerID int64, fields map[string]int64) error
 }
+
+// 熔断配置哈希的字段名（数据面 route.parseProviderCircuitConfig 逐字读这几个键）。
+const (
+	providerCircuitFieldFailureThreshold         = "failureThreshold"
+	providerCircuitFieldOpenDuration             = "openDuration"
+	providerCircuitFieldHalfOpenSuccessThreshold = "halfOpenSuccessThreshold"
+	providerCircuitFieldReleaseIncrement         = "releaseIncrement"
+	providerCircuitFieldMaxOpenCount             = "maxOpenCount"
+)
 
 // redisCircuitConfigWriter 是 ProviderCircuitConfigWriter 的 Redis 实现。
 type redisCircuitConfigWriter struct {
@@ -57,15 +72,30 @@ func (w *redisCircuitConfigWriter) WriteProviderCircuitConfig(
 	failureThreshold, openDurationMS, halfOpenSuccessThreshold,
 	releaseIncrementMS, maxOpenCount int64,
 ) error {
+	return w.WriteProviderCircuitConfigFields(ctx, providerID, map[string]int64{
+		providerCircuitFieldFailureThreshold:         failureThreshold,
+		providerCircuitFieldOpenDuration:             openDurationMS,
+		providerCircuitFieldHalfOpenSuccessThreshold: halfOpenSuccessThreshold,
+		providerCircuitFieldReleaseIncrement:         releaseIncrementMS,
+		providerCircuitFieldMaxOpenCount:             maxOpenCount,
+	})
+}
+
+func (w *redisCircuitConfigWriter) WriteProviderCircuitConfigFields(
+	ctx context.Context,
+	providerID int64,
+	fields map[string]int64,
+) error {
+	if len(fields) == 0 {
+		return nil
+	}
 	key := route.ProviderConfigKeyPrefix + strconv.FormatInt(providerID, 10)
+	values := make(map[string]any, len(fields))
+	for field, value := range fields {
+		values[field] = strconv.FormatInt(value, 10)
+	}
 	// HSET 而非覆盖整个键：Node 侧同（hset，不是 set），键上可能还有别的读取方写入的字段。
-	if err := w.client.HSet(ctx, key, map[string]any{
-		"failureThreshold":         strconv.FormatInt(failureThreshold, 10),
-		"openDuration":             strconv.FormatInt(openDurationMS, 10),
-		"halfOpenSuccessThreshold": strconv.FormatInt(halfOpenSuccessThreshold, 10),
-		"releaseIncrement":         strconv.FormatInt(releaseIncrementMS, 10),
-		"maxOpenCount":             strconv.FormatInt(maxOpenCount, 10),
-	}).Err(); err != nil {
+	if err := w.client.HSet(ctx, key, values).Err(); err != nil {
 		return fmt.Errorf("adminapi: 写熔断配置失败: %w", err)
 	}
 	return nil

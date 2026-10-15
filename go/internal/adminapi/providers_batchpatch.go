@@ -390,7 +390,8 @@ func handleProviderBatchPatchApply(deps Deps) http.HandlerFunc {
 			})
 		}
 
-		providerBatchRunPostCommitEffects(deps, request, decision.Result)
+		providerBatchRunPostCommitEffects(deps, request, decision.Result,
+			providerBatchCircuitConfigFields(updates))
 		providerEmitWriteAudit(deps, request, "provider.batch_patch_apply", effectiveIDs[0], "", map[string]any{
 			"operationId":   operationID,
 			"updatedCount":  decision.Result.ApplyResult.UpdatedCount,
@@ -401,20 +402,27 @@ func handleProviderBatchPatchApply(deps Deps) http.HandlerFunc {
 }
 
 // providerBatchRunPostCommitEffects 复刻 runProviderBatchPostCommitEffects（actions:2139-2213）的
-// **可移植部分**：缓存失效广播。阈值归零时的强制闭合熔断走既有熔断缝，缺失即不做事（与 Node 的
-// 「失败只告警」同判）。
+// **可移植部分**：熔断配置哈希同步 + 缓存失效广播。阈值归零时的强制闭合熔断走既有熔断缝，缺失即不
+// 做事（与 Node 的「失败只告警」同判）。
+//
+// 次序：先同步哈希再广播。广播是给各进程内缓存的失信号（信号一发，缓存就会拿 Redis 当新真值），
+// 若哈希还没写，收到信号的读方会看到旧阈值——与单条写路径同序（见 providers_write.go）。
+//
+// PostCommitEffects 里曾经的两个广播分支合并为一处：CircuitBreakerChanged 那一支发的是同一个域，
+// Node 侧两次 publish 也只有一次失效（发布是幂等的），故合并不改变语义。
 func providerBatchRunPostCommitEffects(
 	deps Deps,
 	request *http.Request,
 	result *store.ProviderBatchApplyResult,
+	circuitFields map[string]int64,
 ) {
 	if result == nil {
 		return
 	}
-	adminPublishDomain(deps, request, cfgsync.DomainProviders)
 	if result.PostCommitEffects.CircuitBreakerChanged {
-		adminPublishDomain(deps, request, cfgsync.DomainProviders)
+		providerBatchSyncCircuitConfigs(deps, result.EffectiveProviderIDs, circuitFields)
 	}
+	adminPublishDomain(deps, request, cfgsync.DomainProviders)
 	// 登记差异（Note）：Node 的 clearLimit5hCostCache 清的是**供应商级**成本缓存
 	// （clearSingleProviderCostCache），而 Go 的 Deps.Invalidator 只覆盖 key/user 两级缓存
 	// （见 deps.go 的 Invalidator 声明）。新增供应商级失效面属 Deps 冻结面变更，不在本任务的
@@ -595,6 +603,12 @@ func groupDisplayName(group providerFieldGroup) string {
 }
 
 // providerBatchPostCommitEffects 复刻 postCommitEffects 参数的构造（actions:2464-2481）。
+//
+// CircuitBreakerChanged 现是**哈希同步的触发条件**，故必须覆盖批量面里所有会进哈希的字段。
+// 判据（2026-10 复核）：批量契约表 providerPatchFieldSpecs 里与熔断配置哈希相关的只有三个阈值
+// 字段（release_increment / max_open_count 只存在于单条写路径的字段表，批量面不可及），
+// 故这里的三个 case 就是「全部入口」；新增可批量改的哈希字段必须同时加进 case 与
+// providerBatchCircuitConfigFields 的表，否则改了不生效（正是本函数此前的问题）。
 func providerBatchPostCommitEffects(
 	updates providerBatchApplyUpdates,
 	changedFields []string,
@@ -602,7 +616,6 @@ func providerBatchPostCommitEffects(
 ) store.ProviderBatchPostCommitEffects {
 	_, has5hResetMode := updates["limit_5h_reset_mode"]
 	circuitBreakerChanged := false
-	nextThreshold := any(nil)
 	for _, field := range changedFields {
 		switch field {
 		case "circuit_breaker_failure_threshold",
@@ -611,16 +624,97 @@ func providerBatchPostCommitEffects(
 			circuitBreakerChanged = true
 		}
 	}
-	if value, ok := updates["circuit_breaker_failure_threshold"]; ok {
+	return store.ProviderBatchPostCommitEffects{
+		ClearLimit5hCostCache: has5hResetMode,
+		CircuitBreakerChanged: circuitBreakerChanged,
+	}
+}
+
+// providerBatchCircuitConfigFields 取本次改动字段的「改后值」（熔断配置哈希字段名 → 值）。
+//
+// 只收真的改了的字段：批量载荷只带改动字段，行里其余熔断字段的值不在手上（读取要多一次按 id 的
+// 查询），全量写会把它们冲成出厂默认——例如把管理员先前设的 openDuration 抹回 30 分钟。
+func providerBatchCircuitConfigFields(updates providerBatchApplyUpdates) map[string]int64 {
+	defaults := providerThresholdsFromRow(nil)
+	fields := make(map[string]int64, 3)
+	for _, spec := range []struct {
+		patchField string
+		hashField  string
+		// cleared 是「清空后库里那行会取到的出厂默认」（列 NULL 时 providerThresholdsFromRow 的值）。
+		cleared int64
+	}{
+		{"circuit_breaker_failure_threshold", providerCircuitFieldFailureThreshold, defaults.FailureThreshold},
+		{"circuit_breaker_open_duration", providerCircuitFieldOpenDuration, defaults.OpenDurationMS},
+		{"circuit_breaker_half_open_success_threshold", providerCircuitFieldHalfOpenSuccessThreshold, defaults.HalfOpenSuccessThreshold},
+	} {
+		value, changed := updates[spec.patchField]
+		if !changed {
+			continue
+		}
+		// 三个阈值列在批量契约表里都不可清空（Clearable=false），value == nil 不可达；
+		// 留着这一支是为了「哪天可清空了」时写库里的出厂默认，而不是 0——
+		// route 把非正阈值读成「熔断已关闭」，写 0 等于一次空操作把熔断关掉。
+		if value == nil {
+			fields[spec.hashField] = spec.cleared
+			continue
+		}
+		// convertPatchSetValue 对 patchValueInt 统一产出 int64（providerBatchApplyUpdates 的绑定形状）。
 		if number, ok := value.(int64); ok {
-			nextThreshold = number
+			fields[spec.hashField] = number
 		}
 	}
-	return store.ProviderBatchPostCommitEffects{
-		ClearLimit5hCostCache:              has5hResetMode,
-		CircuitBreakerChanged:              circuitBreakerChanged,
-		NextCircuitBreakerFailureThreshold: nextThreshold,
+	return fields
+}
+
+// providerBatchSyncCircuitConfigs 把本次改动过的熔断阈值逐个写进供应商的 Redis 配置哈希。
+//
+// 为什么必须有：数据面的熔断读只看 Redis（route.ReadProviderCircuitConfig），漏写就是「管理员改了
+// 阈值而闸门不变」的静默错行为——不报错、不日志，只是行为不是他要的那个。
+//
+// 有界与失败处置：
+//   - 只同步 effectiveProviderIDs（本次真的改了的那批，≤ providerBatchMaxSize = 500），
+//     不做全表扫描；每行一次 HSET，O(改动数)。
+//   - 不做逐行读库取全量阈值（那要多 500 次按 id 的查询，且批量面够不到的字段仍无值）——只写改动字段。
+//   - 写失败不阻断已落库的请求（与单条写路径同判：熔断配置同步失败不该让「改名字」这个请求失败），
+//     聚合成一条 warn 记数量、样例 id 与首个错误；不逐行记是避免 500 行失败时刷屏掩盖真正的成因。
+func providerBatchSyncCircuitConfigs(deps Deps, providerIDs []int64, fields map[string]int64) {
+	if len(providerIDs) == 0 || len(fields) == 0 {
+		return
 	}
+	if deps.ProviderCircuitConfig == nil {
+		if deps.Logger != nil {
+			deps.Logger.Warn("admin_providers_circuit_config_unwired", map[string]any{
+				"providerCount": len(providerIDs),
+				"effect":        "数据面的熔断阈值读 Redis，未装配时这批供应商按出厂默认工作",
+			})
+		}
+		return
+	}
+	failed := make([]int64, 0)
+	firstError := ""
+	for _, providerID := range providerIDs {
+		if err := deps.ProviderCircuitConfig.WriteProviderCircuitConfigFields(
+			context.Background(), providerID, fields); err != nil {
+			failed = append(failed, providerID)
+			if firstError == "" {
+				firstError = err.Error()
+			}
+		}
+	}
+	if len(failed) == 0 || deps.Logger == nil {
+		return
+	}
+	sample := failed
+	if len(sample) > 5 {
+		sample = sample[:5]
+	}
+	deps.Logger.Warn("admin_providers_circuit_config_batch_sync_failed", map[string]any{
+		"failedCount":       len(failed),
+		"providerCount":     len(providerIDs),
+		"sampleProviderIds": append([]int64(nil), sample...),
+		"fields":            fields,
+		"error":             firstError,
+	})
 }
 
 // ---- 入参解码与作答工具 ----

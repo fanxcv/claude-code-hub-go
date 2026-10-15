@@ -47,10 +47,13 @@ type ProviderBatchUpdateGroup struct {
 }
 
 // ProviderBatchPostCommitEffects 是提交后效应的参数（Node 的 postCommitEffects）。
+//
+// 无 NextCircuitBreakerFailureThreshold：它曾只是「下一个失败阈值」的携带位，零消费方。
+// 移除而非接线——批量载荷（providerBatchApplyUpdates）本就带着本次改动字段的改后值，
+// 单个阈值既省不掉也没必要代替它去逐行读库。
 type ProviderBatchPostCommitEffects struct {
-	ClearLimit5hCostCache              bool `json:"clearLimit5hCostCache"`
-	CircuitBreakerChanged              bool `json:"circuitBreakerChanged"`
-	NextCircuitBreakerFailureThreshold any  `json:"nextCircuitBreakerFailureThreshold"`
+	ClearLimit5hCostCache bool `json:"clearLimit5hCostCache"`
+	CircuitBreakerChanged bool `json:"circuitBreakerChanged"`
 }
 
 // ProviderBatchApplyResult 是账本里的结果（Node 的 ProviderBatchApplyLedgerResult）。

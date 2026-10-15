@@ -205,16 +205,23 @@ func handleCreateProvider(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		adminPublishDomain(deps, request, cfgsync.DomainProviders)
+		// 成功审计仍在查找之前落：create 的失败路径（下面 providerFindVisible 出错）与 Node 的
+		// 「先记成功、再在末尾读回」同次序，本任务只挪广播，不动审计。
 		providerEmitWriteAudit(deps, request, "provider.create", id, providerWriteAuditName(payload),
 			providerWriteAuditAfter(payload), true, "")
 
 		created, err := providerFindVisible(request, deps, id)
 		if err != nil {
+			// 广播仍要发：行已经落库，读方收不到失效信号就会继续用旧列表。
+			adminPublishDomain(deps, request, cfgsync.DomainProviders)
 			adminProblemWriter(deps).WriteActionError(writer, request, err)
 			return
 		}
+		// 次序：先同步熔断配置哈希，再广播。广播是给读方的「缓存放手」信号——读到 Redis 的
+		// 读方若在哈希写入前先收到广播，就会把旧阈值当新真值再遮回去（今日 Go 侧无进程内
+		// 熔断配置缓存故无现患；次序钉住是为了不把陷阱留给加缓存的那天）。
 		providerSyncCircuitConfig(deps, id, providerThresholdsFromRow(created))
+		adminPublishDomain(deps, request, cfgsync.DomainProviders)
 		adminWriteCreated(writer, fmt.Sprintf("/api/v1/providers/%d", id),
 			providerSummaryPayload(*created, nil))
 	}
@@ -320,19 +327,21 @@ func handleUpdateProvider(deps Deps) http.HandlerFunc {
 			return
 		}
 
-		adminPublishDomain(deps, request, cfgsync.DomainProviders)
-
 		updated, err := providerFindVisible(request, deps, id)
 		if err != nil {
 			// 成功审计就在下面几行：移到动作末尾之后，这里的失败才不会与「成功」同时出现在审计里
 			// （Node 的 catch 与末尾 emit 也是这个次序）。
+			// 广播仍要发：行已经落库，读方收不到失效信号就会继续用旧列表。
+			adminPublishDomain(deps, request, cfgsync.DomainProviders)
 			updateFailed(map[string]any{
 				"changedFields":   providerSortedKeys(preimage),
 				"dbUpdateApplied": true,
 			}, err)
 			return
 		}
+		// 次序：先同步熔断配置哈希，再广播（理由见 handleCreateProvider）。
 		providerSyncCircuitConfig(deps, id, providerThresholdsFromRow(updated))
+		adminPublishDomain(deps, request, cfgsync.DomainProviders)
 		providerEmitWriteAudit(deps, request, "provider.update", id, "",
 			map[string]any{"changedFields": providerSortedKeys(preimage)}, true, "")
 		writer.Header().Set("X-CCH-Undo-Token", undoToken)
