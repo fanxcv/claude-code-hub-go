@@ -548,7 +548,8 @@ func TestIntegrationTotalCostCacheIsReusedAndResetAware(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
-	current, err := service.totalCost(ctx, EntityKey, keyID, keyHash, nil, now)
+	prefetched := service.windows.ReadWindows(ctx, []CacheRead{{Key: cacheKey}})
+	current, err := service.totalCost(ctx, EntityKey, keyID, keyHash, nil, prefetched)
 	if err != nil || current != 4 {
 		t.Fatalf("总额度读取 = %v（err=%v），期望 4", current, err)
 	}
@@ -568,7 +569,12 @@ func TestIntegrationTotalCostCacheIsReusedAndResetAware(t *testing.T) {
 		t.Errorf("缓存值 = %s，期望 4", cached)
 	}
 
-	if _, err := service.totalCost(ctx, EntityKey, keyID, keyHash, nil, now); err != nil {
+	// 第二次读取走预取快照：命中缓存则值仍为 4（不再依赖账本回退）。
+	hit := service.windows.ReadWindows(ctx, []CacheRead{{Key: cacheKey}})
+	if value := hit[cacheKey]; !value.Exists || value.Value != 4 {
+		t.Errorf("第二次读取应命中缓存: %+v", value)
+	}
+	if _, err := service.totalCost(ctx, EntityKey, keyID, keyHash, nil, hit); err != nil {
 		t.Fatalf("第二次读取失败: %v", err)
 	}
 

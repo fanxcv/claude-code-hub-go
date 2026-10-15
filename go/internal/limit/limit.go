@@ -243,11 +243,34 @@ func (s *Service) check(
 	keyCostResetAt := LaterReset(keyQuota.CostResetAt, userQuota.CostResetAt)
 	user5hCostResetAt := LaterReset(userQuota.CostResetAt, userQuota.Limit5hCostResetAt)
 
+	// 第三层与第四层：短期到中长期周期限额，同窗口内 Key 先行。
+	// 列表先建好：它同时是下面那次批量取数的输入，判定顺序不受影响。
+	dimensions := []costDimension{
+		{entity: EntityKey, id: keyQuota.KeyID, keyHash: keyQuota.KeyHash, period: Period5h, amount: keyQuota.Limit5hUSD, resetMode: defaultMode(keyQuota.Limit5hResetMode, ResetRolling), costResetAt: keyCostResetAt},
+		{entity: EntityUser, id: userQuota.UserID, period: Period5h, amount: userQuota.Limit5hUSD, resetMode: defaultMode(userQuota.Limit5hResetMode, ResetRolling), costResetAt: userQuota.CostResetAt, limit5hCostResetAt: user5hCostResetAt},
+		{entity: EntityKey, id: keyQuota.KeyID, keyHash: keyQuota.KeyHash, period: PeriodDaily, amount: keyQuota.LimitDailyUSD, resetMode: defaultMode(keyQuota.DailyResetMode, ResetFixed), resetTime: keyQuota.DailyResetTime, costResetAt: keyCostResetAt},
+		{entity: EntityUser, id: userQuota.UserID, period: PeriodDaily, amount: userQuota.LimitDailyUSD, resetMode: defaultMode(userQuota.DailyResetMode, ResetFixed), resetTime: userQuota.DailyResetTime, costResetAt: userQuota.CostResetAt},
+		{entity: EntityKey, id: keyQuota.KeyID, keyHash: keyQuota.KeyHash, period: PeriodWeekly, amount: keyQuota.LimitWeeklyUSD, resetMode: ResetFixed, costResetAt: keyCostResetAt},
+		{entity: EntityUser, id: userQuota.UserID, period: PeriodWeekly, amount: userQuota.LimitWeeklyUSD, resetMode: ResetFixed, costResetAt: userQuota.CostResetAt},
+		{entity: EntityKey, id: keyQuota.KeyID, keyHash: keyQuota.KeyHash, period: PeriodMonthly, amount: keyQuota.LimitMonthlyUSD, resetMode: ResetFixed, costResetAt: keyCostResetAt},
+		{entity: EntityUser, id: userQuota.UserID, period: PeriodMonthly, amount: userQuota.LimitMonthlyUSD, resetMode: ResetFixed, costResetAt: userQuota.CostResetAt},
+	}
+	// 缓存预取：本次判定要读的窗口键一次性取回，替代逐维单独往返。预取只改往返次数，
+	// 不改判定顺序与回退口径（谁先判、触顶即拒、失败回退账本都在下面各分支里）。
+	reads := dimensionReads(dimensions, now)
+	if read, ok := totalCacheRead(EntityKey, keyQuota.KeyID, keyQuota.KeyHash, keyQuota.LimitTotalUSD, keyCostResetAt); ok {
+		reads = append(reads, read)
+	}
+	if read, ok := totalCacheRead(EntityUser, userQuota.UserID, "", userQuota.LimitTotalUSD, userQuota.CostResetAt); ok {
+		reads = append(reads, read)
+	}
+	cache := s.windows.ReadWindows(ctx, reads)
+
 	// 第一层：永久硬限制。
-	if block := s.totalLimit(ctx, EntityKey, keyQuota.KeyID, keyQuota.KeyHash, keyQuota.LimitTotalUSD, keyCostResetAt, now); block != nil {
+	if block := s.totalLimit(ctx, EntityKey, keyQuota.KeyID, keyQuota.KeyHash, keyQuota.LimitTotalUSD, keyCostResetAt, now, cache); block != nil {
 		return block, nil
 	}
-	if block := s.totalLimit(ctx, EntityUser, userQuota.UserID, "", userQuota.LimitTotalUSD, userQuota.CostResetAt, now); block != nil {
+	if block := s.totalLimit(ctx, EntityUser, userQuota.UserID, "", userQuota.LimitTotalUSD, userQuota.CostResetAt, now, cache); block != nil {
 		return block, nil
 	}
 
@@ -268,16 +291,6 @@ func (s *Service) check(
 	var leasePlan pctx.LeaseSettlementPlan
 
 	// 第三层与第四层：短期到中长期周期限额，同窗口内 Key 先行。
-	dimensions := []costDimension{
-		{entity: EntityKey, id: keyQuota.KeyID, keyHash: keyQuota.KeyHash, period: Period5h, amount: keyQuota.Limit5hUSD, resetMode: defaultMode(keyQuota.Limit5hResetMode, ResetRolling), costResetAt: keyCostResetAt},
-		{entity: EntityUser, id: userQuota.UserID, period: Period5h, amount: userQuota.Limit5hUSD, resetMode: defaultMode(userQuota.Limit5hResetMode, ResetRolling), costResetAt: userQuota.CostResetAt, limit5hCostResetAt: user5hCostResetAt},
-		{entity: EntityKey, id: keyQuota.KeyID, keyHash: keyQuota.KeyHash, period: PeriodDaily, amount: keyQuota.LimitDailyUSD, resetMode: defaultMode(keyQuota.DailyResetMode, ResetFixed), resetTime: keyQuota.DailyResetTime, costResetAt: keyCostResetAt},
-		{entity: EntityUser, id: userQuota.UserID, period: PeriodDaily, amount: userQuota.LimitDailyUSD, resetMode: defaultMode(userQuota.DailyResetMode, ResetFixed), resetTime: userQuota.DailyResetTime, costResetAt: userQuota.CostResetAt},
-		{entity: EntityKey, id: keyQuota.KeyID, keyHash: keyQuota.KeyHash, period: PeriodWeekly, amount: keyQuota.LimitWeeklyUSD, resetMode: ResetFixed, costResetAt: keyCostResetAt},
-		{entity: EntityUser, id: userQuota.UserID, period: PeriodWeekly, amount: userQuota.LimitWeeklyUSD, resetMode: ResetFixed, costResetAt: userQuota.CostResetAt},
-		{entity: EntityKey, id: keyQuota.KeyID, keyHash: keyQuota.KeyHash, period: PeriodMonthly, amount: keyQuota.LimitMonthlyUSD, resetMode: ResetFixed, costResetAt: keyCostResetAt},
-		{entity: EntityUser, id: userQuota.UserID, period: PeriodMonthly, amount: userQuota.LimitMonthlyUSD, resetMode: ResetFixed, costResetAt: userQuota.CostResetAt},
-	}
 	for _, dimension := range dimensions {
 		if dimension.amount == nil || *dimension.amount <= 0 {
 			continue
@@ -295,7 +308,7 @@ func (s *Service) check(
 				continue
 			}
 		}
-		current, exceeded, checkErr := s.costLimit(ctx, dimension, now)
+		current, exceeded, checkErr := s.costLimit(ctx, dimension, now, cache)
 		if checkErr != nil {
 			// Fail Open 放行的请求照样会花钱：已经用租约判过的切片必须留在计划里，
 			// 否则那些切片在刷新窗口内会比实际更宽——正是本接线要修的缺口。
@@ -494,7 +507,7 @@ func (s *Service) rpmLimit(ctx context.Context, userQuota UserQuota, now time.Ti
 }
 
 // totalLimit 复刻第 1、2 维：Key/User 的永久总额度（带 5 分钟 Redis 缓存）。
-func (s *Service) totalLimit(ctx context.Context, e Entity, id int64, keyHash string, limit *float64, resetAt *time.Time, now time.Time) *guard.RateLimitBlock {
+func (s *Service) totalLimit(ctx context.Context, e Entity, id int64, keyHash string, limit *float64, resetAt *time.Time, now time.Time, cache windowCache) *guard.RateLimitBlock {
 	if limit == nil || *limit <= 0 {
 		return nil
 	}
@@ -507,7 +520,7 @@ func (s *Service) totalLimit(ctx context.Context, e Entity, id int64, keyHash st
 		return nil
 	}
 
-	current, err := s.totalCost(ctx, e, id, keyHash, resetAt, now)
+	current, err := s.totalCost(ctx, e, id, keyHash, resetAt, cache)
 	if err != nil {
 		s.log.Error("limit.check.total_failed", map[string]any{"error": err.Error(), "entity": string(e), "id": id})
 		return nil
@@ -536,20 +549,19 @@ func (s *Service) totalLimit(ctx context.Context, e Entity, id int64, keyHash st
 	}
 }
 
-// totalCost 读总额度用量：Redis 缓存 -> 账本 -> 回写缓存。
-func (s *Service) totalCost(ctx context.Context, e Entity, id int64, keyHash string, resetAt *time.Time, now time.Time) (float64, error) {
+// totalCost 读总额度用量：批量预取的 Redis 缓存 -> 账本 -> 回写缓存。
+func (s *Service) totalCost(ctx context.Context, e Entity, id int64, keyHash string, resetAt *time.Time, cache windowCache) (float64, error) {
 	if !s.windows.Ready() {
 		return s.totalCostFromLedger(ctx, e, id, keyHash, resetAt)
 	}
 	cacheKey := TotalCostCacheKey(e, id, keyHash, resetAt)
-	raw := s.windows.client.Raw()
-	cached, err := raw.Get(ctx, cacheKey).Result()
-	if err == nil {
-		return ParseCostText(cached), nil
-	}
-	if !isRedisMiss(err) {
-		s.log.Warn("limit.check.total_cache_read_failed", map[string]any{"error": err.Error()})
+	cached := cache[cacheKey]
+	if cached.Err != nil {
+		s.log.Warn("limit.check.total_cache_read_failed", map[string]any{"error": cached.Err.Error()})
 		return s.totalCostFromLedger(ctx, e, id, keyHash, resetAt)
+	}
+	if cached.Exists {
+		return cached.Value, nil
 	}
 
 	current, err := s.totalCostFromLedger(ctx, e, id, keyHash, resetAt)
@@ -560,7 +572,7 @@ func (s *Service) totalCost(ctx context.Context, e Entity, id int64, keyHash str
 	go func() {
 		writeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if setErr := raw.Set(writeCtx, cacheKey, FormatCostText(current), 300*time.Second).Err(); setErr != nil {
+		if setErr := s.windows.client.Raw().Set(writeCtx, cacheKey, FormatCostText(current), 300*time.Second).Err(); setErr != nil {
 			s.log.Warn("limit.check.total_cache_write_failed", map[string]any{"error": setErr.Error()})
 		}
 	}()
@@ -583,6 +595,40 @@ func (s *Service) totalCostFromLedger(ctx context.Context, e Entity, id int64, k
 	return ParseCostText(total), nil
 }
 
+// windowCache 是本次判定一次性取回的窗口缓存快照（键缺席按缺键处理）。
+type windowCache = map[string]WindowValue
+
+// totalCacheRead 给出总额度的缓存读；限额未设（或非正）时 ok=false。
+func totalCacheRead(e Entity, id int64, keyHash string, limit *float64, resetAt *time.Time) (CacheRead, bool) {
+	if limit == nil || *limit <= 0 {
+		return CacheRead{}, false
+	}
+	return CacheRead{Key: TotalCostCacheKey(e, id, keyHash, resetAt)}, true
+}
+
+// dimensionReads 收集各生效周期维度的缓存读（限额未设的维度不读）。
+func dimensionReads(dimensions []costDimension, now time.Time) []CacheRead {
+	reads := make([]CacheRead, 0, len(dimensions))
+	for _, dimension := range dimensions {
+		if dimension.amount == nil || *dimension.amount <= 0 {
+			continue
+		}
+		switch {
+		case dimension.period == Period5h && dimension.resetMode == ResetFixed:
+			reads = append(reads, CacheRead{Key: Cost5hKey(dimension.entity, dimension.id, ResetFixed), KeepTTL: true})
+		case isRollingWindow(dimension):
+			read, err := RollingCacheRead(dimension.entity, dimension.id, dimension.period, now)
+			if err != nil {
+				continue // 维度参数非法：判定循环里会按原路留痕并回退账本
+			}
+			reads = append(reads, read)
+		default:
+			reads = append(reads, CacheRead{Key: FixedWindowKey(dimension.entity, dimension.id, dimension.period, dimension.resetTime)})
+		}
+	}
+	return reads
+}
+
 // costDimension 是单个周期限额的判定输入。
 type costDimension struct {
 	entity  Entity
@@ -600,15 +646,15 @@ type costDimension struct {
 // costLimit 判定单个周期限额，返回当前用量与是否触顶。
 //
 // 读路径与 Node 一致：Redis 快路径 -> 缓存未命中/Redis 故障 -> 账本回退 -> 回写固定窗口缓存。
-func (s *Service) costLimit(ctx context.Context, dimension costDimension, now time.Time) (float64, bool, error) {
-	current, err := s.currentCost(ctx, dimension, now)
+func (s *Service) costLimit(ctx context.Context, dimension costDimension, now time.Time, cache windowCache) (float64, bool, error) {
+	current, err := s.currentCost(ctx, dimension, now, cache)
 	if err != nil {
 		return 0, false, err
 	}
 	return current, current >= *dimension.amount, nil
 }
 
-func (s *Service) currentCost(ctx context.Context, dimension costDimension, now time.Time) (float64, error) {
+func (s *Service) currentCost(ctx context.Context, dimension costDimension, now time.Time, cache windowCache) (float64, error) {
 	remoteOK := s.windows.Ready()
 
 	// 5h 固定窗口：Node 侧同样只读固定窗口键，没有账本回退（Redis 不可用时计为 0）。
@@ -616,25 +662,30 @@ func (s *Service) currentCost(ctx context.Context, dimension costDimension, now 
 		if !remoteOK {
 			return 0, nil
 		}
-		state, err := s.windows.Fixed5hWindowState(ctx, dimension.entity, dimension.id, now)
-		if err != nil {
-			s.log.Error("limit.check.fixed5h_failed", map[string]any{"error": err.Error()})
+		value := cache[Cost5hKey(dimension.entity, dimension.id, ResetFixed)]
+		if value.Err != nil {
+			s.log.Error("limit.check.fixed5h_failed", map[string]any{"error": value.Err.Error()})
 			return s.costFromLedger(ctx, dimension, now)
 		}
-		return state.Current, nil
+		return value.Value, nil
 	}
 
 	if remoteOK {
 		// 滚动窗口（5h rolling / daily rolling）与固定窗口在 Redis 里是两种表示，读法不同。
 		if isRollingWindow(dimension) {
-			current, exists, err := s.windows.RollingCost(ctx, dimension.entity, dimension.id, dimension.period, now)
-			if err != nil {
-				s.log.Error("limit.check.rolling_failed", map[string]any{"error": err.Error(), "period": string(dimension.period)})
+			read, readErr := RollingCacheRead(dimension.entity, dimension.id, dimension.period, now)
+			if readErr != nil {
+				s.log.Error("limit.check.rolling_failed", map[string]any{"error": readErr.Error(), "period": string(dimension.period)})
+				return s.costFromLedger(ctx, dimension, now)
+			}
+			value := cache[read.Key]
+			if value.Err != nil {
+				s.log.Error("limit.check.rolling_failed", map[string]any{"error": value.Err.Error(), "period": string(dimension.period)})
 				return s.costFromLedger(ctx, dimension, now)
 			}
 			// 值非 0，或键确实存在（说明窗口内真的是 0）时无需回退。
-			if current != 0 || exists {
-				return current, nil
+			if value.Value != 0 || value.Exists {
+				return value.Value, nil
 			}
 			s.log.Info("limit.check.cache_miss", map[string]any{
 				"entity": string(dimension.entity),
@@ -643,21 +694,21 @@ func (s *Service) currentCost(ctx context.Context, dimension costDimension, now 
 			})
 			return s.costFromLedger(ctx, dimension, now)
 		}
-		return s.fixedCost(ctx, dimension, now)
+		return s.fixedCost(ctx, dimension, now, cache)
 	}
 
 	return s.costFromLedger(ctx, dimension, now)
 }
 
 // fixedCost 读固定窗口键（daily fixed / 周 / 月）。
-func (s *Service) fixedCost(ctx context.Context, dimension costDimension, now time.Time) (float64, error) {
+func (s *Service) fixedCost(ctx context.Context, dimension costDimension, now time.Time, cache windowCache) (float64, error) {
 	key := FixedWindowKey(dimension.entity, dimension.id, dimension.period, dimension.resetTime)
-	current, exists, err := s.windows.FixedCost(ctx, key)
-	if err != nil {
-		s.log.Error("limit.check.fixed_read_failed", map[string]any{"error": err.Error(), "period": string(dimension.period)})
+	value := cache[key]
+	if value.Err != nil {
+		s.log.Error("limit.check.fixed_read_failed", map[string]any{"error": value.Err.Error(), "period": string(dimension.period)})
 		return s.costFromLedger(ctx, dimension, now)
 	}
-	if !exists {
+	if !value.Exists {
 		s.log.Info("limit.check.cache_miss", map[string]any{
 			"entity": string(dimension.entity),
 			"period": string(dimension.period),
@@ -666,7 +717,7 @@ func (s *Service) fixedCost(ctx context.Context, dimension costDimension, now ti
 		})
 		return s.costFromLedger(ctx, dimension, now)
 	}
-	return current, nil
+	return value.Value, nil
 }
 
 // costFromLedger 复刻 checkCostLimitsFromDatabase 的窗口口径，并按需回写固定窗口缓存。
@@ -845,9 +896,4 @@ func defaultMode(mode ResetMode, fallback ResetMode) ResetMode {
 		return fallback
 	}
 	return mode
-}
-
-// isRedisMiss 判定是不是「键不存在」（go-redis 的 redis.Nil）。
-func isRedisMiss(err error) bool {
-	return errors.Is(err, redis.Nil)
 }

@@ -46,14 +46,17 @@ type ledgerCall struct {
 
 // fakeLedger 是账本回退的桩：按实体标识给出合计值。
 type fakeLedger struct {
-	totals   map[string]float64
-	ranges   map[string]float64
-	calls    []ledgerCall
-	totalErr error
-	rangeErr error
+	totals map[string]float64
+	ranges map[string]float64
+	calls  []ledgerCall
+	// totalCalls 数总额度回退次数（calls 只数周期窗口）。
+	totalCalls int
+	totalErr   error
+	rangeErr   error
 }
 
 func (f *fakeLedger) SumLedgerTotalCost(_ context.Context, entityType store.LedgerEntityType, entityID any, _ *time.Time) (string, error) {
+	f.totalCalls++
 	if f.totalErr != nil {
 		return "", f.totalErr
 	}

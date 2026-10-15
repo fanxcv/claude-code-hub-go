@@ -12,6 +12,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/ratelimit"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 )
 
 // LeaseService 是 Node `src/lib/rate-limit/lease-service.ts` 的等价实现：把「DB 权威用量」
@@ -41,6 +42,10 @@ type LeaseService struct {
 
 	decrementScript *redis.Script
 	settleScript    *redis.Script
+
+	// refreshGroup 是回表刷新的进程内单飞：租约过期的瞬间（同实例内的并发请求）只放一次
+	// 回表 + 写回，其余调用方共享同一份结果，见 refreshSingleFlight。
+	refreshGroup singleflight.Group
 }
 
 // leaseSettlementMarkerTTLSeconds 对应 Node `SETTLEMENT_MARKER_TTL_SECONDS`（5 分钟）。
@@ -141,13 +146,13 @@ func (l *LeaseService) GetCostLease(ctx context.Context, params GetCostLeasePara
 			if !IsLeaseExpired(lease, l.now().UnixMilli()) {
 				if lease.Window == string(LeaseWindow5h) && lease.ResetMode == string(ResetFixed) &&
 					lease.WindowResetAtMS != nil && *lease.WindowResetAtMS <= l.now().UnixMilli() {
-					return l.refreshCostLease(ctx, params)
+					return l.refreshSingleFlight(ctx, params)
 				}
 				if lease.LimitAmount != params.LimitAmount {
-					return l.refreshCostLease(ctx, params)
+					return l.refreshSingleFlight(ctx, params)
 				}
 				if l.costResetChanged(lease, params.CostResetAt) {
-					return l.refreshCostLease(ctx, params)
+					return l.refreshSingleFlight(ctx, params)
 				}
 				return &lease, true
 			}
@@ -156,7 +161,39 @@ func (l *LeaseService) GetCostLease(ctx context.Context, params GetCostLeasePara
 		l.log.Warn("limit.lease.cache_read_failed", map[string]any{"key": leaseKey, "error": err.Error()})
 	}
 
-	return l.refreshCostLease(ctx, params)
+	return l.refreshSingleFlight(ctx, params)
+}
+
+// refreshSingleFlight 是回表刷新的唯一入口：同一份租约被并发请求同时打中（租约刚过期）时，
+// 进程内只放一次回表 + 写回，其余的共享同一份结果，不再各自打一次 DB。
+//
+// 单飞键包含全部影响切片结果的参数：配额快照可能前后不同（限额、重置时刻、密钥串），
+// 只按键名合并会把一份切片的余额发给参数不同的调用方。
+//
+// 跨实例的重复回表不在本单飞范围内（每个进程各有自己的 singleflight）；只承诺「同实例合并」。
+func (l *LeaseService) refreshSingleFlight(ctx context.Context, params GetCostLeaseParams) (*BudgetLease, bool) {
+	result, _, _ := l.refreshGroup.Do(refreshFlightKey(params), func() (any, error) {
+		lease, ok := l.refreshCostLease(ctx, params)
+		return leaseRefreshResult{lease: lease, ok: ok}, nil
+	})
+	shared, _ := result.(leaseRefreshResult)
+	return shared.lease, shared.ok
+}
+
+// leaseRefreshResult 是单飞的共享结果：同一份租约会被多个调用方只读读取。
+type leaseRefreshResult struct {
+	lease *BudgetLease
+	ok    bool
+}
+
+// refreshFlightKey 由租约键 + 切片参数拼成单飞键。
+func refreshFlightKey(params GetCostLeaseParams) string {
+	key := BuildLeaseKey(params.Entity, params.EntityID, params.Window, params.ResetMode) +
+		"|" + FormatCostText(params.LimitAmount) + "|" + params.ResetTime + "|" + params.KeyHash
+	if params.CostResetAt != nil {
+		key += "|" + strconv.FormatInt(params.CostResetAt.UnixMilli(), 10)
+	}
+	return key
 }
 
 // costResetChanged 报告 costResetAt 是否与租约快照不同（nil 与 nil 视为相同）。

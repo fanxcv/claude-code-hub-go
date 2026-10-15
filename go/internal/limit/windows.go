@@ -56,38 +56,137 @@ func (w *CostWindows) Ready() bool {
 	return w.client != nil && w.client.Raw() != nil
 }
 
+// RollingRead 是滚动窗口读的入参：脚本常量名 + 窗口长度 + 取值时刻。
+type RollingRead struct {
+	ScriptConst  string
+	WindowMillis int64
+	Now          time.Time
+}
+
+// CacheRead 是批量读里的一项：Key 为缓存键；Rolling 非空按滚动窗口（EVAL）读，否则按字符串（GET）读；
+// KeepTTL 为真时同批取回剩余 TTL（5h 固定窗口由 TTL 反推重置时刻）。
+type CacheRead struct {
+	Key     string
+	Rolling *RollingRead
+	KeepTTL bool
+}
+
+// WindowValue 是批量读出的单个窗口取值。Err 只影响该键，同批其它键照常可用。
+type WindowValue struct {
+	Value  float64
+	Exists bool
+	TTL    time.Duration
+	Err    error
+}
+
+// ReadWindows 一次管道读取一批窗口键（一次网络往返），返回按键索引的取值。
+//
+// 语义与逐个读一致：缺键是 Exists=false 而不是错误，单键错误记在该键上由调用方按原有 fail-open
+// 口径处理。Redis 不可用时返回空表，调用方各自的「Redis 不可用」分支照旧生效。
+func (w *CostWindows) ReadWindows(ctx context.Context, reads []CacheRead) map[string]WindowValue {
+	values := make(map[string]WindowValue, len(reads))
+	if len(reads) == 0 || !w.Ready() {
+		return values
+	}
+
+	pipe := w.client.Raw().Pipeline()
+	gets := make([]*redis.StringCmd, len(reads))
+	evals := make([]*redis.Cmd, len(reads))
+	exists := make([]*redis.IntCmd, len(reads))
+	ttls := make([]*redis.DurationCmd, len(reads))
+	for index, read := range reads {
+		if read.Rolling != nil {
+			source, err := w.scriptSource(read.Rolling.ScriptConst)
+			if err != nil {
+				values[read.Key] = WindowValue{Err: err}
+				continue
+			}
+			// 管道里发脚本正文：管道内命令只在 Exec 时统一执行，此时 NOSCRIPT 已无重试机会（与 queueRolling 同理）。
+			evals[index] = pipe.Eval(ctx, source, []string{read.Key}, read.Rolling.Now.UnixMilli(), read.Rolling.WindowMillis)
+			// 值为 0 时要判键是否存在（见 RollingCost 的注释）：同批取回，免得再要一次往返。
+			exists[index] = pipe.Exists(ctx, read.Key)
+		} else {
+			gets[index] = pipe.Get(ctx, read.Key)
+		}
+		if read.KeepTTL {
+			ttls[index] = pipe.TTL(ctx, read.Key)
+		}
+	}
+	// Exec 只回第一个错误，而缺键（redis.Nil）本就常见；单键成败按各自的 Cmd 判定。
+	_, _ = pipe.Exec(ctx)
+
+	for index, read := range reads {
+		if _, settled := values[read.Key]; settled {
+			continue
+		}
+		value := WindowValue{}
+		if read.Rolling == nil {
+			raw, err := gets[index].Result()
+			switch {
+			case errors.Is(err, redis.Nil):
+			case err != nil:
+				value.Err = err
+			default:
+				value.Value, value.Exists = ParseCostText(raw), true
+			}
+		} else {
+			raw, err := evals[index].Result()
+			switch {
+			case err != nil:
+				value.Err = err
+			default:
+				value.Value = ParseCostText(raw)
+				value.Exists = value.Value != 0
+				if !value.Exists {
+					count, existsErr := exists[index].Result()
+					if existsErr != nil {
+						value.Err = existsErr
+					} else {
+						value.Exists = count > 0
+					}
+				}
+			}
+		}
+		if read.KeepTTL && value.Err == nil && ttls[index] != nil {
+			if ttl, err := ttls[index].Result(); err == nil {
+				value.TTL = ttl
+			}
+		}
+		values[read.Key] = value
+	}
+	return values
+}
+
+// RollingCacheRead 给出滚动窗口的批量读入参（周期非法是调用方缺陷，不静默算成零值）。
+func RollingCacheRead(e Entity, id int64, period Period, now time.Time) (CacheRead, error) {
+	switch period {
+	case Period5h:
+		return CacheRead{
+			Key:     Cost5hKey(e, id, ResetRolling),
+			Rolling: &RollingRead{ScriptConst: "GET_COST_5H_ROLLING_WINDOW", WindowMillis: window5hMillis, Now: now},
+		}, nil
+	case PeriodDaily:
+		return CacheRead{
+			Key:     CostDailyRollingKey(e, id),
+			Rolling: &RollingRead{ScriptConst: "GET_COST_DAILY_ROLLING_WINDOW", WindowMillis: window24hMillis, Now: now},
+		}, nil
+	default:
+		return CacheRead{}, fmt.Errorf("limit: 不支持的滚动周期 %q", period)
+	}
+}
+
 // RollingCost 读滚动窗口累计值（5h 或 daily），并报告键是否存在。
 func (w *CostWindows) RollingCost(ctx context.Context, e Entity, id int64, period Period, now time.Time) (float64, bool, error) {
 	// 参数先判：周期非法是调用方缺陷，不该被「Redis 不可用」掩盖成零值。
-	var constName, key string
-	var window int64
-	switch period {
-	case Period5h:
-		constName, key, window = "GET_COST_5H_ROLLING_WINDOW", Cost5hKey(e, id, ResetRolling), window5hMillis
-	case PeriodDaily:
-		constName, key, window = "GET_COST_DAILY_ROLLING_WINDOW", CostDailyRollingKey(e, id), window24hMillis
-	default:
-		return 0, false, fmt.Errorf("limit: 不支持的滚动周期 %q", period)
+	read, err := RollingCacheRead(e, id, period, now)
+	if err != nil {
+		return 0, false, err
 	}
 	if !w.Ready() {
 		return 0, false, nil
 	}
-
-	value, err := w.client.EvalConst(ctx, constName, []string{key}, []any{now.UnixMilli(), window})
-	if err != nil {
-		return 0, false, err
-	}
-	current := ParseCostText(value)
-	if current != 0 {
-		return current, true, nil
-	}
-	// 值为 0 时再判键是否存在：脚本自身会清理过期成员，故 0 既可能是「真的没消费」，
-	// 也可能是「键被清空」（此时必须回退到账本，否则 Redis 一被清空就能超支）。
-	exists, err := w.client.Raw().Exists(ctx, key).Result()
-	if err != nil {
-		return 0, false, err
-	}
-	return current, exists > 0, nil
+	value := w.ReadWindows(ctx, []CacheRead{read})[read.Key]
+	return value.Value, value.Exists, value.Err
 }
 
 // FixedCost 读固定窗口累计值（daily fixed / weekly / monthly / 5h fixed 的键形制）。
@@ -95,14 +194,8 @@ func (w *CostWindows) FixedCost(ctx context.Context, key string) (float64, bool,
 	if !w.Ready() {
 		return 0, false, nil
 	}
-	raw, err := w.client.Raw().Get(ctx, key).Result()
-	if errors.Is(err, redis.Nil) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	return ParseCostText(raw), true, nil
+	value := w.ReadWindows(ctx, []CacheRead{{Key: key}})[key]
+	return value.Value, value.Exists, value.Err
 }
 
 // Fixed5hWindowState 读 5h 固定窗口：值 + 由 TTL 反推的重置时刻。
@@ -110,29 +203,21 @@ func (w *CostWindows) Fixed5hWindowState(ctx context.Context, e Entity, id int64
 	if !w.Ready() {
 		return Fixed5hState{}, nil
 	}
-	key := Cost5hKey(e, id, ResetFixed)
-	pipe := w.client.Raw().Pipeline()
-	getCmd := pipe.Get(ctx, key)
-	ttlCmd := pipe.TTL(ctx, key)
-	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		return Fixed5hState{}, err
+	read := CacheRead{Key: Cost5hKey(e, id, ResetFixed), KeepTTL: true}
+	value := w.ReadWindows(ctx, []CacheRead{read})[read.Key]
+	if value.Err != nil {
+		return Fixed5hState{}, value.Err
 	}
-	raw, err := getCmd.Result()
-	if errors.Is(err, redis.Nil) {
-		return Fixed5hState{}, nil
-	}
-	if err != nil {
-		return Fixed5hState{}, err
-	}
+	return Fixed5hState{Current: value.Value, Exists: value.Exists, ResetAt: resetAtFromTTL(now, value.TTL)}, nil
+}
 
-	state := Fixed5hState{Current: ParseCostText(raw), Exists: true}
-	ttl := ttlCmd.Val()
-	if ttl > 0 {
-		seconds := int64(ttl / time.Second)
-		resetAt := now.Add(time.Duration(seconds) * time.Second)
-		state.ResetAt = &resetAt
+// resetAtFromTTL 由剩余 TTL 反推重置时刻；键不存在或没有 TTL 时为空。
+func resetAtFromTTL(now time.Time, ttl time.Duration) *time.Time {
+	if ttl <= 0 {
+		return nil
 	}
-	return state, nil
+	resetAt := now.Add(ttl.Truncate(time.Second))
+	return &resetAt
 }
 
 // WarmFixed 把账本回退算出的固定窗口值写回 Redis（对应 Node 侧 Cache Warming）。
@@ -251,7 +336,7 @@ func (w *CostWindows) queueDaily(ctx context.Context, pipe redis.Pipeliner, e En
 //
 // 脚本取不到时只记日志：单条记账失败不应让整次请求失败（Node 侧同样静默吞掉）。
 func (w *CostWindows) queueRolling(ctx context.Context, pipe redis.Pipeliner, key string, cost float64, now time.Time, windowMillis int64, requestID string, ttlSeconds int64) {
-	source, err := w.rollingScriptSource()
+	source, err := w.scriptSource("TRACK_COST_ROLLING_WINDOW")
 	if err != nil {
 		w.log.Error("limit.track.script_missing", map[string]any{"error": err.Error(), "key": key})
 		return
@@ -270,13 +355,14 @@ func (w *CostWindows) queueRolling(ctx context.Context, pipe redis.Pipeliner, ke
 	}
 }
 
-func (w *CostWindows) rollingScriptSource() (string, error) {
+// scriptSource 取脚本正文（管道内只发正文：见 queueRolling）。
+func (w *CostWindows) scriptSource(constName string) (string, error) {
 	if w.client == nil || w.client.Scripts() == nil {
 		return "", errors.New("limit: 脚本注册表缺失")
 	}
-	script, ok := w.client.Scripts().LookupConst("TRACK_COST_ROLLING_WINDOW")
+	script, ok := w.client.Scripts().LookupConst(constName)
 	if !ok {
-		return "", errors.New("limit: 未登记的脚本 TRACK_COST_ROLLING_WINDOW")
+		return "", fmt.Errorf("limit: 未登记的脚本 %s", constName)
 	}
 	return script.Source, nil
 }

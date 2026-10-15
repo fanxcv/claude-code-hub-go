@@ -68,11 +68,18 @@ func (s *Service) CheckProviderCostLimits(
 		},
 	}
 
+	// 与主判定路径同一套读法：先批量取回本次要看的窗口键，再逐维判定（不另写一份窗口读法）。
+	reads := dimensionReads(dimensions, now)
+	if read, ok := totalCacheRead(EntityProvider, providerID, "", in.LimitTotalUSD, in.CostResetAt); ok {
+		reads = append(reads, read)
+	}
+	cache := s.windows.ReadWindows(ctx, reads)
+
 	for _, dimension := range dimensions {
 		if dimension.amount == nil || *dimension.amount <= 0 {
 			continue
 		}
-		current, exceeded, err := s.costLimit(ctx, dimension, now)
+		current, exceeded, err := s.costLimit(ctx, dimension, now, cache)
 		if err != nil {
 			s.log.Error("limit.provider_cost.failed", map[string]any{
 				"providerId": providerID,
@@ -87,7 +94,7 @@ func (s *Service) CheckProviderCostLimits(
 	}
 
 	if in.LimitTotalUSD != nil && *in.LimitTotalUSD > 0 {
-		current, err := s.totalCost(ctx, EntityProvider, providerID, "", in.CostResetAt, now)
+		current, err := s.totalCost(ctx, EntityProvider, providerID, "", in.CostResetAt, cache)
 		if err != nil {
 			s.log.Error("limit.provider_total_cost.failed", map[string]any{
 				"providerId": providerID,
