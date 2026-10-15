@@ -1,8 +1,8 @@
 "use client";
 
 import { NextIntlClientProvider } from "next-intl";
-import type { ReactNode } from "react";
-import { getClientMessages } from "@/i18n/client-messages";
+import { type ReactNode, use } from "react";
+import { loadClientMessages } from "@/i18n/client-messages";
 
 interface I18nProviderProps {
   locale: string;
@@ -22,17 +22,14 @@ interface I18nProviderProps {
  * 以 props 传入：props 会跨 server/client 边界序列化进每个路由的 RSC flight payload，
  * 实测造成全站约 88 MiB 的词表重复（每路由每语言 3 份 payload + 1 份 HTML 内联）。
  *
- * 静态 import 保证词表在预渲染期同步可用——本仓有依赖预渲染产出的本地化文案
- * （usage-doc 约 156 KiB），改成异步加载会丢文案并造成 hydration 不一致。
+ * 词表按 locale 各成一份 async chunk（原来的静态 import 会把两种语言打进同一个 eager chunk），
+ * 用 `use()` 挂住：预渲染期服务端等这份本地 import 落地、客户端 hydration 先取当前语言那份，
+ * 因而首帧文案与语言都不回退。
  */
 export function I18nProvider({ locale, timeZone, now, children }: I18nProviderProps) {
+  const messages = use(loadClientMessages(locale));
   return (
-    <NextIntlClientProvider
-      locale={locale}
-      messages={getClientMessages(locale)}
-      timeZone={timeZone}
-      now={now}
-    >
+    <NextIntlClientProvider locale={locale} messages={messages} timeZone={timeZone} now={now}>
       {children}
     </NextIntlClientProvider>
   );

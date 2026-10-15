@@ -200,6 +200,32 @@ const CountUp = ({
   );
 };
 
+/** 秒级时钟：只有自己每秒重渲染（原先这一拍放在页面组件上，会把整块看板连同 4 张 recharts 图一起重渲）。 */
+const LiveClock = ({ className }: { className: string }) => {
+  const [time, setTime] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return <div className={className}>{time.toLocaleTimeString()}</div>;
+};
+
+/**
+ * 请求趋势只需知道「当前第几小时」（原先由页面把每秒变化的 `currentTime` 传进来，
+ * 于是整张图每秒重算一遍）。按需派生：逐分钟对表，只有跨小时才更新状态。
+ */
+function useCurrentUtcHour(): number {
+  const [hour, setHour] = useState(() => new Date().getUTCHours());
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const current = new Date().getUTCHours();
+      setHour((previous) => (previous === current ? previous : current));
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  return hour;
+}
+
 /**
  * ============================================================================
  * 核心业务组件
@@ -552,7 +578,6 @@ const TrafficTrend = ({
   data,
   theme,
   t,
-  currentTime,
 }: {
   data: Array<{
     hour: number;
@@ -560,10 +585,9 @@ const TrafficTrend = ({
   }>;
   theme: (typeof THEMES)[keyof typeof THEMES];
   t: (key: string) => string;
-  currentTime: Date;
 }) => {
   // 只显示到当前小时的数据（截断未来时间）
-  const currentHour = currentTime.getUTCHours();
+  const currentHour = useCurrentUtcHour();
   const filteredData = data
     .filter((item) => item.hour <= currentHour)
     .map((item) => ({
@@ -715,7 +739,6 @@ const ModelDistribution = ({
 export default function BigScreenPage() {
   const t = useTranslations("bigScreen");
   const [themeMode, setThemeMode] = useState("dark");
-  const [currentTime, setCurrentTime] = useState(new Date());
 
   // 语言切换
   const currentLocale = useLocale() as Locale;
@@ -732,12 +755,6 @@ export default function BigScreenPage() {
   };
 
   const theme = THEMES[themeMode as keyof typeof THEMES];
-
-  // 时钟
-  useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // 实时数据：与全站一致用 react-query（原先误用幽灵依赖 swr，其仅因 @lobehub/ui 传递引入）。
   // 2 秒轮询；后台不刷新与失焦不刷新沿用全局默认（providers.tsx 的 QUERY_CLIENT_DEFAULTS）。
@@ -809,9 +826,7 @@ export default function BigScreenPage() {
 
           <div className="flex items-center gap-6">
             <div className={`text-right hidden md:block ${theme.text}`}>
-              <div className="text-xl font-mono font-bold tabular-nums">
-                {currentTime.toLocaleTimeString()}
-              </div>
+              <LiveClock className="text-xl font-mono font-bold tabular-nums" />
             </div>
             <div className="h-6 w-[1px] bg-white/10" />
             <div className="flex gap-2">
@@ -908,7 +923,7 @@ export default function BigScreenPage() {
               <ProviderQuotas providers={providers} theme={theme} t={t} />
             </div>
             <div className={`flex-[2] ${theme.card} rounded-lg p-4`}>
-              <TrafficTrend data={trendData} theme={theme} t={t} currentTime={currentTime} />
+              <TrafficTrend data={trendData} theme={theme} t={t} />
             </div>
             <div className={`flex-[1] ${theme.card} rounded-lg p-4`}>
               <ModelDistribution data={modelDist} theme={theme} t={t} />

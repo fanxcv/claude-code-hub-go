@@ -1,6 +1,6 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { getUsageLogsBatch } from "@/lib/api-client/v1/actions/usage-logs";
 import type { UsageLogsBatchResult } from "@/types/usage-logs";
 import { type UsageLogsStreamStatus, useUsageLogsStream } from "./usage-logs-stream";
@@ -555,8 +555,28 @@ interface UseLogsRefreshEngineOptions {
 }
 
 /**
+ * 页面是否可见（后台标签页 = 不可见）。
+ *
+ * 用 `useSyncExternalStore` 订阅 `visibilitychange`：SSR/首帧快照取 true，客户端以真实值订正，
+ * 不会造成 hydration 不一致。
+ */
+function usePageVisible(): boolean {
+  return useSyncExternalStore(
+    (onVisibilityChange) => {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      return () => document.removeEventListener("visibilitychange", onVisibilityChange);
+    },
+    () => !document.hidden,
+    () => true
+  );
+}
+
+/**
  * 自动刷新引擎：`pull` 模式按间隔取新行，`push` 模式订阅 SSE 信号后取新行；
  * 两者都另有首页兜底重取。返回推送连接状态供界面显示。
+ *
+ * 页面不可见（后台标签页/锁屏）时暂停定时拉取：没人看的窗口不值得每 3 秒打一次整页载荷。
+ * 暂停与「浏览历史」共用同一条路——信号照收（推送连接不拆），恢复可见时补一次。
  */
 export function useLogsRefreshEngine({
   queryKey,
@@ -568,6 +588,8 @@ export function useLogsRefreshEngine({
 }: UseLogsRefreshEngineOptions): { streamStatus: UsageLogsStreamStatus } {
   const queryClient = useQueryClient();
   const [streamStatus, setStreamStatus] = useState<UsageLogsStreamStatus>("idle");
+  const pageVisible = usePageVisible();
+  const active = enabled && pageVisible;
   const inFlightRef = useRef(false);
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
@@ -575,8 +597,8 @@ export function useLogsRefreshEngine({
   queryKeyRef.current = queryKey;
   // 「暂停」与间隔都放 ref：它们要参与信号处理却又不应重建回调（重建会被 useUsageLogsStream
   // 当作新回调，而该 hook 内部已用 ref 挡住，不必要地重建徒增可读性成本）。
-  const enabledRef = useRef(enabled);
-  enabledRef.current = enabled;
+  const enabledRef = useRef(active);
+  enabledRef.current = active;
   const intervalMsRef = useRef(intervalMs);
   intervalMsRef.current = intervalMs;
   // 回调放 ref：调用方若传内联箭头函数，其身份每次渲染都变；若把它挂在订阅的 effect 依赖上
@@ -732,10 +754,10 @@ export function useLogsRefreshEngine({
 
   // 轮询模式：按间隔取新行。
   useEffect(() => {
-    if (!enabled || mode !== "pull" || intervalMs <= 0) return;
+    if (!active || mode !== "pull" || intervalMs <= 0) return;
     const timer = setInterval(() => void pullNewRows(), intervalMs);
     return () => clearInterval(timer);
-  }, [enabled, mode, intervalMs, pullNewRows]);
+  }, [active, mode, intervalMs, pullNewRows]);
 
   // 首页兜底重取：两种模式都需要（在途行的用量/计费在结算后才写）。
   //
@@ -744,32 +766,32 @@ export function useLogsRefreshEngine({
   // `` §0-⑦；若将来要降，判据与实测见
   // `` 的「用户裁决」一节（方案已备、未启用）。
   useEffect(() => {
-    if (!enabled || intervalMs <= 0) return;
+    if (!active || intervalMs <= 0) return;
     const timer = setInterval(() => void refreshFirstPage(), FIRST_PAGE_REFRESH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [enabled, intervalMs, refreshFirstPage]);
+  }, [active, intervalMs, refreshFirstPage]);
 
   // 非终态行的定向重读：按同一间隔（两种模式都跑）——推送模式下「某行结算」不产生信号
   // （id 不变、无新行），故这一路只能靠定时器补。仅在**存在非终态行**时发请求。
   // 代价（有意，登记在此）：请求量与列表刷新同阶（+1/interval），上限 = 在途行数决定的窗口，
   // 空闲时为零；实测对照与判据见。
   useEffect(() => {
-    if (!enabled || intervalMs <= 0) return;
+    if (!active || intervalMs <= 0) return;
     const timer = setInterval(() => void refreshNonTerminalRows(), intervalMs);
     return () => clearInterval(timer);
-  }, [enabled, intervalMs, refreshNonTerminalRows]);
+  }, [active, intervalMs, refreshNonTerminalRows]);
 
-  // 从「暂停」恢复（如从历史浏览回到顶部、重新打开自动刷新开关）时补一次：
+  // 从「暂停」恢复（如从历史浏览回到顶部、重新打开自动刷新开关、后台标签页回到前台）时补一次：
   // 推送模式的信号在暂停期间已经丢了，必须主动补，否则会一直缺一段。
   const wasEnabledRef = useRef(false);
   useEffect(() => {
     const wasEnabled = wasEnabledRef.current;
-    wasEnabledRef.current = enabled;
-    if (!enabled || wasEnabled) return;
+    wasEnabledRef.current = active;
+    if (!active || wasEnabled) return;
     // 暂停期间攒下的信号按**合并后的窗口**补（连 minId-1 那段一起带回来）；没攒下就按高水位补。
     if (pendingSignalRef.current !== null) flushPendingSignal();
     else void pullNewRows();
-  }, [enabled, flushPendingSignal, pullNewRows]);
+  }, [active, flushPendingSignal, pullNewRows]);
 
   return { streamStatus };
 }

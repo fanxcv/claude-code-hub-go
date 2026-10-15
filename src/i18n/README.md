@@ -25,7 +25,7 @@
 | [routing.ts](routing.ts) | `defineRouting`（`localePrefix: "always"`）与类型安全导航（`Link`/`redirect`/`useRouter`/`usePathname`） |
 | [pathname.ts](pathname.ts) | 语种判定与「导航用 pathname」归一（登录后回跳的安全兜底也用它） |
 | [request.ts](request.ts) | 构建期的 `getRequestConfig`：语种归一 → 动态导入 `messages/<locale>` → 解析系统时区 |
-| [client-messages.ts](client-messages.ts) | `getClientMessages(locale)`：给客户端 Provider（[../components/i18n-provider.tsx](../components/i18n-provider.tsx)）按语种装配词表 |
+| [client-messages.ts](client-messages.ts) | `loadClientMessages(locale)`：给客户端 Provider（[../components/i18n-provider.tsx](../components/i18n-provider.tsx)）按语种装配词表（每语种一份 async chunk，首屏只带当前语言） |
 | [retired-locale.ts](retired-locale.ts) | `retiredLocaleRedirectHtml()`：退役前缀的重定向壳 HTML（导出脚本写入每个退役前缀目录） |
 
 ## 语种如何决定（静态导出形态）

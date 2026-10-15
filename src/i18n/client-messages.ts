@@ -1,8 +1,6 @@
-import en from "@messages/en";
-import zhCN from "@messages/zh-CN";
 import type { NextIntlClientProvider } from "next-intl";
 import type { ComponentProps } from "react";
-import type { Locale } from "./config";
+import { defaultLocale, type Locale, locales } from "./config";
 
 /**
  * next-intl provider 实际接受的词表类型。
@@ -11,25 +9,34 @@ import type { Locale } from "./config";
 type ClientMessages = NonNullable<ComponentProps<typeof NextIntlClientProvider>["messages"]>;
 
 /**
- * 客户端词表来源（每 locale 一份完整 catalog）。
+ * 客户端词表：按 locale 各拆一份 async chunk。
  *
- * 为什么不从服务端 layout 以 props 传 `messages`：
- * 跨 server/client 边界的 props 会被序列化进**每个路由、每个 locale** 的 RSC flight payload。
- * 实测 `zh-CN/dashboard` 的 payload 里词表占 65%（178 KiB / 275 KiB），而该 payload 每路由
- * 存 3 份（`index.txt` / `__next._full.txt` / `__next.$d$locale.txt`）另有 HTML 内联一份，
- * 于是全站仅词表就占约 88 MiB。改为在客户端模块内引用后，词表只作为共享 JS chunk 存在
- * （全站一份），不再进 payload。
+ * 这里曾是两份静态 `import`（`@messages/zh-CN` + `@messages/en`）：两份完整 catalog 落进同一个
+ * eager chunk（实测 raw 577,580 B / gzip 176,173 B），被 66/73 个导出 html 引用（含 `/en/login`）
+ * ——首屏白带另一种语言。改成按 locale `import()` 后，每种语言各一份 chunk，单次首屏只取当前语言。
  *
- * 为什么是静态 `import` 而非动态 `import()`：
- * 本项目有多处（如 usage-doc 的约 156 KiB）**预渲染**产出的本地化文案，需要词表在预渲染期
- * 同步可用；动态导入会让首帧拿不到词表，既丢文案又造成 hydration 不一致。
+ * 词表在**预渲染期**仍需同步可用（否则首帧丢文案），所以取用点（`@/components/i18n-provider`）
+ * 用 `use()` 挂住：服务端预渲染会等这份本地 import 落地（无网络），客户端 hydration 先取到当前
+ * 语言的 chunk，两侧是同一份词表，不会语言回退。
  */
-const catalogs: Record<Locale, ClientMessages> = {
-  "zh-CN": zhCN,
-  en,
+const loaders: Record<Locale, () => Promise<ClientMessages>> = {
+  "zh-CN": () => import("@messages/zh-CN").then((module) => module.default),
+  en: () => import("@messages/en").then((module) => module.default),
 };
 
+/**
+ * 每个 locale 只 import 一次：`use()` 要求 promise 身份稳定，否则每次渲染都重新挂起。
+ * （catalog 缺失属构建期错误，失败态无需重置——重置只会把同一个错误再抛一遍。）
+ */
+const pendingByLocale = new Map<Locale, Promise<ClientMessages>>();
+
 /** 取某 locale 的完整词表；未知 locale 回落到默认语言。 */
-export function getClientMessages(locale: string): ClientMessages {
-  return catalogs[locale as Locale] ?? catalogs["zh-CN"];
+export function loadClientMessages(locale: string): Promise<ClientMessages> {
+  const key: Locale = locales.includes(locale as Locale) ? (locale as Locale) : defaultLocale;
+  let pending = pendingByLocale.get(key);
+  if (!pending) {
+    pending = loaders[key]();
+    pendingByLocale.set(key, pending);
+  }
+  return pending;
 }
