@@ -87,24 +87,21 @@ type ProviderCircuitConfig struct {
 // Disabled 复刻 isCircuitBreakerDisabled：阈值非法或非正即关闭熔断。
 func (c ProviderCircuitConfig) Disabled() bool { return c.FailureThreshold <= 0 }
 
-// ReadProviderCircuitConfig 读供应商熔断配置；缺失或读取失败时取默认值（Node 同样降级到默认）。
-func ReadProviderCircuitConfig(
-	ctx context.Context,
-	redisClient redis.UniversalClient,
-	providerID int64,
-) ProviderCircuitConfig {
-	fallback := ProviderCircuitConfig{
+// defaultProviderCircuitConfig 是配置缺失或读取失败时的默认值（Node 同样降级到默认）。
+func defaultProviderCircuitConfig() ProviderCircuitConfig {
+	return ProviderCircuitConfig{
 		FailureThreshold:         DefaultFailureThreshold,
 		OpenDurationMS:           DefaultOpenDurationMS,
 		HalfOpenSuccessThreshold: DefaultHalfOpenSuccessThreshold,
 		OpenDurationIncrementMS:  DefaultOpenDurationIncrementMS,
 		MaxOpenCount:             DefaultMaxOpenCount,
 	}
-	if redisClient == nil {
-		return fallback
-	}
-	raw, err := redisClient.HGetAll(ctx, ProviderConfigKeyPrefix+strconv.FormatInt(providerID, 10)).Result()
-	if err != nil || len(raw) == 0 {
+}
+
+// parseProviderCircuitConfig 把配置哈希解析成配置；空哈希即默认值。
+func parseProviderCircuitConfig(raw map[string]string) ProviderCircuitConfig {
+	fallback := defaultProviderCircuitConfig()
+	if len(raw) == 0 {
 		return fallback
 	}
 	return ProviderCircuitConfig{
@@ -114,6 +111,62 @@ func ReadProviderCircuitConfig(
 		OpenDurationIncrementMS:  nonNegativeConfigInt(raw["releaseIncrement"], fallback.OpenDurationIncrementMS),
 		MaxOpenCount:             nonNegativeConfigInt(raw["maxOpenCount"], fallback.MaxOpenCount),
 	}
+}
+
+// ReadProviderCircuitConfig 读供应商熔断配置；缺失或读取失败时取默认值（Node 同样降级到默认）。
+// 判定路径（ProviderOpen/ProviderState）不单独调它：状态与配置同批取回，见 readProviderCircuit。
+func ReadProviderCircuitConfig(
+	ctx context.Context,
+	redisClient redis.UniversalClient,
+	providerID int64,
+) ProviderCircuitConfig {
+	fallback := defaultProviderCircuitConfig()
+	if redisClient == nil {
+		return fallback
+	}
+	raw, err := redisClient.HGetAll(ctx, ProviderConfigKeyPrefix+strconv.FormatInt(providerID, 10)).Result()
+	if err != nil {
+		return fallback
+	}
+	return parseProviderCircuitConfig(raw)
+}
+
+// readProviderCircuit 用一条 pipeline 同批取回状态哈希与配置哈希（改前是两次独立往返）。
+//
+// 等价性判据（改前 → 改后）：
+//   - 状态读失败 → ExitReadError，调用方 fail-open：与改前一致（改前配置读根本不会发生）；
+//   - 配置读失败 → 取默认值：与 ReadProviderCircuitConfig 的降级口径同一份 parse/fallback；
+//   - 状态哈希不存在 → 空 map（判定为未开闸）：与改前一致；此时配置也已同批取回，只是被丢弃。
+//
+// 任一命令失败都不产生「拦下」（open=true）：状态失败即 ExitReadError；配置失败落到默认阈值，
+// 默认阈值非正才关闸（见 Disabled）。唯一差异是「状态为空时配置也读了」，它不增加往返，不改变判定。
+func (h *HealthReader) readProviderCircuit(
+	ctx context.Context,
+	providerID int64,
+) (map[string]string, ProviderCircuitConfig, ExitReason) {
+	id := strconv.FormatInt(providerID, 10)
+	var stateCmd, configCmd *redis.MapStringStringCmd
+	if _, err := h.redis.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		stateCmd = pipe.HGetAll(ctx, ProviderStateKeyPrefix+id)
+		configCmd = pipe.HGetAll(ctx, ProviderConfigKeyPrefix+id)
+		return nil
+	}); err != nil && stateCmd == nil {
+		return nil, ProviderCircuitConfig{}, ExitReadError
+	}
+	if stateCmd == nil {
+		return nil, ProviderCircuitConfig{}, ExitReadError
+	}
+	state, stateErr := stateCmd.Result()
+	if stateErr != nil {
+		return nil, ProviderCircuitConfig{}, ExitReadError
+	}
+	config := defaultProviderCircuitConfig()
+	if configCmd != nil {
+		if raw, configErr := configCmd.Result(); configErr == nil {
+			config = parseProviderCircuitConfig(raw)
+		}
+	}
+	return state, config, ""
 }
 
 // nonNegativeConfigInt 读一个非负配置项：空串取默认，负数按 0 处理。
@@ -208,18 +261,19 @@ func EffectiveProviderState(current CircuitState, openUntilMS, nowMS int64) Circ
 // 4. 仍在 open 窗口内 -> true；half-open -> false（放行试探）。
 //
 // 过期判定经 EffectiveProviderState（与读取侧同源），不在此另写一份。
+// 状态与配置由 readProviderCircuit 用一条 pipeline 同批取回（每个候选取一次往返）。
 func (h *HealthReader) ProviderOpen(ctx context.Context, providerID int64) (bool, ExitReason) {
 	if h == nil || h.redis == nil {
 		return false, ExitNoRedis
 	}
-	state, err := h.redis.HGetAll(ctx, ProviderStateKeyPrefix+strconv.FormatInt(providerID, 10)).Result()
-	if err != nil {
-		return false, ExitReadError
+	state, config, reason := h.readProviderCircuit(ctx, providerID)
+	if reason != "" {
+		return false, reason
 	}
 	if len(state) == 0 {
 		return false, ""
 	}
-	if !h.providerCircuitEnabled(ctx, providerID) {
+	if config.Disabled() {
 		return false, ""
 	}
 
@@ -251,11 +305,8 @@ func (h *HealthReader) ProviderState(ctx context.Context, providerID int64) Circ
 	if h == nil || h.redis == nil {
 		return StateClosed
 	}
-	state, err := h.redis.HGetAll(ctx, ProviderStateKeyPrefix+strconv.FormatInt(providerID, 10)).Result()
-	if err != nil || len(state) == 0 {
-		return StateClosed
-	}
-	if !h.providerCircuitEnabled(ctx, providerID) {
+	state, config, reason := h.readProviderCircuit(ctx, providerID)
+	if reason != "" || len(state) == 0 || config.Disabled() {
 		return StateClosed
 	}
 	return EffectiveProviderState(
@@ -263,12 +314,6 @@ func (h *HealthReader) ProviderState(ctx context.Context, providerID int64) Circ
 		parseInt64(state["circuitOpenUntil"]),
 		h.now().UnixMilli(),
 	)
-}
-
-// providerCircuitEnabled 复刻 isCircuitBreakerDisabled 的取反：
-// 配置缺失取默认值；failureThreshold 非正即视为熔断器关闭（Node 会强制归零为 closed）。
-func (h *HealthReader) providerCircuitEnabled(ctx context.Context, providerID int64) bool {
-	return !ReadProviderCircuitConfig(ctx, h.redis, providerID).Disabled()
 }
 
 // VendorTypeOpen 复刻 isVendorTypeCircuitOpen：

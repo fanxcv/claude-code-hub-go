@@ -135,6 +135,89 @@ func TestLadderSequenceAgainstRealRedis(t *testing.T) {
 	}
 }
 
+// conflictInjectingWatch 把真 Redis 的事务面包一层：第一次读到状态之后，用**另一条连接**写同一个键，
+// 精确复现「本事务读到值 → 别人写了新值 → 本事务提交」这个 WATCH 要挡的窗口。
+//
+// 用同一份 Redis client 就够：事务已独占一条连接（sticky），它的写必然走池里的另一条连接。
+type conflictInjectingWatch struct {
+	base   stateWatch
+	client redis.UniversalClient
+	key    string
+	write  func(ctx context.Context) error
+	// injected 记录实际注入了几次（预期 1：只在第一次尝试的读之后）。
+	injected int
+	// writeErr 记下注入失败：HGetAll 的签名给不了错误返回，由用例在末尾断言。
+	writeErr error
+}
+
+func (w *conflictInjectingWatch) Watch(ctx context.Context, fn func(stateTx) error, keys ...string) error {
+	return w.base.Watch(ctx, func(tx stateTx) error {
+		return fn(&conflictInjectingTx{stateTx: tx, owner: w})
+	}, keys...)
+}
+
+// conflictInjectingTx 在读到状态之后插入一次「另一个实例的写」（只插第一次：第二次尝试
+// 必须看到并发写者落下的值，否则断言重试就没有意义）。
+type conflictInjectingTx struct {
+	stateTx
+	owner *conflictInjectingWatch
+}
+
+func (t *conflictInjectingTx) HGetAll(ctx context.Context, key string) *redis.MapStringStringCmd {
+	cmd := t.stateTx.HGetAll(ctx, key)
+	if t.owner.injected > 0 {
+		return cmd
+	}
+	t.owner.injected++
+	t.owner.writeErr = t.owner.write(ctx)
+	return cmd
+}
+
+// TestIntegrationConcurrentWriteIsRetriedAgainstRealRedis 用真 Redis 钉住 P-2 的修复：
+// 「另一个实例在本事务的读与提交之间写了同一键」时，EXEC 不得提交，本包必须重试并落在新值之上。
+//
+// 为何不用并发压测：注入点是确定性的（一个事务窗口里恰好插一次写），断言才能是等号而不是下界。
+// 改造前（readState → 内存改 → HSET 覆盖式落库）这里会把并发写者刚落的 failureCount=1 覆盖回 1，
+// 先写者的那次失败静默消失。
+func TestIntegrationConcurrentWriteIsRetriedAgainstRealRedis(t *testing.T) {
+	client, ctx := ladderRedisClient(t)
+	const providerID int64 = 990003
+	key := providerKey(providerID)
+	t.Cleanup(func() { client.Del(context.Background(), key) })
+
+	writer := NewWriter(Options{Redis: client})
+	injector := &conflictInjectingWatch{
+		base:   writer.watch,
+		client: client,
+		key:    key,
+		write: func(ctx context.Context) error {
+			// 另一个实例的记账结果（它读到的失败计数是 0）。
+			return client.HSet(ctx, key, map[string]any{
+				"failureCount": "1",
+				"circuitState": string(route.StateClosed),
+			}).Err()
+		},
+	}
+	writer.watch = injector
+
+	if err := writer.RecordProviderFailure(ctx, providerID, nil); err != nil {
+		t.Fatalf("记账失败: %v", err)
+	}
+	if injector.writeErr != nil {
+		t.Fatalf("注入并发写失败: %v", injector.writeErr)
+	}
+	if injector.injected != 1 {
+		t.Fatalf("注入次数 = %d，期望 1", injector.injected)
+	}
+	raw, err := client.HGetAll(ctx, key).Result()
+	if err != nil {
+		t.Fatalf("读状态失败: %v", err)
+	}
+	if raw["failureCount"] != "2" {
+		t.Fatalf("并发写之后的失败计数 = %q，期望 \"2\"（本次记账必须落在并发写者之上）", raw["failureCount"])
+	}
+}
+
 // TestLadderOldStateCompatibleAgainstRealRedis 覆盖验收项 f：真 Redis 上手写一个**不含**
 // 阶梯字段的旧哈希，断言按 0 处理、且其余字段不被破坏。
 func TestLadderOldStateCompatibleAgainstRealRedis(t *testing.T) {

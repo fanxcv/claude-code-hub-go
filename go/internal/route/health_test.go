@@ -15,8 +15,30 @@ type fakeRedis struct {
 	redis.UniversalClient
 	hashes map[string]map[string]string
 	values map[string]string
-	// hgetAllCalls 累计 HGetAll 次数，供往返削减用例断言。
+	// hgetAllCalls 累计 HGetAll 次数（批内命令也逐条计数），供往返削减用例断言。
 	hgetAllCalls int
+	// pipelineCalls 累计 Pipelined 次数：熔断读的往返数就是它（一批 = 一次往返）。
+	pipelineCalls int
+}
+
+// Pipelined 让批内命令逐条落到本替身上（真库在一次往返里发出整批）。
+func (f *fakeRedis) Pipelined(_ context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
+	f.pipelineCalls++
+	pipe := &fakePipeline{client: f}
+	if err := fn(pipe); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+// fakePipeline 只覆盖本包熔断读用到的 HGetAll：结果立即写进 cmd（与真库 Exec 之后可读等价）。
+type fakePipeline struct {
+	redis.Pipeliner
+	client *fakeRedis
+}
+
+func (p *fakePipeline) HGetAll(ctx context.Context, key string) *redis.MapStringStringCmd {
+	return p.client.HGetAll(ctx, key)
 }
 
 func (f *fakeRedis) HGetAll(_ context.Context, key string) *redis.MapStringStringCmd {
@@ -221,10 +243,10 @@ func TestHealthRejectionProducesCircuitReasons(t *testing.T) {
 	}
 }
 
-// TestHealthRejectionReadsProviderCircuitInTwoRoundTrips 钉住供应商熔断维度的往返削减：
-// 每个候选只读一次 state + 一次 config（2 次 HGetAll）。改前命中 open 分支时还会再调
-// ProviderState 重读 state+config（共 4 次），而该分支的 details 区分不可达；删后同为 2 次。
-func TestHealthRejectionReadsProviderCircuitInTwoRoundTrips(t *testing.T) {
+// TestHealthRejectionReadsProviderCircuitInOnePipeline 钉住供应商熔断维度的往返削减：
+// 每个候选只发一条 pipeline，state 与 config 两条命令同批（2 次 HGetAll、1 次 Pipelined）。
+// 改前是两次独立往返；改前命中 open 分支时还会再调 ProviderState 重读一遍（共 4 次）。
+func TestHealthRejectionReadsProviderCircuitInOnePipeline(t *testing.T) {
 	now := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
 	provider := baseProvider(5, convert.ProviderClaude)
 	client := &fakeRedis{hashes: map[string]map[string]string{
@@ -240,8 +262,58 @@ func TestHealthRejectionReadsProviderCircuitInTwoRoundTrips(t *testing.T) {
 	if !open || record.Details != "circuit_open" {
 		t.Fatalf("窗口内 open 应拦下并记 circuit_open，实际 open=%v details=%q", open, record.Details)
 	}
+	if client.pipelineCalls != 1 {
+		t.Errorf("供应商熔断判定 Pipelined 次数 = %d，期望 1（state+config 同批）", client.pipelineCalls)
+	}
 	if client.hgetAllCalls != 2 {
-		t.Errorf("供应商熔断判定 HGetAll 次数 = %d，期望 2（state 1 + config 1）", client.hgetAllCalls)
+		t.Errorf("批内 HGetAll 次数 = %d，期望 2（state 1 + config 1）", client.hgetAllCalls)
+	}
+}
+
+// TestSelectionReadsOnePipelinePerCandidate 钉住 8 候选一次选路的往返数：
+// 8 条候选熔断判定 + 1 条选中者的状态快照，各一条 pipeline = 9 次 Pipelined、18 条命令。
+// 改前每条判定两次往返（state/config 各一），共 18 次往返——此处用真实选路链路实测。
+func TestSelectionReadsOnePipelinePerCandidate(t *testing.T) {
+	now := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
+	const candidates = 8
+	providers := make([]Provider, 0, candidates)
+	hashes := map[string]map[string]string{}
+	byID := map[int64]Provider{}
+	for id := int64(1); id <= candidates; id++ {
+		provider := baseProvider(id, convert.ProviderClaude)
+		providers = append(providers, provider)
+		byID[id] = provider
+		hashes[providerStateKey(id)] = map[string]string{
+			"circuitState":    string(StateClosed),
+			"failureCount":    "1",
+			"lastFailureTime": strconv.FormatInt(now.Add(-time.Minute).UnixMilli(), 10),
+		}
+		hashes[ProviderConfigKeyPrefix+strconv.FormatInt(id, 10)] = map[string]string{"failureThreshold": "5"}
+	}
+	client := &fakeRedis{hashes: hashes}
+	selector := NewSelector(Options{
+		Source: &stubSource{providers: providers, byID: byID},
+		Health: newTestHealth(t, client, true),
+		Now:    func() time.Time { return now },
+	})
+
+	result, err := selector.Select(context.Background(), Request{Model: "m", Format: convert.FormatClaude})
+	if err != nil {
+		t.Fatalf("选路失败: %v", err)
+	}
+	if result.Provider == nil {
+		t.Fatalf("全部候选可用时不应选空")
+	}
+	if result.Context.AfterHealthCheck != candidates {
+		t.Fatalf("健康过滤通过数 = %d，期望 %d", result.Context.AfterHealthCheck, candidates)
+	}
+	if client.pipelineCalls != candidates+1 {
+		t.Errorf("选路 Pipelined 次数 = %d，期望 %d（8 候选判定 + 1 选中者快照）",
+			client.pipelineCalls, candidates+1)
+	}
+	if client.hgetAllCalls != 2*(candidates+1) {
+		t.Errorf("批内 HGetAll 次数 = %d，期望 %d（每条 pipeline 两条命令）",
+			client.hgetAllCalls, 2*(candidates+1))
 	}
 }
 

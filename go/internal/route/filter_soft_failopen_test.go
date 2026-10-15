@@ -67,6 +67,28 @@ func (f *failOpenRedis) providerErrorCoolDown(sessionID string, keyID, providerI
 	f.values[SlowRateCooldownKey(sessionID, keyID, providerID)] = "42"
 }
 
+// Pipelined 覆盖 slowRateRedis 的版本：熔断读改走批内 HGetAll，而 stateHashes 只有本类型认识。
+// 不覆盖时批内 HGetAll 会落到 slowRatePipeline 嵌入的 nil Pipeliner 上 panic。
+// 非 HGetAll 命令继续走 slowRatePipeline（慢速读的 Get/HMGet/Exists）。
+func (f *failOpenRedis) Pipelined(ctx context.Context, fn func(redis.Pipeliner) error) ([]redis.Cmder, error) {
+	f.pipelineCalls++
+	inner := &slowRatePipeline{redis: f.slowRateRedis, ctx: ctx}
+	pipe := &failOpenPipeline{slowRatePipeline: inner, failOpenRedis: f}
+	if err := fn(pipe); err != nil {
+		return nil, err
+	}
+	return inner.cmds, inner.firstErr
+}
+
+type failOpenPipeline struct {
+	*slowRatePipeline
+	failOpenRedis *failOpenRedis
+}
+
+func (p *failOpenPipeline) HGetAll(_ context.Context, key string) *redis.MapStringStringCmd {
+	return p.failOpenRedis.HGetAll(context.Background(), key)
+}
+
 func newFailOpenSelector(t *testing.T, client redis.UniversalClient, providers ...Provider) *Selector {
 	t.Helper()
 	source := &stubSource{providers: providers, byID: map[int64]Provider{}}
