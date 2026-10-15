@@ -38,6 +38,8 @@
     "title": "Active Sessions",
     "summary": "{count} sessions in the last {minutes} minutes",
     "empty": "No active sessions",
+    "loadError": "Failed to load active sessions",
+    "retry": "Retry",
     "viewAll": "View All",
     "loading": "Loading...",
     "unknownUser": "unknown",

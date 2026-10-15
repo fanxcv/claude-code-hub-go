@@ -26,6 +26,43 @@
 import { z } from "zod";
 import { ERROR_CODES, zodErrorToCode } from "./error-messages";
 
+type Translator = (key: string, params?: Record<string, string | number>) => string;
+
+// Schema messages bypass Zod's global error map (a message set on a check wins over the map),
+// so message keys are resolved here against the translator registered by setZodErrorMap.
+let registeredTranslator: Translator | null = null;
+
+/**
+ * Resolve a schema message key registered by {@link setZodErrorMap}.
+ *
+ * Falls back to the key itself when no translator is registered (server-side parse, tests)
+ * or when the locale is missing the key.
+ */
+export function translateSchemaMessage(
+  key: string,
+  params?: Record<string, string | number>
+): string {
+  if (!registeredTranslator) return key;
+  try {
+    return registeredTranslator(key, params);
+  } catch (error) {
+    if (process.env.NODE_ENV === "development") {
+      console.warn("translateSchemaMessage fallback", { key, error });
+    }
+    return key;
+  }
+}
+
+/**
+ * Zod check params for a translated schema message.
+ *
+ * @example
+ * z.string().min(1, schemaMessage("USER_NAME_REQUIRED"))
+ */
+export function schemaMessage(key: string, params?: Record<string, string | number>) {
+  return { error: () => translateSchemaMessage(key, params) };
+}
+
 /**
  * Client-side Zod error map
  *
@@ -38,9 +75,9 @@ import { ERROR_CODES, zodErrorToCode } from "./error-messages";
  * const t = useTranslations("errors");
  * setZodErrorMap(t);
  */
-export function setZodErrorMap(
-  t: (key: string, params?: Record<string, string | number>) => string
-): void {
+export function setZodErrorMap(t: Translator): void {
+  registeredTranslator = t;
+
   // @ts-expect-error - Zod v4 type definition issue with error map signature
   z.setErrorMap((issue: z.ZodIssue, _ctx: { defaultError: string; data: unknown }) => {
     // Convert Zod error to our error code system

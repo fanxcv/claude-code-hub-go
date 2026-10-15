@@ -9,7 +9,6 @@ interface CountdownResult {
   seconds: number;
   totalSeconds: number;
   isExpired: boolean;
-  formatted: string; // 格式化输出：如 "1天 2小时 3分钟" 或 "2h 3m 45s"
   shortFormatted: string; // 简短格式：如 "1d 2h 3m" 或 "2h 3m"
 }
 
@@ -25,7 +24,6 @@ function calculateCountdown(targetDate: Date | null): CountdownResult {
       seconds: 0,
       totalSeconds: 0,
       isExpired: true,
-      formatted: "已过期",
       shortFormatted: "0s",
     };
   }
@@ -43,7 +41,6 @@ function calculateCountdown(targetDate: Date | null): CountdownResult {
       seconds: 0,
       totalSeconds: 0,
       isExpired: true,
-      formatted: "已过期",
       shortFormatted: "0s",
     };
   }
@@ -55,20 +52,15 @@ function calculateCountdown(targetDate: Date | null): CountdownResult {
   const seconds = totalSeconds % 60;
 
   // 格式化输出
-  let formatted = "";
   let shortFormatted = "";
 
   if (days > 0) {
-    formatted = `${days}天 ${hours}小时 ${minutes}分钟`;
     shortFormatted = `${days}d ${hours}h ${minutes}m`;
   } else if (hours > 0) {
-    formatted = `${hours}小时 ${minutes}分钟 ${seconds}秒`;
     shortFormatted = `${hours}h ${minutes}m ${seconds}s`;
   } else if (minutes > 0) {
-    formatted = `${minutes}分钟 ${seconds}秒`;
     shortFormatted = `${minutes}m ${seconds}s`;
   } else {
-    formatted = `${seconds}秒`;
     shortFormatted = `${seconds}s`;
   }
 
@@ -79,7 +71,6 @@ function calculateCountdown(targetDate: Date | null): CountdownResult {
     seconds,
     totalSeconds,
     isExpired: false,
-    formatted,
     shortFormatted,
   };
 }
@@ -94,7 +85,7 @@ function calculateCountdown(targetDate: Date | null): CountdownResult {
  * @example
  * ```tsx
  * const countdown = useCountdown(resetTime);
- * return <div>{countdown.formatted}</div>;
+ * return <div>{countdown.shortFormatted}</div>;
  * ```
  */
 export function useCountdown(targetDate: Date | null, enabled: boolean = true): CountdownResult {
@@ -130,7 +121,6 @@ export function useCountdown(targetDate: Date | null, enabled: boolean = true): 
       seconds: 0,
       totalSeconds: 0,
       isExpired: false,
-      formatted: "—",
       shortFormatted: "—",
     };
   }

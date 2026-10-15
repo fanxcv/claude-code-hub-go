@@ -98,7 +98,6 @@
   "filterDetails": {
     "vendor_type_circuit_open": "供应商类型临时熔断",
     "circuit_open": "熔断器打开",
-    "circuit_half_open": "熔断器半开",
     "rate_limited": "速率限制",
     "provider_client_restriction": "供应商因客户端限制被跳过",
     "session_reuse_client_restriction": "Session reuse rejected: client restriction",

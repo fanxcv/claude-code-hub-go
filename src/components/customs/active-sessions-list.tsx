@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Loader2 } from "lucide-react";
+import { Activity, AlertCircle, Loader2 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "@/i18n/routing";
 import { getActiveSessions } from "@/lib/api-client/v1/actions/active-sessions";
@@ -14,7 +14,7 @@ const REFRESH_INTERVAL = 5000; // 5秒刷新一次
 async function fetchActiveSessions(): Promise<ActiveSessionInfo[]> {
   const result = await getActiveSessions();
   if (!result.ok) {
-    throw new Error(result.error || "获取活跃 Session 失败");
+    throw new Error(result.error || "getActiveSessions failed");
   }
   return result.data;
 }
@@ -52,7 +52,12 @@ export function ActiveSessionsList({
   const tu = useTranslations("ui");
   const tc = useTranslations("customs");
 
-  const { data = [], isLoading } = useQuery<ActiveSessionInfo[], Error>({
+  const {
+    data = [],
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery<ActiveSessionInfo[], Error>({
     queryKey: ["active-sessions"],
     queryFn: fetchActiveSessions,
     refetchInterval: REFRESH_INTERVAL,
@@ -91,6 +96,22 @@ export function ActiveSessionsList({
           >
             <Loader2 className="h-4 w-4 animate-spin mr-2" />
             {tu("common.loading")}
+          </div>
+        ) : displaySessions.length === 0 && isError ? (
+          <div
+            className="flex flex-col items-center justify-center gap-2 text-sm"
+            style={{ height: maxHeight }}
+          >
+            <span className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="h-4 w-4" />
+              {tc("activeSessions.loadError")}
+            </span>
+            <button
+              onClick={() => refetch()}
+              className="text-xs text-muted-foreground hover:text-foreground underline transition-colors cursor-pointer"
+            >
+              {tc("activeSessions.retry")}
+            </button>
           </div>
         ) : displaySessions.length === 0 ? (
           <div

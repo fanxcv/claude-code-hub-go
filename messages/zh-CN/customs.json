@@ -38,6 +38,8 @@
     "title": "活跃 Session",
     "summary": "{count} 个 Session，{minutes} 分钟内",
     "empty": "暂无活跃 Session",
+    "loadError": "活跃 Session 加载失败",
+    "retry": "重试",
     "viewAll": "查看全部",
     "loading": "加载中...",
     "unknownUser": "未知",

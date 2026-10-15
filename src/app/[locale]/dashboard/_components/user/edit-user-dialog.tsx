@@ -39,6 +39,7 @@ import {
 import { useZodForm } from "@/lib/hooks/use-zod-form";
 import type { UserStatisticsResetRecord } from "@/lib/user-statistics-reset/types";
 import { cn } from "@/lib/utils";
+import { setZodErrorMap } from "@/lib/utils/zod-i18n";
 import { UpdateUserSchema } from "@/lib/validation/schemas";
 import type { UserDisplay } from "@/types/user";
 import { DangerZone } from "./forms/danger-zone";
@@ -103,6 +104,12 @@ function EditUserDialogInner({ onOpenChange, user, onSuccess }: EditUserDialogPr
   // 这些码与 Node `ERROR_CODES` 同名，且 `errors` 命名空间里有对应文案，故优先本地化，
   // 拿不到才回落服务端 detail——否则会展示 Problem 的英文 title。
   const tErrors = useTranslations("errors");
+
+  // Zod 校验文案装配（含 schema 消息键的解析器）
+  useEffect(() => {
+    setZodErrorMap(tErrors);
+  }, [tErrors]);
+
   const locale = useLocale();
   const [isPending, startTransition] = useTransition();
   const [isResettingAll, setIsResettingAll] = useState(false);

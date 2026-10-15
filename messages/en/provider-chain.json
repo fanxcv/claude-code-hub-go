@@ -98,7 +98,6 @@
   "filterDetails": {
     "vendor_type_circuit_open": "Vendor-type temporarily circuit-broken",
     "circuit_open": "Circuit breaker open",
-    "circuit_half_open": "Circuit breaker half-open",
     "rate_limited": "Rate limited",
     "provider_client_restriction": "Provider skipped due to client restriction",
     "session_reuse_client_restriction": "Session reuse rejected: client restriction",

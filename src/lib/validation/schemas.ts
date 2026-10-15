@@ -16,6 +16,7 @@ import {
 } from "@/lib/public-status/constants";
 import { CURRENCY_CONFIG } from "@/lib/utils/currency";
 import { isValidIANATimezone } from "@/lib/utils/timezone-shared";
+import { schemaMessage, translateSchemaMessage } from "@/lib/utils/zod-i18n";
 import {
   DISCOVERY_FIELD_LIMITS,
   DISCOVERY_SETTINGS_INVALID_ERROR_CODE,
@@ -72,13 +73,13 @@ const MAX_TOKENS_PREFERENCE = z.union([
   z.literal("inherit"),
   z
     .string()
-    .regex(/^\d+$/, 'max_tokens 必须为 "inherit" 或数字字符串')
+    .regex(/^\d+$/, schemaMessage("MAX_TOKENS_PREFERENCE_FORMAT"))
     .refine(
       (val) => {
         const num = Number.parseInt(val, 10);
         return num >= 1 && num <= 64000;
       },
-      { message: "max_tokens 必须在 1 到 64000 之间" }
+      schemaMessage("MAX_TOKENS_PREFERENCE_RANGE", { min: 1, max: 64000 })
     ),
 ]);
 
@@ -86,13 +87,13 @@ const ANTHROPIC_THINKING_BUDGET_PREFERENCE = z.union([
   z.literal("inherit"),
   z
     .string()
-    .regex(/^\d+$/, 'thinking.budget_tokens 必须为 "inherit" 或数字字符串')
+    .regex(/^\d+$/, schemaMessage("THINKING_BUDGET_PREFERENCE_FORMAT"))
     .refine(
       (val) => {
         const num = Number.parseInt(val, 10);
         return num >= 1024 && num <= 32000;
       },
-      { message: "thinking.budget_tokens 必须在 1024 到 32000 之间" }
+      schemaMessage("THINKING_BUDGET_PREFERENCE_RANGE", { min: 1024, max: 32000 })
     ),
 ]);
 
@@ -131,11 +132,11 @@ const optionalPreprocessed = <T extends z.ZodType>(
 const CLIENT_PATTERN_SCHEMA = z
   .string()
   .trim()
-  .min(1, "客户端模式不能为空")
-  .max(64, "客户端模式长度不能超过64个字符");
+  .min(1, schemaMessage("CLIENT_PATTERN_REQUIRED"))
+  .max(64, schemaMessage("CLIENT_PATTERN_MAX_LENGTH", { max: 64 }));
 const CLIENT_PATTERN_ARRAY_SCHEMA = z
   .array(CLIENT_PATTERN_SCHEMA)
-  .max(50, "客户端模式数量不能超过50个");
+  .max(50, schemaMessage("CLIENT_PATTERN_MAX_COUNT", { max: 50 }));
 const OPTIONAL_CLIENT_PATTERN_ARRAY_SCHEMA = optionalPreprocessed(
   (value) => (value === null ? [] : value),
   CLIENT_PATTERN_ARRAY_SCHEMA
@@ -147,62 +148,75 @@ const OPTIONAL_CLIENT_PATTERN_ARRAY_WITH_DEFAULT_SCHEMA =
  * 用户创建数据验证schema
  */
 export const CreateUserSchema = z.object({
-  name: z.string().min(1, "用户名不能为空").max(64, "用户名不能超过64个字符"),
-  note: z.string().max(200, "备注不能超过200个字符").optional().default(""),
+  name: z
+    .string()
+    .min(1, schemaMessage("USER_NAME_REQUIRED"))
+    .max(64, schemaMessage("USER_NAME_MAX_LENGTH", { max: 64 })),
+  note: z
+    .string()
+    .max(200, schemaMessage("USER_NOTE_MAX_LENGTH", { max: 200 }))
+    .optional()
+    .default(""),
   providerGroup: z
     .string()
-    .max(200, "供应商分组不能超过200个字符")
+    .max(200, schemaMessage("PROVIDER_GROUP_MAX_LENGTH", { max: 200 }))
     .nullable()
     .optional()
     .default(""),
   tags: z
-    .array(z.string().max(32, "标签长度不能超过32个字符"))
-    .max(20, "标签数量不能超过20个")
+    .array(z.string().max(32, schemaMessage("TAG_MAX_LENGTH", { max: 32 })))
+    .max(20, schemaMessage("TAGS_MAX_COUNT", { max: 20 }))
     .optional()
     .default([]),
   rpm: z.coerce
     .number()
-    .int("RPM必须是整数")
-    .min(USER_LIMITS.RPM.MIN, `RPM不能低于${USER_LIMITS.RPM.MIN}`)
-    .max(USER_LIMITS.RPM.MAX, `RPM不能超过${USER_LIMITS.RPM.MAX}`)
+    .int(schemaMessage("RPM_INTEGER"))
+    .min(USER_LIMITS.RPM.MIN, schemaMessage("RPM_MIN", { min: USER_LIMITS.RPM.MIN }))
+    .max(USER_LIMITS.RPM.MAX, schemaMessage("RPM_MAX", { max: USER_LIMITS.RPM.MAX }))
     .nullable()
     .optional(),
   dailyQuota: z.coerce
     .number()
-    .min(USER_LIMITS.DAILY_QUOTA.MIN, `每日额度不能低于${USER_LIMITS.DAILY_QUOTA.MIN}美元`)
-    .max(USER_LIMITS.DAILY_QUOTA.MAX, `每日额度不能超过${USER_LIMITS.DAILY_QUOTA.MAX}美元`)
+    .min(
+      USER_LIMITS.DAILY_QUOTA.MIN,
+      schemaMessage("DAILY_QUOTA_MIN", { min: USER_LIMITS.DAILY_QUOTA.MIN })
+    )
+    .max(
+      USER_LIMITS.DAILY_QUOTA.MAX,
+      schemaMessage("DAILY_QUOTA_MAX", { max: USER_LIMITS.DAILY_QUOTA.MAX })
+    )
     .nullable()
     .optional(),
   limit5hUsd: z.coerce
     .number()
-    .min(0, "5小时消费上限不能为负数")
-    .max(10000, "5小时消费上限不能超过10000美元")
+    .min(0, schemaMessage("LIMIT_5H_MIN"))
+    .max(10000, schemaMessage("LIMIT_5H_MAX", { max: 10000 }))
     .nullable()
     .optional(),
   limit5hResetMode: z.enum(["fixed", "rolling"]).optional().default("rolling"),
   limitWeeklyUsd: z.coerce
     .number()
-    .min(0, "周消费上限不能为负数")
-    .max(50000, "周消费上限不能超过50000美元")
+    .min(0, schemaMessage("LIMIT_WEEKLY_MIN"))
+    .max(50000, schemaMessage("LIMIT_WEEKLY_MAX", { max: 50000 }))
     .nullable()
     .optional(),
   limitMonthlyUsd: z.coerce
     .number()
-    .min(0, "月消费上限不能为负数")
-    .max(200000, "月消费上限不能超过200000美元")
+    .min(0, schemaMessage("LIMIT_MONTHLY_MIN"))
+    .max(200000, schemaMessage("LIMIT_MONTHLY_MAX", { max: 200000 }))
     .nullable()
     .optional(),
   limitTotalUsd: z.coerce
     .number()
-    .min(0, "总消费上限不能为负数")
-    .max(10000000, "总消费上限不能超过10000000美元")
+    .min(0, schemaMessage("LIMIT_TOTAL_MIN"))
+    .max(10000000, schemaMessage("LIMIT_TOTAL_MAX", { max: 10000000 }))
     .nullable()
     .optional(),
   limitConcurrentSessions: z.coerce
     .number()
-    .int("并发Session上限必须是整数")
-    .min(0, "并发Session上限不能为负数")
-    .max(1000, "并发Session上限不能超过1000")
+    .int(schemaMessage("LIMIT_CONCURRENT_SESSIONS_INTEGER"))
+    .min(0, schemaMessage("LIMIT_CONCURRENT_SESSIONS_MIN"))
+    .max(1000, schemaMessage("LIMIT_CONCURRENT_SESSIONS_MAX", { max: 1000 }))
     .nullable()
     .optional(),
   // User status and expiry management
@@ -237,7 +251,7 @@ export const CreateUserSchema = z.object({
       if (date <= now) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "过期时间必须是将来时间",
+          message: translateSchemaMessage("EXPIRES_AT_MUST_BE_FUTURE"),
         });
       }
 
@@ -247,7 +261,7 @@ export const CreateUserSchema = z.object({
       if (date > maxExpiry) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
-          message: "过期时间不能超过10年",
+          message: translateSchemaMessage("EXPIRES_AT_TOO_FAR"),
         });
       }
     })
@@ -256,7 +270,7 @@ export const CreateUserSchema = z.object({
   dailyResetMode: z.enum(["fixed", "rolling"]).optional().default("fixed"),
   dailyResetTime: z
     .string()
-    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "重置时间格式必须为 HH:mm")
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, schemaMessage("DAILY_RESET_TIME_FORMAT"))
     .optional()
     .default("00:00"),
   // Allowed clients (CLI/IDE restrictions)
@@ -265,8 +279,8 @@ export const CreateUserSchema = z.object({
   blockedClients: OPTIONAL_CLIENT_PATTERN_ARRAY_WITH_DEFAULT_SCHEMA,
   // Allowed models (AI model restrictions)
   allowedModels: z
-    .array(z.string().max(64, "模型名称长度不能超过64个字符"))
-    .max(50, "模型数量不能超过50个")
+    .array(z.string().max(64, schemaMessage("ALLOWED_MODEL_MAX_LENGTH", { max: 64 })))
+    .max(50, schemaMessage("ALLOWED_MODELS_MAX_COUNT", { max: 50 }))
     .optional()
     .default([]),
 });
@@ -275,55 +289,72 @@ export const CreateUserSchema = z.object({
  * 用户更新数据验证schema
  */
 export const UpdateUserSchema = z.object({
-  name: z.string().min(1, "用户名不能为空").max(64, "用户名不能超过64个字符").optional(),
-  note: z.string().max(200, "备注不能超过200个字符").optional(),
-  providerGroup: z.string().max(200, "供应商分组不能超过200个字符").nullable().optional(),
+  name: z
+    .string()
+    .min(1, schemaMessage("USER_NAME_REQUIRED"))
+    .max(64, schemaMessage("USER_NAME_MAX_LENGTH", { max: 64 }))
+    .optional(),
+  note: z
+    .string()
+    .max(200, schemaMessage("USER_NOTE_MAX_LENGTH", { max: 200 }))
+    .optional(),
+  providerGroup: z
+    .string()
+    .max(200, schemaMessage("PROVIDER_GROUP_MAX_LENGTH", { max: 200 }))
+    .nullable()
+    .optional(),
   tags: z
-    .array(z.string().max(32, "标签长度不能超过32个字符"))
-    .max(20, "标签数量不能超过20个")
+    .array(z.string().max(32, schemaMessage("TAG_MAX_LENGTH", { max: 32 })))
+    .max(20, schemaMessage("TAGS_MAX_COUNT", { max: 20 }))
     .optional(),
   rpm: z.coerce
     .number()
-    .int("RPM必须是整数")
-    .min(USER_LIMITS.RPM.MIN, `RPM不能低于${USER_LIMITS.RPM.MIN}`)
-    .max(USER_LIMITS.RPM.MAX, `RPM不能超过${USER_LIMITS.RPM.MAX}`)
+    .int(schemaMessage("RPM_INTEGER"))
+    .min(USER_LIMITS.RPM.MIN, schemaMessage("RPM_MIN", { min: USER_LIMITS.RPM.MIN }))
+    .max(USER_LIMITS.RPM.MAX, schemaMessage("RPM_MAX", { max: USER_LIMITS.RPM.MAX }))
     .optional(),
   dailyQuota: z.coerce
     .number()
-    .min(USER_LIMITS.DAILY_QUOTA.MIN, `每日额度不能低于${USER_LIMITS.DAILY_QUOTA.MIN}美元`)
-    .max(USER_LIMITS.DAILY_QUOTA.MAX, `每日额度不能超过${USER_LIMITS.DAILY_QUOTA.MAX}美元`)
+    .min(
+      USER_LIMITS.DAILY_QUOTA.MIN,
+      schemaMessage("DAILY_QUOTA_MIN", { min: USER_LIMITS.DAILY_QUOTA.MIN })
+    )
+    .max(
+      USER_LIMITS.DAILY_QUOTA.MAX,
+      schemaMessage("DAILY_QUOTA_MAX", { max: USER_LIMITS.DAILY_QUOTA.MAX })
+    )
     .nullable()
     .optional(),
   limit5hUsd: z.coerce
     .number()
-    .min(0, "5小时消费上限不能为负数")
-    .max(10000, "5小时消费上限不能超过10000美元")
+    .min(0, schemaMessage("LIMIT_5H_MIN"))
+    .max(10000, schemaMessage("LIMIT_5H_MAX", { max: 10000 }))
     .nullable()
     .optional(),
   limit5hResetMode: z.enum(["fixed", "rolling"]).optional(),
   limitWeeklyUsd: z.coerce
     .number()
-    .min(0, "周消费上限不能为负数")
-    .max(50000, "周消费上限不能超过50000美元")
+    .min(0, schemaMessage("LIMIT_WEEKLY_MIN"))
+    .max(50000, schemaMessage("LIMIT_WEEKLY_MAX", { max: 50000 }))
     .nullable()
     .optional(),
   limitMonthlyUsd: z.coerce
     .number()
-    .min(0, "月消费上限不能为负数")
-    .max(200000, "月消费上限不能超过200000美元")
+    .min(0, schemaMessage("LIMIT_MONTHLY_MIN"))
+    .max(200000, schemaMessage("LIMIT_MONTHLY_MAX", { max: 200000 }))
     .nullable()
     .optional(),
   limitTotalUsd: z.coerce
     .number()
-    .min(0, "总消费上限不能为负数")
-    .max(10000000, "总消费上限不能超过10000000美元")
+    .min(0, schemaMessage("LIMIT_TOTAL_MIN"))
+    .max(10000000, schemaMessage("LIMIT_TOTAL_MAX", { max: 10000000 }))
     .nullable()
     .optional(),
   limitConcurrentSessions: z.coerce
     .number()
-    .int("并发Session上限必须是整数")
-    .min(0, "并发Session上限不能为负数")
-    .max(1000, "并发Session上限不能超过1000")
+    .int(schemaMessage("LIMIT_CONCURRENT_SESSIONS_INTEGER"))
+    .min(0, schemaMessage("LIMIT_CONCURRENT_SESSIONS_MIN"))
+    .max(1000, schemaMessage("LIMIT_CONCURRENT_SESSIONS_MAX", { max: 1000 }))
     .nullable()
     .optional(),
   // User status and expiry management
@@ -371,7 +402,7 @@ export const UpdateUserSchema = z.object({
         if (date > maxExpiry) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
-            message: "过期时间不能超过10年",
+            message: translateSchemaMessage("EXPIRES_AT_TOO_FAR"),
           });
         }
       })
@@ -380,7 +411,7 @@ export const UpdateUserSchema = z.object({
   dailyResetMode: z.enum(["fixed", "rolling"]).optional(),
   dailyResetTime: z
     .string()
-    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "重置时间格式必须为 HH:mm")
+    .regex(/^([01]\d|2[0-3]):[0-5]\d$/, schemaMessage("DAILY_RESET_TIME_FORMAT"))
     .optional(),
   // Allowed clients (CLI/IDE restrictions)
   allowedClients: OPTIONAL_CLIENT_PATTERN_ARRAY_SCHEMA,
@@ -388,8 +419,8 @@ export const UpdateUserSchema = z.object({
   blockedClients: OPTIONAL_CLIENT_PATTERN_ARRAY_SCHEMA,
   // Allowed models (AI model restrictions)
   allowedModels: z
-    .array(z.string().max(64, "模型名称长度不能超过64个字符"))
-    .max(50, "模型数量不能超过50个")
+    .array(z.string().max(64, schemaMessage("ALLOWED_MODEL_MAX_LENGTH", { max: 64 })))
+    .max(50, schemaMessage("ALLOWED_MODELS_MAX_COUNT", { max: 50 }))
     .optional(),
 });
 
@@ -397,7 +428,10 @@ export const UpdateUserSchema = z.object({
  * 密钥表单数据验证schema
  */
 export const KeyFormSchema = z.object({
-  name: z.string().min(1, "密钥名称不能为空").max(64, "密钥名称不能超过64个字符"),
+  name: z
+    .string()
+    .min(1, schemaMessage("KEY_NAME_REQUIRED"))
+    .max(64, schemaMessage("KEY_NAME_MAX_LENGTH", { max: 64 })),
   expiresAt: z
     .string()
     .optional()
@@ -415,14 +449,14 @@ export const KeyFormSchema = z.object({
   limit5hResetMode: z.enum(["fixed", "rolling"]).optional().default("rolling"),
   limitDailyUsd: z.coerce
     .number()
-    .min(0, "每日消费上限不能为负数")
-    .max(10000, "每日消费上限不能超过10000美元")
+    .min(0, schemaMessage("KEY_DAILY_LIMIT_MIN"))
+    .max(10000, schemaMessage("KEY_DAILY_LIMIT_MAX", { max: 10000 }))
     .nullable()
     .optional(),
   dailyResetMode: z.enum(["fixed", "rolling"]).optional().default("fixed"),
   dailyResetTime: z
     .string()
-    .regex(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/, "重置时间格式必须为 HH:mm")
+    .regex(/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/, schemaMessage("DAILY_RESET_TIME_FORMAT"))
     .optional()
     .default("00:00"),
   limitWeeklyUsd: z.coerce
@@ -452,7 +486,7 @@ export const KeyFormSchema = z.object({
     .default(0),
   providerGroup: z
     .string()
-    .max(200, "供应商分组不能超过200个字符")
+    .max(200, schemaMessage("PROVIDER_GROUP_MAX_LENGTH", { max: 200 }))
     .nullable()
     .optional()
     .default(""),
@@ -488,9 +522,21 @@ const PROVIDER_CUSTOM_HEADERS_SCHEMA = z
  */
 export const CreateProviderSchema = z
   .object({
-    name: z.string().min(1, "服务商名称不能为空").max(64, "服务商名称不能超过64个字符"),
-    url: z.string().url("请输入有效的URL地址").max(255, "URL长度不能超过255个字符"),
-    key: z.string().min(1, "API密钥不能为空").max(PROVIDER_KEY_MAX_LENGTH, "API密钥长度超出限制"),
+    name: z
+      .string()
+      .min(1, schemaMessage("PROVIDER_NAME_REQUIRED"))
+      .max(64, schemaMessage("PROVIDER_NAME_MAX_LENGTH", { max: 64 })),
+    url: z
+      .string()
+      .url(schemaMessage("INVALID_URL"))
+      .max(255, schemaMessage("PROVIDER_URL_MAX_LENGTH", { max: 255 })),
+    key: z
+      .string()
+      .min(1, schemaMessage("API_KEY_REQUIRED"))
+      .max(
+        PROVIDER_KEY_MAX_LENGTH,
+        schemaMessage("PROVIDER_API_KEY_MAX_LENGTH", { max: PROVIDER_KEY_MAX_LENGTH })
+      ),
     // 数据库字段命名：下划线
     is_enabled: z.boolean().optional().default(PROVIDER_DEFAULTS.IS_ENABLED),
     weight: z

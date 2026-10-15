@@ -21,6 +21,7 @@ import { PROVIDER_GROUP } from "@/lib/constants/provider.constants";
 import { useZodForm } from "@/lib/hooks/use-zod-form";
 import { getErrorMessage } from "@/lib/utils/error-messages";
 import { parseProviderGroups } from "@/lib/utils/provider-group";
+import { setZodErrorMap } from "@/lib/utils/zod-i18n";
 import { KeyFormSchema } from "@/lib/validation/schemas";
 import type { KeyDialogUserContext } from "@/types/user";
 
@@ -42,6 +43,11 @@ export function AddKeyForm({ userId, user, isAdmin = false, onSuccess }: AddKeyF
   const tUI = useTranslations("ui.tagInput");
   const tCommon = useTranslations("common");
   const tErrors = useTranslations("errors");
+
+  // Zod 校验文案装配（含 schema 消息键的解析器）
+  useEffect(() => {
+    setZodErrorMap(tErrors);
+  }, [tErrors]);
 
   // Load provider group suggestions
   useEffect(() => {

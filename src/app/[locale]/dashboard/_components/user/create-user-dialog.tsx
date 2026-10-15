@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, UserPlus } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ import { addKey } from "@/lib/api-client/v1/actions/keys";
 import { createUserOnly, removeUser } from "@/lib/api-client/v1/actions/users";
 import { PROVIDER_GROUP } from "@/lib/constants/provider.constants";
 import { useZodForm } from "@/lib/hooks/use-zod-form";
+import { setZodErrorMap } from "@/lib/utils/zod-i18n";
 import { KeyFormSchema, UpdateUserSchema } from "@/lib/validation/schemas";
 import { KeyEditSection } from "./forms/key-edit-section";
 import { UserEditSection } from "./forms/user-edit-section";
@@ -126,6 +127,13 @@ function CreateUserDialogInner({ onOpenChange, onSuccess }: CreateUserDialogProp
   const queryClient = useQueryClient();
   const t = useTranslations("dashboard.userManagement");
   const tCommon = useTranslations("common");
+  const tErrors = useTranslations("errors");
+
+  // Zod 校验文案装配（含 schema 消息键的解析器）
+  useEffect(() => {
+    setZodErrorMap(tErrors);
+  }, [tErrors]);
+
   const [isPending, startTransition] = useTransition();
   const [generatedKey, setGeneratedKey] = useState<GeneratedKeyInfo | null>(null);
   const [copied, setCopied] = useState(false);
