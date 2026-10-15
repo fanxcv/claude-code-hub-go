@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -655,7 +654,7 @@ func (api *systemSettingsAPI) emitSettingsAudit(
 		TargetName: "global",
 		Before:     systemSettingsAuditMap(before),
 		Success:    success,
-		IP:         auditRequestIP(request),
+		IP:         auditClientIP(request.Context(), api.pools, request),
 		UserAgent:  request.UserAgent(),
 	}
 	if after != nil {
@@ -1592,21 +1591,6 @@ func settingsContainsString(values []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// auditRequestIP 取审计用客户端 IP（与 auth.go 的口径一致：X-Forwarded-For 首项，否则 RemoteAddr）。
-func auditRequestIP(request *http.Request) string {
-	if forwarded := request.Header.Get("X-Forwarded-For"); forwarded != "" {
-		if first, _, found := strings.Cut(forwarded, ","); found {
-			return strings.TrimSpace(first)
-		}
-		return strings.TrimSpace(forwarded)
-	}
-	host, _, err := net.SplitHostPort(request.RemoteAddr)
-	if err != nil {
-		return request.RemoteAddr
-	}
-	return host
 }
 
 // systemSettingsProjection 供其他模块（如 /api/admin/system-config）复用投影。

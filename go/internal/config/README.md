@@ -10,20 +10,20 @@
 
 ## 覆盖范围
 
-`env.go` 的规格表 `envSpecs` 覆盖矩阵里的全部 **66** 项：
+`env.go` 的规格表 `envSpecs` 覆盖矩阵里的全部 **65** 项：
 
 | 类别 | 项数 | 说明 |
 | --- | ---: | --- |
-| `kindNumber` | 26 | `z.coerce.number()`，其中 19 项为整数、7 项允许小数 |
-| `kindBool` | 18 | `z.string().default(...).transform(booleanTransform)` |
+| `kindNumber` | 25 | `z.coerce.number()`，其中 18 项为整数、7 项允许小数 |
+| `kindBool` | 16 | `z.string().default(...).transform(booleanTransform)` |
 | `kindOptionalNumber` | 9 | `optionalNumber(...)`，未配置为 nil |
-| `kindEnum` | 6 | `z.enum([...]).default(...)` |
-| `kindString` | 4 | `z.string().default(...)` |
+| `kindEnum` | 5 | `z.enum([...]).default(...)` |
+| `kindString` | 3 | `z.string().default(...)` |
 | `kindOptionalString` | 4 | `z.string().optional()` |
 | `kindCredential` | 3 | `optionalPreprocessed(...)`：`ADMIN_TOKEN`、`CSRF_SECRET`、`DSN` |
 
 Go 专有变量（`CCH_EGRESS_PAGES`、`CCH_GO_MAX_INFLIGHT_BYTES`、`CCH_GO_MAX_STREAMS`、
-`CCH_PATROL_*`、`CCH_PPROF_*`、`CCH_SAME_PROTOCOL_WEIGHT_K`、`GOMEMLIMIT`）不在契约内，单独解析，
+`CCH_PATROL_*`、`CCH_PPROF_*`、`CCH_SAME_PROTOCOL_WEIGHT_K`、`CCH_TRUSTED_PROXY_CIDRS`、`GOMEMLIMIT`）不在契约内，单独解析，
 **不写进** `go/env-parity.txt`，否则会被对账脚本判为「多配」。
 历史：双后端时期的 `CCH_INTERNAL_PORT`、`CCH_EGRESS_MODE`、`CCH_EGRESS_ROUTES` 已随回退能力删除。
 
@@ -33,7 +33,7 @@ Go 专有变量（`CCH_EGRESS_PAGES`、`CCH_GO_MAX_INFLIGHT_BYTES`、`CCH_GO_MAX
 因此不存在「清单里有、装载器没实现」这类静默分叉。三条不变量由测试钉住：
 
 - `TestEnvSpecsStructAndParityListAreBijective`：规格表 ↔ `EnvConfig` 字段与标签 ↔ 对账清单，
-  双向一一对应，总数 66。
+  双向一一对应，总数 65。
 - `TestEverySpecIsConsumedByLoader`：装载器必须真正读过每一项。
 - `TestParityListMatchesMatrix`：对账清单与矩阵真源逐名一致。
 
@@ -71,8 +71,9 @@ node scripts/check-env-parity.mjs --strict
 | D2 | `REDIS_URL` 的 scheme 必须是 `redis` / `rediss` | TS 完全不校验 |
 | D3 | `PORT` / `CCH_INTERNAL_PORT` 必须落在 1..65535 | 契约里 `PORT` 无边界。端口 0 会让网关静默绑随机端口，比启动失败更难排查 |
 | D4 | 兼容入口 `Load` 无法区分未设置与空串 | 它接收 `func(string) string`。生产入口应改用 `LoadLookup(LookupFromOS())`；`cmd/cchd` 目前仍走兼容入口，差异仅影响「显式设为空串」的变量 |
-| D5 | 字符串长度界按 UTF-8 字符数计 | zod 按 UTF-16 code unit 计。阈值仅 1（`ADMIN_TOKEN`）与 16（`CSRF_SECRET`），差异只在含非 BMP 字符的凭据上出现 |
+| D5 | 字符串长度界按 UTF-8 字符数计 | zod 按 UTF-16 code unit 计。长度阈值只在两个凭据上（`ADMIN_TOKEN` 与 `CSRF_SECRET`，均为 16），差异只在含非 BMP 字符的凭据上出现 |
 | D6 | 数值不接受 JS 的十六进制字面量（`Number("0x10")`） | 前导空白裁剪、空串得 0、非数字报错三项与 JS 一致；十六进制字面量在实际部署中不出现 |
+| D7 | `ADMIN_TOKEN` 下限 16 字符（TS 侧为 1，即任意非空值） | 它是管理面唯一的 bearer 凭据；且 CSRF 签名链在 `CSRF_SECRET` 未配时退到本值（见 `go/internal/adminapi/auth.go` 的 `csrfSecret` 链），1 字符等于把 CSRF 密钥也拉成零熵。挡住弱值的收益大于「与 TS 逐字同界」，Node 数据面已退役，不存在两边起不来的场景；用例见 `go/internal/config/env_test.go` 的 `TestEnvCredentialPlaceholdersAndRedaction` |
 
 ## 门禁
 

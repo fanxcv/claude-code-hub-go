@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
@@ -34,6 +35,16 @@ import (
 //
 // 与 Node 的最后一处差别：链走完仍无有效 IP 时 Node 记 null（审计列可空），本函数返回空串，
 // 由调用方原样落库——两者在库里都是 NULL。
+//
+// 采信转发头的前置条件（与 Node 的差别，也是「不可伪造」的唯一保证）：**直连 peer 必须可信**。
+// 转发头是客户端填的，只有前面确实有会追加/覆写它的代理时才能当客户端地址；peer 地址在 TCP 层
+// 由内核定，伪造不了。故 peer 不在可信清单里（或取不到）时，本函数不看任何头、直接回 peer——
+// 默认「什么都不信」，跨机代理用 CCH_TRUSTED_PROXY_CIDRS 显式声明。否则换一个
+// `x-real-ip: <随机值>` 就能把按 IP 计数的登录锁定变成摆设。
+
+// trustedProxyEnvVar 是可信代理清单（Go 专有变量，不进 TS 契约）：逗号分隔的 CIDR 或裸地址，
+// 如 `10.0.0.0/8,192.168.0.0/16,203.0.113.7`。回环恒信（本机反代是常态），不必写进来。
+const trustedProxyEnvVar = "CCH_TRUSTED_PROXY_CIDRS"
 
 // auditIPPickMode 是链内取值模式：最右 / 最左 / 指定下标。
 type auditIPPickMode struct {
@@ -75,6 +86,12 @@ func auditClientIP(ctx context.Context, pools *store.Pools, request *http.Reques
 	if request == nil {
 		return ""
 	}
+	// 不可信的 peer：不采信任何转发头（详见文件头）。顺带的好处是这类请求的审计行不再为空——
+	// 旧实现链路无值时记 NULL，现在至少记下真实对端。
+	peer := normalizeAuditIP(request.RemoteAddr)
+	if !isTrustedProxyPeer(peer) {
+		return peer
+	}
 	rules := defaultAuditIPChain()
 	if pools != nil {
 		if settings, err := pools.FindSystemSettings(ctx); err == nil && settings != nil {
@@ -84,6 +101,46 @@ func auditClientIP(ctx context.Context, pools *store.Pools, request *http.Reques
 		}
 	}
 	return extractAuditIP(request.Header, rules)
+}
+
+// isTrustedProxyPeer 判直连 peer 是否可信：回环恒信，其余由 CCH_TRUSTED_PROXY_CIDRS 声明。
+//
+// peer 为空或不是合法 IP（取不到对端）一律按不可信处理：拿不准时不采信可伪造的头。
+// 清单项解析失败只跳过该项（与 parseAuditIPExtractionConfig 对非法规则同一处置），
+// 不静默放宽，也不把整条清单作废。
+func isTrustedProxyPeer(peer string) bool {
+	addr := net.ParseIP(peer)
+	if addr == nil {
+		return false
+	}
+	if addr.IsLoopback() {
+		return true
+	}
+	for _, item := range strings.Split(os.Getenv(trustedProxyEnvVar), ",") {
+		if network := parseTrustedProxyEntry(item); network != nil && network.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// parseTrustedProxyEntry 解一条清单项：CIDR 或裸地址（裸 v4 作 /32、裸 v6 作 /128）。
+func parseTrustedProxyEntry(raw string) *net.IPNet {
+	entry := strings.TrimSpace(raw)
+	if entry == "" {
+		return nil
+	}
+	if _, network, err := net.ParseCIDR(entry); err == nil {
+		return network
+	}
+	addr := net.ParseIP(entry)
+	if addr == nil {
+		return nil
+	}
+	if v4 := addr.To4(); v4 != nil {
+		return &net.IPNet{IP: v4, Mask: net.CIDRMask(32, 32)}
+	}
+	return &net.IPNet{IP: addr, Mask: net.CIDRMask(128, 128)}
 }
 
 // parseAuditIPExtractionConfig 解码 ip_extraction_config；形状非法时返回 false，由调用方退回默认链。

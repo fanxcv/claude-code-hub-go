@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -135,9 +136,23 @@ func newAuthHarness(t *testing.T, options AuthIssuerOptions) *authHarness {
 }
 
 // post 发一个登录/登出请求；headers 为额外请求头（值写 "k: v" 形式）。
+// peer 用 httptest 的默认值（192.0.2.1:1234，不可信）。
 func (h *authHarness) post(t *testing.T, path string, body string, headers ...string) *httptest.ResponseRecorder {
 	t.Helper()
+	return h.postFrom(t, "192.0.2.1:1234", path, body, headers...)
+}
+
+// postFrom 以指定直连 peer 发一个请求：转发头与 peer 都要能控，才钉得住「按哪个地址计数」。
+func (h *authHarness) postFrom(
+	t *testing.T,
+	remoteAddr string,
+	path string,
+	body string,
+	headers ...string,
+) *httptest.ResponseRecorder {
+	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	request.RemoteAddr = remoteAddr
 	request.Header.Set("Content-Type", "application/json")
 	for _, header := range headers {
 		name, value, found := strings.Cut(header, ": ")
@@ -442,6 +457,36 @@ func TestAuthLoginSuccessResetsRateLimit(t *testing.T) {
 	}
 }
 
+// TestLoginAbuseKeyIgnoresForgedForwardedHeaders 是登录限流的防伪造验收：公网直连的调用方
+// 每次换一个转发头（x-real-ip / x-forwarded-for）也绕不过锁定。
+//
+// 旧实现按转发头计数，换头即换分桶，10 次阈值永远撞不上（S3）。计数键现在只有直连 peer
+// （TCP 对端，客户端填不了），且分桶仍按 peer 分开——不是退化成全局闸门。
+func TestLoginAbuseKeyIgnoresForgedForwardedHeaders(t *testing.T) {
+	harness := newAuthHarness(t, AuthIssuerOptions{})
+	const peer = "198.51.100.9:41234"
+
+	for attempt := 1; attempt <= 10; attempt++ {
+		forged := "203.0.113." + strconv.Itoa(attempt)
+		recorder := harness.postFrom(t, peer, "/api/auth/login", `{"key":"wrong"}`,
+			"X-Real-IP: "+forged, "X-Forwarded-For: "+forged)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("第 %d 次失败应 401（未到阈值），实际 %d：%s", attempt, recorder.Code, recorder.Body.String())
+		}
+	}
+
+	recorder := harness.postFrom(t, peer, "/api/auth/login", `{"key":"wrong"}`,
+		"X-Real-IP: 203.0.113.250", "X-Forwarded-For: 203.0.113.250")
+	if recorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("换头不得绕过锁定（第 11 次应 429），实际 %d：%s", recorder.Code, recorder.Body.String())
+	}
+
+	other := harness.postFrom(t, "198.51.100.10:41234", "/api/auth/login", `{"key":"wrong"}`)
+	if other.Code != http.StatusUnauthorized {
+		t.Fatalf("限流按 peer 分桶，不应连带锁死其它 peer，实际 %d：%s", other.Code, other.Body.String())
+	}
+}
+
 // TestAuthLoginLocaleFromCookieAndHeader 钉住 locale 解析顺序（cookie 优先，其次 Accept-Language）。
 func TestAuthLoginLocaleFromCookieAndHeader(t *testing.T) {
 	cases := []struct {
@@ -458,6 +503,8 @@ func TestAuthLoginLocaleFromCookieAndHeader(t *testing.T) {
 			harness := newAuthHarness(t, AuthIssuerOptions{})
 			// 走限流拒绝路径取文案：它的正文只含文案，不含分类差异。限流只在「该分桶已有记录」时
 			// 锁定（Node 的 check 同样只在已有记录上判），故先记满 10 次失败。
+			// 计数键是直连 peer（不可伪造）：把用例的 peer 声明为可信代理，转发头才会被采信。
+			t.Setenv(trustedProxyEnvVar, "192.0.2.1")
 			for attempt := 0; attempt < 10; attempt++ {
 				harness.abuse.RecordFailure("1.2.3.4", "")
 			}

@@ -1,17 +1,17 @@
 {
   "source": "src/lib/config/env.schema.ts",
-  "sourceSha256": "f7ec9cea4ed61caa9f69fc5b3aac2d4de22d44528246a3497544d879a53a8338",
-  "variableCount": 66,
+  "sourceSha256": "a177f54e7931c7765771990e4135b0d961a14eb7ea3f4ebbd3a8d7360c894fcd",
+  "variableCount": 65,
   "countsByType": {
     "enum": 5,
-    "number": 35,
+    "number": 34,
     "string": 26
   },
   "countsByDomain": {
     "Redis 与缓存": 4,
     "Replay": 4,
     "上游拨号": 4,
-    "其它": 14,
+    "其它": 13,
     "可观测性": 6,
     "多进程与进程内": 2,
     "数据库": 6,
@@ -93,23 +93,6 @@
       "descriptionSummary": "",
       "consumerFiles": [],
       "consumerFileCount": 0
-    },
-    {
-      "name": "DASHBOARD_LOGS_POLL_INTERVAL_MS",
-      "schemaType": "number",
-      "wrapper": "raw",
-      "optional": true,
-      "int": true,
-      "default": 5000,
-      "defaultRaw": "5000",
-      "min": 250,
-      "max": 60000,
-      "boundsKind": "value",
-      "enumValues": null,
-      "descriptionComment": "",
-      "descriptionSummary": "",
-      "consumerFiles": ["src/app/[locale]/dashboard/logs/page.tsx"],
-      "consumerFileCount": 1
     },
     {
       "name": "DB_LOCK_TIMEOUT_MS",
@@ -295,7 +278,10 @@
       "enumValues": null,
       "descriptionComment": "缓存效果计费模拟：理论 vs 实际缓存命中率聚合指标（仅展示，不影响路由，默认开启）",
       "descriptionSummary": "缓存效果计费模拟：理论 vs 实际缓存命中率聚合指标（仅展示，不影响路由，默认开启）",
-      "consumerFiles": ["src/lib/api/v1/schemas/system-config.ts", "src/types/system-config.ts"],
+      "consumerFiles": [
+        "src/lib/api/v1/schemas/system-config.ts",
+        "src/types/system-config.ts"
+      ],
       "consumerFileCount": 2
     },
     {
@@ -653,10 +639,19 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": ["fatal", "error", "warn", "info", "debug", "trace"],
+      "enumValues": [
+        "fatal",
+        "error",
+        "warn",
+        "info",
+        "debug",
+        "trace"
+      ],
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": ["src/lib/logger.ts"],
+      "consumerFiles": [
+        "src/lib/logger.ts"
+      ],
       "consumerFileCount": 1
     },
     {
@@ -738,7 +733,10 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": ["sync", "async"],
+      "enumValues": [
+        "sync",
+        "async"
+      ],
       "descriptionComment": "message_request 写入模式\n- sync（默认）：同步写入，终态与成本在响应尾链上写完再返回\n- async：异步批量写入（Go 侧有界队列 + 单 writer，见 go/internal/terminal/batch.go；\n  队列满时降级为同步写，不丢数据）",
       "descriptionSummary": "message_request 写入模式",
       "consumerFiles": [],
@@ -755,7 +753,11 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": ["development", "production", "test"],
+      "enumValues": [
+        "development",
+        "production",
+        "test"
+      ],
       "descriptionComment": "",
       "descriptionSummary": "",
       "consumerFiles": [
@@ -1016,7 +1018,11 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": ["legacy", "dual", "opaque"],
+      "enumValues": [
+        "legacy",
+        "dual",
+        "opaque"
+      ],
       "descriptionComment": "",
       "descriptionSummary": "",
       "consumerFiles": [],
@@ -1107,7 +1113,10 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": ["off", "enforce"],
+      "enumValues": [
+        "off",
+        "enforce"
+      ],
       "descriptionComment": "===== CCHP 网关移植功能开关 =====\n流式内容门控：off=关闭；enforce=首个有效内容帧前缓冲+failover",
       "descriptionSummary": "===== CCHP 网关移植功能开关 =====",
       "consumerFiles": [],

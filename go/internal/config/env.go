@@ -70,12 +70,12 @@ type envSpec struct {
 
 // envSpecs 按 env-matrix.json 的字母序排列，便于与矩阵逐行对照。
 var envSpecs = []envSpec{
-	{name: "ADMIN_TOKEN", field: "AdminToken", kind: kindCredential, minLen: 1},
+	// ADMIN_TOKEN：下限与 CSRF_SECRET 同档（16 字符）。它是管理面唯一的 bearer 凭据，而 CSRF
+	// 签名链在 CSRF_SECRET 未配时会退到本值（adminapi 的 csrfSecret → adminToken），1 字符等于零熵。
+	{name: "ADMIN_TOKEN", field: "AdminToken", kind: kindCredential, minLen: 16},
 	{name: "AUTH_SESSION_TTL_SECONDS", field: "AuthSessionTTLSeconds", kind: kindNumber, def: "604800", isInt: true, hasMin: true, min: 60, hasMax: true, max: 31536000},
 	{name: "AUTO_MIGRATE", field: "AutoMigrate", kind: kindBool, def: "true"},
 	{name: "CSRF_SECRET", field: "CSRFSecret", kind: kindCredential, minLen: 16},
-	// DASHBOARD_LOGS_POLL_INTERVAL_MS：Go 侧无消费方（日志页由 store 直读，无前端轮询间隔功能）；属 Node 契约残留，保留以维持 env-parity 对账。
-	{name: "DASHBOARD_LOGS_POLL_INTERVAL_MS", field: "DashboardLogsPollIntervalMS", kind: kindNumber, def: "5000", isInt: true, hasMin: true, min: 250, hasMax: true, max: 60000},
 	{name: "DB_LOCK_TIMEOUT_MS", field: "DBLockTimeoutMS", kind: kindOptionalNumber, def: "5000", isInt: true, hasMin: true, min: 100, hasMax: true, max: 60000},
 	{name: "DB_POOL_CONNECT_TIMEOUT", field: "DBPoolConnectTimeout", kind: kindOptionalNumber, hasMin: true, min: 1, hasMax: true, max: 120},
 	{name: "DB_POOL_IDLE_TIMEOUT", field: "DBPoolIdleTimeout", kind: kindOptionalNumber, hasMin: true, min: 0, hasMax: true, max: 3600},
@@ -175,8 +175,6 @@ type EnvConfig struct {
 	AutoMigrate bool `env:"AUTO_MIGRATE"`
 	// CSRF_SECRET
 	CSRFSecret *string `env:"CSRF_SECRET"`
-	// DASHBOARD_LOGS_POLL_INTERVAL_MS
-	DashboardLogsPollIntervalMS int `env:"DASHBOARD_LOGS_POLL_INTERVAL_MS"`
 	// DB_LOCK_TIMEOUT_MS：等待数据库锁的最长时间（毫秒）
 	DBLockTimeoutMS *int `env:"DB_LOCK_TIMEOUT_MS"`
 	// DB_POOL_CONNECT_TIMEOUT：建连超时（秒）
@@ -303,7 +301,7 @@ type EnvConfig struct {
 	TZ string `env:"TZ"`
 }
 
-// LoadEnv 按 envSpecs 装载并校验全部 66 个契约变量。
+// LoadEnv 按 envSpecs 装载并校验全部 65 个契约变量。
 func LoadEnv(lookup LookupEnvFunc) (EnvConfig, error) {
 	return loadEnv(lookup, nil)
 }

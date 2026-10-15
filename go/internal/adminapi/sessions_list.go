@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/fanxcv/claude-code-hub-go/go/internal/session"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/store"
 )
 
@@ -128,11 +129,15 @@ func (api *sessionAPI) handleListSessions(writer http.ResponseWriter, request *h
 	}
 
 	// 1. 取会话 id 集合。活跃分支只取观测集合；全量分支取并集（观测在前，见文件头第 3 条）。
+	//
+	// 读数按 session.MaxSessionListIDs 封顶（见该常量的说明）。恰好等于上限即按「可能被截断」处理：
+	// 宁可多报一次「还有更多」，也不要让分页在覆盖不全时误报「到底了」。
 	observed, err := api.observations.ObservedActiveSessions(ctx)
 	if err != nil {
 		api.writeSessionFailure(writer, request, "listSessions", err)
 		return
 	}
+	truncated := len(observed) >= session.MaxSessionListIDs
 	sessionIDs := observed
 	if query.State == "all" {
 		stored, storedErr := api.observations.AllSessionIDs(ctx)
@@ -140,6 +145,7 @@ func (api *sessionAPI) handleListSessions(writer http.ResponseWriter, request *h
 			api.writeSessionFailure(writer, request, "listSessions", storedErr)
 			return
 		}
+		truncated = truncated || len(stored) >= session.MaxSessionListIDs
 		sessionIDs = appendUniqueStrings(observed, stored)
 	}
 	if len(sessionIDs) == 0 {
@@ -187,6 +193,13 @@ func (api *sessionAPI) handleListSessions(writer http.ResponseWriter, request *h
 	}
 
 	if query.State != "all" {
+		// 活跃分支的响应体没有 hasMore* 这类字段（形状不能改），截断只能记一条 warn 供运维察觉。
+		if truncated && api.logger != nil {
+			api.logger.Warn("sessions_list_truncated", map[string]any{
+				"state": query.State,
+				"cap":   session.MaxSessionListIDs,
+			})
+		}
 		adminWriteJSON(writer, http.StatusOK, sessionsListBody{Items: rows})
 		return
 	}
@@ -204,19 +217,31 @@ func (api *sessionAPI) handleListSessions(writer http.ResponseWriter, request *h
 		inactive = append(inactive, row)
 	}
 
+	adminWriteJSON(writer, http.StatusOK, buildAllSessionsBody(active, inactive, query, truncated))
+}
+
+// buildAllSessionsBody 组装 `?state=all` 的分页响应（字段与顺序不变）。
+//
+// truncated 为真表示 id 集合已被 session.MaxSessionListIDs 截断：此时「还有更多」为真——
+// 截断只保证覆盖前缀，若按截断后的长度算 hasMore*，翻到第 25 页以后的调用方会看到假的「到底了」。
+func buildAllSessionsBody(
+	active, inactive []activeSessionBody,
+	query sessionsListQuery,
+	truncated bool,
+) allSessionsBody {
 	activeOffset := (query.ActivePage - 1) * query.PageSize
 	inactiveOffset := (query.InactivePage - 1) * query.PageSize
 	paginatedActive := sliceSessions(active, activeOffset, query.PageSize)
 	paginatedInactive := sliceSessions(inactive, inactiveOffset, query.PageSize)
 
-	adminWriteJSON(writer, http.StatusOK, allSessionsBody{
+	return allSessionsBody{
 		Active:          paginatedActive,
 		Inactive:        paginatedInactive,
 		TotalActive:     len(active),
 		TotalInactive:   len(inactive),
-		HasMoreActive:   activeOffset+len(paginatedActive) < len(active),
-		HasMoreInactive: inactiveOffset+len(paginatedInactive) < len(inactive),
-	})
+		HasMoreActive:   truncated || activeOffset+len(paginatedActive) < len(active),
+		HasMoreInactive: truncated || inactiveOffset+len(paginatedInactive) < len(inactive),
+	}
 }
 
 // buildActiveSessionBody 把一条聚合结果转成一行会话（Node 的两个 map 回调逐字一致）。

@@ -86,8 +86,8 @@ func expectedDefaultText(spec envSpec) string {
 // 三处结构必须一一对应：规格表、结构体字段与标签、对账清单。
 // 任一方向多出或少掉一项都说明有变量会静默分叉。
 func TestEnvSpecsStructAndParityListAreBijective(t *testing.T) {
-	if len(envSpecs) != 66 {
-		t.Fatalf("规格表应为 66 项，收到 %d", len(envSpecs))
+	if len(envSpecs) != 65 {
+		t.Fatalf("规格表应为 65 项，收到 %d", len(envSpecs))
 	}
 
 	specNames := map[string]bool{}
@@ -386,6 +386,32 @@ func TestEnvCredentialPlaceholdersAndRedaction(t *testing.T) {
 		t.Fatal("CSRF_SECRET 不足 16 字符应被拒绝")
 	} else if strings.Contains(err.Error(), shortSecret) {
 		t.Fatalf("错误信息泄漏了 CSRF_SECRET 原文: %v", err)
+	}
+
+	// ADMIN_TOKEN 与 CSRF_SECRET 同档下限：15 字符被拒（弱值 fail fast），恰好 16 字符放行。
+	// 占位符不参与下限判定——它先被归一成「未配置」，故 change-me（9 字符）不报错。
+	const shortAdminToken = "admin-token-015"
+	if len(shortAdminToken) != 15 {
+		t.Fatalf("用例前提变了：弱值应为 15 字符，实际 %d", len(shortAdminToken))
+	}
+	if _, err := LoadEnv(lookupMap(map[string]string{"ADMIN_TOKEN": shortAdminToken})); err == nil {
+		t.Fatal("ADMIN_TOKEN 不足 16 字符应被拒绝")
+	} else if strings.Contains(err.Error(), shortAdminToken) {
+		t.Fatalf("错误信息泄漏了 ADMIN_TOKEN 原文: %v", err)
+	}
+	for _, placeholder := range []string{"change-me", ""} {
+		placeholderEnv, placeholderErr := LoadEnv(lookupMap(map[string]string{"ADMIN_TOKEN": placeholder}))
+		if placeholderErr != nil || placeholderEnv.AdminToken != nil {
+			t.Fatalf("ADMIN_TOKEN=%q 应视为未配置，收到 %v / %v",
+				placeholder, placeholderEnv.AdminToken, placeholderErr)
+		}
+	}
+	const boundaryAdminToken = "admin-token-0016"
+	if len(boundaryAdminToken) != 16 {
+		t.Fatalf("用例前提变了：边界值应为 16 字符，实际 %d", len(boundaryAdminToken))
+	}
+	if boundary, err := LoadEnv(lookupMap(map[string]string{"ADMIN_TOKEN": boundaryAdminToken})); err != nil || boundary.AdminToken == nil {
+		t.Fatalf("恰好 16 字符的 ADMIN_TOKEN 应放行，收到 %v / %v", boundary.AdminToken, err)
 	}
 
 	// 已配置时摘要只报「已配置」，不带原文。

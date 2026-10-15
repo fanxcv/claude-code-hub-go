@@ -2,8 +2,8 @@
 
 由 `scripts/export-env-matrix.ts` 从 `src/lib/config/env.schema.ts` 生成，请勿手工编辑。
 
-- 变量总数：**66**
-- 源文件 SHA256：`f7ec9cea4ed61caa9f69fc5b3aac2d4de22d44528246a3497544d879a53a8338`
+- 变量总数：**65**
+- 源文件 SHA256：`a177f54e7931c7765771990e4135b0d961a14eb7ea3f4ebbd3a8d7360c894fcd`
 - 重生成：`bun scripts/export-env-matrix.ts`
 
 ## Redis 与缓存（4）
@@ -33,12 +33,11 @@
 | `FETCH_CONNECT_TIMEOUT` | number | `30000` | — | （无静态引用） |
 | `FETCH_HEADERS_TIMEOUT` | number | `600_000` | — | （无静态引用） |
 
-## 其它（14）
+## 其它（13）
 
 | 变量 | 类型 | 默认值 | 约束 | 主要消费方 |
 | --- | --- | --- | --- | --- |
 | `AUTO_MIGRATE` | string | `"true"` | — | （无静态引用） |
-| `DASHBOARD_LOGS_POLL_INTERVAL_MS` | number | `5000` | >= 250；<= 60000 | `src/app/[locale]/dashboard/logs/page.tsx` |
 | `ENABLE_CACHE_EFFECTIVENESS` | string | `"true"` | — | `src/lib/api/v1/schemas/system-config.ts` |
 | `ENABLE_PREFIX_AFFINITY` | string | `"false"` | — | （无静态引用） |
 | `ENABLE_REQUEST_REPLAY` | string | `"true"` | — | `src/app/[locale]/settings/config/page.tsx` |

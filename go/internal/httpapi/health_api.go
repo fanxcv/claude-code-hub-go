@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/appversion"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/ipgeo"
 )
 
 // 本文件是 Node 的 `/api/health`、`/api/health/ready`、`/api/health/live` 的 Go 落点
@@ -30,6 +32,9 @@ import (
 //  2. `version` 没有 ServerOptions 入口时按「VERSION 文件 → 环境变量 → 常量」取值（见 appVersion）。
 //     Node 取 `NEXT_PUBLIC_APP_VERSION` → `VERSION` → `package.json`；Go 侧的取值统一在
 //     `internal/appversion`，装配处注入同一个值，故这里的三段式只做兜底。
+//  3. `version` 只回给本机/内网的调用方（见 `healthVersionVisible`）：这三条不查登录，
+//     对公网回显构建版本等于白送一个指纹口。字段与判定档位都不变，只是取值按调用方来源分两种。
+//     运维侧的探测（ docker healthcheck、k8s probe、内网监控）都从本机或内网来，照旧拿到版本。
 
 // healthProcessStartedAt 近似进程启动时刻（见文件头差异 1）。
 var healthProcessStartedAt = time.Now()
@@ -58,11 +63,27 @@ type healthResponse struct {
 // /api/health/ready）返回完全相同的正文与状态码（Node 侧只是失败日志的 action 文案不同）。
 func (s *Server) handleHealthAPI(writer http.ResponseWriter, request *http.Request) {
 	report := s.buildHealth(request.Context())
+	if !healthVersionVisible(request) {
+		report.Version = ""
+	}
 	status := http.StatusOK
 	if report.Status == "unhealthy" {
 		status = http.StatusServiceUnavailable
 	}
 	writeJSON(writer, status, report)
+}
+
+// healthVersionVisible 判「这个调用方能不能看版本细节」。
+//
+// 判据只看**直连 peer 地址**（不看 X-Forwarded-For 一类可伪造的头）：回环或私有地址→可见。
+// 之所以不认头：探针端点不查登录，若按头判，任何人加一个 `x-real-ip: 127.0.0.1` 就能把版本要回去，
+// 那等于没判。私有判定复用 `ipgeo.IsPrivate`（与出站归属地判定的同一份清单，不另立一套网段）。
+func healthVersionVisible(request *http.Request) bool {
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err != nil {
+		host = request.RemoteAddr
+	}
+	return ipgeo.IsPrivate(host)
 }
 
 // handleHealthLive 复刻 `health/live/route.ts`：只证明进程活着，不查依赖。

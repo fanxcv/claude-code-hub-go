@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,8 +13,12 @@ import (
 // cf-connecting-ip（它们在没有可信代理覆写时是客户端可控的），这是 Node 默认值的全部要点。
 
 // auditIPRequest 造一个带指定头的请求。
+//
+// peer 默认给回环（本机反代）：默认链只在直连 peer 可信时才被采信，而本文件前半部分的用例
+// 钉的是「链怎么取值」。peer 不可信的形态单独由 TestAuditClientIPIgnoresForwardedHeadersFromUntrustedPeer 钉住。
 func auditIPRequest(headers map[string]string) *http.Request {
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/keys/1", nil)
+	request.RemoteAddr = "127.0.0.1:51234"
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
@@ -84,6 +89,79 @@ func TestAuditClientIPDefaultChainIgnoresUntrustedHeaders(t *testing.T) {
 			t.Fatalf("审计 IP = %q，期望最右的 198.51.100.7", got)
 		}
 	})
+}
+
+// TestAuditClientIPIgnoresForwardedHeadersFromUntrustedPeer 钉住「不可伪造维度」这条不变量：
+// peer 不可信（公网直连）时，转发头一律不看；声明为可信代理后才回到可配置链。
+//
+// 为什么必须有这条：转发头是客户端可控的，旧实现直接采信最右一段，于是登录失败限流只要每次
+// 换一个 `x-real-ip` 就能永远不触发锁定（见 TestLoginAbuseKeyIgnoresForgedForwardedHeaders）。
+func TestAuditClientIPIgnoresForwardedHeadersFromUntrustedPeer(t *testing.T) {
+	forged := map[string]string{
+		"X-Real-IP":       "203.0.113.9",
+		"X-Forwarded-For": "203.0.113.9, 198.51.100.7",
+	}
+
+	t.Run("公网直连的伪造头不得胜出", func(t *testing.T) {
+		request := auditIPRequest(forged)
+		request.RemoteAddr = "198.51.100.9:41234"
+		if got := auditClientIP(t.Context(), nil, request); got != "198.51.100.9" {
+			t.Fatalf("审计 IP = %q，期望直连 peer 的 198.51.100.9", got)
+		}
+	})
+
+	t.Run("清单内的代理才采信头", func(t *testing.T) {
+		t.Setenv(trustedProxyEnvVar, " 198.51.100.9 , 2001:db8::/32 , not-an-entry ")
+		request := auditIPRequest(forged)
+		request.RemoteAddr = "198.51.100.9:41234"
+		if got := auditClientIP(t.Context(), nil, request); got != "203.0.113.9" {
+			t.Fatalf("审计 IP = %q，期望可信代理追加的 203.0.113.9", got)
+		}
+	})
+
+	t.Run("清单只覆盖声明的地址", func(t *testing.T) {
+		t.Setenv(trustedProxyEnvVar, "2001:db8::/32")
+		request := auditIPRequest(forged)
+		request.RemoteAddr = "198.51.100.9:41234"
+		if got := auditClientIP(t.Context(), nil, request); got != "198.51.100.9" {
+			t.Fatalf("审计 IP = %q，期望不在清单内的 peer 自己", got)
+		}
+	})
+
+	t.Run("peer 取不到时不采信任何头", func(t *testing.T) {
+		request := auditIPRequest(forged)
+		request.RemoteAddr = ""
+		if got := auditClientIP(t.Context(), nil, request); got != "" {
+			t.Fatalf("审计 IP = %q，期望空串", got)
+		}
+	})
+}
+
+// TestParseTrustedProxyEntry 钉住清单项的解析边界：CIDR、裸 v4/v6、非法项一律不信任。
+func TestParseTrustedProxyEntry(t *testing.T) {
+	cases := []struct {
+		entry string
+		peer  string
+		want  bool
+	}{
+		{"10.0.0.0/8", "10.9.9.9", true},
+		{"10.0.0.0/8", "11.9.9.9", false},
+		{"203.0.113.7", "203.0.113.7", true},
+		{"203.0.113.7", "203.0.113.8", false},
+		{"2001:db8::/32", "2001:db8::1", true},
+		{"2001:db8::1", "2001:db8::1", true},
+		{"2001:db8::1", "2001:db8::2", false},
+		{"", "203.0.113.7", false},
+		{"not-an-entry", "203.0.113.7", false},
+	}
+	for _, testCase := range cases {
+		network := parseTrustedProxyEntry(testCase.entry)
+		got := network != nil && network.Contains(net.ParseIP(testCase.peer))
+		if got != testCase.want {
+			t.Errorf("parseTrustedProxyEntry(%q).Contains(%q) = %v，期望 %v",
+				testCase.entry, testCase.peer, got, testCase.want)
+		}
+	}
 }
 
 // TestAuditClientIPWithoutHeaders 覆盖「XFF 不存在」：链走完无值即空串（Node 记 null）。
@@ -226,6 +304,9 @@ func TestNormalizeAuditIP(t *testing.T) {
 // 用例刻意让旧实现与正确结果不同：旧 keys 实现取最左段（伪造值），旧 users 实现取 RemoteAddr
 // （离疑地址），两者都拿不到可信代理追加在最右的真实地址。
 func TestAuditClientIPWiredIntokeysAndUsersEmitters(t *testing.T) {
+	// 10.9.9.9 是反代（peer），转发头里的 198.51.100.7 是它追加的真实地址：只有声明 peer 可信，
+	// 默认链的最右值才是客户端地址。
+	t.Setenv(trustedProxyEnvVar, "10.9.9.9")
 	request := auditIPRequest(map[string]string{
 		"X-Forwarded-For": "1.2.3.4, 198.51.100.7",
 	})

@@ -30,6 +30,30 @@ func observedSessionInfoKey(sessionIdentity string) string {
 	return observedSessionInfoPrefix + sessionIdentity + observedSessionInfoSuffix
 }
 
+// MaxSessionListIDs 是单次会话列表读取的会话身份上限（ZSET 成员与 `session:*:info` 扫描各算一份）。
+//
+// 为什么是 5000：列表页每页上限 200（`parseSessionsListQuery`），5000 = 25 页，超出任何人工翻阅量；
+// 而单请求代价随它线性——5000 条成员约 0.5 MB、一次 pipeline 5000 条 EXISTS、一条 5000 参数的
+// 聚合 SQL（PG 参数上限 65535），都在可控范围。观测窗口（SESSION_TTL）默认 300 秒，
+// 5000 条≈每秒 16 个新会话，实际部署通常远低于此。
+//
+// 截断方向：ZSET 取「最近见到」的 5000 条（score 是最后见到时刻，尾部最新）；扫描只能按 SCAN 的
+// 返回顺序截（SCAN 本身无序，定义不了「更近」）。调用方以 `len(ids) == MaxSessionListIDs` 判
+// 「可能被截断」，并把事实透到响应的 hasMore* 字段（见 adminapi 的 handleListSessions）。
+const MaxSessionListIDs = 5000
+
+// appendBounded 把一批会话 id 追加进 ids，总长不超 MaxSessionListIDs。
+func appendBounded(ids []string, batch []string) []string {
+	remaining := MaxSessionListIDs - len(ids)
+	if remaining <= 0 {
+		return ids
+	}
+	if len(batch) > remaining {
+		batch = batch[:remaining]
+	}
+	return append(ids, batch...)
+}
+
 // observedSessionTTL 取观测窗口（Node 的 SessionTracker.SESSION_TTL_MS）。
 //
 // Node 的 SESSION_TTL_SECONDS 与绑定 TTL 同源（SESSION_TTL 环境变量，默认 300），故这里直接
@@ -77,7 +101,9 @@ func (b *Binder) ObservedActiveSessions(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	members, err := raw.ZRange(ctx, key, 0, -1).Result()
+	// 只取最近的 MaxSessionListIDs 条（负下标从尾部数），与 `ZRange(0, -1)` 在未超限时等价，
+	// 返回顺序仍是 score 升序；超限时截掉最旧的一批，而不是把整个 ZSET 拉进内存。
+	members, err := raw.ZRange(ctx, key, -int64(MaxSessionListIDs), -1).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +177,9 @@ func (b *Binder) ObservedConcurrentCounts(
 //
 // SCAN 而不是 KEYS：Node 也是 SCAN（COUNT 100），大库上 KEYS 会阻塞整个 Redis。
 // 去重与顺序：Node 按 SCAN 批次累加、不去重（同一 id 不会出现两次：一个键只被扫一次）。
+//
+// 扫到 MaxSessionListIDs 就停：键空间由用户与历史会话决定，不设上限时一次管理面 GET 会把
+// 整库的 `session:*:info` 全扫一遍（随后还有一条同等规模的聚合 SQL）。
 func (b *Binder) AllSessionIDs(ctx context.Context) ([]string, error) {
 	if !b.Ready() {
 		return nil, ErrNilClient
@@ -164,11 +193,13 @@ func (b *Binder) AllSessionIDs(ctx context.Context) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		batch := make([]string, 0, len(keys))
 		for _, key := range keys {
-			sessionIDs = append(sessionIDs, trimSessionInfoKey(key))
+			batch = append(batch, trimSessionInfoKey(key))
 		}
+		sessionIDs = appendBounded(sessionIDs, batch)
 		cursor = next
-		if cursor == 0 {
+		if cursor == 0 || len(sessionIDs) >= MaxSessionListIDs {
 			return sessionIDs, nil
 		}
 	}

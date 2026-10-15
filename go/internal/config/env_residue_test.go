@@ -23,7 +23,6 @@ type envResidueEntry struct {
 }
 
 var envSpecResidue = []envResidueEntry{
-	{"DashboardLogsPollIntervalMS", "Go 侧日志页由 store 直读，没有前端轮询间隔这回事"},
 	{"DetachedStreamBudgetBytes", "分离流（断开后上游续流）在 Go 侧从未实现，仅剩跨字段校验"},
 	{"DetachedStreamMaxConcurrency", "分离流未实现，Go 侧无并发上限"},
 	{"DetachedStreamMeteringReserveBytes", "分离流未实现，Go 侧无计量预留"},

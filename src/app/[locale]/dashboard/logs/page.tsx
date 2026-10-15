@@ -15,8 +15,7 @@ import { UsageLogsSkeleton } from "./_components/usage-logs-skeleton";
  * - `getSystemSettings()`（`@/repository/system-config`）→ 客户端 action `/api/v1/system/settings`；
  * - `resolveSystemTimezone()`（服务端：DB 设置 → env `TZ` → UTC）→ 客户端 action
  * `/api/v1/system/timezone`。
- * 已知差异（与 `settings/config/page.tsx` 的同类记载一致）：`DASHBOARD_LOGS_POLL_INTERVAL_MS`
- * 来自 `getEnvConfig()`，浏览器里没有 `process.env`，故不再透传。使用记录页的刷新间隔改由
+ * 已知差异（与 `settings/config/page.tsx` 的同类记载一致）：使用记录页的刷新间隔由
  * 用户在本机选择（`useLogsRefreshPreference`，存 localStorage，默认 3 秒、可关闭），
  * 与刷新模式（轮询 / 推送）一起在页面工具栏切换；`UsageLogsViewVirtualized` 的
  * `logsRefreshIntervalMs` 保留为「出厂默认覆盖」入口，将来接 `__CCH_BOOTSTRAP__` 或系统设置。

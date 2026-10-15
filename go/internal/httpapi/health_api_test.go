@@ -168,3 +168,53 @@ func TestHealthVersionMatchesSingleSource(t *testing.T) {
 		t.Errorf("本端点 (%q) 与 appversion.ResolveBare (%q) 必须同值", got, want)
 	}
 }
+
+// 版本细节只回给本机/内网的调用方：公网 peer 拿到空串，回环/内网 peer 照旧拿版本，
+// 而 status 与 components 不受影响（探针可用性与响应形状都不变）。
+//
+// 判据只有直连 peer：带 `x-real-ip: 127.0.0.1` 的公网直连依然是空串，否则加个头就能把版本要回去。
+func TestHealthVersionVisibleOnlyToPrivatePeers(t *testing.T) {
+	server, _ := newTestServer(t, stubProber{pg: StatusOK, redis: StatusOK, rules: StatusOK}, true)
+	server.version = func() string { return "v9.9.9" }
+
+	cases := []struct {
+		name       string
+		remoteAddr string
+		headers    map[string]string
+		want       string
+	}{
+		{name: "公网直连不回版本", remoteAddr: "203.0.113.9:41234", want: ""},
+		{name: "公网直连伪造转发头也不回版本", remoteAddr: "203.0.113.9:41234",
+			headers: map[string]string{"X-Real-IP": "127.0.0.1", "X-Forwarded-For": "127.0.0.1"}, want: ""},
+		{name: "回环 peer 照旧回版本", remoteAddr: "127.0.0.1:41234", want: "9.9.9"},
+		{name: "内网 peer 照旧回版本", remoteAddr: "[fd00::9]:41234", want: "9.9.9"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+			request.RemoteAddr = testCase.remoteAddr
+			for name, value := range testCase.headers {
+				request.Header.Set(name, value)
+			}
+
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("探针可用性必须保持，收到 %d", recorder.Code)
+			}
+			payload := decodeHealth(t, recorder.Body.Bytes())
+			if payload["status"] != "healthy" {
+				t.Fatalf("status 不受版本可见性影响，收到 %v", payload["status"])
+			}
+			column, present := payload["version"]
+			if !present {
+				t.Fatalf("version 键必须保留（形状不变）: %v", payload)
+			}
+			if column != testCase.want {
+				t.Fatalf("version = %v，期望 %q", column, testCase.want)
+			}
+			componentOf(t, payload, "database")
+		})
+	}
+}
