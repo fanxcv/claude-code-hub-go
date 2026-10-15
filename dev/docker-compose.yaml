@@ -58,7 +58,8 @@ services:
       ENABLE_RATE_LIMIT: ${ENABLE_RATE_LIMIT:-true}
       AUTH_SESSION_TTL_SECONDS: ${AUTH_SESSION_TTL_SECONDS:-604800}
       SESSION_TTL: ${SESSION_TTL:-300}
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-cch-dev-admin}
+      # 须 ≥ 16 字符：go/internal/config/env.go 的 kindCredential 下限，低于则启动即 config_invalid。
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-cch-dev-admin-token}
       TZ: Asia/Shanghai
     ports:
       - "${APP_PORT:-23000}:3000"

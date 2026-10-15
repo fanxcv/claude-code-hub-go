@@ -23,7 +23,8 @@ export DB_NAME ?= claude_code_hub
 export POSTGRES_PORT ?= 5432
 export REDIS_PORT ?= 6379
 export APP_PORT ?= 23000
-export ADMIN_TOKEN ?= cch-dev-admin
+# 须 ≥ 16 字符：go/internal/config/env.go 的 kindCredential 下限，低于则启动即 config_invalid。
+export ADMIN_TOKEN ?= cch-dev-admin-token
 export APP_VERSION ?= dev
 export ENABLE_RATE_LIMIT ?= true
 
