@@ -278,10 +278,7 @@
       "enumValues": null,
       "descriptionComment": "缓存效果计费模拟：理论 vs 实际缓存命中率聚合指标（仅展示，不影响路由，默认开启）",
       "descriptionSummary": "缓存效果计费模拟：理论 vs 实际缓存命中率聚合指标（仅展示，不影响路由，默认开启）",
-      "consumerFiles": [
-        "src/lib/api/v1/schemas/system-config.ts",
-        "src/types/system-config.ts"
-      ],
+      "consumerFiles": ["src/lib/api/v1/schemas/system-config.ts", "src/types/system-config.ts"],
       "consumerFileCount": 2
     },
     {
@@ -639,19 +636,10 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "fatal",
-        "error",
-        "warn",
-        "info",
-        "debug",
-        "trace"
-      ],
+      "enumValues": ["fatal", "error", "warn", "info", "debug", "trace"],
       "descriptionComment": "",
       "descriptionSummary": "",
-      "consumerFiles": [
-        "src/lib/logger.ts"
-      ],
+      "consumerFiles": ["src/lib/logger.ts"],
       "consumerFileCount": 1
     },
     {
@@ -733,10 +721,7 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "sync",
-        "async"
-      ],
+      "enumValues": ["sync", "async"],
       "descriptionComment": "message_request 写入模式\n- sync（默认）：同步写入，终态与成本在响应尾链上写完再返回\n- async：异步批量写入（Go 侧有界队列 + 单 writer，见 go/internal/terminal/batch.go；\n  队列满时降级为同步写，不丢数据）",
       "descriptionSummary": "message_request 写入模式",
       "consumerFiles": [],
@@ -753,18 +738,14 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "development",
-        "production",
-        "test"
-      ],
+      "enumValues": ["development", "production", "test"],
       "descriptionComment": "",
       "descriptionSummary": "",
       "consumerFiles": [
         "src/lib/config/env-flags.ts",
         "src/lib/provider-endpoints/probe-logs-batcher.ts",
-        "src/app/[locale]/settings/providers/_components/provider-endpoint-hover.tsx",
         "src/lib/utils/zod-i18n.ts",
+        "src/app/[locale]/settings/providers/_components/provider-endpoint-hover.tsx",
         "src/app/[locale]/dashboard/_components/user/hooks/use-model-suggestions.ts"
       ],
       "consumerFileCount": 7
@@ -1018,11 +999,7 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "legacy",
-        "dual",
-        "opaque"
-      ],
+      "enumValues": ["legacy", "dual", "opaque"],
       "descriptionComment": "",
       "descriptionSummary": "",
       "consumerFiles": [],
@@ -1113,10 +1090,7 @@
       "min": null,
       "max": null,
       "boundsKind": null,
-      "enumValues": [
-        "off",
-        "enforce"
-      ],
+      "enumValues": ["off", "enforce"],
       "descriptionComment": "===== CCHP 网关移植功能开关 =====\n流式内容门控：off=关闭；enforce=首个有效内容帧前缓冲+failover",
       "descriptionSummary": "===== CCHP 网关移植功能开关 =====",
       "consumerFiles": [],

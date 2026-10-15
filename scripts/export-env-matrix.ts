@@ -16,8 +16,9 @@
  *   bun scripts/export-env-matrix.ts --out-dir=X  # 自定义输出目录
  */
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, mkdirSync, writeFileSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, mkdirSync, writeFileSync, statSync, existsSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,6 +26,7 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE_REL = "src/lib/config/env.schema.ts";
 const DEFAULT_OUT_DIR = "tests/load/env-parity";
 const MAX_CONSUMER_FILES = 5;
+const BIOME_BIN = join(REPO_ROOT, "node_modules", ".bin", "biome");
 
 interface VariableEntry {
   name: string;
@@ -510,6 +512,26 @@ async function runtimeCrossCheck(matrix: Matrix): Promise<number> {
   return failures;
 }
 
+/**
+ * JSON 生成物必须与 biome formatter 逐字节一致，否则 `bun run lint`（`biome check .`）会红：
+ * biome.json 的 files.includes 覆盖 tests/**，而 JSON.stringify(matrix, null, 2) 把数组一律展开，
+ * 装得下的短数组 biome 却折叠成一行——schema 一动即触发（2026-10-15 实例：删掉一个 env
+ * 后枚举数组变短，lint 立即变红）。
+ *
+ * 走 biome 的 stdin 模式而非 `format --write <jsonPath>`：后者受 files.includes 过滤，
+ * `--out-dir` 指到仓库外时直接 rc=1（实测）。
+ */
+function formatJsonWithBiome(matrix: Matrix): string {
+  if (!existsSync(BIOME_BIN)) {
+    throw new Error(`未找到 ${BIOME_BIN}：JSON 生成物需经 biome 格式化，请先 bun install（或 bun run lint）`);
+  }
+  return execFileSync(BIOME_BIN, ["format", "--stdin-file-path=env-matrix.json"], {
+    cwd: REPO_ROOT,
+    input: `${JSON.stringify(matrix, null, 2)}\n`,
+    encoding: "utf8",
+  });
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const check = args.includes("--check");
@@ -540,7 +562,7 @@ async function main(): Promise<void> {
   mkdirSync(outDir, { recursive: true });
   const jsonPath = join(outDir, "env-matrix.json");
   const mdPath = join(outDir, "env-matrix.md");
-  writeFileSync(jsonPath, `${JSON.stringify(matrix, null, 2)}\n`);
+  writeFileSync(jsonPath, formatJsonWithBiome(matrix));
   writeFileSync(mdPath, renderMarkdown(matrix, crossFieldRules));
 
   console.log(`源文件 ${SOURCE_REL}（sha256 ${matrix.sourceSha256.slice(0, 12)}…）`);
