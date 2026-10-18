@@ -115,10 +115,31 @@ func decodeAnthropicMedia(part *Value, kind BlockKind, loss *LossCollector, dire
 		url, _ := stringField(source, "url")
 		block.URL = url
 		return block, true
-	default:
-		loss.Rewritten(LossUnknownField, direction, string(kind)+".source.type")
-		return opaqueBlock(anthropicWire, part), true
+	case "text":
+		// 纯文本文档没有媒体载荷，只能以文本承载；与 relaykit 的 chat 侧降级同一语义。
+		// 落到 BlockText 而非 BlockDocument：后者的编码器只认 data/url（encodeAnthropicMedia），
+		// 塞进去会被记成 document 丢失，把已送达的内容报成损失。
+		if kind == BlockDocument {
+			text, _ := stringField(source, "data")
+			loss.Rewritten(LossDocument, direction, "document.source.text_to_text")
+			textual := textBlock(text)
+			textual.CacheHint = block.CacheHint
+			return textual, true
+		}
 	}
+	// 其余（含 Files API 的 `source.type=file`）指向我们取不到的对象：媒体不可达。
+	// 记 LossImage / LossDocument 而非 unknown_field，且**不装箱**——装箱后编码器会再记一条
+	// opaque dropped，同一件事两笔台账。
+	loss.Dropped(mediaLossCapability(kind), direction, string(kind)+".source."+sourceType)
+	return Block{}, false
+}
+
+// mediaLossCapability 把块类映射到「媒体不可达」的归因类别。
+func mediaLossCapability(kind BlockKind) string {
+	if kind == BlockDocument {
+		return LossDocument
+	}
+	return LossImage
 }
 
 // decodeAnthropicToolResult 把 tool_result 块解为独立 item；is_error 无法承载时声明损失。
@@ -411,6 +432,15 @@ func decodeAnthropicRequest(body *Value, ctx ConvertCtx) DecodeResult[*Request] 
 	}
 	if reasoning := decodeAnthropicReasoning(source, loss); reasoning != nil {
 		request.Reasoning = reasoning
+	}
+	// metadata 整块进枢纽（含 user_id）：它在 knownKeys 里，不搬就是静默消失。
+	if metadata := fieldOrNil(source, "metadata"); isMeaningful(metadata) {
+		request.Metadata = metadata
+	}
+	// 顶层 cache_control（请求级自动缓存）无任何承载位，且不在 knownKeys 里，
+	// 不显式记就是零台账。此处只记不消费。
+	if isMeaningful(fieldOrNil(source, "cache_control")) {
+		loss.Dropped(LossCacheControl, "request", "cache_control")
 	}
 	if passthrough := collectPassthrough(source, anthropicKnownRequestKeys); len(passthrough.Members()) > 0 {
 		request.Passthrough[anthropicWire] = passthrough

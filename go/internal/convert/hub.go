@@ -165,7 +165,12 @@ type Request struct {
 	// 编码器原样写出，anthropic（无此概念）仍记 info 档损失。
 	PromptCacheKey    string
 	HasPromptCacheKey bool
-	Passthrough       map[WireProtocol]*Value
+	// Metadata 是客户端的自由表单据（Anthropic 的 `metadata.user_id` 是其中唯一有共识的键）。
+	//
+	// 为何进枢纽：它原先只在 knownKeys 里被跳过，于是既不写出也不记损——responses 侧本有
+	// 同名承载位却拿不到值。整块搬（而非只取 user_id），回写时字节保真。
+	Metadata    *Value
+	Passthrough map[WireProtocol]*Value
 }
 
 // Response 是枢纽响应。
