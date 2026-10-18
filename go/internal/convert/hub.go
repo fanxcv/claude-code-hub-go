@@ -548,11 +548,16 @@ const (
 // 也无法按来源过滤，跟「任意未知字段丢了」完全不可区分。前缀统一为 `unknown_field.`，
 // 故“是否属于 catch-all 家族”可由前缀判定（服务端与界面两侧同一判据）。
 const (
-	LossUnknownFieldTool      = "unknown_field.tool"
-	LossUnknownFieldRefusal   = "unknown_field.refusal"
-	LossUnknownFieldContent   = "unknown_field.content"
-	LossUnknownFieldMessage   = "unknown_field.message"
-	LossUnknownFieldParam     = "unknown_field.param"
+	LossUnknownFieldTool    = "unknown_field.tool"
+	LossUnknownFieldRefusal = "unknown_field.refusal"
+	LossUnknownFieldContent = "unknown_field.content"
+	LossUnknownFieldMessage = "unknown_field.message"
+	LossUnknownFieldParam   = "unknown_field.param"
+	// LossUnknownFieldIdentity 是「身份/观测类元数据」子类：客户端把它当作请求标识或
+	// 计费标签（metadata / user / safety_identifier / service_tier），目标线不承载它时
+	// 上游看到的生成内容**一点不变**——与 unknown_field.param 里那些真改行为的采样参数
+	// 必须分档，否则每条带 metadata 的请求都挂「内容改写」徽章，真损失被淹没。
+	LossUnknownFieldIdentity  = "unknown_field.identity"
 	LossUnknownFieldStructure = "unknown_field.structure"
 	// LossUnknownFieldOther 是未能归类的兜底子类：新增记损站点若引入新前缀，落这里而不是消失。
 	LossUnknownFieldOther = "unknown_field.other"
@@ -631,15 +636,16 @@ const (
 // 新增非 rewrite 档能力只改这张表，随后按 TestLossSeverityGeneratedTableIsUpToDate 的提示
 // 重新生成界面侧的表即可。
 var lossSeverityByCapability = map[string]LossSeverity{
-	LossStoreFlag:         SeverityInfo,
-	LossPromptCacheKey:    SeverityInfo,
-	LossReasoningSummary:  SeverityInfo,
-	LossThinkingSignature: SeverityDegrade,
-	LossThinkingDerived:   SeverityDegrade,
-	LossReasoningReplay:   SeverityDegrade,
-	LossCacheControl:      SeverityDegrade,
-	LossThinkingEncrypted: SeverityDegrade,
-	LossToolStrict:        SeverityDegrade,
+	LossStoreFlag:            SeverityInfo,
+	LossPromptCacheKey:       SeverityInfo,
+	LossReasoningSummary:     SeverityInfo,
+	LossUnknownFieldIdentity: SeverityInfo,
+	LossThinkingSignature:    SeverityDegrade,
+	LossThinkingDerived:      SeverityDegrade,
+	LossReasoningReplay:      SeverityDegrade,
+	LossCacheControl:         SeverityDegrade,
+	LossThinkingEncrypted:    SeverityDegrade,
+	LossToolStrict:           SeverityDegrade,
 }
 
 // lossSeverityByCapabilityAction 是「同一能力按动作分档」的例外表。

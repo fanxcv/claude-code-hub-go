@@ -126,6 +126,10 @@ func TestLossSeverityOf(t *testing.T) {
 		// 不承载约束 → 信息档：丢掉后本次作答完全不变。
 		{"落库开关", LossStoreFlag, LossDropped, SeverityInfo},
 		{"缓存路由键", LossPromptCacheKey, LossDropped, SeverityInfo},
+		// 身份/观测类元数据 → 信息档：metadata / user / include / top_logprobs 都不影响
+		// 上游生成的内容。2026-10-18 生产实证：归 rewrite 会让每条带 metadata 的请求都挂
+		// 「内容改写」徽章（Codex / Claude Code 类客户端每请求必带），真损失被淹没。
+		{"身份类元数据", LossUnknownFieldIdentity, LossDropped, SeverityInfo},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

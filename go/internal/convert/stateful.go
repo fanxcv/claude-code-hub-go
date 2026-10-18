@@ -88,22 +88,23 @@ type foreignDroppableField struct {
 var foreignDroppableFields = []foreignDroppableField{
 	{key: "store", class: LossStoreFlag, requireTruthy: true},
 
-	// 以下十一个键是 Responses / Chat 线的请求级开关与采样参数：枢纽没有承载位，跨线时整键丢。
-	// 类别沿用 catch-all 家族的 `unknown_field.param`（seed / stop / parallel_tool_calls 等同属
-	// 这一类），而不新造常量：它们正是「源线有、枢纽无」的同一类事实，detail 取键名，故台账里
-	// 仍能按键定位。
-	{key: "metadata", class: LossUnknownFieldParam},
-	{key: "client_metadata", class: LossUnknownFieldParam},
-	{key: "include", class: LossUnknownFieldParam},
+	// 身份/观测类元数据：目标线不承载时**生成内容一点不变**，故归 info 档而非 rewrite。
+	// 判据见 hub.go 的 lossSeverityByCapability 注释（rewrite = 上游看到的东西变了）。
+	{key: "metadata", class: LossUnknownFieldIdentity},
+	{key: "client_metadata", class: LossUnknownFieldIdentity},
+	{key: "user", class: LossUnknownFieldIdentity},
+	{key: "safety_identifier", class: LossUnknownFieldIdentity},
+	{key: "service_tier", class: LossUnknownFieldIdentity},
+
+	// include 只声明「返回哪些可选字段」（如 reasoning.encrypted_content），不影响生成内容本身，
+	// 故归 info 档；top_logprobs 同理（只影响返回的 logprob 字段）。
+	{key: "include", class: LossUnknownFieldIdentity},
+	{key: "top_logprobs", class: LossUnknownFieldIdentity},
 	{key: "truncation", class: LossUnknownFieldParam},
 	// background:false 是默认语义（同步作答），目标线本来也是同步 ⇒ 与 store:false 同因不记。
 	{key: "background", class: LossUnknownFieldParam, requireTruthy: true},
-	{key: "top_logprobs", class: LossUnknownFieldParam},
 	{key: "presence_penalty", class: LossUnknownFieldParam},
 	{key: "frequency_penalty", class: LossUnknownFieldParam},
-	{key: "user", class: LossUnknownFieldParam},
-	{key: "service_tier", class: LossUnknownFieldParam},
-	{key: "safety_identifier", class: LossUnknownFieldParam},
 
 	// 顶层 cache_control（请求级自动缓存）：块级提示由各编码器记 LossCacheControl，顶层这一处
 	// 此前无人读（不在任何 knownKeys 里，落 passthrough 后无消费者），故与块级同类别补在这里。
@@ -153,6 +154,10 @@ func reportForeignDroppableFields(request *Request, target WireProtocol, loss *L
 var hubCarriedRequestKeys = knownKeys{
 	"prompt_cache_key": true,
 	"metadata":         true,
+	// text 是 responses 线的结构化输出载体：format 进枢纽、其余成员（verbosity 等）由
+	// reportResidualTextControls 单独记损。不列入就会被 reportUnknownForeignFields 当成
+	// 「未知顶层键」再记一遍（实测：text.verbosity 与整键 text 两条重复台账）。
+	"text": true,
 }
 
 // reportUnknownForeignFields 把「白名单外的外线顶层字段」也记入损失。
