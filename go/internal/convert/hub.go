@@ -779,7 +779,10 @@ func StopReasonFromAnthropic(raw string, has bool) StopReason {
 	case "refusal":
 		return StopContentFilte
 	case "pause_turn":
-		return StopEndTurn
+		// 上游明确「本轮流被暂停、未走完」：归为截断族而非正常收尾。当 end_turn 会让客户端
+		// 把半截结果当完整答复，chat 出 stop、responses 出 completed；map 到 max_tokens 后两线
+		// 分别出 length 与 incomplete。
+		return StopMaxTokens
 	default:
 		return StopUnknown
 	}
@@ -1013,6 +1016,18 @@ func usageToAnthropic(usage *Usage) *Value {
 	}
 	if usage.CacheWriteTokens != nil {
 		out.Set("cache_creation_input_tokens", NewNumber(jsNumber(*usage.CacheWriteTokens)))
+	}
+	// cache_creation 的 5m/1h 分档是 Anthropic 侧的计费口径：只在上游真的分列时才写，
+	// 未分列（nil）时留白，避免把「不知道」写成 0。
+	if usage.CacheCreation5mTokens != nil || usage.CacheCreation1hTokens != nil {
+		detail := NewObject()
+		if usage.CacheCreation5mTokens != nil {
+			detail.Set("ephemeral_5m_input_tokens", NewNumber(jsNumber(*usage.CacheCreation5mTokens)))
+		}
+		if usage.CacheCreation1hTokens != nil {
+			detail.Set("ephemeral_1h_input_tokens", NewNumber(jsNumber(*usage.CacheCreation1hTokens)))
+		}
+		out.Set("cache_creation", detail)
 	}
 	return out
 }

@@ -24,6 +24,10 @@ type anthropicStreamDecoder struct {
 	indexMap map[int]int
 
 	malformedFrames int
+	// errorFrames 记录流内 error 事件的条数。此前 error 与 ping / 未知事件一并丢弃，其上层的收尾
+	// 由 Flush 补出，客户端看不出上游其实是报错收场。枢纽 Chunk 尚无错误载体（见 stream.go），
+	// 本线先留下可判定的计数。
+	errorFrames int
 }
 
 func newAnthropicStreamDecoder(ctx ConvertCtx) StreamDecoder {
@@ -171,8 +175,14 @@ func (d *anthropicStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 		d.ended = true
 		return []Chunk{{Kind: ChunkEnd}}
 
+	case "error":
+		// 流内错误（overloaded_error / api_error 等）必须单独成支：与 ping 同归 default 时，
+		// 客户端拿到的是 Flush 补出的正常收尾，看不出上游是报错收场。
+		d.errorFrames++
+		return nil
+
 	default:
-		// ping / error / 未知事件：忽略但计数
+		// ping / 未知事件：忽略但计数
 		return nil
 	}
 }
