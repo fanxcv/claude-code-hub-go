@@ -189,8 +189,11 @@ type Chunk struct {
 	TextDelta      *string
 	ArgsDelta      *string
 	ReasoningDelta *string
-	StopReason     *StopReason
-	Usage          *Usage
+	// Citations 是一条引用/注解（responses 的 annotation、anthropic 的 citation）。它不是正文，
+	// 也不属于某个块的内容：故单独成位，随 ChunkDelta 交付，形状由目标线编码器决定。
+	Citations  *Value
+	StopReason *StopReason
+	Usage      *Usage
 	// Failed 表示本次流以上游失败收尾。ChunkEnd 带上它时，编码器只关块、不补正常终止帧：
 	// 补了就等于向客户端宣称「响应完整」，把上游的失败伪装成成功。
 	Failed bool
@@ -244,8 +247,51 @@ func NewStreamEncoder(protocol WireProtocol, ctx ConvertCtx) (StreamEncoder, boo
 	if !ok || factory.newEncoder == nil {
 		return nil, false
 	}
-	return factory.newEncoder(ctx), true
+	return &reasoningSeparatorEncoder{inner: factory.newEncoder(ctx)}, true
 }
+
+// reasoningSeparator 是相邻两个思考块之间的分隔串。
+//
+// 为什么要插：responses 的 summary 与 reasoning_text 是同一段思考的两个来源，跨线后常以两个思考
+// 块先后交付；客户端把两块正文拼起来时不插分隔就粘成一句（relaykit 同口径）。
+const reasoningSeparator = "\n\n"
+
+// reasoningSeparatorEncoder 在同一个流里第二次及以后开思考块时补 reasoningSeparator。
+//
+// 为什么放在工厂这一层：三条线各自渲染 thinking，但「块间要分隔」是枢纽语义而非某条线的渲染
+// 细节；一处实现即三线同时生效，不必每线各写一遍。
+type reasoningSeparatorEncoder struct {
+	inner StreamEncoder
+	seen  bool
+	// pendingBlock 记录分隔该补在哪一块：块起始不带正文时，分隔随该块的首个推理增量发出。
+	pendingBlock int
+	pending      bool
+}
+
+func (e *reasoningSeparatorEncoder) Push(chunk Chunk) [][]byte {
+	if chunk.Kind == ChunkBlockStart && chunk.Block != nil &&
+		chunk.Block.Kind == BlockThinking && !chunk.Block.Redacted {
+		if e.seen {
+			if chunk.Block.Text != "" {
+				block := *chunk.Block
+				block.Text = reasoningSeparator + block.Text
+				chunk.Block = &block
+			} else if chunk.BlockIndex != nil {
+				e.pending, e.pendingBlock = true, *chunk.BlockIndex
+			}
+		}
+		e.seen = true
+	}
+	if e.pending && chunk.Kind == ChunkBlockDelta && chunk.ReasoningDelta != nil &&
+		chunk.BlockIndex != nil && *chunk.BlockIndex == e.pendingBlock {
+		e.pending = false
+		text := reasoningSeparator + *chunk.ReasoningDelta
+		chunk.ReasoningDelta = &text
+	}
+	return e.inner.Push(chunk)
+}
+
+func (e *reasoningSeparatorEncoder) Flush() [][]byte { return e.inner.Flush() }
 
 // ---------------------------------------------------------------------------
 // 串联：上游字节 → 枢纽 → 客户端字节

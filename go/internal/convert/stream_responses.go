@@ -657,6 +657,14 @@ func (d *responsesStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 			}
 			d.closeBlock(&out, part)
 		}
+	case "response.output_text.annotation.added":
+		// 引用/注解不是正文，也不属于某个块的文本：单独成块交付，由编码器按目标线重排。
+		annotation := payload.ObjectField("annotation")
+		if annotation == nil || !annotation.IsObject() {
+			return out
+		}
+		d.ensureStart(&out)
+		out = append(out, Chunk{Kind: ChunkDelta, Citations: annotation})
 	case "response.completed", "response.incomplete", "response.done":
 		response := payload.ObjectField("response")
 		if response == nil {
@@ -731,6 +739,8 @@ type responsesEncoderBlockState struct {
 	text        string
 	args        string
 	reasoning   string
+	// annotations 是该文本块收到的注解，收块时写进 output_text 分片的 annotations。
+	annotations []*Value
 	// skipped 表示枢纽块在本线无表示（如仅有签名的 thinking）：其 delta/stop 一律忽略。
 	skipped bool
 	closed  bool
@@ -812,7 +822,7 @@ func (e *responsesStreamEncoder) closeBlock(out *[][]byte, blockIndex int) {
 		part := NewObject().
 			Set("type", NewString("output_text")).
 			Set("text", NewString(state.text)).
-			Set("annotations", NewArray())
+			Set("annotations", NewArray(state.annotations...))
 		state.item.Set("status", NewString("completed"))
 		state.item.Set("content", NewArray(part))
 		*out = append(*out, e.frame("response.output_text.done", NewObject().
@@ -858,6 +868,16 @@ func (e *responsesStreamEncoder) closeAll(out *[][]byte) {
 	for len(e.openOrder) > 0 {
 		e.closeBlock(out, e.openOrder[0])
 	}
+}
+
+// openTextBlock 返回当前未关闭的文本块（无则 nil）。
+func (e *responsesStreamEncoder) openTextBlock() *responsesEncoderBlockState {
+	for _, blockIndex := range e.openOrder {
+		if state, ok := e.states[blockIndex]; ok && !state.closed && state.kind == responsesKindText {
+			return state
+		}
+	}
+	return nil
 }
 
 func (e *responsesStreamEncoder) openBlock(out *[][]byte, chunk Chunk) {
@@ -1120,6 +1140,19 @@ func (e *responsesStreamEncoder) Push(chunk Chunk) [][]byte {
 		e.usage = mergeUsage(e.usage, chunk.Usage)
 		if chunk.StopReason != nil {
 			e.stopReason = chunk.StopReason
+		}
+		if chunk.Citations != nil {
+			// 注解必须落在它引用的那个文本块内、块关闭之前：本线把注解写在 message 项的
+			// content[].annotations 上，块一关就无法再回填。
+			e.ensureCreated(&out)
+			if state := e.openTextBlock(); state != nil {
+				state.annotations = append(state.annotations, chunk.Citations)
+				out = append(out, e.frame("response.output_text.annotation.added", NewObject().
+					Set("item_id", NewString(state.itemID)).
+					Set("output_index", NewNumberInt(int64(state.outputIndex))).
+					Set("content_index", NewNumberInt(0)).
+					Set("annotation", chunk.Citations)))
+			}
 		}
 	case ChunkEnd:
 		if chunk.Failed {
