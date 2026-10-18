@@ -468,7 +468,8 @@ type AdminDefaultErrorRule struct {
 // 顺序不重要（同步按 pattern 匹配），但**内容必须逐字一致**：pattern 参与唯一索引与用户自定义
 // 判定，override_response 是用户可见的覆写体。改动这里等于改动线上默认规则。
 //
-// Go 侧增补的规则另立 adminUnsupportedInputErrorRules，由 adminDefaultErrorRules 拼在其后。
+// Go 侧增补的规则另立 adminPromptLimitErrorRules 与 adminUnsupportedInputErrorRules，由
+// adminDefaultErrorRules 拼在其后。
 var adminNodeDefaultErrorRules = []AdminDefaultErrorRule{
 	{
 		Pattern:          "Missing or invalid 'alt' query parameter. Expected 'alt=sse'",
@@ -788,6 +789,29 @@ var adminNodeDefaultErrorRules = []AdminDefaultErrorRule{
 	},
 }
 
+// adminPromptLimitErrorRules 是 Go 侧增补的一族默认规则（Node 的默认表里没有）：收「prompt is too
+// long … context window of N」这类文案，归 context_limit（不重试、不切换、不计熔断）。
+//
+// 动机（2026-10-18 生产实测）：两条约 32 万 token 的请求打 20 万档的免费模型，上游回
+// `prompt is too long: about 321416 tokens, more than <model>'s context window of 200000`。既有两条
+// context 系规则都不匹配——规则 1 `prompt is too long.*(tokens.*maximum|maximum.*tokens)` 等的是
+// 「tokens … maximum」，规则 5 `context.*(length|window|limit).*exceed|…` 等的是「exceed」，该文案
+// 两者皆无 ⇒ 归 CategoryProviderError ⇒ 同家重试 + 逐家切换 + 计熔断，而换一家同样会被拒。
+//
+// priority 89：低于既有 context_limit（92）与 prompt_limit（100），故同一文案若也命中那两条，
+// 归口仍由 forward 在多命中里取更保守的一档决定，本条不改变既有命中结果。
+var adminPromptLimitErrorRules = []AdminDefaultErrorRule{
+	{
+		Pattern:          "prompt is too long.*context window|more than .*context window",
+		Category:         "context_limit",
+		MatchType:        "regex",
+		Description:      adminRuleText("Prompt exceeds the provider model context window (production wording, 2026-10-18)"),
+		Priority:         89,
+		IsEnabled:        true,
+		OverrideResponse: json.RawMessage("{\"type\":\"error\",\"error\":{\"type\":\"context_limit\",\"message\":\"上下文长度超过模型限制，请减少对话历史或输入内容\"}}"),
+	},
+}
+
 // adminUnsupportedInputErrorRules 是 Go 侧增补的一族默认规则（Node 的默认表里没有）：
 // 上游**明确声明该客户端输入形态不受支持**时，命中即归 CategoryProviderUnsupportedInput
 // （**不在同一家重试、但允许换家**，见 forward/errors.go 的 RuleCategoryProviderUnsupportedInput）。
@@ -850,7 +874,10 @@ var adminUnsupportedInputErrorRules = []AdminDefaultErrorRule{
 // 本表最后那一族（adminUnsupportedInputErrorRules）的 category 取值与匹配后的否定判定
 // 定义在下两处：RuleCategoryProviderUnsupportedInput / SuppressUnsupportedInputMatch。
 var adminDefaultErrorRules = append(
-	append([]AdminDefaultErrorRule{}, adminNodeDefaultErrorRules...),
+	append(
+		append([]AdminDefaultErrorRule{}, adminNodeDefaultErrorRules...),
+		adminPromptLimitErrorRules...,
+	),
 	adminUnsupportedInputErrorRules...,
 )
 

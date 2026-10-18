@@ -286,6 +286,61 @@ func TestAdminUnsupportedInputErrorRulesCarrySwitchingCategory(t *testing.T) {
 	}
 }
 
+// TestAdminPromptLimitErrorRulesMatchContextWindowWording 钉住 Go 侧新增的 prompt/context window 一族。
+//
+// 动机是 2026-10-18 的两条生产文案（见 admin_error_rules.go 的注释）：它们同时躲过既有规则 1
+// （要 `prompt is too long` 后面跟 `tokens … maximum`）与规则 5（要 `exceed`），被当成 provider_error
+// 去同家重试 + 换家。下面同时钉住「该命中的命中」与「不该误伤的不误伤」。
+func TestAdminPromptLimitErrorRulesMatchContextWindowWording(t *testing.T) {
+	if len(adminPromptLimitErrorRules) != 1 {
+		t.Fatalf("prompt/context window 族应恰好一条规则，实际 %d 条", len(adminPromptLimitErrorRules))
+	}
+	// 样式是跨库契约（pattern 参与唯一索引），逐字钉住。
+	rule := adminPromptLimitErrorRules[0]
+	if rule.Pattern != "prompt is too long.*context window|more than .*context window" {
+		t.Fatalf("pattern = %q，与规格不符", rule.Pattern)
+	}
+	if rule.Category != "context_limit" || rule.MatchType != "regex" || !rule.IsEnabled {
+		t.Fatalf("规则形状不对: category=%q match_type=%q enabled=%v", rule.Category, rule.MatchType, rule.IsEnabled)
+	}
+	matcher := compileDefaultRules(t, adminDefaultErrorRules)
+
+	cases := []struct {
+		name     string
+		body     string
+		category string
+	}{
+		{
+			name:     "生产文案：prompt is too long + more than … context window（既有两族皆不中）",
+			body:     "prompt is too long: about 321416 tokens, more than deepseek-v4.1-flash-free's context window of 200000 (OpenCode Zen Free answered 500: OpenCode Zen Free: 500 Internal Server Error)",
+			category: "context_limit",
+		},
+		{
+			// 既有规则 1 的文案：钉住新增条目没有抢走它的归口（该文案不含 context window）。
+			name:     "既有命中不受影响：prompt_limit 仍归 prompt_limit",
+			body:     "prompt is too long: 321416 tokens > 200000 maximum",
+			category: "prompt_limit",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			matched := matcher.matchedCategories(tc.body)
+			if len(matched) != 1 || matched[0] != tc.category {
+				t.Fatalf("matchedCategories(%q) = %v，期望恰好 [%s]", tc.body, matched, tc.category)
+			}
+		})
+	}
+
+	// 「image URLs are not currently supported」由 unsupported 族（priority 78）正常命中，
+	// 故这里问的不是「命没命」，而是新增条目不得把它拉进 context_limit。
+	docBody := "image URLs are not currently supported"
+	for _, category := range matcher.matchedCategories(docBody) {
+		if category == "context_limit" {
+			t.Fatalf("新规则误伤了 unsupported 族: matchedCategories(%q) = %v", docBody, matcher.matchedCategories(docBody))
+		}
+	}
+}
+
 // TestAdminDefaultErrorRulesIncludeUnsupportedInputFamily 钉住增补那一族确实进了同步表——
 // 少拼一个 append，规则就进不了库（而这不会让任何编译或既有用例失败）。
 func TestAdminDefaultErrorRulesIncludeUnsupportedInputFamily(t *testing.T) {
