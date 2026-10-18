@@ -19,16 +19,19 @@ import (
 // 1. 思考强度代数
 // ——————————————————————————————————————————————————————————————
 
+// TestThinkingLevelFromBudgetThresholds 钉住阈值与 relaykit `EffortFromBudget` 同口径。
+//
+// 本次修正了这条期望：旧实现是「下界包含」的 8192/32768（budget=2048 给 low，relaykit 给 medium），
+// 同一份预算在两条实现下落到不同等级。改为上界包含的 1024/8192 后两边一致（见审计 T2）。
 func TestThinkingLevelFromBudgetThresholds(t *testing.T) {
 	cases := []struct {
 		budget float64
 		want   string
 	}{
 		{1024, thinkingLevelLow},
-		{thinkingBudgetMediumFloor - 1, thinkingLevelLow},
-		{thinkingBudgetMediumFloor, thinkingLevelMedium},
-		{thinkingBudgetHighFloor - 1, thinkingLevelMedium},
-		{thinkingBudgetHighFloor, thinkingLevelHigh},
+		{thinkingBudgetLowCeiling + 1, thinkingLevelMedium},
+		{thinkingBudgetMediumCeiling, thinkingLevelMedium},
+		{thinkingBudgetMediumCeiling + 1, thinkingLevelHigh},
 		{200_000, thinkingLevelHigh},
 		{1, thinkingLevelLow}, // 非法小值按最低档（调用方不应在此路径给出 ≤0）
 	}
@@ -359,6 +362,128 @@ func TestChatToolCacheControlRecordedAsLoss(t *testing.T) {
 	if strings.Contains(encoded.Body.MarshalCompact(), "cache_control") {
 		t.Fatalf("chat 线无工具级承载位，出站不得出现 cache_control：%s", encoded.Body.MarshalCompact())
 	}
+}
+
+// ——————————————————————————————————————————————————————————————
+// 5. anthropic 源 thinking 形态与消息形状（审计 T3/T4/T5/R1/R2）
+// ——————————————————————————————————————————————————————————————
+
+// TestAnthropicThinkingWithoutBudgetStillCarriesStrength 钉住 T3/T4：
+// `thinking.type=adaptive` 与「`enabled` 但无 `budget_tokens`」都必须留下强度，不得整块消失。
+//
+// 为何：旧实现的 switch 只认 `enabled+budget` 与 `disabled`，两种形态都落 `Reasoning=nil`
+// 且零记损，用户表现为「思考强度整个消失」；relaykit 对两种形态都给 EffortHigh
+// （`reasoning/intent.go:668-670`、`shared/claude/reasoning.go:76-84`）。
+func TestAnthropicThinkingWithoutBudgetStillCarriesStrength(t *testing.T) {
+	cases := []struct {
+		label    string
+		thinking string
+	}{
+		{"adaptive", `{"type":"adaptive"}`},
+		{"enabled 无预算", `{"type":"enabled"}`},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.label, func(t *testing.T) {
+			body := mustParsePayload(t, `{"model":"claude-sonnet-4-5","max_tokens":512,"thinking":`+
+				testCase.thinking+`,"messages":[{"role":"user","content":"想一下"}]}`)
+
+			chatCtx := ConvertCtx{ClientFormat: FormatOpenAI, TargetProto: ProtocolOpenAIChat}
+			decoded, _ := DecodeRequest(ProtocolAnthropicMessages, body, chatCtx)
+			encoded, _ := EncodeRequest(ProtocolOpenAIChat, decoded.Value, chatCtx)
+			effort, present := encoded.Body.Get("reasoning_effort")
+			if !present {
+				t.Fatalf("chat 出站必须带强度（否则思考强度整个丢失）：%s", encoded.Body.MarshalCompact())
+			}
+			if level, _ := effort.String(); level != thinkingLevelHigh {
+				t.Fatalf("chat 出站强度应为 %q，实际 %q", thinkingLevelHigh, level)
+			}
+
+			// anthropic 目标：无预算可搬，落到 output_config.effort（本线唯一的等级载体）。
+			sameCtx := ConvertCtx{ClientFormat: FormatClaude, TargetProto: ProtocolAnthropicMessages}
+			sameDecoded, _ := DecodeRequest(ProtocolAnthropicMessages, body, sameCtx)
+			sameEncoded, _ := EncodeRequest(ProtocolAnthropicMessages, sameDecoded.Value, sameCtx)
+			outputConfig, present := sameEncoded.Body.Get("output_config")
+			if !present {
+				t.Fatalf("anthropic 出站应把强度落到 output_config：%s", sameEncoded.Body.MarshalCompact())
+			}
+			if level, _ := stringField(outputConfig, "effort"); level != thinkingLevelHigh {
+				t.Fatalf("output_config.effort 应为 %q，实际 %q", thinkingLevelHigh, level)
+			}
+		})
+	}
+
+	// adaptive 是模式丢失（枢纽无承载位），故必须记一条换算降级。
+	body := mustParsePayload(t, `{"model":"claude-sonnet-4-5","max_tokens":512,
+		"thinking":{"type":"adaptive"},"messages":[{"role":"user","content":"想一下"}]}`)
+	decoded, _ := DecodeRequest(ProtocolAnthropicMessages, body, ConvertCtx{})
+	assertLossEntry(t, decoded.Loss, LossThinkingDerived, string(LossDowngraded), "thinking.type.adaptive")
+}
+
+// TestAnthropicThinkingDisplayRecordedAsLoss 钉住 T5：`thinking.display` 无承载位，必须记损。
+//
+// 为何：它是「要不要回传思考摘要」的显示偏好，旧实现既不解码也不记损（`thinking` 在
+// knownKeys 内，passthrough 也收不到），于是静默消失。
+func TestAnthropicThinkingDisplayRecordedAsLoss(t *testing.T) {
+	body := mustParsePayload(t, `{"model":"claude-sonnet-4-5","max_tokens":512,
+		"thinking":{"type":"enabled","budget_tokens":4096,"display":"summarized"},
+		"messages":[{"role":"user","content":"想一下"}]}`)
+	decoded, _ := DecodeRequest(ProtocolAnthropicMessages, body, ConvertCtx{})
+	assertLossEntry(t, decoded.Loss, LossUnknownFieldParam, string(LossDropped), "thinking.display")
+}
+
+// TestAnthropicFirstMessageGetsUserPlaceholder 钉住 R1：首条非 user 时插占位 user。
+//
+// 为何：Anthropic 要求首条消息为 user。chat 源里历史可以 assistant 开头（预填回复），
+// 旧实现原样输出，上游直接 400；relaykit 插一条 `"..."` 占位（`to_claude_messages_req.go:208-213`）。
+func TestAnthropicFirstMessageGetsUserPlaceholder(t *testing.T) {
+	body := mustParsePayload(t, `{"model":"gpt-4o","messages":[
+		{"role":"assistant","content":"好的"},
+		{"role":"user","content":"继续"}]}`)
+	ctx := ConvertCtx{ClientFormat: FormatClaude, TargetProto: ProtocolAnthropicMessages}
+	decoded, _ := DecodeRequest(ProtocolOpenAIChat, body, ctx)
+	encoded, _ := EncodeRequest(ProtocolAnthropicMessages, decoded.Value, ctx)
+
+	messages, present := encoded.Body.Get("messages")
+	if !present || !messages.IsArray() || len(messages.Items()) != 3 {
+		t.Fatalf("应在原有两条前插一条占位 user（共 3 条）：%s", encoded.Body.MarshalCompact())
+	}
+	first := messages.Items()[0]
+	if role, _ := stringField(first, "role"); role != "user" {
+		t.Fatalf("首条必须是 user，实际 %q：%s", role, encoded.Body.MarshalCompact())
+	}
+	if !strings.Contains(first.MarshalCompact(), `"text":"..."`) {
+		t.Fatalf("占位内容应为 `...`：%s", first.MarshalCompact())
+	}
+	assertLossEntry(t, encoded.Loss, LossUnknownFieldMessage, string(LossRewritten), "messages[0].role")
+
+	// 首条已是 user 时不得插（否则每条请求都多一条噪声消息）。
+	plain := mustParsePayload(t, `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
+	plainDecoded, _ := DecodeRequest(ProtocolOpenAIChat, plain, ctx)
+	plainEncoded, _ := EncodeRequest(ProtocolAnthropicMessages, plainDecoded.Value, ctx)
+	plainMessages, _ := plainEncoded.Body.Get("messages")
+	if len(plainMessages.Items()) != 1 {
+		t.Fatalf("首条已是 user 时不得插占位：%s", plainEncoded.Body.MarshalCompact())
+	}
+}
+
+// TestAnthropicEmptyTextBlockBecomesEllipsis 钉住 R2：空 text 块顶替为 `...` 并记损。
+//
+// 为何：`{"type":"text","text":""}` 对 Anthropic 是空内容（整条消息无可见内容时被拒），
+// relaykit 同位置用 `...` 顶替（`to_claude_messages_req.go:167`）。
+func TestAnthropicEmptyTextBlockBecomesEllipsis(t *testing.T) {
+	body := mustParsePayload(t, `{"model":"gpt-4o","messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":""},
+		{"role":"user","content":"继续"}]}`)
+	ctx := ConvertCtx{ClientFormat: FormatClaude, TargetProto: ProtocolAnthropicMessages}
+	decoded, _ := DecodeRequest(ProtocolOpenAIChat, body, ctx)
+	encoded, _ := EncodeRequest(ProtocolAnthropicMessages, decoded.Value, ctx)
+
+	text := encoded.Body.MarshalCompact()
+	if !strings.Contains(text, `{"type":"text","text":"..."}`) {
+		t.Fatalf("空 text 块应顶替为 `...`：%s", text)
+	}
+	assertLossEntry(t, encoded.Loss, LossUnknownFieldContent, string(LossRewritten), "content_part.text.empty")
 }
 
 // ——————————————————————————————————————————————————————————————

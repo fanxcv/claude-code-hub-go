@@ -331,16 +331,36 @@ func decodeAnthropicReasoning(body *Value, loss *LossCollector) *Reasoning {
 		thinkingType, _ := stringField(thinking, "type")
 		switch thinkingType {
 		case "enabled":
+			// 缺 budget_tokens 时不得整块丢弃：relaykit 在 ModeEnabled 且无预算时给 EffortHigh
+			// （`reasoning/intent.go:668-670`）。旧实现 `found` 保持 false，思考强度整个消失。
 			if budget, ok := numberField(thinking, "budget_tokens"); ok {
 				reasoning.BudgetTokens = budget
-				found = true
+			} else {
+				reasoning.Effort = thinkingLevelHigh
+				reasoning.HasEffort = true
 			}
+			found = true
+		case "adaptive":
+			// 自适应思考在枢纽里无承载位（Reasoning 无对应字段，扩枢纽会波及本 lane 之外的
+			// 文件）。按 relaykit 对未知模型的口径降为手动 high（`shared/claude/reasoning.go:76-84`）：
+			// 强度保留、模式丢失，故记一条换算降级而非静默。
+			reasoning.Effort = thinkingLevelHigh
+			reasoning.HasEffort = true
+			found = true
+			loss.Downgraded(LossThinkingDerived, "request", "thinking.type.adaptive→effort="+thinkingLevelHigh)
 		case "disabled":
 			reasoning.Effort = "none"
 			reasoning.HasEffort = true
 			found = true
 		default:
 			loss.Dropped(LossUnknownField, "request", "thinking.type")
+		}
+		if thinkingType == "enabled" || thinkingType == "adaptive" {
+			// display（summarized/omitted）是「要不要回传思考摘要」的显示偏好：三条线里只有
+			// responses 的 reasoning.summary 能表达它，而枢纽未承载该值，故如实记损。
+			if display, ok := stringField(thinking, "display"); ok && display != "" {
+				loss.Dropped(LossUnknownField, "request", "thinking.display")
+			}
 		}
 	}
 	if outputConfig := fieldOrNil(body, "output_config"); isRecord(outputConfig) {
@@ -549,12 +569,20 @@ func encodeAnthropicToolResult(item Item, options *anthropicRenderOptions) *Valu
 }
 
 // encodeAnthropicMessage 渲染一条 role 消息；无可见内容时返回 nil。
+//
+// 空 text 块在此层顶替为 `...`（而非在 encodeAnthropicBlock 里）：该函数也用于 system 与响应，
+// 那两处顶替会把「没说的话」变成「说了个省略号」。消息正文才需要它——Anthropic 把空 text 块
+// 当作空内容，与 relaykit 同口径顶替（`to_claude_messages_req.go:167`）。
 func encodeAnthropicMessage(role string, blocks []Block, options *anthropicRenderOptions) *Value {
 	content := []*Value{}
 	blockIndex := 0
 	for _, block := range blocks {
 		seed := options.seed + ":" + strconv.Itoa(blockIndex)
 		blockIndex++
+		if block.Kind == BlockText && block.Text == "" {
+			block.Text = "..."
+			options.loss.Rewritten(LossUnknownField, options.direction, "content_part.text.empty")
+		}
 		if encoded, ok := encodeAnthropicBlock(block, seed, options); ok {
 			content = append(content, encoded)
 		}
@@ -612,6 +640,19 @@ func encodeAnthropicMessages(items []Item, idMap map[string]string, loss *LossCo
 			messages = append(messages, NewObject().
 				Set("role", NewString("user")).
 				Set("content", NewArray(encodeAnthropicToolResult(item, options))))
+		}
+	}
+	// Anthropic 要求首条消息为 user。客户端历史以 assistant 开头（如 chat 源里的预填回复）时，
+	// 直接输出会被上游拒；与 relaykit 同口径插一条占位 user（`to_claude_messages_req.go:208-213`）。
+	// 判据取自**渲染结果**而非输入 items：首条 item 可能因无可见内容整条不产出。
+	if len(messages) > 0 {
+		if role, _ := stringField(messages[0], "role"); role != "user" {
+			messages = append([]*Value{NewObject().
+				Set("role", NewString("user")).
+				Set("content", NewArray(NewObject().
+					Set("type", NewString("text")).
+					Set("text", NewString("..."))))}, messages...)
+			loss.Rewritten(LossUnknownField, "request", "messages[0].role.placeholder")
 		}
 	}
 	return messages

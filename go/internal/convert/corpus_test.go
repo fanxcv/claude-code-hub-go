@@ -171,13 +171,13 @@ var intentionalRequestDivergences = map[string]intentionalDivergence{
 	"request.anthropic-messages.system-image-thinking.to.openai-chat": {
 		Kind:   kindAddedField,
 		Path:   []string{"reasoning_effort"},
-		Value:  "low",
-		Reason: "Node 丢弃 thinking.budget_tokens；Go 按阈值反查为等级（1024 → low）",
+		Value:  "medium",
+		Reason: "Node 丢弃 thinking.budget_tokens；Go 按阈值反查为等级（2048 → medium，与 relaykit 同口径）",
 	},
 	"request.anthropic-messages.system-image-thinking.to.openai-responses": {
 		Kind:   kindAddedField,
 		Path:   []string{"reasoning", "effort"},
-		Value:  "low",
+		Value:  "medium",
 		Reason: "同上，落至 responses 的 reasoning.effort",
 	},
 	"request.openai-responses.mcp-items.to.anthropic-messages": {

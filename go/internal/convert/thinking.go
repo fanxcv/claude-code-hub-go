@@ -29,30 +29,30 @@ const (
 	thinkingLevelMedium = "medium"
 	thinkingLevelHigh   = "high"
 
-	// 预算→等级的阈值（token，**下界包含**）：
+	// 预算→等级的阈值（token，**上界包含**）：
 	//
-	//	budget <  8192  → low
-	//	budget < 32768  → medium
-	//	budget >= 32768 → high
+	//	budget <=  1024 → low
+	//	budget <=  8192 → medium
+	//	budget >   8192 → high
 	//
-	// 取值依据：Anthropic 要求 `budget_tokens` ≥ 1024，官方常见档位为 1024 / 8192 / 32768；
-	// 阈值与下面 `thinkingBudgetByLevel` 的反向表**互为反函数**（1024→low、8192→medium、32768→high），
-	// 故 `level → budget → level` 往返稳定（单测钉住）。
-	thinkingBudgetMediumFloor = 8192
-	thinkingBudgetHighFloor   = 32768
+	// 取值依据：Anthropic 要求 `budget_tokens` ≥ 1024，官方常见档位为 1024 / 8192；
+	// 阈值与 relaykit 的 `EffortFromBudget`（`reasoning/intent.go`）同口径——两边对同一份预算
+	// 必须给出同一等级，否则同一请求经两条实现落到不同上游强度。
+	thinkingBudgetLowCeiling    = 1024
+	thinkingBudgetMediumCeiling = 8192
 )
 
-// ThinkingLevelFromBudget 把 token 预算反查为等级（阈值下界包含）。
+// ThinkingLevelFromBudget 把 token 预算反查为等级（阈值上界包含）。
 //
 // 非正数视为无效输入，返回 low（调用方不应在预算 ≤ 0 时来找等级——那是「未给预算」的形态）。
 func ThinkingLevelFromBudget(budget float64) string {
 	switch {
-	case budget >= thinkingBudgetHighFloor:
-		return thinkingLevelHigh
-	case budget >= thinkingBudgetMediumFloor:
+	case budget <= thinkingBudgetLowCeiling:
+		return thinkingLevelLow
+	case budget <= thinkingBudgetMediumCeiling:
 		return thinkingLevelMedium
 	default:
-		return thinkingLevelLow
+		return thinkingLevelHigh
 	}
 }
 
