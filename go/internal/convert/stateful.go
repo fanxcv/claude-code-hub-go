@@ -71,6 +71,27 @@ var foreignDroppableFields = []foreignDroppableField{
 	{key: "response_format", class: LossResponseFormat},
 	{key: "text", class: LossTextControls},
 	{key: "store", class: LossStoreFlag, requireTruthy: true},
+
+	// 以下十一个键是 Responses / Chat 线的请求级开关与采样参数：枢纽没有承载位，跨线时整键丢。
+	// 类别沿用 catch-all 家族的 `unknown_field.param`（seed / stop / parallel_tool_calls 等同属
+	// 这一类），而不新造常量：它们正是「源线有、枢纽无」的同一类事实，detail 取键名，故台账里
+	// 仍能按键定位。
+	{key: "metadata", class: LossUnknownFieldParam},
+	{key: "client_metadata", class: LossUnknownFieldParam},
+	{key: "include", class: LossUnknownFieldParam},
+	{key: "truncation", class: LossUnknownFieldParam},
+	// background:false 是默认语义（同步作答），目标线本来也是同步 ⇒ 与 store:false 同因不记。
+	{key: "background", class: LossUnknownFieldParam, requireTruthy: true},
+	{key: "top_logprobs", class: LossUnknownFieldParam},
+	{key: "presence_penalty", class: LossUnknownFieldParam},
+	{key: "frequency_penalty", class: LossUnknownFieldParam},
+	{key: "user", class: LossUnknownFieldParam},
+	{key: "service_tier", class: LossUnknownFieldParam},
+	{key: "safety_identifier", class: LossUnknownFieldParam},
+
+	// 顶层 cache_control（请求级自动缓存）：块级提示由各编码器记 LossCacheControl，顶层这一处
+	// 此前无人读（不在任何 knownKeys 里，落 passthrough 后无消费者），故与块级同类别补在这里。
+	{key: "cache_control", class: LossCacheControl},
 }
 
 // reportForeignDroppableFields 把「留在外线 passthrough 里、目标线无法承载的高层字段」记入损失。
