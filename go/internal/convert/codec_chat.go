@@ -391,17 +391,35 @@ func decodeChatSampling(body *Value, loss *LossCollector) Sampling {
 	return sampling
 }
 
-func decodeChatReasoningConfig(body *Value) *Reasoning {
-	if effort, ok := stringField(body, "reasoning_effort"); ok && effort != "" {
-		return &Reasoning{Effort: effort, HasEffort: true}
-	}
-	nested := fieldOrNil(body, "reasoning")
-	if isRecord(nested) {
+func decodeChatReasoningConfig(body *Value, loss *LossCollector) *Reasoning {
+	const direction = "request"
+	reasoning := &Reasoning{}
+	if nested := fieldOrNil(body, "reasoning"); isRecord(nested) {
+		// enabled:false 与 anthropic 的 thinking.type=disabled 同口径（强度 none）；显式等级优先于它，
+		// 与 decodeAnthropicReasoning 里 output_config.effort 覆盖 disabled 的次序一致。
+		if enabled, present := boolField(nested, "enabled"); present && !enabled {
+			reasoning.Effort, reasoning.HasEffort = "none", true
+		}
 		if effort, ok := stringField(nested, "effort"); ok && effort != "" {
-			return &Reasoning{Effort: effort, HasEffort: true}
+			reasoning.Effort, reasoning.HasEffort = effort, true
+		}
+		// max_tokens 是 chat 线的思考预算载体：进枢纽后由 thinking.derived 换算到只有等级的线上。
+		if budget, ok := numberField(nested, "max_tokens"); ok {
+			reasoning.BudgetTokens = budget
+		}
+		// exclude:true 是「不要把思考回传给我」的显示偏好，chat 线无承载位；exclude:false 是默认值，
+		// 记它等于每请求一条噪声（与 store 同口径，见 foreignDroppableField.requireTruthy）。
+		if exclude, present := nested.Get("exclude"); present && isTrue(exclude) {
+			loss.Dropped(LossUnknownField, direction, "reasoning.exclude")
 		}
 	}
-	return nil
+	if effort, ok := stringField(body, "reasoning_effort"); ok && effort != "" {
+		reasoning.Effort, reasoning.HasEffort = effort, true
+	}
+	if !reasoning.HasEffort && reasoning.BudgetTokens == nil {
+		return nil
+	}
+	return reasoning
 }
 
 func decodeChatRequest(body *Value, ctx ConvertCtx) DecodeResult[*Request] {
@@ -436,8 +454,13 @@ func decodeChatRequest(body *Value, ctx ConvertCtx) DecodeResult[*Request] {
 	} else if value, present := source.Get("parallel_tool_calls"); present && !value.IsNull() {
 		loss.Dropped(LossUnknownField, "request", "parallel_tool_calls")
 	}
-	if reasoning := decodeChatReasoningConfig(source); reasoning != nil {
+	if reasoning := decodeChatReasoningConfig(source, loss); reasoning != nil {
 		request.Reasoning = reasoning
+	}
+	// 缓存路由键进枢纽（而非只活在 passthrough）：responses / chat 编码器要原样写出，见 Request.PromptCacheKey。
+	if key, ok := stringField(source, "prompt_cache_key"); ok && key != "" {
+		request.PromptCacheKey = key
+		request.HasPromptCacheKey = true
 	}
 	if passthrough := collectPassthrough(source, chatKnownRequestKeys); len(passthrough.Members()) > 0 {
 		request.Passthrough[chatWire] = passthrough
@@ -470,7 +493,7 @@ func decodeChatMessages(raw *Value, system *[]Block, items *[]Item, loss *LossCo
 		}
 		role, _ := stringField(message, "role")
 		switch role {
-		case "system":
+		case "system", "developer":
 			if index != 0 {
 				loss.Rewritten("system.position", direction, "messages["+strconv.Itoa(index)+"]")
 			}

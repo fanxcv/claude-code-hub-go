@@ -5,7 +5,8 @@ package convert
 //	1. 状态型字段（previous_response_id / conversation / store:true）——丢失的不是约束而是
 //	   上下文或落库语义，故由调用方在**转换真的发生时** fail-closed（见 forward.BuildPlan）；
 //	2. 约束型字段（prompt_cache_key / response_format / text / store）——丢失后可降级继续，
-//	   但必须记损，否则用户看到的是「约束静默失效」。
+//	   但必须记损，否则用户看到的是「约束静默失效」（prompt_cache_key 例外：chat / responses
+//	   两线都有承载位，故进枢纽原样回写，只有 anthropic 记损）。
 //
 // 两者都只对**外线**字段生效：各编码器只读本线 passthrough（Node 亦然），而 request 侧的
 // passthrough 全仓没有任何消费者（`passthroughFor` 的调用点都取目标线），所以外线字段在
@@ -65,8 +66,15 @@ type foreignDroppableField struct {
 // 故 responses 侧记的是整键 `text.controls`（含 format 与 verbosity，两者在 anthropic/chat 上
 // 都没有等价物）。
 //
-// `prompt_cache_key` **不在本表**：它已进枢纽（Request.PromptCacheKey），由 chat / responses
-// 两线原样回写，只有 anthropic（无此概念）在编码器里记损。留在这里会把它重复记一遍。
+// `web_search_options` / legacy `functions[]` / `function_call` 是 chat 线独有的工具声明与
+// 强制调用形态，目标线都无承载位；它们不在 knownKeys 里，故只活在 chat 线 passthrough 中，
+// 而 reportForeignPreservedTools 只看 `tools` 键——不在此表就完全没有痕迹。web_search_options
+// 与 responses 线的 `web_search` 工具同属一个能力（故共用 LossWebSearchTool），legacy 的
+// `functions[]` / `function_call` 是 function 声明，归 LossUnknownFieldTool。
+//
+// `prompt_cache_key` **不在本表**：它已进枢纽（Request.PromptCacheKey）——chat 与 responses
+// 两线的解码器都读它（decodeChatRequest / decodeResponsesRequest），两线的编码器都原样回写，
+// 只有 anthropic（无此概念）在编码器里记损。留在这里会把它重复记一遍。
 var foreignDroppableFields = []foreignDroppableField{
 	{key: "response_format", class: LossResponseFormat},
 	{key: "text", class: LossTextControls},
@@ -92,6 +100,10 @@ var foreignDroppableFields = []foreignDroppableField{
 	// 顶层 cache_control（请求级自动缓存）：块级提示由各编码器记 LossCacheControl，顶层这一处
 	// 此前无人读（不在任何 knownKeys 里，落 passthrough 后无消费者），故与块级同类别补在这里。
 	{key: "cache_control", class: LossCacheControl},
+
+	{key: "web_search_options", class: LossWebSearchTool},
+	{key: "functions", class: LossUnknownFieldTool},
+	{key: "function_call", class: LossUnknownFieldTool},
 }
 
 // reportForeignDroppableFields 把「留在外线 passthrough 里、目标线无法承载的高层字段」记入损失。
