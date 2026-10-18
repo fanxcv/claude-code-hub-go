@@ -10,7 +10,7 @@ import (
 //
 //	1. tool_result 内嵌图片不再丢：文本留在 role:tool 消息，图搬到紧随这批 tool 消息之后的
 //	   role:user 消息上（chat 的 tool content 只能是字符串，无图片承载位）；
-//	2. tool_result 内嵌 document 仍记损（chat 线无 file 内容块的可靠承载形态）；
+//	2. tool_result 内嵌的内联 PDF 搬成 chat 的 file 分片（同一条 user 消息），非 PDF 仍记损；
 //	3. tools 为空时不写 tool_choice（上游会拒）；非 function 工具的记损 detail 带具体类型。
 
 const testToolResultChatImageB64 = "iVBORw0KGgoAAAANSUhEUg=="
@@ -159,18 +159,39 @@ func TestChatToolResultImageKeepsToolBatchContiguousAndReasoningOwner(t *testing
 	}
 }
 
-// TestChatToolResultDocumentRecordedAsLoss 钉住 M6 的本轮结论：chat 线没有可靠的 file 内容块
-// 承载形态，故 document 仍丢，但归到 document 专用类别（而非 catch-all），且不得连累同批的图。
-func TestChatToolResultDocumentRecordedAsLoss(t *testing.T) {
+// TestChatToolResultDocumentCarriedAsFilePart 钉住本轮修复：chat 线能承载内联 PDF
+// （`{type:"file", file:{filename, file_data}}`），故 tool_result 内嵌的 base64 PDF 不再丢，
+// 而是与图一样搬到紧随这批 tool 消息之后的 user 消息上。
+//
+// 这条期望本轮从「仍记损」改成「送出」：旧结论建立在「chat 无 file 内容块的可靠承载形态」
+// 之上，而承载形态确实存在（见 audit-chat #18）。非 PDF 与远程 URL 文档仍记损。
+func TestChatToolResultDocumentCarriedAsFilePart(t *testing.T) {
 	body, loss := encodeAnthropicToChat(t, chatToolResultPayload(
 		`{"type":"text","text":"见附件"},`+
 			`{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0="}}`))
 
-	if got := strings.Join(chatRoles(t, body), ","); got != "user,assistant,tool" {
-		t.Fatalf("纯文档工具结果不得多出 user 消息，实际 %s：%s", got, body.MarshalCompact())
+	if got := strings.Join(chatRoles(t, body), ","); got != "user,assistant,tool,user" {
+		t.Fatalf("PDF 应搬进紧随 tool 消息之后的 user 消息，实际 %s：%s", got, body.MarshalCompact())
 	}
-	if body.MarshalCompact() != "" && strings.Contains(body.MarshalCompact(), "JVBERi0") {
-		t.Fatalf("chat 出站不得出现 PDF 字节（无承载位）：%s", body.MarshalCompact())
+	if !strings.Contains(body.MarshalCompact(), `"type":"file"`) ||
+		!strings.Contains(body.MarshalCompact(), "data:application/pdf;base64,JVBERi0=") {
+		t.Fatalf("chat 出站必须以 file 分片承载 PDF：%s", body.MarshalCompact())
+	}
+	for _, entry := range loss.Entries {
+		if entry.Capability == LossDocument && entry.Action == LossDropped {
+			t.Fatalf("PDF 已送出，不得再记 document 类丢弃：%+v", loss.Entries)
+		}
+	}
+}
+
+// TestChatToolResultNonPDFDocumentRecordedAsLoss 钉住承载边界：本线 file 分片只保证 PDF，
+// 其它文档类型仍记 document 类损失且不送半成品分片。
+func TestChatToolResultNonPDFDocumentRecordedAsLoss(t *testing.T) {
+	body, loss := encodeAnthropicToChat(t, chatToolResultPayload(
+		`{"type":"document","source":{"type":"base64","media_type":"text/csv","data":"YSxiCg=="}}`))
+
+	if strings.Contains(body.MarshalCompact(), `"type":"file"`) {
+		t.Fatalf("非 PDF 文档无本线承载位，不得送出：%s", body.MarshalCompact())
 	}
 	found := false
 	for _, entry := range loss.Entries {
@@ -179,7 +200,7 @@ func TestChatToolResultDocumentRecordedAsLoss(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatalf("被丢的 document 必须记 document 类损失，实际 %+v", loss.Entries)
+		t.Fatalf("被丢的非 PDF 文档必须记 document 类损失，实际 %+v", loss.Entries)
 	}
 }
 

@@ -15,6 +15,8 @@ const (
 	BlockText     BlockKind = "text"
 	BlockImage    BlockKind = "image"
 	BlockDocument BlockKind = "document"
+	BlockAudio    BlockKind = "audio"
+	BlockVideo    BlockKind = "video"
 	BlockToolCall BlockKind = "tool_call"
 	BlockThinking BlockKind = "thinking"
 	BlockOpaque   BlockKind = "opaque"
@@ -42,7 +44,7 @@ type Block struct {
 	// thinking
 	Signature string
 	Redacted  bool
-	// image / document
+	// image / document / audio / video
 	MediaType string
 	Data      string
 	URL       string
@@ -1176,6 +1178,41 @@ func fieldOrNil(object *Value, keys ...string) *Value {
 		current = next
 	}
 	return current
+}
+
+// audioMediaType 把 chat / responses 线的音频 `format`（如 wav / mp3）折成媒体类型。
+//
+// 枢纽不给音频单开字段：音频与图片同形（内联 base64 或远程 URL），format 只是媒体类型的
+// 子类型后缀，折进来才能让三条线共用同一套媒体闸门。
+func audioMediaType(format string) string { return "audio/" + format }
+
+// audioFormat 是 audioMediaType 的反向：非 audio/* 返回空，编码侧据此记损。
+func audioFormat(mediaType string) string {
+	if !strings.HasPrefix(mediaType, "audio/") {
+		return ""
+	}
+	return mediaType[len("audio/"):]
+}
+
+// mediaURLOf 取 `{url}` 对象或裸字符串两种写法的媒体地址；对象里的其余成员记损。
+func mediaURLOf(raw *Value, loss *LossCollector, direction string, detailPrefix string) string {
+	switch {
+	case raw == nil:
+		return ""
+	case raw.Kind() == "string":
+		url, _ := raw.String()
+		return url
+	case raw.IsObject():
+		url, _ := stringField(raw, "url")
+		for _, member := range raw.Members() {
+			if member.Key == "url" || member.Value.IsNull() {
+				continue
+			}
+			loss.Dropped(LossUnknownField, direction, detailPrefix+"."+member.Key)
+		}
+		return url
+	}
+	return ""
 }
 
 func nestedField(object *Value, parent string, child string) *Value {

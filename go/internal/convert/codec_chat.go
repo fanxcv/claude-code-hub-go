@@ -172,9 +172,92 @@ func chatContentPartToBlocks(part *Value, loss *LossCollector, direction string)
 		return []Block{textBlock(text)}
 	case "image_url":
 		return []Block{chatImagePartToBlock(part, loss, direction)}
+	case "input_audio":
+		return []Block{chatAudioPartToBlock(part, loss, direction)}
+	case "video_url":
+		return []Block{chatVideoPartToBlock(part, loss, direction)}
+	case "file":
+		return chatFilePartToBlocks(part, loss, direction)
 	default:
 		return []Block{opaqueBlock(chatWire, part)}
 	}
+}
+
+// chatAudioPartToBlock 解 `{type:"input_audio", input_audio:{data, format}}`。
+//
+// 与 responses 线同口径：只收内联 base64，format 折成媒体类型（见 audioMediaType）。
+func chatAudioPartToBlock(part *Value, loss *LossCollector, direction string) Block {
+	raw := fieldOrNil(part, "input_audio")
+	if !isRecord(raw) {
+		loss.Rewritten(LossUnknownField, direction, "input_audio.missing")
+		return opaqueBlock(chatWire, part)
+	}
+	data, _ := stringField(raw, "data")
+	format, _ := stringField(raw, "format")
+	for _, extra := range meaningfulExtras(part, "type", "input_audio") {
+		loss.Dropped(LossUnknownField, direction, "content_part."+extra)
+	}
+	for _, member := range raw.Members() {
+		if member.Key == "data" || member.Key == "format" || member.Value.IsNull() {
+			continue
+		}
+		loss.Dropped(LossUnknownField, direction, "input_audio."+member.Key)
+	}
+	if data == "" || format == "" {
+		loss.Dropped(LossUnknownField, direction, "input_audio")
+		return opaqueBlock(chatWire, part)
+	}
+	return Block{Kind: BlockAudio, MediaType: audioMediaType(format), Data: data}
+}
+
+// chatVideoPartToBlock 解 `{type:"video_url", video_url:{url}}`（或 `video_url` 为裸字符串）。
+func chatVideoPartToBlock(part *Value, loss *LossCollector, direction string) Block {
+	url := mediaURLOf(fieldOrNil(part, "video_url"), loss, direction, "video_url")
+	if url == "" {
+		loss.Rewritten(LossUnknownField, direction, "video_url.missing")
+		return opaqueBlock(chatWire, part)
+	}
+	for _, extra := range meaningfulExtras(part, "type", "video_url") {
+		loss.Dropped(LossUnknownField, direction, "content_part."+extra)
+	}
+	return Block{Kind: BlockVideo, URL: url}
+}
+
+// chatFilePartToBlocks 解 `{type:"file", file:{filename, file_data}}`。
+//
+// 只收 data URL 形态的内联文件：`file_id` 是上游文件库句柄，跨线没有载体，故记损不装箱
+// （与 responses 线的 input_file.file_id 同处置）。
+func chatFilePartToBlocks(part *Value, loss *LossCollector, direction string) []Block {
+	raw := fieldOrNil(part, "file")
+	if !isRecord(raw) {
+		loss.Rewritten(LossUnknownField, direction, "file.missing")
+		return []Block{opaqueBlock(chatWire, part)}
+	}
+	if _, ok := stringField(raw, "file_id"); ok {
+		loss.Dropped(LossUnknownField, direction, "file.file_id")
+		return nil
+	}
+	fileData, _ := stringField(raw, "file_data")
+	if fileData == "" {
+		loss.Dropped(LossDocument, direction, "file.file_data")
+		return nil
+	}
+	parsed, ok := parseChatDataURL(fileData)
+	if !ok {
+		// 本线规定 file_data 是 data URL；把裸 base64 当 data URL 交给上游是失真。
+		loss.Rewritten(LossUnknownField, direction, "file.file_data")
+		return nil
+	}
+	for _, member := range raw.Members() {
+		if member.Key == "filename" || member.Key == "file_data" || member.Value.IsNull() {
+			continue
+		}
+		loss.Dropped(LossUnknownField, direction, "file."+member.Key)
+	}
+	for _, extra := range meaningfulExtras(part, "type", "file") {
+		loss.Dropped(LossUnknownField, direction, "content_part."+extra)
+	}
+	return []Block{{Kind: BlockDocument, MediaType: parsed.MediaType, Data: parsed.Data}}
 }
 
 // chatImageMediaTypes 把 URL 扩展名映射为媒体类型。
@@ -711,10 +794,17 @@ func chatRenderMessages(role string, blocks []Block, options *chatRenderOptions)
 				parts = append(parts, part)
 			}
 		case BlockDocument:
-			if block.CacheHint != nil {
-				options.loss.Dropped(LossCacheControl, options.direction, "document")
+			if part := chatDocumentBlockToPart(block, options.loss, options.direction); part != nil {
+				parts = append(parts, part)
 			}
-			options.loss.Dropped(LossDocument, options.direction, "chat_has_no_document")
+		case BlockAudio:
+			if part := chatAudioBlockToPart(block, options.loss, options.direction); part != nil {
+				parts = append(parts, part)
+			}
+		case BlockVideo:
+			if part := chatVideoBlockToPart(block, options.loss, options.direction); part != nil {
+				parts = append(parts, part)
+			}
 		case BlockThinking:
 			chatRenderThinking(block, role, &reasoning, options)
 		case BlockToolCall:
@@ -803,6 +893,61 @@ func imageMediaTypeDetail(mediaType string) string {
 	return mediaType
 }
 
+// chatDocumentBlockToPart 把内联 PDF 渲染成 chat 的 file 分片。
+//
+// 只送内联 PDF：本线 file 分片被保证支持的只有 PDF，且必须是 data URL 形态的内联数据；
+// 远程 URL 与其它文档类型无取证过的承载位，仍按 document 类记损。
+// filename 由本函数合成：枢纽块没有文件名字段（跨到 anthropic 时也没有承载位），
+// 它在上游只是展示用的标签，不参与解析。
+func chatDocumentBlockToPart(block Block, loss *LossCollector, direction string) *Value {
+	if block.CacheHint != nil {
+		loss.Dropped(LossCacheControl, direction, "document")
+	}
+	if block.Data == "" || block.MediaType != "application/pdf" {
+		loss.Dropped(LossDocument, direction, "chat_file_needs_pdf_data")
+		return nil
+	}
+	return NewObject().
+		Set("type", NewString("file")).
+		Set("file", NewObject().
+			Set("filename", NewString("document.pdf")).
+			Set("file_data", NewString(chatToDataURL(block.MediaType, block.Data))))
+}
+
+// chatAudioBlockToPart 渲染 `{type:"input_audio", input_audio:{data, format}}`。
+//
+// 本线音频只有内联 base64 一种承载形态（无 URL 形态），故缺 data 或媒体类型不是 audio/*
+// 时无处可送，记损而不送出半成品分片。
+func chatAudioBlockToPart(block Block, loss *LossCollector, direction string) *Value {
+	if block.CacheHint != nil {
+		loss.Dropped(LossCacheControl, direction, "audio")
+	}
+	format := audioFormat(block.MediaType)
+	if block.Data == "" || format == "" {
+		loss.Dropped(LossUnknownField, direction, "audio")
+		return nil
+	}
+	return NewObject().
+		Set("type", NewString("input_audio")).
+		Set("input_audio", NewObject().
+			Set("data", NewString(block.Data)).
+			Set("format", NewString(format)))
+}
+
+// chatVideoBlockToPart 渲染 `{type:"video_url", video_url:{url}}`。
+func chatVideoBlockToPart(block Block, loss *LossCollector, direction string) *Value {
+	if block.CacheHint != nil {
+		loss.Dropped(LossCacheControl, direction, "video")
+	}
+	if block.URL == "" {
+		loss.Dropped(LossUnknownField, direction, "video")
+		return nil
+	}
+	return NewObject().
+		Set("type", NewString("video_url")).
+		Set("video_url", NewObject().Set("url", NewString(block.URL)))
+}
+
 // chatRenderToolMessage 渲染一条 role:tool 消息，并把 tool 结果里**无法落在它上面**的图片
 // 作为第二个返回值交回调用方。
 //
@@ -825,10 +970,18 @@ func chatRenderToolMessage(item Item, options *chatRenderOptions) (*Value, []*Va
 				media = append(media, part)
 			}
 		case BlockDocument:
-			// chat 线没有 file 内容块这一承载形态（本仓的解码侧也只认 text / image_url，
-			// 上游两侧对 `{type:"file"}` 的接受度无取证），故仍按损失抛出，但归到 document
-			// 专用类别而不是 catch-all——文档丢了与未知字段丢了不是同一件事。
-			options.loss.Dropped(LossDocument, options.direction, "chat_has_no_document")
+			// 与图同理：chat 的 tool 消息 content 只能是字符串，文件只能搬到紧随的 user 消息上。
+			if part := chatDocumentBlockToPart(block, options.loss, options.direction); part != nil {
+				media = append(media, part)
+			}
+		case BlockAudio:
+			if part := chatAudioBlockToPart(block, options.loss, options.direction); part != nil {
+				media = append(media, part)
+			}
+		case BlockVideo:
+			if part := chatVideoBlockToPart(block, options.loss, options.direction); part != nil {
+				media = append(media, part)
+			}
 		default:
 			options.loss.Dropped(LossUnknownField, options.direction, "tool_result."+string(block.Kind))
 		}

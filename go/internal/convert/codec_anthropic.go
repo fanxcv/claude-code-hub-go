@@ -513,6 +513,11 @@ func encodeAnthropicBlock(block Block, seed string, options *anthropicRenderOpti
 		}
 		options.loss.Dropped(LossDocument, options.direction, "no_data_or_url")
 		return nil, false
+	case BlockAudio, BlockVideo:
+		// 本线的 content block 只有 text / image / document / tool_use / thinking 五类，
+		// 无音视频承载位：宁可记损也不送一个上游不认的 type。
+		options.loss.Dropped(LossUnknownField, options.direction, string(block.Kind))
+		return nil, false
 	case BlockToolCall:
 		name := block.Name
 		if options.toWire != nil {
