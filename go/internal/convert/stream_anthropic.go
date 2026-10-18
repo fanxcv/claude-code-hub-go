@@ -442,6 +442,13 @@ func (e *anthropicStreamEncoder) Push(chunk Chunk) [][]byte {
 	case ChunkEnd:
 		out = append(out, e.ensureStart()...)
 		out = append(out, e.closeOpenBlock(true)...)
+		if chunk.Failed {
+			// 上游已失败：不发 message_delta 的 stop_reason，也不发 message_stop。
+			// deltaSent 同时置位，免得 Flush 补上这两个正常终止帧。
+			e.deltaSent = true
+			e.ended = true
+			return out
+		}
 		out = append(out, e.ensureDelta()...)
 		out = append(out, e.emit("message_stop", NewObject().Set("type", NewString("message_stop"))))
 		e.ended = true

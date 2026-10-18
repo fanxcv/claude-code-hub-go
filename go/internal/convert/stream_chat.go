@@ -520,6 +520,11 @@ func (e *chatStreamEncoder) Push(chunk Chunk) [][]byte {
 
 	case ChunkEnd:
 		out = append(out, e.ensureStart()...)
+		if chunk.Failed {
+			// 上游已失败：不发 finish_reason 与 [DONE]，只标记收尾让 Flush 也不再补。
+			e.doneSent = true
+			return out
+		}
 		if !e.finishSent {
 			out = append(out, e.finishFrame(nil))
 		}
