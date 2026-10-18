@@ -5,13 +5,14 @@ import (
 	"testing"
 )
 
-// 本文件钉住四件由生产取证（2026-09-17，真实 Codex 请求体过 decode+encode）逼出来的改动：
+// 本文件钉住五件由生产取证（2026-09-17，真实 Codex 请求体过 decode+encode）逼出来的改动：
 //
 //	1. `namespace` 工具组必须被展平（此前整组进 preserved，跨线时整组丢）；
 //	2. input 里的 `additional_tools` item 也是工具声明（Codex 0.154 的新传输），必须并入 Tools，
 //	   且不得产出消息项；
 //	3. `tools[].strict` 只在 true 时算损失（Codex 给每个工具都写 false，此前每条都记一条「改写」）；
-//	4. `reasoning.summary` 与加密思考块各归专用类别（此前挤在 catch-all，导致 rewrite 档被噪声填满）。
+//	4. `reasoning.summary` 与加密思考块各归专用类别（此前挤在 catch-all，导致 rewrite 档被噪声填满）；
+//	5. 非 function 工具的损失按 Kind 可区分（托管类 / 本地执行类各一档）。
 
 // codexNamespaceToolsBody 是「顶层 tools[] 里带 namespace 组」的请求体（实测形状，已剪裁）。
 const codexNamespaceToolsBody = `{
@@ -125,8 +126,34 @@ func TestAdditionalToolsItemMergedAndNotEmittedAsMessage(t *testing.T) {
 	if count := strings.Count(serialized, `"role"`); count != 1 {
 		t.Fatalf("只应产出 1 条消息（system 由 instructions 缺省），实际 %d 条：%s", count, serialized)
 	}
-	// custom 叶在 chat 线无承载位，必须记损（专用类别），不许静默丢。
-	assertLossEntry(t, loss, LossNonFunctionTool, "dropped", "custom")
+	// custom 叶在 chat 线无承载位，必须记损（原生档专用类别，不许静默丢）。
+	assertLossEntry(t, loss, LossNativeTool, "dropped", "custom")
+}
+
+// TestNonFunctionToolLossDistinguishesKind 钉住非 function 工具的损失按 Kind 可区分。
+//
+// 为何要钉：类别是聚合口径、detail 是定位口径。若把托管类与本地执行类混成一格，台账只能看出
+// 「丢了工具」；若 detail 不带具体 Kind，连丢的是 file_search 还是 computer_use 都无从分辨。
+func TestNonFunctionToolLossDistinguishesKind(t *testing.T) {
+	const body = `{"model":"gpt-5","input":"hi","tools":[
+	  {"type":"web_search"},
+	  {"type":"file_search"},
+	  {"type":"mcp","server_label":"s","server_url":"https://example.com/mcp"},
+	  {"type":"custom","name":"exec"},
+	  {"type":"local_shell"}
+	]}`
+	_, loss := decodeResponsesTo(t, body, ProtocolOpenAIChat)
+
+	want := []struct{ capability, detail string }{
+		{LossWebSearchTool, "web_search"},
+		{LossNonFunctionTool, "file_search"},
+		{LossMCPTool, "mcp"},
+		{LossNativeTool, "custom"},
+		{LossNativeTool, "local_shell"},
+	}
+	for _, item := range want {
+		assertLossEntry(t, loss, item.capability, "dropped", item.detail)
+	}
 }
 
 func TestToolStrictOnlyRecordedWhenTrue(t *testing.T) {

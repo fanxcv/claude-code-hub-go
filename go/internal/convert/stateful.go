@@ -135,3 +135,55 @@ func reportForeignDroppableFields(request *Request, target WireProtocol, loss *L
 		}
 	}
 }
+
+// hubCarriedRequestKeys 是「落在 passthrough 里、但已由枢纽或编码器读走」的键。
+//
+// 为何单列：它们不在任何线的 knownKeys 里（故会落进 passthrough），但均有消费者——
+// prompt_cache_key 由解码器进 Request.PromptCacheKey 并在 chat/responses 编码器回写（anthropic
+// 那条另有 LossPromptCacheKey 专用记录），metadata 进 Request.Metadata。不列入就是重复记损。
+var hubCarriedRequestKeys = knownKeys{
+	"prompt_cache_key": true,
+	"metadata":         true,
+}
+
+// reportUnknownForeignFields 把「白名单外的外线顶层字段」也记入损失。
+//
+// 为何需要兜底：reportForeignDroppableFields 只认清单——清单外的键（`container`、
+// `max_tool_calls` 之类）落进 passthrough 后无任何消费者，跨线即零痕迹。漏一个键就是一条
+// 静默丢弃，而清单永远是滞后的那一侧；故以「不在清单、也不在本线 knownKeys」为判据反推。
+func reportUnknownForeignFields(request *Request, target WireProtocol, loss *LossCollector, direction string, ctx ConvertCtx) {
+	if request == nil || loss == nil {
+		return
+	}
+	for wire, fields := range request.Passthrough {
+		if wire == target || fields == nil {
+			continue
+		}
+		// 已消费键集合 = 该线 knownKeys ∪ 白名单键 ∪ 枢纽承载键。三层缺一即重复记损
+		// （stateful.go 开头那段注释里的 prompt_cache_key 就是踩过的坑）。
+		consumed := knownRequestKeysFor(wire)
+		for _, member := range fields.Members() {
+			if consumed.contains(member.Key) || hubCarriedRequestKeys.contains(member.Key) ||
+				isForeignDroppableKey(member.Key) {
+				continue
+			}
+			if !isMeaningful(member.Value) {
+				continue
+			}
+			if ctx.isGatewayInjectedField(member.Key) {
+				continue
+			}
+			loss.Dropped(LossUnknownFieldParam, direction, member.Key)
+		}
+	}
+}
+
+// isForeignDroppableKey 报告键是否已在 foreignDroppableFields 清单里（已由上一个函数记过）。
+func isForeignDroppableKey(key string) bool {
+	for _, item := range foreignDroppableFields {
+		if item.key == key {
+			return true
+		}
+	}
+	return false
+}

@@ -1055,6 +1055,7 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	// 外线留存的非 function 工具（如 responses 线的 MCP / web_search 工具声明）本线无法承载时记损。
 	reportForeignPreservedTools(request, chatWire, loss, direction)
 	reportForeignDroppableFields(request, chatWire, loss, direction, ctx)
+	reportUnknownForeignFields(request, chatWire, loss, direction, ctx)
 	out.Set("model", NewString(firstString(ctx.Model, request.Model)))
 	out.Set("stream", NewBool(request.Stream || ctx.Stream))
 

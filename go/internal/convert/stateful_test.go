@@ -309,6 +309,109 @@ func TestForeignDroppableRequestKeysRecordedAsLoss(t *testing.T) {
 	}
 }
 
+// TestUnknownForeignFieldsRecordedAsLoss 钉住白名单外的外线顶层字段也必须留痕。
+//
+// 为何要钉：白名单永远是滞后的那一侧——`container` / `max_tool_calls` 这类键落进 passthrough 后
+// 无任何消费者，跨线即零痕迹（实测：客户端以为指定了容器，上游根本没收到）。同时必须钉住
+// 「不重复」：`prompt_cache_key` 与 `metadata` 已有承载位或白名单条目，兜底再记一遍就是双计。
+func TestUnknownForeignFieldsRecordedAsLoss(t *testing.T) {
+	lossesFor := func(t *testing.T, source, target WireProtocol, body string) []string {
+		t.Helper()
+		ctx := ConvertCtx{
+			ClientFormat:   clientFormatOfProtocol(source),
+			TargetProto:    target,
+			Model:          "m",
+			ToWireToolName: NormalizeToolName,
+		}
+		decoded, ok := DecodeRequest(source, mustParsePayload(t, body), ctx)
+		if !ok {
+			t.Fatalf("协议线 %s 无解码器", source)
+		}
+		encoded, ok := EncodeRequest(target, decoded.Value, ctx)
+		if !ok {
+			t.Fatalf("协议线 %s 无编码器", target)
+		}
+		got := []string{}
+		for _, entry := range encoded.Loss.Entries {
+			got = append(got, entry.Capability+"/"+string(entry.Action)+"/"+entry.Detail)
+		}
+		return got
+	}
+	countOf := func(entries []string, capability, detail string) int {
+		count := 0
+		for _, entry := range entries {
+			if entry == capability+"/dropped/"+detail {
+				count++
+			}
+		}
+		return count
+	}
+
+	responsesBody := func(extra string) string { return `{"model":"gpt-5","input":"hi",` + extra + `}` }
+	chatBody := func(extra string) string {
+		return `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],` + extra + `}`
+	}
+
+	// 白名单外的未知键：两个方向各恰好一条。
+	for _, item := range []struct {
+		name   string
+		source WireProtocol
+		target WireProtocol
+		body   string
+		key    string
+	}{
+		{"responses→chat/container", ProtocolOpenAIResponses, ProtocolOpenAIChat,
+			responsesBody(`"container":"cntr_1"`), "container"},
+		{"responses→chat/max_tool_calls", ProtocolOpenAIResponses, ProtocolOpenAIChat,
+			responsesBody(`"max_tool_calls":3`), "max_tool_calls"},
+		{"responses→anthropic/container", ProtocolOpenAIResponses, ProtocolAnthropicMessages,
+			responsesBody(`"container":"cntr_1"`), "container"},
+		{"chat→responses/container", ProtocolOpenAIChat, ProtocolOpenAIResponses,
+			chatBody(`"container":"cntr_1"`), "container"},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			entries := lossesFor(t, item.source, item.target, item.body)
+			if count := countOf(entries, LossUnknownFieldParam, item.key); count != 1 {
+				t.Fatalf("%s 必须恰好记一条 %s，实际 %d 条：%v", item.key, LossUnknownFieldParam, count, entries)
+			}
+		})
+	}
+
+	// 已消费的键不得被兜底重复记：prompt_cache_key 进枢纽（chat/responses 回写、anthropic 另有专用类别），
+	// metadata 已有白名单条目——两者在兜底那一层都必须零条。
+	cacheKeyEntries := lossesFor(t, ProtocolOpenAIResponses, ProtocolOpenAIChat,
+		responsesBody(`"prompt_cache_key":"k1"`))
+	if count := countOf(cacheKeyEntries, LossUnknownFieldParam, "prompt_cache_key"); count != 0 {
+		t.Fatalf("prompt_cache_key 已被枢纽承载，不得兜底记损，实际 %v", cacheKeyEntries)
+	}
+	for _, entries := range [][]string{
+		lossesFor(t, ProtocolOpenAIResponses, ProtocolAnthropicMessages, responsesBody(`"prompt_cache_key":"k1"`)),
+		lossesFor(t, ProtocolOpenAIChat, ProtocolAnthropicMessages, chatBody(`"prompt_cache_key":"k1"`)),
+	} {
+		if count := countOf(entries, LossUnknownFieldParam, "prompt_cache_key"); count != 0 {
+			t.Fatalf("prompt_cache_key 已有专用类别，不得兜底再记，实际 %v", entries)
+		}
+		if count := countOf(entries, LossPromptCacheKey, "anthropic_has_no_prompt_cache_key"); count != 1 {
+			t.Fatalf("anthropic 线必须恰好记一条专用损失，实际 %v", entries)
+		}
+	}
+
+	metadataEntries := lossesFor(t, ProtocolOpenAIResponses, ProtocolOpenAIChat,
+		responsesBody(`"metadata":{"user_id":"u1"}`))
+	if count := countOf(metadataEntries, LossUnknownFieldParam, "metadata"); count != 1 {
+		t.Fatalf("metadata 已在白名单里，应恰好一条，实际 %v", metadataEntries)
+	}
+
+	// 空值不承载约束：空对象 / null 一律不记（与 store:false 同因）。
+	for _, value := range []string{`{}`, `null`} {
+		entries := lossesFor(t, ProtocolOpenAIResponses, ProtocolOpenAIChat,
+			responsesBody(`"container":`+value))
+		if count := countOf(entries, LossUnknownFieldParam, "container"); count != 0 {
+			t.Fatalf("container=%s 不得记损，实际 %v", value, entries)
+		}
+	}
+}
+
 // TestPromptCacheKeyCarriedExceptAnthropic 钉住缓存路由键的新处置：能带就带，带不了才记损。
 //
 // 为何必须钉两面：

@@ -391,6 +391,14 @@ const (
 	LossWebSearchTool   = "web_search.tool"
 	LossNonFunctionTool = "tool.non_function"
 
+	// LossNativeTool 是同一批工具里「本地执行」的那一档（custom / local_shell / apply_patch / shell …）。
+	//
+	// 为何与 LossNonFunctionTool 分开：两者丢失的后果不同——托管类（file_search / code_execution /
+	// computer_use …）丢的是服务端整项能力，原生类丢的是客户端自己执行的工具声明（上游仍可纯文本作答，
+	// 客户端拿到的是一个没有被调用的工具表）。混成一格时，台账只能看出「丢了工具」，看不出
+	// 「丢的是哪一档能力」，而这正是按 Kind 定位问题的最低粒度。具体类型仍进 detail。
+	LossNativeTool = "tool.native"
+
 	// LossThinkingDerived 记「思考强度载体换算」（budget_tokens ↔ 等级）。
 	//
 	// 为何需要：三条线的强度载体不同——Anthropic 以 `thinking.budget_tokens`（token 数）为主、
@@ -615,8 +623,13 @@ func nonFunctionToolLossClass(wire WireProtocol, value *Value) (string, string) 
 		return LossWebSearchTool, typeName
 	case "":
 		return LossNonFunctionTool, "opaque:" + string(wire)
-	default:
+	// 托管执行类：丢的是服务端整项能力（web_search 与 mcp 在上面各有专用类别）。
+	case "file_search", "web_fetch", "code_execution", "computer_use", "computer_use_preview",
+		"url_context", "image_generation":
 		return LossNonFunctionTool, typeName
+	// 其余（native / custom / local_shell / apply_patch / shell 及未来未知类型）都是本地执行档。
+	default:
+		return LossNativeTool, typeName
 	}
 }
 
@@ -1185,6 +1198,23 @@ func responsePassthroughFor(response *Response, protocol WireProtocol) *Value {
 type knownKeys map[string]bool
 
 func (k knownKeys) contains(key string) bool { return k[key] }
+
+// knownRequestKeysFor 按协议线取该线解码器使用的 knownKeys。
+//
+// 为何需要按线取：passthrough 的键集合以**来源线**为命名空间（collectPassthrough 按来源线的
+// knownKeys 跳过已知键），故「某键是否已被消费」只能在来源线的口径下判定。
+func knownRequestKeysFor(wire WireProtocol) knownKeys {
+	switch wire {
+	case ProtocolOpenAIChat:
+		return chatKnownRequestKeys
+	case ProtocolOpenAIResponses:
+		return responsesKnownRequestKeys
+	case ProtocolAnthropicMessages:
+		return anthropicKnownRequestKeys
+	default:
+		return nil
+	}
+}
 
 func collectPassthrough(source *Value, known knownKeys) *Value {
 	out := NewObject()
