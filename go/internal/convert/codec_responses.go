@@ -827,21 +827,36 @@ func responsesVideoPart(block Block, options *responsesRenderOptions) *Value {
 
 func responsesReasoningItem(blocks []Block, options *responsesRenderOptions) *Value {
 	summary := []*Value{}
+	// 加密思考块（redacted_thinking）的 Text 是密文而不是可读摘要：当摘要写出去就是把
+	// 一段 base64 糊到客户端可见字段上（实测 `output=[reasoning("t"), reasoning("BLOB"), ...]`）。
+	// Responses 线有 encrypted_content 承载位，按该位承载；无法承载时只记损、不写文本。
+	encrypted := ""
 	for _, block := range blocks {
 		if block.Kind != BlockThinking || block.Text == "" {
+			continue
+		}
+		if block.Redacted {
+			encrypted = block.Text
 			continue
 		}
 		summary = append(summary, NewObject().
 			Set("type", NewString("summary_text")).
 			Set("text", NewString(block.Text)))
 	}
-	if len(summary) == 0 {
+	if len(summary) == 0 && encrypted == "" {
 		return nil
 	}
 	if blocks[0].Signature != "" {
 		options.loss.Dropped(LossThinkingSignature, options.direction, "responses_has_no_signature")
 	}
-	return NewObject().Set("type", NewString("reasoning")).Set("summary", NewArray(summary...))
+	item := NewObject().Set("type", NewString("reasoning"))
+	if len(summary) > 0 {
+		item.Set("summary", NewArray(summary...))
+	}
+	if encrypted != "" {
+		item.Set("encrypted_content", NewString(encrypted))
+	}
+	return item
 }
 
 func responsesFunctionCallItem(block Block, seed string, options *responsesRenderOptions) *Value {
