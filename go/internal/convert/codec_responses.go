@@ -75,16 +75,58 @@ func decodeResponsesPart(part *Value, loss *LossCollector, direction string) []B
 		return []Block{textBlock(text)}
 	case "input_image":
 		return decodeResponsesImagePart(part, loss, direction)
+	case "input_file":
+		return decodeResponsesFilePart(part, loss, direction)
 	case "refusal":
-		loss.Dropped(LossUnknownField, direction, "refusal")
-		return nil
+		// 拒答文本是模型给出的**全部**输出：丢弃它，客户端拿到的是空消息，看不出这是拒答。
+		refusal, _ := stringField(part, "refusal")
+		return []Block{textBlock(refusal)}
 	default:
 		return []Block{opaqueBlock(responsesWire, part)}
 	}
 }
 
+// decodeResponsesFilePart 解 input_file 分片。
+//
+// file_id 是上游文件库的句柄，三条线里只有本线自己能续用；跨线没有载体，而同线往返靠
+// 装箱也保不住（装箱块只在本线编码时原样回写，跨线一律丢），故 file_id 只记损、不装箱。
+func decodeResponsesFilePart(part *Value, loss *LossCollector, direction string) []Block {
+	if data, ok := stringField(part, "file_data"); ok && data != "" {
+		parsed, parsedOK := parseChatDataURL(data)
+		if !parsedOK {
+			// responses 规定 file_data 是 data URL；把裸 base64 当 data URL 交给上游是失真。
+			loss.Rewritten(LossUnknownField, direction, "input_file.file_data")
+			return nil
+		}
+		return []Block{{Kind: BlockDocument, MediaType: parsed.MediaType, Data: parsed.Data}}
+	}
+	if url, ok := stringField(part, "file_url"); ok && url != "" {
+		return []Block{{Kind: BlockDocument, URL: url}}
+	}
+	if _, ok := stringField(part, "file_id"); ok {
+		loss.Dropped(LossUnknownField, direction, "input_file.file_id")
+		return nil
+	}
+	loss.Dropped(LossUnknownField, direction, "input_file")
+	return nil
+}
+
 func decodeResponsesImagePart(part *Value, loss *LossCollector, direction string) []Block {
-	url, _ := stringField(part, "image_url")
+	raw := fieldOrNil(part, "image_url")
+	url := ""
+	switch {
+	case raw != nil && raw.Kind() == "string":
+		url, _ = raw.String()
+	case raw != nil && raw.IsObject():
+		// 官方两种形态都收：字符串，或 `{url, detail}` 对象。
+		url, _ = stringField(raw, "url")
+		for _, member := range raw.Members() {
+			if member.Key == "url" || member.Value.IsNull() {
+				continue
+			}
+			loss.Dropped(LossUnknownField, direction, "image_url."+member.Key)
+		}
+	}
 	if url == "" {
 		loss.Dropped(LossUnknownField, direction, "input_image.image_url")
 		return nil
@@ -641,6 +683,27 @@ func responsesImagePart(block Block, options *responsesRenderOptions) *Value {
 	return part
 }
 
+func responsesFilePart(block Block, options *responsesRenderOptions) *Value {
+	part := NewObject().Set("type", NewString("input_file"))
+	switch {
+	case block.Data != "":
+		mediaType := block.MediaType
+		if mediaType == "" {
+			mediaType = "application/octet-stream"
+		}
+		part.Set("file_data", NewString(chatToDataURL(mediaType, block.Data)))
+	case block.URL != "":
+		part.Set("file_url", NewString(block.URL))
+	default:
+		options.loss.Dropped(LossDocument, options.direction, "no_data_or_url")
+		return nil
+	}
+	if block.CacheHint != nil {
+		options.loss.Dropped(LossCacheControl, options.direction, "document")
+	}
+	return part
+}
+
 func responsesReasoningItem(blocks []Block, options *responsesRenderOptions) *Value {
 	summary := []*Value{}
 	for _, block := range blocks {
@@ -687,12 +750,12 @@ func responsesFunctionCallItem(block Block, seed string, options *responsesRende
 // input_file 的数组，「工具返回图片或文件」是明确支持的用法。此前只拼文本，工具结果里的图
 // （Claude Code / Codex 的截图类工具）在跨到本线时整幅丢失。
 //
-// 形态选择：纯文本仍写字符串（兼容面最广，多数上游只认这一形态）；只要有一张图真正送出，
-// 整条改数组，文本逐块写成 input_text。图被丢弃（无 data/url）时不算「有图」，仍回字符串。
+// 形态选择：纯文本仍写字符串（兼容面最广，多数上游只认这一形态）；只要有一件媒体真正送出，
+// 整条改数组，文本逐块写成 input_text。媒体被丢弃（无 data/url）时不算「有媒体」，仍回字符串。
 func responsesFunctionCallOutputItem(item Item, options *responsesRenderOptions) *Value {
 	texts := []string{}
 	parts := []*Value{}
-	hasImage := false
+	hasMedia := false
 	for _, block := range item.Blocks {
 		switch block.Kind {
 		case BlockText:
@@ -703,7 +766,13 @@ func responsesFunctionCallOutputItem(item Item, options *responsesRenderOptions)
 		case BlockImage:
 			if part := responsesImagePart(block, options); part != nil {
 				parts = append(parts, part)
-				hasImage = true
+				hasMedia = true
+			}
+		case BlockDocument:
+			// 工具返回文件也是官方支持的用法（与 input_image 同属 output 数组）。
+			if part := responsesFilePart(block, options); part != nil {
+				parts = append(parts, part)
+				hasMedia = true
 			}
 		default:
 			options.loss.Dropped(LossUnknownField, options.direction, "function_call_output."+string(block.Kind))
@@ -717,7 +786,7 @@ func responsesFunctionCallOutputItem(item Item, options *responsesRenderOptions)
 		options.loss.Dropped(LossToolResultIsError, options.direction, "responses_has_no_is_error")
 	}
 	output := NewString(strings.Join(texts, ""))
-	if hasImage {
+	if hasMedia {
 		output = NewArray(parts...)
 	}
 	return NewObject().
@@ -782,7 +851,10 @@ func responsesEncodeInput(items []Item, idMap map[string]string, loss *LossColle
 					flush()
 					out = append(out, responsesFunctionCallItem(block, seed, options))
 				case BlockDocument:
-					loss.Dropped(LossDocument, options.direction, "responses_has_no_document")
+					// 本线承载文件的分片就是 input_file（解码侧见 decodeResponsesFilePart）。
+					if part := responsesFilePart(block, options); part != nil {
+						parts = append(parts, part)
+					}
 				case BlockOpaque:
 					if block.Wire != responsesWire {
 						loss.Dropped(LossUnknownField, options.direction, "opaque:"+string(block.Wire))
@@ -954,6 +1026,11 @@ func decodeResponsesOutput(raw *Value, loss *LossCollector, fromWire func(string
 				case "output_text", "input_text", "text":
 					text, _ := stringField(part, "text")
 					blocks = append(blocks, textBlock(text))
+					if annotations := asUnknownArray(fieldOrNil(part, "annotations")); len(annotations) > 0 {
+						// 枢纽块无注解承载位（chat 的 message.annotations / anthropic 的 citations 各自
+						// 形状不同），故只能记损而不能静默丢弃：url_citation 对客户端是可见内容。
+						loss.Dropped(LossUnknownField, direction, "annotations")
+					}
 				case "refusal":
 					loss.Dropped(LossUnknownField, direction, "refusal")
 				case "input_image":
@@ -962,7 +1039,9 @@ func decodeResponsesOutput(raw *Value, loss *LossCollector, fromWire func(string
 					blocks = append(blocks, opaqueBlock(responsesWire, part))
 				}
 			}
-		case "function_call":
+		case "function_call", "custom_tool_call":
+			// custom 工具（freeform）在枢纽里就是工具调用：参数包一层 {"input":…}，与请求侧
+			// appendResponsesCustomToolCall 同形状——否则客户端拿到空 assistant，看不到调了什么。
 			name, _ := stringField(item, "name")
 			if fromWire != nil {
 				name = fromWire(name)
@@ -972,6 +1051,10 @@ func decodeResponsesOutput(raw *Value, loss *LossCollector, fromWire func(string
 				callID, _ = stringField(item, "id")
 			}
 			arguments, present := stringField(item, "arguments")
+			if contentPartType(item) == "custom_tool_call" {
+				input, _ := stringField(item, "input")
+				arguments, present = NewObject().Set("input", NewString(input)).MarshalCompact(), true
+			}
 			if !present {
 				arguments = "{}"
 			}
