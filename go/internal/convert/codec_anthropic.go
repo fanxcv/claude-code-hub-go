@@ -65,6 +65,7 @@ func decodeAnthropicBlock(part *Value, loss *LossCollector, direction string, fr
 		text, _ := stringField(part, "text")
 		block := textBlock(text)
 		block.CacheHint = decodeAnthropicCacheHint(part)
+		block.Citations = citationValue(part, "citations")
 		return block, true
 	case "image":
 		return decodeAnthropicMedia(part, BlockImage, loss, direction)
@@ -491,6 +492,9 @@ func encodeAnthropicBlock(block Block, seed string, options *anthropicRenderOpti
 	case BlockText:
 		out := NewObject().Set("type", NewString("text")).Set("text", NewString(block.Text))
 		encodeAnthropicCacheHint(out, block.CacheHint)
+		if citations := citationArray(block.Citations, ProtocolAnthropicMessages); citations != nil {
+			out.Set("citations", citations)
+		}
 		return out, true
 	case BlockImage:
 		if mediaOut, ok := encodeAnthropicMedia(block, "image"); ok {
@@ -943,10 +947,12 @@ func encodeAnthropicResponse(response *Response, ctx ConvertCtx) EncodeResult {
 	return EncodeResult{Body: out, Loss: loss.Report()}
 }
 
-// joinableSystemText 报告 system 能否以单个字符串表达：全部为无缓存提示的文本块。
+// joinableSystemText 报告 system 能否以单个字符串表达：全部为无缓存提示、无引用的文本块。
+//
+// 引用也算在内：拼成字符串就只剩一个承载位，分片级 citations 无处安放。
 func joinableSystemText(blocks []Block) (string, bool) {
 	for _, block := range blocks {
-		if block.Kind != BlockText || block.CacheHint != nil {
+		if block.Kind != BlockText || block.CacheHint != nil || block.Citations != nil {
 			return "", false
 		}
 	}

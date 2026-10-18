@@ -667,12 +667,16 @@ func responsesResolveEmitID(original string, seed string, options *responsesRend
 	return resolveEmitToolCallID(original, seed, options.idMap, chatIsSafeToolID, options.loss, options.direction)
 }
 
-func responsesTextPart(role string, text string) *Value {
+func responsesTextPart(role string, block Block) *Value {
 	partType := "output_text"
 	if role != "assistant" {
 		partType = "input_text"
 	}
-	return NewObject().Set("type", NewString(partType)).Set("text", NewString(text))
+	out := NewObject().Set("type", NewString(partType)).Set("text", NewString(block.Text))
+	if citations := citationArray(block.Citations, ProtocolOpenAIResponses); citations != nil {
+		out.Set("annotations", citations)
+	}
+	return out
 }
 
 func responsesImagePart(block Block, options *responsesRenderOptions) *Value {
@@ -850,7 +854,7 @@ func responsesEncodeInput(items []Item, idMap map[string]string, loss *LossColle
 					if block.CacheHint != nil {
 						loss.Dropped(LossCacheControl, options.direction, "text")
 					}
-					parts = append(parts, responsesTextPart(item.Role, block.Text))
+					parts = append(parts, responsesTextPart(item.Role, block))
 				case BlockImage:
 					if item.Role == "assistant" {
 						loss.Dropped(LossImage, options.direction, "assistant_image")
@@ -1043,12 +1047,9 @@ func decodeResponsesOutput(raw *Value, loss *LossCollector, fromWire func(string
 				switch contentPartType(part) {
 				case "output_text", "input_text", "text":
 					text, _ := stringField(part, "text")
-					blocks = append(blocks, textBlock(text))
-					if annotations := asUnknownArray(fieldOrNil(part, "annotations")); len(annotations) > 0 {
-						// 枢纽块无注解承载位（chat 的 message.annotations / anthropic 的 citations 各自
-						// 形状不同），故只能记损而不能静默丢弃：url_citation 对客户端是可见内容。
-						loss.Dropped(LossUnknownField, direction, "annotations")
-					}
+					block := textBlock(text)
+					block.Citations = citationValue(part, "annotations")
+					blocks = append(blocks, block)
 				case "refusal":
 					loss.Dropped(LossUnknownField, direction, "refusal")
 				case "input_image":
@@ -1123,17 +1124,17 @@ func encodeResponsesOutput(response *Response, loss *LossCollector, idMap map[st
 	options := &responsesRenderOptions{
 		direction: "response", seed: "0", idMap: idMap, loss: loss,
 	}
-	texts := []string{}
+	textBlocks := []Block{}
 	flush := func() {
-		if len(texts) == 0 {
+		if len(textBlocks) == 0 {
 			return
 		}
 		out = append(out, NewObject().
 			Set("type", NewString("message")).
 			Set("role", NewString("assistant")).
-			Set("content", NewArray(textParts(texts)...)).
+			Set("content", NewArray(textParts(textBlocks)...)).
 			Set("status", NewString("completed")))
-		texts = nil
+		textBlocks = nil
 	}
 	blockIndex := 0
 	for _, block := range response.Blocks {
@@ -1144,7 +1145,7 @@ func encodeResponsesOutput(response *Response, loss *LossCollector, idMap map[st
 			if block.CacheHint != nil {
 				loss.Dropped(LossCacheControl, options.direction, "text")
 			}
-			texts = append(texts, block.Text)
+			textBlocks = append(textBlocks, block)
 		case BlockThinking:
 			flush()
 			if reasoning := responsesReasoningItem([]Block{block}, options); reasoning != nil {
@@ -1172,12 +1173,10 @@ func encodeResponsesOutput(response *Response, loss *LossCollector, idMap map[st
 	return out
 }
 
-func textParts(texts []string) []*Value {
-	out := make([]*Value, 0, len(texts))
-	for _, text := range texts {
-		out = append(out, NewObject().
-			Set("type", NewString("output_text")).
-			Set("text", NewString(text)))
+func textParts(blocks []Block) []*Value {
+	out := make([]*Value, 0, len(blocks))
+	for _, block := range blocks {
+		out = append(out, responsesTextPart("assistant", block))
 	}
 	return out
 }

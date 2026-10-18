@@ -12,7 +12,8 @@ import (
 //  2. `custom_tool_call` 响应项此前落 default 被丢，客户端拿到空 assistant，看不到模型调了什么；
 //  3. `refusal` 分片此前记损并丢——拒答文本是模型给出的全部输出，丢了客户端就只剩空消息；
 //  4. `input_image.image_url` 的对象形态（`{url, detail}`，官方两种形态都收）此前整块落 opaque；
-//  5. 响应侧 `annotations` 此前静默丢弃，连损失条目都没有。
+//  5. 响应侧 `annotations` 此前静默丢弃（后补记为损失条目），跨线后引用彻底消失。
+//     现由枢纽 `Block.Citations` 原样承载，按目标线形状重写。
 //
 // 为何单测而不是只靠语料：语料是 Node 行为的逐字节快照，上面这些格位在 Node 侧本就没有实现
 // （refusal 丢弃正是快照里的期望），无法用「与 Node 对齐」证明改对了。
@@ -266,9 +267,9 @@ func TestResponsesRefusalPartKeepsText(t *testing.T) {
 	}
 }
 
-// TestResponsesAnnotationsReportedAsLoss：枢纽块没有注解承载位，跨线只能记损——
-// 但绝不能静默丢弃：url_citation 是客户端可见内容，无条目就无从排查。
-func TestResponsesAnnotationsReportedAsLoss(t *testing.T) {
+// TestResponsesAnnotationsCarriedToChat：`output_text.annotations` 跨到 chat 线落为
+// `message.annotations`（`url_citation` 形状），既不静默丢弃也不再记损。
+func TestResponsesAnnotationsCarriedToChat(t *testing.T) {
 	const upstream = `{"id":"resp_1","object":"response","model":"m","status":"completed","output":[` +
 		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"See [1]",` +
 		`"annotations":[{"type":"url_citation","url":"https://example.com/a","title":"A",` +
@@ -279,5 +280,17 @@ func TestResponsesAnnotationsReportedAsLoss(t *testing.T) {
 	if content, _ := message.StringField("content"); content != "See [1]" {
 		t.Fatalf("正文不应受影响，实际 %q", content)
 	}
-	assertLossEntry(t, loss, LossUnknownFieldOther, "dropped", "annotations")
+	annotations := message.ArrayField("annotations")
+	if len(annotations) != 1 {
+		t.Fatalf("应当承载一条注释，实际 %s", string(body.MarshalCompact()))
+	}
+	if kind, _ := annotations[0].StringField("type"); kind != "url_citation" {
+		t.Fatalf("注释必须带 url_citation 判别字段，实际 %q", kind)
+	}
+	if url, _ := annotations[0].StringField("url"); url != "https://example.com/a" {
+		t.Fatalf("注释 url 应保留，实际 %q", url)
+	}
+	if len(loss.Entries) != 0 {
+		t.Fatalf("注释已承载，不应再记损，实际 %+v", loss.Entries)
+	}
 }
