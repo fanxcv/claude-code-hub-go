@@ -681,14 +681,33 @@ func responsesFunctionCallItem(block Block, seed string, options *responsesRende
 		Set("arguments", NewString(arguments))
 }
 
+// responsesFunctionCallOutputItem 渲染 function_call_output。
+//
+// 官方 function calling 指南：工具的 output 既可为字符串，也可为 input_text / input_image /
+// input_file 的数组，「工具返回图片或文件」是明确支持的用法。此前只拼文本，工具结果里的图
+// （Claude Code / Codex 的截图类工具）在跨到本线时整幅丢失。
+//
+// 形态选择：纯文本仍写字符串（兼容面最广，多数上游只认这一形态）；只要有一张图真正送出，
+// 整条改数组，文本逐块写成 input_text。图被丢弃（无 data/url）时不算「有图」，仍回字符串。
 func responsesFunctionCallOutputItem(item Item, options *responsesRenderOptions) *Value {
 	texts := []string{}
+	parts := []*Value{}
+	hasImage := false
 	for _, block := range item.Blocks {
-		if block.Kind == BlockText {
+		switch block.Kind {
+		case BlockText:
 			texts = append(texts, block.Text)
-			continue
+			parts = append(parts, NewObject().
+				Set("type", NewString("input_text")).
+				Set("text", NewString(block.Text)))
+		case BlockImage:
+			if part := responsesImagePart(block, options); part != nil {
+				parts = append(parts, part)
+				hasImage = true
+			}
+		default:
+			options.loss.Dropped(LossUnknownField, options.direction, "function_call_output."+string(block.Kind))
 		}
-		options.loss.Dropped(LossUnknownField, options.direction, "function_call_output."+string(block.Kind))
 	}
 	// tool_result 块自身的 cache_control：function_call_output 只有 output，无承载位。
 	if item.CacheHint != nil {
@@ -697,10 +716,14 @@ func responsesFunctionCallOutputItem(item Item, options *responsesRenderOptions)
 	if item.IsError {
 		options.loss.Dropped(LossToolResultIsError, options.direction, "responses_has_no_is_error")
 	}
+	output := NewString(strings.Join(texts, ""))
+	if hasImage {
+		output = NewArray(parts...)
+	}
 	return NewObject().
 		Set("type", NewString("function_call_output")).
 		Set("call_id", NewString(responsesResolveEmitID(item.ToolCallID, options.seed, options))).
-		Set("output", NewString(strings.Join(texts, "")))
+		Set("output", output)
 }
 
 func responsesEncodeInput(items []Item, idMap map[string]string, loss *LossCollector, ctx ConvertCtx) []*Value {
