@@ -486,12 +486,29 @@ func appendResponsesToolEntries(entries []*Value, tools *[]Tool, preserved *[]*V
 				*preserved = append(*preserved, entry)
 				continue
 			}
+			// 展平即丢归组信息：枢纽与另外两条线都没有 namespace 概念，上游只能看到拍平后的
+			// 裸名列表。记损让「哪些工具来自哪个组」在报告里可回溯；detail 带组名以便聚合。
+			namespace, _ := stringField(entry, "name")
+			loss.Dropped(LossUnknownFieldTool, "request", "tool.namespace."+namespace)
 			appendResponsesToolEntries(inner.Items(), tools, preserved, loss)
 			continue
 		}
 		name, hasName := stringField(entry, "name")
 		if entryType != "function" || !hasName || name == "" {
 			*preserved = append(*preserved, entry)
+			continue
+		}
+		// 展平后同名的两个工具会让上游只看到一个（名字是工具表的键），后到者无处安放：
+		// 保留先到者并留痕，口径与 relaykit 的 namespaced_tool_dropped 一致（丢 + 可归因）。
+		collided := false
+		for _, existing := range *tools {
+			if existing.Name == name {
+				collided = true
+				break
+			}
+		}
+		if collided {
+			loss.Dropped(LossUnknownFieldTool, "request", "tool.name_collision."+name)
 			continue
 		}
 		tool := Tool{Name: name, Parameters: NewObject()}

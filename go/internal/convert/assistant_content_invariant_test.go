@@ -2,6 +2,7 @@ package convert
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -334,4 +335,35 @@ func TestChatAssistantToolCallsKeepsNullContent(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAnthropicEmptyAssistantOmittedWithLoss 是 chat 侧同名钉子的对偶：anthropic 编码器同样把
+// 「无可见内容」的 assistant 整条不产出（content:[] 上游判畸形），此前零痕迹——报告里只看到
+// enc= 为空，查不出是丢了一条消息。本用例钉住那条损失。
+func TestAnthropicEmptyAssistantOmittedWithLoss(t *testing.T) {
+	ctx := ConvertCtx{ClientFormat: FormatClaude, TargetProto: ProtocolAnthropicMessages}
+	raw := `{"model":"m","max_tokens":64,"messages":[
+		{"role":"user","content":"hi"},
+		{"role":"assistant","content":[]},
+		{"role":"user","content":"再来"}]}`
+	decoded, ok := DecodeRequest(ProtocolAnthropicMessages, mustParsePayload(t, raw), ctx)
+	if !ok {
+		t.Fatal("anthropic 线必须能解码")
+	}
+	encoded, ok := EncodeRequest(ProtocolAnthropicMessages, decoded.Value, ctx)
+	if !ok {
+		t.Fatal("anthropic 线必须能编码")
+	}
+
+	messages, _ := encoded.Body.Get("messages")
+	roles := []string{}
+	for _, message := range messages.Items() {
+		role, _ := stringField(message, "role")
+		roles = append(roles, role)
+	}
+	if joined := strings.Join(roles, ","); joined != "user,user" {
+		t.Fatalf("空 assistant 不得产出（上游判畸形），实际消息角色序列：%s", joined)
+	}
+	// 损失记在解码侧：空轮次在那里就一条 item 都不产出，编码器看不到它。
+	assertLossEntry(t, decoded.Loss, LossAssistantContentEmpty, "dropped", "assistant.empty_message")
 }

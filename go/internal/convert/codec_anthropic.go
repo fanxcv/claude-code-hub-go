@@ -176,12 +176,14 @@ func decodeAnthropicMessages(raw *Value, items *[]Item, loss *LossCollector, fro
 		content, hasContent := message.Get("content")
 
 		pending := []Block{}
+		emitted := 0
 		flush := func() {
 			if len(pending) == 0 {
 				return
 			}
 			*items = append(*items, Item{Kind: ItemMessage, Role: role, Blocks: pending})
 			pending = nil
+			emitted++
 		}
 
 		for _, part := range asUnknownArray(content) {
@@ -189,6 +191,7 @@ func decodeAnthropicMessages(raw *Value, items *[]Item, loss *LossCollector, fro
 				if partType, _ := stringField(part, "type"); partType == "tool_result" {
 					flush()
 					*items = append(*items, decodeAnthropicToolResult(part, loss, direction))
+					emitted++
 					continue
 				}
 			}
@@ -200,6 +203,11 @@ func decodeAnthropicMessages(raw *Value, items *[]Item, loss *LossCollector, fro
 			pending = decodeAnthropicBlocks(content, loss, direction, fromWire)
 		}
 		flush()
+		if emitted == 0 && role == "assistant" {
+			// 空的 assistant 轮次（典型：`content:[]`）在解码期就一条 item 都不产出，编码器
+			// 根本见不到它——不在这里记损，报告里就只有「enc= 为空」，查不出丢了一条消息。
+			loss.Dropped(LossAssistantContentEmpty, direction, "assistant.empty_message")
+		}
 	}
 }
 
@@ -618,6 +626,12 @@ func encodeAnthropicMessage(role string, blocks []Block, options *anthropicRende
 		}
 	}
 	if len(content) == 0 {
+		// 空 assistant 整条不产出：content 为空串也判畸形（与 chat 侧同口径），故只能在编码侧
+		// 拦下。记损让「客户端历史里那条空轮次没了」可查，而不是只表现为 enc= 为空。
+		// 非 assistant 角色不记：那可能与空轮次无关（块全被降级掉），记了就是错归因。
+		if role == "assistant" {
+			options.loss.Dropped(LossAssistantContentEmpty, options.direction, "assistant.empty_message")
+		}
 		return nil
 	}
 	return NewObject().

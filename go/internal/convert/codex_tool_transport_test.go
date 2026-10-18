@@ -160,7 +160,8 @@ func TestToolStrictOnlyRecordedWhenTrue(t *testing.T) {
 	// strict:false 是 Codex 的默认写法，等于两线缺省：既不写进上游、也不记损（否则每请求 +N 条噪声）。
 	_, loss := decodeResponsesTo(t, codexNamespaceToolsBody, ProtocolOpenAIChat)
 	for _, entry := range loss.Entries {
-		if entry.Capability == LossUnknownFieldTool || entry.Capability == LossToolStrict {
+		// 只看 strict 本身：同一份请求里的其他记损（如 namespace 展平）不属本用例所要钉的事。
+		if entry.Capability == LossToolStrict || strings.HasPrefix(entry.Detail, "tool.strict") {
 			t.Fatalf("strict:false 不得记损，实际：%+v", entry)
 		}
 	}
@@ -275,4 +276,49 @@ func TestCustomToolCallHistorySurvivesAsFunctionShapedPair(t *testing.T) {
 	if !strings.Contains(joined, "assistant,tool") {
 		t.Fatalf("工具调用与其结果必须相邻（assistant(tool_calls) → tool），实际消息角色序列：%s", joined)
 	}
+}
+
+// TestNamespaceFlattenIsRecorded 钉住展平留痕：namespace 组一旦拍平，组名就在出站正文里消失，
+// 故必须在损失台账里留下带组名的一条（否则「工具来自哪个组」事后无从追溯）。
+func TestNamespaceFlattenIsRecorded(t *testing.T) {
+	_, loss := decodeResponsesTo(t, codexNamespaceToolsBody, ProtocolOpenAIChat)
+	assertLossEntry(t, loss, LossUnknownFieldTool, "dropped", "tool.namespace.agents")
+}
+
+// TestFlattenedToolNameCollisionKeepsFirstAndRecordsLoss 钉住同名冲突：展平后工具名是上游工具表的
+// 键，两个组各有一个同名工具时只能送达一个。口径是先到者胜 + 记损（丢掉的必须可归因）。
+func TestFlattenedToolNameCollisionKeepsFirstAndRecordsLoss(t *testing.T) {
+	const body = `{
+	  "model": "gpt-5.1-codex",
+	  "input": [{"type":"message","role":"user","content":"hi"}],
+	  "tools": [
+	    {"type":"namespace","name":"agents","tools":[
+	      {"type":"function","name":"run","description":"from agents","parameters":{"type":"object"}}
+	    ]},
+	    {"type":"namespace","name":"functions","tools":[
+	      {"type":"function","name":"run","description":"from functions","parameters":{"type":"object"}},
+	      {"type":"function","name":"other","parameters":{"type":"object"}}
+	    ]}
+	  ],
+	  "tool_choice": "auto"
+	}`
+	encoded, loss := decodeResponsesTo(t, body, ProtocolOpenAIChat)
+	names := toolNames(t, encoded.Body)
+	runCount := 0
+	for _, name := range names {
+		if name == "run" {
+			runCount++
+		}
+	}
+	if runCount != 1 {
+		t.Fatalf("同名工具只应送达一条（先到者胜），实际 %q", strings.Join(names, ","))
+	}
+	if !strings.Contains(strings.Join(names, ","), "other") {
+		t.Fatalf("未冲突的工具不得被连坐丢弃，实际 %q", strings.Join(names, ","))
+	}
+	// 保留的必须是先到的那条：agents 组的 description 在出站正文里。
+	if !strings.Contains(encoded.Body.MarshalCompact(), "from agents") {
+		t.Fatalf("应保留先到的工具声明：%s", encoded.Body.MarshalCompact())
+	}
+	assertLossEntry(t, loss, LossUnknownFieldTool, "dropped", "tool.name_collision.run")
 }
