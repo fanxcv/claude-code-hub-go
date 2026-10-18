@@ -250,6 +250,13 @@ type Request struct {
 	// 编码器原样写出，anthropic（无此概念）仍记 info 档损失。
 	PromptCacheKey    string
 	HasPromptCacheKey bool
+	// ResponseFormat 是客户端的结构化输出约束，**按源线形状原样**保留（chat 的
+	// `response_format` 或 responses 的 `text.format`）。
+	//
+	// 为何进枢纽：两线都有承载位，此前它只活在各自 passthrough 里，跨线即静默丢失——客户端
+	// 按 schema 解析却拿到自由文本。形态归一（json_schema 的嵌套层级两线不同）留在目标线
+	// 编码器做，见 chatResponseFormatValue / responsesTextFormatValue。
+	ResponseFormat *Value
 	// Metadata 是客户端的自由表单据（Anthropic 的 `metadata.user_id` 是其中唯一有共识的键）。
 	//
 	// 为何进枢纽：它原先只在 knownKeys 里被跳过，于是既不写出也不记损——responses 侧本有

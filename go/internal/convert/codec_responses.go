@@ -677,6 +677,11 @@ func decodeResponsesRequest(body *Value, ctx ConvertCtx) DecodeResult[*Request] 
 	if reasoning := decodeResponsesReasoning(fieldOrNil(source, "reasoning"), loss); reasoning != nil {
 		request.Reasoning = reasoning
 	}
+	// 结构化输出进枢纽（本线形状是 text.format）：chat 线用 response_format 承载同一约束。
+	// text 的其余成员（verbosity 等）没有承载位，仍由 reportForeignDroppableFields 记损。
+	if format := fieldOrNil(source, "text", "format"); isMeaningful(format) {
+		request.ResponseFormat = format
+	}
 	passthrough := collectPassthrough(source, responsesKnownRequestKeys)
 	if len(preservedTools) > 0 {
 		// 本线无枢纽表示的非 function 工具定义：随本线 passthrough 保存（Node：`passthrough.tools = preserved`），
@@ -713,6 +718,31 @@ func responsesTextPart(role string, block Block) *Value {
 	out := NewObject().Set("type", NewString(partType)).Set("text", NewString(block.Text))
 	if citations := citationArray(block.Citations, ProtocolOpenAIResponses); citations != nil {
 		out.Set("annotations", citations)
+	}
+	return out
+}
+
+// responsesTextFormatValue 把枢纽里的结构化输出约束整理成 responses 线形状（text.format）。
+//
+// 与 chatResponseFormatValue 互为反向：本线把 name/schema/strict 与 type 并列，chat 则包在
+// `response_format.json_schema` 里。源线是 responses（已并列）时原样返回，源线是 chat 时展开
+// 那一层。为何宁展开而不另立枢纽字段：两线只需知道这层嵌套，故两个小函数即可，枢纽保持
+// 「源线形状原值」语义（见 Request.ResponseFormat）。
+func responsesTextFormatValue(format *Value) *Value {
+	if _, present := format.Get("json_schema"); !present {
+		return format.Clone()
+	}
+	out := NewObject()
+	for _, member := range format.Members() {
+		if member.Key == "json_schema" && isRecord(member.Value) {
+			for _, inner := range member.Value.Members() {
+				if !out.Has(inner.Key) {
+					out.Set(inner.Key, inner.Value)
+				}
+			}
+			continue
+		}
+		out.Set(member.Key, member.Value)
 	}
 	return out
 }
@@ -1098,6 +1128,13 @@ func encodeResponsesRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	// 缓存路由键原样回写：本线原生时它本就在 passthrough 里，跨线过来时靠枢纽带过。
 	if request.HasPromptCacheKey {
 		out.Set("prompt_cache_key", NewString(request.PromptCacheKey))
+	}
+	if request.ResponseFormat != nil {
+		// text 留在本线 passthrough 时（同线往返）不重建：verbosity 等成员必须字节保真；
+		// 跨线过来时 passthrough 里没有本线 text，才按枢纽里的 format 现搭一个。
+		if _, carried := out.Get("text"); !carried {
+			out.Set("text", NewObject().Set("format", responsesTextFormatValue(request.ResponseFormat)))
+		}
 	}
 	return EncodeResult{Body: out, Loss: loss.Report()}
 }

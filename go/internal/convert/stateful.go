@@ -2,11 +2,12 @@ package convert
 
 // 本文件承载两类「请求侧高层字段在跨线转换时无承载位」的处置：
 //
-//	1. 状态型字段（previous_response_id / conversation / store:true）——丢失的不是约束而是
-//	   上下文或落库语义，故由调用方在**转换真的发生时** fail-closed（见 forward.BuildPlan）；
-//	2. 约束型字段（prompt_cache_key / response_format / text / store）——丢失后可降级继续，
-//	   但必须记损，否则用户看到的是「约束静默失效」（prompt_cache_key 例外：chat / responses
-//	   两线都有承载位，故进枢纽原样回写，只有 anthropic 记损）。
+//	1. 状态型字段（previous_response_id / conversation / store:true / prompt /
+//	   context_management）——丢失的不是约束而是上下文或落库语义，故由调用方在**转换真的
+//	   发生时** fail-closed（见 forward.BuildPlan）；
+//	2. 约束型字段（store:false / text 的非 format 成员）——丢失后可降级继续，但必须记损，
+//	   否则用户看到的是「约束静默失效」（prompt_cache_key / response_format 例外：两线都有
+//	   承载位，故进枢纽原样回写，见 Request.PromptCacheKey / Request.ResponseFormat）。
 //
 // 两者都只对**外线**字段生效：各编码器只读本线 passthrough（Node 亦然），而 request 侧的
 // passthrough 全仓没有任何消费者（`passthroughFor` 的调用点都取目标线），所以外线字段在
@@ -16,8 +17,9 @@ package convert
 // 状态型字段名；无冲突时返回空串。
 //
 // 判据与边界：
-//   - 只对 responses 线判定：这三个键是 Responses API 的服务端状态语义（续接上一次响应、
-//     绑定会话、显式落库）。其它方言里出现同名字段只是杂项键，不该因一个无意义的键把请求打回；
+//   - 只对 responses 线判定：这些键是 Responses API 的服务端状态语义（续接上一次响应、
+//     绑定会话、引用服务端模板、编辑上下文、显式落库）。其它方言里出现同名字段只是杂项键，
+//     不该因一个无意义的键把请求打回；
 //   - `store: false` 不算冲突：它是多数 Responses 客户端的默认值，且语义等价于「不额外落库」，
 //     目标线本来就不落库——把它判成冲突会打断正常流量。它的丢弃仍由
 //     reportForeignDroppableFields 记损；
@@ -34,6 +36,16 @@ func StatefulConversionConflict(sourceWire WireProtocol, body *Value) string {
 	}
 	if store, present := body.Get("store"); present && isTrue(store) {
 		return "store"
+	}
+	// prompt（服务端模板引用）与 context_management（上下文编辑指令）同样只是本线的服务端
+	// 状态语义：目标线既无承载位、也无等价能力，静默丢掉会让上游按**另一套上下文**作答。
+	// relaykit 对这两个键是报错而非丢弃（to_oai_chat_req.go 的 validateResponsesRequestChatUnsupportedFields），
+	// 本函数与之同口径。
+	if prompt, present := body.Get("prompt"); present && isMeaningful(prompt) {
+		return "prompt"
+	}
+	if management, present := body.Get("context_management"); present && isMeaningful(management) {
+		return "context_management"
 	}
 	return ""
 }
@@ -60,11 +72,9 @@ type foreignDroppableField struct {
 	requireTruthy bool
 }
 
-// foreignDroppableFields 是有承载体但与目标线不兼容的顶层字段清单。
-//
-// 键名与线的关系：response_format 是 chat 线的结构化输出载体，responses 线走 text.format——
-// 故 responses 侧记的是整键 `text.controls`（含 format 与 verbosity，两者在 anthropic/chat 上
-// 都没有等价物）。
+// response_format / text 不在此表：两者都能进枢纽（Request.ResponseFormat）并由 chat /
+// responses 两线互转（见 codec_chat.go 的 chatResponseFormatValue 与 codec_responses.go 的
+// responsesTextFormatValue）；`text` 里除 format 外的成员才记损，见 reportResidualTextControls。
 //
 // `web_search_options` / legacy `functions[]` / `function_call` 是 chat 线独有的工具声明与
 // 强制调用形态，目标线都无承载位；它们不在 knownKeys 里，故只活在 chat 线 passthrough 中，
@@ -76,8 +86,6 @@ type foreignDroppableField struct {
 // 两线的解码器都读它（decodeChatRequest / decodeResponsesRequest），两线的编码器都原样回写，
 // 只有 anthropic（无此概念）在编码器里记损。留在这里会把它重复记一遍。
 var foreignDroppableFields = []foreignDroppableField{
-	{key: "response_format", class: LossResponseFormat},
-	{key: "text", class: LossTextControls},
 	{key: "store", class: LossStoreFlag, requireTruthy: true},
 
 	// 以下十一个键是 Responses / Chat 线的请求级开关与采样参数：枢纽没有承载位，跨线时整键丢。
@@ -119,6 +127,7 @@ func reportForeignDroppableFields(request *Request, target WireProtocol, loss *L
 		if wire == target || fields == nil {
 			continue
 		}
+		reportResidualTextControls(fields, loss, direction)
 		for _, item := range foreignDroppableFields {
 			value := fieldOrNil(fields, item.key)
 			if !isMeaningful(value) {
@@ -186,4 +195,21 @@ func isForeignDroppableKey(key string) bool {
 		}
 	}
 	return false
+}
+
+// reportResidualTextControls 记 responses 的 `text` 对象里除 format 之外成员的丢失。
+//
+// format 已进枢纽（其约束换上 `response_format` 或 `text.format` 两种形状都能承载），
+// 而 verbosity 这类成员两条目标线都没有等价物——丢的是显示与详尽度偏好，故仍要留痕。
+func reportResidualTextControls(fields *Value, loss *LossCollector, direction string) {
+	text, present := fields.Get("text")
+	if !present || !isRecord(text) {
+		return
+	}
+	for _, member := range text.Members() {
+		if member.Key == "format" || !isMeaningful(member.Value) {
+			continue
+		}
+		loss.Dropped(LossTextControls, direction, "text."+member.Key)
+	}
 }

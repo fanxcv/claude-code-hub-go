@@ -828,6 +828,11 @@ func encodeAnthropicRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	if choice := encodeAnthropicToolChoiceWithParallel(request.ToolChoice, request.ParallelToolCalls, ctx); choice != nil {
 		out.Set("tool_choice", choice)
 	}
+	if request.ResponseFormat != nil {
+		// anthropic 线无结构化输出的承载位（其约束靠 tools 的 input_schema 间接表达），丢的是
+		//「本次输出必须符合 schema」这一约束，故记 rewrite 档而非静默丢。
+		loss.Dropped(LossResponseFormat, direction, "anthropic_has_no_response_format")
+	}
 
 	maxTokens := float64(anthropicDefaultMaxTokens)
 	if request.Sampling.MaxTokens != nil {

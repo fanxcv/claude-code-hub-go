@@ -569,6 +569,10 @@ func decodeChatRequest(body *Value, ctx ConvertCtx) DecodeResult[*Request] {
 		request.PromptCacheKey = key
 		request.HasPromptCacheKey = true
 	}
+	// 结构化输出进枢纽：responses 线的承载位是 text.format，本线的形状留到编码侧再归一。
+	if format := fieldOrNil(source, "response_format"); isMeaningful(format) {
+		request.ResponseFormat = format
+	}
 	if passthrough := collectPassthrough(source, chatKnownRequestKeys); len(passthrough.Members()) > 0 {
 		request.Passthrough[chatWire] = passthrough
 	}
@@ -1277,6 +1281,9 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	if request.Sampling.Seed != nil {
 		out.Set("seed", NewNumber(jsNumber(*request.Sampling.Seed)))
 	}
+	if request.ResponseFormat != nil {
+		out.Set("response_format", chatResponseFormatValue(request.ResponseFormat))
+	}
 	if request.Sampling.TopK != nil {
 		loss.Dropped(LossTopK, direction, "chat_has_no_top_k")
 	}
@@ -1404,4 +1411,33 @@ func encodeChatResponse(response *Response, ctx ConvertCtx) EncodeResult {
 func stringOrEmpty(object *Value, key string) string {
 	text, _ := stringField(object, key)
 	return text
+}
+
+// chatResponseFormatValue 把枢纽里的结构化输出约束整理成 chat 线形状。
+//
+// 为何需要整理：同一约束在两线的嵌套层级不同——chat 把 name/schema/strict 包在
+// `response_format.json_schema` 里，responses 则与之并列（`text.format.name` 等）。
+// 源线是 chat 时形状本已正确，原样返回（不重建、不排序，字节保真）；源线是 responses
+// 时把并列成员收到 `json_schema` 里。反向见 responsesTextFormatValue
+// （与 relaykit 的 to_oai_chat_req.go / to_oai_responses_req.go 同口径）。
+func chatResponseFormatValue(format *Value) *Value {
+	if _, present := format.Get("json_schema"); present {
+		return format.Clone()
+	}
+	nested := NewObject()
+	for _, member := range format.Members() {
+		if member.Key != "type" {
+			nested.Set(member.Key, member.Value)
+		}
+	}
+	if len(nested.Members()) == 0 {
+		return format.Clone()
+	}
+	out := NewObject()
+	for _, member := range format.Members() {
+		if member.Key == "type" {
+			out.Set(member.Key, member.Value)
+		}
+	}
+	return out.Set("json_schema", nested)
 }

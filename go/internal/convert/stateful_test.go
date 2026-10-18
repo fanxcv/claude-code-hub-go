@@ -7,10 +7,12 @@ import (
 )
 
 // 本文件钉住「请求侧高层字段跨线无承载位」的两条处置：
-//   - 状态型字段（previous_response_id / conversation / store:true）：只**判定**冲突，由
-//     forward.BuildPlan 据此 fail-closed（见 forward/plan_test.go 的对应用例）；
-//   - 约束型字段（response_format / text / store:false）：记损，不阻断；
-//   - 缓存路由键（prompt_cache_key）：能带就带（chat/responses 两线原样回写），anthropic 线才记损。
+//   - 状态型字段（previous_response_id / conversation / store:true / prompt /
+//     context_management）：只**判定**冲突，由 forward.BuildPlan 据此 fail-closed
+//     （见 forward/plan_test.go 的对应用例）；
+//   - 约束型字段（store:false / text 的非 format 成员）：记损，不阻断；
+//   - 缓存路由键（prompt_cache_key）与结构化输出（response_format ↔ text.format）：能带就带，
+//     anthropic 线才记损。
 //
 // 为什么要钉：这些字段此前落进 passthrough 逃生舱后**没有任何消费者**（request 侧 passthrough
 // 只在目标线取用，而跨线时目标线与来源线不同），于是 Node 与本仓都表现为静默丢弃——客户端
@@ -31,6 +33,17 @@ func TestStatefulConversionConflict(t *testing.T) {
 			`{"model":"gpt-5","input":"hi","conversation":{"id":"conv_1"}}`, "conversation"},
 		{"store:true", ProtocolOpenAIResponses,
 			`{"model":"gpt-5","input":"hi","store":true}`, "store"},
+		// prompt / context_management 是服务端模板引用与上下文编辑指令：目标线无承载位也无等价能力，
+		// 丢了上游就是按另一套上下文作答，故与 relaykit 同口径 fail-closed（此前是静默丢）。
+		{"prompt", ProtocolOpenAIResponses,
+			`{"model":"gpt-5","prompt":{"id":"pmpt_1"}}`, "prompt"},
+		{"context_management", ProtocolOpenAIResponses,
+			`{"model":"gpt-5","input":"hi","context_management":{"edits":[{"type":"clear_thinking_20251015"}]}}`,
+			"context_management"},
+		{"prompt 为空对象不算冲突", ProtocolOpenAIResponses,
+			`{"model":"gpt-5","input":"hi","prompt":{}}`, ""},
+		{"context_management 为空对象不算冲突", ProtocolOpenAIResponses,
+			`{"model":"gpt-5","input":"hi","context_management":{}}`, ""},
 		{"store:false 不算冲突", ProtocolOpenAIResponses,
 			`{"model":"gpt-5","input":"hi","store":false}`, ""},
 		{"无状态字段", ProtocolOpenAIResponses, `{"model":"gpt-5","input":"hi"}`, ""},
@@ -43,6 +56,9 @@ func TestStatefulConversionConflict(t *testing.T) {
 			`{"model":"gpt-5","messages":[],"previous_response_id":"resp_123"}`, ""},
 		{"anthropic 线上的同名字段不判冲突", ProtocolAnthropicMessages,
 			`{"model":"claude","messages":[],"conversation":"conv_1"}`, ""},
+		// prompt 在 anthropic 线是别的意思（无此语义），同样不得把请求打回。
+		{"chat 线上的 prompt 不判冲突", ProtocolOpenAIChat,
+			`{"model":"gpt-5","messages":[],"prompt":{"id":"pmpt_1"}}`, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -64,17 +80,15 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 		wantLoss []string
 	}{
 		{
-			// 缓存路由键**不再记损**：它已进枢纽并由 chat/responses 两线原样回写（守卫链主动补它是为了
-			// 命中供应商前缀缓存，丢掉等于白补）。这里只钉住剩下的结构型字段。
-			name:   "responses→chat：结构化输出记损（缓存键改为转发）",
+			// 结构化输出已承载：responses 的 text.format 转成 chat 的 response_format，故不记损。
+			// text 里只剩 format 一个成员时，也不该凭空多记一条 text.controls。
+			name:   "responses→chat：text.format 转成 response_format（不再记损）",
 			source: ProtocolOpenAIResponses,
 			target: ProtocolOpenAIChat,
 			body: `{"model":"gpt-5","input":"hi","prompt_cache_key":"k1",` +
 				`"text":{"format":{"type":"json_schema","name":"r","schema":{"type":"object"}}},` +
 				`"store":false}`,
-			wantLoss: []string{
-				LossTextControls + "/dropped/text",
-			},
+			wantLoss: []string{},
 		},
 		{
 			// store:false 是多数 Responses 客户端的默认值，与「目标线不落库」等价 ⇒ 不记损。
@@ -96,18 +110,26 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 			wantLoss: []string{LossStoreFlag + "/dropped/store"},
 		},
 		{
-			name:     "chat→responses：response_format",
+			name:     "chat→responses：response_format 转成 text.format（不记损）",
 			source:   ProtocolOpenAIChat,
 			target:   ProtocolOpenAIResponses,
 			body:     `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
-			wantLoss: []string{LossResponseFormat + "/dropped/response_format"},
+			wantLoss: []string{},
 		},
 		{
-			name:     "chat→anthropic：response_format 同样记损",
+			name:     "chat→anthropic：response_format 无承载位，记损",
 			source:   ProtocolOpenAIChat,
 			target:   ProtocolAnthropicMessages,
 			body:     `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
-			wantLoss: []string{LossResponseFormat + "/dropped/response_format"},
+			wantLoss: []string{LossResponseFormat + "/dropped/anthropic_has_no_response_format"},
+		},
+		{
+			// text 里 format 之外的成员（verbosity）无任何承载位：仍须记一条（detail 指明是哪个成员）。
+			name:     "responses→chat：text 的 verbosity 仍记损",
+			source:   ProtocolOpenAIResponses,
+			target:   ProtocolOpenAIChat,
+			body:     `{"model":"gpt-5","input":"hi","text":{"verbosity":"low"}}`,
+			wantLoss: []string{LossTextControls + "/dropped/text.verbosity"},
 		},
 		{
 			name:     "无这些字段时不记损（不多不少）",
@@ -463,4 +485,112 @@ func TestPromptCacheKeyCarriedExceptAnthropic(t *testing.T) {
 	if losses, _ := run(t, ProtocolAnthropicMessages, []string{"prompt_cache_key"}); len(losses) != 0 {
 		t.Fatalf("网关注入的 prompt_cache_key 不算客户端约束，不得记损，实际 %v", losses)
 	}
+}
+
+// TestResponseFormatCarriedAcrossOpenAILines 钉住结构化输出的双向承载：chat 的 response_format
+// 与 responses 的 text.format 是同一条约束的两种形状，跨线时必须搬过去、且形状归一。
+//
+// 为何要钉：两边都曾把它当「外线无承载位」整键丢弃——客户端按 schema 解析拿到自由文本，
+// 报告里只有一句 loss，没有任何补救。可承载而丢弃是本文件要消灭的那类事实。
+func TestResponseFormatCarriedAcrossOpenAILines(t *testing.T) {
+	const chatBody = `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],` +
+		`"response_format":{"type":"json_schema","json_schema":{"name":"answer","strict":true,` +
+		`"schema":{"type":"object","properties":{"a":{"type":"string"}}}}}}`
+	const responsesBody = `{"model":"gpt-5","input":"hi","text":{"format":{"type":"json_schema",` +
+		`"name":"answer","strict":true,"schema":{"type":"object","properties":{"a":{"type":"string"}}}}}}`
+
+	convert := func(t *testing.T, source WireProtocol, target WireProtocol, body string) (string, []LossEntry) {
+		t.Helper()
+		ctx := ConvertCtx{
+			ClientFormat:   clientFormatOfProtocol(source),
+			TargetProto:    target,
+			Model:          "m",
+			ToWireToolName: NormalizeToolName,
+		}
+		decoded, ok := DecodeRequest(source, mustParsePayload(t, body), ctx)
+		if !ok {
+			t.Fatalf("协议线 %s 无解码器", source)
+		}
+		encoded, ok := EncodeRequest(target, decoded.Value, ctx)
+		if !ok {
+			t.Fatalf("协议线 %s 无编码器", target)
+		}
+		entries := append(append([]LossEntry{}, decoded.Loss.Entries...), encoded.Loss.Entries...)
+		return encoded.Body.MarshalCompact(), entries
+	}
+
+	t.Run("chat→responses：落 text.format 并展开嵌套", func(t *testing.T) {
+		out, _ := convert(t, ProtocolOpenAIChat, ProtocolOpenAIResponses, chatBody)
+		want := `"text":{"format":{"type":"json_schema","name":"answer","strict":true,` +
+			`"schema":{"type":"object","properties":{"a":{"type":"string"}}}}}`
+		if !strings.Contains(out, want) {
+			t.Fatalf("responses 出站必须承载同一约束（text.format 里 name/schema 与 type 并列），实际 %s", out)
+		}
+		if strings.Contains(out, `"json_schema":{"name"`) {
+			t.Fatalf("chat 那层 json_schema 嵌套必须展开，实际 %s", out)
+		}
+		if strings.Contains(out, `"response_format"`) {
+			t.Fatalf("responses 线不得出现 chat 的键名，实际 %s", out)
+		}
+	})
+
+	t.Run("responses→chat：落 response_format 并收起嵌套", func(t *testing.T) {
+		out, _ := convert(t, ProtocolOpenAIResponses, ProtocolOpenAIChat, responsesBody)
+		want := `"response_format":{"type":"json_schema","json_schema":{"name":"answer","strict":true,` +
+			`"schema":{"type":"object","properties":{"a":{"type":"string"}}}}}}`
+		if !strings.Contains(out, want) {
+			t.Fatalf("chat 出站必须承载同一约束（name/schema 收在 json_schema 里），实际 %s", out)
+		}
+		if strings.Contains(out, `"text":{"format"`) {
+			t.Fatalf("chat 线不得出现 responses 的键名，实际 %s", out)
+		}
+	})
+
+	t.Run("非 json_schema 原样搬运", func(t *testing.T) {
+		const objectBody = `{"model":"gpt-5","input":"hi","text":{"format":{"type":"json_object"}}}`
+		out, _ := convert(t, ProtocolOpenAIResponses, ProtocolOpenAIChat, objectBody)
+		if !strings.Contains(out, `"response_format":{"type":"json_object"}`) {
+			t.Fatalf("json_object 不涉嵌套，原样搬运即可，实际 %s", out)
+		}
+	})
+
+	t.Run("无 format 时不多写字段", func(t *testing.T) {
+		for _, tc := range []struct {
+			source WireProtocol
+			target WireProtocol
+			body   string
+		}{
+			{ProtocolOpenAIChat, ProtocolOpenAIResponses, `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`},
+			{ProtocolOpenAIResponses, ProtocolOpenAIChat, `{"model":"gpt-5","input":"hi"}`},
+			// text 里只有 verbosity：没有 format 就不该凭它凭空造一个 text.format。
+			{ProtocolOpenAIResponses, ProtocolOpenAIChat, `{"model":"gpt-5","input":"hi","text":{"verbosity":"low"}}`},
+		} {
+			out, _ := convert(t, tc.source, tc.target, tc.body)
+			if strings.Contains(out, `"response_format"`) || strings.Contains(out, `"text":{"format"`) {
+				t.Fatalf("%s→%s：客户端没给 format 时不得凭空写字段，实际 %s", tc.source, tc.target, out)
+			}
+		}
+	})
+
+	t.Run("anthropic 目标：记损且不写字段", func(t *testing.T) {
+		for _, source := range []WireProtocol{ProtocolOpenAIChat, ProtocolOpenAIResponses} {
+			body := chatBody
+			if source == ProtocolOpenAIResponses {
+				body = responsesBody
+			}
+			out, entries := convert(t, source, ProtocolAnthropicMessages, body)
+			if strings.Contains(out, "response_format") || strings.Contains(out, `"text":{"format"`) {
+				t.Fatalf("%s→anthropic：无承载位，不得写出结构化输出字段，实际 %s", source, out)
+			}
+			found := false
+			for _, entry := range entries {
+				if entry.Capability == LossResponseFormat && entry.Action == LossDropped {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s→anthropic：客户端的结构化输出约束必须记损，实际 %v", source, entries)
+			}
+		}
+	})
 }
