@@ -2,7 +2,6 @@ package responsefix
 
 import (
 	"bytes"
-	"strings"
 	"unicode/utf8"
 )
 
@@ -50,8 +49,7 @@ func (f EncodingFixer) Fix(input []byte) Result {
 	}
 
 	// 有损修复：非法序列替换为 U+FFFD 后重新编码，确保输出一定是有效 UTF-8。
-	lossy := strings.ToValidUTF8(string(intermediate), "\uFFFD")
-	return Result{Data: []byte(lossy), Applied: true, Details: detailLossyUTF8DecodeEncode}
+	return Result{Data: bytes.ToValidUTF8(intermediate, []byte("\uFFFD")), Applied: true, Details: detailLossyUTF8DecodeEncode}
 }
 
 // hasUTF8BOM 判定 UTF-8 BOM。

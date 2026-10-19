@@ -3,7 +3,6 @@ package responsefix
 import (
 	"bytes"
 	"encoding/json"
-	"strings"
 )
 
 // chatCompletionChunkMarker 是 `"chat.completion.chunk"` 的字节序列，用于解码前的预扫描。
@@ -30,57 +29,71 @@ func filterInertChatCompletionChunks(data []byte) Result {
 		return Result{Data: data}
 	}
 
-	lines := strings.Split(string(data), "\n")
-	out := make([]string, 0, len(lines))
+	var out []byte
 	applied := false
 	skipNextBlank := false
+	keepStart := 0
 
-	for i, line := range lines {
-		hasLineBreak := i < len(lines)-1
-
-		if skipNextBlank && isBlankSSESeparatorLine(line) {
-			skipNextBlank = false
-			continue
-		}
-		skipNextBlank = false
-
-		if isInertChatCompletionDataLine(line) {
-			applied = true
-			// 被删掉的帧后面那个空行（事件分隔符）也要一起删，否则会多出一个空事件。
-			skipNextBlank = true
-			continue
-		}
-
-		out = append(out, line)
+	for pos := 0; pos <= len(data); {
+		lineEnd := bytes.IndexByte(data[pos:], byteLF)
+		hasLineBreak := lineEnd >= 0
 		if hasLineBreak {
-			out = append(out, "\n")
+			lineEnd += pos
+		} else {
+			lineEnd = len(data)
 		}
+		line := data[pos:lineEnd]
+		posEnd := lineEnd
+		if hasLineBreak {
+			posEnd++
+		}
+
+		// 被删掉的帧后面那个空行（事件分隔符）也要一起删，否则会多出一个空事件。
+		// 删除已开始时才建 output：此前只借原切片，无需删帧时直接返回原切片。
+		inert := isInertChatCompletionDataLine(line)
+		if skipNextBlank && isBlankSSESeparatorLine(line) {
+			keepStart = posEnd
+		} else if inert {
+			applied = true
+			if out == nil {
+				out = make([]byte, 0, len(data))
+				out = append(out, data[:pos]...)
+			}
+			keepStart = posEnd
+		}
+		skipNextBlank = inert
+
+		if !hasLineBreak {
+			break
+		}
+		pos = posEnd
 	}
 
 	if !applied {
 		return Result{Data: data}
 	}
+	out = append(out, data[keepStart:]...)
 	return Result{
-		Data:    []byte(strings.Join(out, "")),
+		Data:    out,
 		Applied: true,
 		Details: detailFilteredInertCompletion,
 	}
 }
 
 // isInertChatCompletionDataLine 判定单行 `data:` 载荷是否为惰性 chat chunk。
-func isInertChatCompletionDataLine(line string) bool {
-	if !strings.HasPrefix(line, "data:") {
+func isInertChatCompletionDataLine(line []byte) bool {
+	if !bytes.HasPrefix(line, []byte("data:")) {
 		return false
 	}
 	payload := line[len("data:"):]
-	if strings.HasPrefix(payload, " ") {
+	if bytes.HasPrefix(payload, []byte(" ")) {
 		payload = payload[1:]
 	}
-	if !strings.HasPrefix(payload, "{") {
+	if !bytes.HasPrefix(payload, []byte("{")) {
 		return false
 	}
 	var decoded any
-	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return false
 	}
 	return isInertChatCompletionChunkPayload(decoded)
@@ -156,6 +169,6 @@ func hasMeaningfulJSONValue(value any) bool {
 }
 
 // isBlankSSESeparatorLine 判定 SSE 事件分隔空行（LF 或裸 CR 留下的 `\r` 行）。
-func isBlankSSESeparatorLine(line string) bool {
-	return line == "" || line == "\r"
+func isBlankSSESeparatorLine(line []byte) bool {
+	return len(line) == 0 || (len(line) == 1 && line[0] == '\r')
 }
