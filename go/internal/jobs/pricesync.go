@@ -584,11 +584,22 @@ func (s *PriceSyncer) apply(
 		}
 
 		existingRow, found := existing[modelName]
+		// 库里的价格只存了原始字节，仅在「来源一致」时才解析比对（解析后立即丢弃，不驻留）。
+		priceUnchanged := false
+		if found && existingRow.Source == cloudPriceSource {
+			equal, equalErr := priceDataEqualRaw(existingRow.PriceData, priceData)
+			if equalErr != nil {
+				s.logger.Warn("price_sync_existing_price_decode_failed", map[string]any{
+					"model": modelName, "error": equalErr.Error(),
+				})
+			}
+			priceUnchanged = equal
+		}
 		switch {
 		case !found:
 			pending = append(pending, pendingPriceWrite{modelName: modelName, encoded: encoded, added: true})
 			classifiedAdded++
-		case existingRow.Source != cloudPriceSource || !priceDataEqual(existingRow.PriceData, priceData):
+		case !priceUnchanged:
 			// 与 Node 同口径：整行替换（先删后插），而不是原地更新。
 			pending = append(pending, pendingPriceWrite{modelName: modelName, encoded: encoded})
 			classifiedUpdated++
@@ -796,6 +807,20 @@ func modelNames(models map[string]map[string]any) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// priceDataEqualRaw 比对「库中原始 jsonb 文本」与「云端表里已解析的价格对象」。
+//
+// 为什么不在读行时解析：见 store.PriceSyncExistingRow（驻留会把峰值堆放大 ~5x）。这里只在
+// 判定时解析库侧那一个值，判完即弃，不驻留。
+//
+// 解析失败返回 (false, err)：按「不相等」处理（该行重写一次），由调用方记 warn。
+func priceDataEqualRaw(existing []byte, incoming any) (bool, error) {
+	var decoded any
+	if err := json.Unmarshal(existing, &decoded); err != nil {
+		return false, fmt.Errorf("解析既有价格数据失败: %w", err)
+	}
+	return priceDataEqual(decoded, incoming), nil
 }
 
 // priceDataEqual 复刻 src/actions/model-prices.ts:42 isPriceDataEqual。

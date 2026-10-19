@@ -254,7 +254,7 @@ func TestPriceSyncSecondRunUpdatesOnlyChangedRows(t *testing.T) {
 	// 改变其中一行的价格 → 该行必须走「删旧插新」（upsert）。
 	fake.existing["claude-sonnet-4-5"] = store.PriceSyncExistingRow{
 		ModelName: "claude-sonnet-4-5", Source: cloudPriceSource,
-		PriceData: map[string]any{"mode": "chat", "input_cost_per_token": 999.0},
+		PriceData: json.RawMessage(`{"mode": "chat", "input_cost_per_token": 999.0}`),
 	}
 	fake.upserts = nil
 	// 清空目录：否则第二轮写入的指纹+行数会让第三轮走版本短路，测不到写入分支。
@@ -271,8 +271,8 @@ func TestPriceSyncSecondRunUpdatesOnlyChangedRows(t *testing.T) {
 	}
 }
 
-// syncerStoredRow 取同步器对某模型实际生成的 JSON 对象（用于构造「既有同价行」）。
-func syncerStoredRow(t *testing.T, modelName string) any {
+// syncerStoredRow 取同步器对某模型实际生成的 JSON 字节（用于构造「既有同价行」）。
+func syncerStoredRow(t *testing.T, modelName string) json.RawMessage {
 	t.Helper()
 	table, err := ParseCptTable([]byte(cptFixture("v1")))
 	if err != nil {
@@ -287,11 +287,7 @@ func syncerStoredRow(t *testing.T, modelName string) any {
 	if err != nil {
 		t.Fatalf("序列化失败: %v", err)
 	}
-	var decoded any
-	if err := json.Unmarshal(encoded, &decoded); err != nil {
-		t.Fatalf("反序列化失败: %v", err)
-	}
-	return decoded
+	return encoded
 }
 
 func TestPriceSyncOverwriteManualReplacesGuardedRow(t *testing.T) {
@@ -527,7 +523,7 @@ func TestPriceSyncUsesBatchWritesNotRowByRow(t *testing.T) {
 	// 既有行来源不同 → 判 updated（走批量替换）；别名 sonnet-4-5 不存在 → added（走批量插入）。
 	fake.existing["claude-sonnet-4-5"] = store.PriceSyncExistingRow{
 		ModelName: "claude-sonnet-4-5", Source: "litellm",
-		PriceData: map[string]any{"mode": "chat"},
+		PriceData: json.RawMessage(`{"mode": "chat"}`),
 	}
 	syncer := newPriceSyncFixture(t, fake, cptFixture("v1"))
 

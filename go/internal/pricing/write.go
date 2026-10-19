@@ -109,10 +109,22 @@ func WriteEntries(
 		}
 
 		existing, found := existingRows[modelName]
+		// 库里的价格只存了原始字节（见 store.PriceSyncExistingRow），仅在「来源一致」时才解析比对，
+		// 解析后立即丢弃、不驻留；解析失败按「不相等」处理：该行重写一次，而不是整轮失败。
+		priceUnchanged := false
+		if found && existing.Source == source {
+			equal, equalErr := jobs.PriceDataEqualRaw(existing.PriceData, priceData)
+			if equalErr != nil && logger != nil {
+				logger.Warn("price_table_existing_price_decode_failed", map[string]any{
+					"model": modelName, "error": equalErr.Error(),
+				})
+			}
+			priceUnchanged = equal
+		}
 		switch {
 		case !found:
 			pending = append(pending, pendingEntryWrite{modelName: modelName, data: entry.Data, added: true})
-		case existing.Source != source || !jobs.PriceDataEqual(existing.PriceData, priceData):
+		case !priceUnchanged:
 			pending = append(pending, pendingEntryWrite{modelName: modelName, data: entry.Data})
 		default:
 			result.Unchanged = append(result.Unchanged, modelName)

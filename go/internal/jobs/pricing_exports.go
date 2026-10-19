@@ -9,7 +9,7 @@ import (
 // 本文件是**给管理面 HTTP 端点**用的导出面（model-prices 三兄弟）。
 //
 // 为什么单独一个文件、且不改动 pricesync.go / cpt_convert.go：
-//   - `PriceDataEqual` / `LoadConvertedTable` / `SyncNow` 针对既有私有实现各写一遍，
+//   - `PriceDataEqualRaw` / `LoadConvertedTable` / `SyncNow` 针对既有私有实现各写一遍，
 //     会让「钱路」上出现第二份实现（将来修正一处、漏一处就是静默分叉）；
 //   - 同包新增文件可以在不碰既有文件的前提下复用私有实现，改动面最小。
 //
@@ -18,9 +18,12 @@ import (
 //   - 端点（SyncNow）：**没有**锁与短路——Node 的 `syncLiteLLMPrices`（actions/model-prices.ts:518）
 //     就是直接 load + apply，用户点「立即同步」时预期的是真的重放一遍整表。
 
-// PriceDataEqual 复刻 actions/model-prices.ts:42 的 isPriceDataEqual：
-// 键序无关、丢弃原型污染键的稳定比较（云价格写入的「是否需要更新」判定用它）。
-func PriceDataEqual(left, right any) bool { return priceDataEqual(left, right) }
+// PriceDataEqualRaw 比对「库中原始 jsonb 文本」与「已解析的价格对象」，语义同
+// actions/model-prices.ts:42 的 isPriceDataEqual：键序无关、数值按数值、丢弃原型污染键。
+// 两条同步入口（后台任务与后台管理面「立即同步」）共用它，判定只留一处。
+func PriceDataEqualRaw(existing []byte, incoming any) (bool, error) {
+	return priceDataEqualRaw(existing, incoming)
+}
 
 // LoadConvertedTable 拉取并转换云端 CPT 表（syncLitellmCheck 用：只读、不落库）。
 func (s *PriceSyncer) LoadConvertedTable(ctx context.Context) (*ConvertedCptTable, error) {

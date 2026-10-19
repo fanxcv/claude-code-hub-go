@@ -119,16 +119,17 @@ func TestWriteEntriesClassification(t *testing.T) {
 	fake.manual["manual-override"] = struct{}{}
 	fake.existing["changed-source"] = store.PriceSyncExistingRow{
 		ModelName: "changed-source", Source: "litellm",
-		PriceData: map[string]any{"mode": "chat", "input_cost_per_token": 0.5},
+		PriceData: json.RawMessage(`{"mode": "chat", "input_cost_per_token": 0.5}`),
 	}
 	fake.existing["same-row"] = store.PriceSyncExistingRow{
 		ModelName: "same-row", Source: SourceCloud,
-		PriceData: map[string]any{"mode": "chat", "input_cost_per_token": 1.0, "vendor": "anthropic"},
+		// jsonb 的真实文本形态：键序非字母序、数值带着 `.0`；与入参那条必须判为相等。
+		PriceData: json.RawMessage(`{"mode": "chat", "input_cost_per_token": 1.0, "vendor": "anthropic"}`),
 	}
 	// 已存在的 manual 行 + 列入 overwriteManual → 必须走替换（而非被保护跳过）。
 	fake.existing["manual-override"] = store.PriceSyncExistingRow{
 		ModelName: "manual-override", Source: SourceManual,
-		PriceData: map[string]any{"mode": "chat", "input_cost_per_token": 1.5},
+		PriceData: json.RawMessage(`{"mode": "chat", "input_cost_per_token": 1.5}`),
 	}
 	fake.failOn["boom"] = true
 
@@ -184,6 +185,33 @@ func TestWriteEntriesClassification(t *testing.T) {
 	}
 }
 
+// TestWriteEntriesTreatsJSONBTextAsEqual 钉住「库里只存原始字节」后的比对语义：
+// price_data::text 是 jsonb 的文本形态（键序非字母序、数值带 `.0`、字段间带空格），
+// 与 Go 侧解析出的对象必须判为相等；否则每次「立即同步」都会把整表重写一遍。
+//
+// 若 PriceDataEqualRaw 退化成 bytes.Equal，本条会红：这是改 PriceSyncExistingRow.PriceData
+// 类型时必须同时守住的语义。
+func TestWriteEntriesTreatsJSONBTextAsEqual(t *testing.T) {
+	fake := newFakeStore()
+	fake.existing["jsonb-text"] = store.PriceSyncExistingRow{
+		ModelName: "jsonb-text", Source: SourceCloud,
+		PriceData: json.RawMessage(`{"mode": "chat", "input_cost_per_token": 1.0}`),
+	}
+
+	result, err := WriteEntries(context.Background(), fake,
+		[]Entry{entry("jsonb-text", `{"input_cost_per_token":1,"mode":"chat"}`)},
+		SourceCloud, nil, testLogger())
+	if err != nil {
+		t.Fatalf("WriteEntries 失败: %v", err)
+	}
+	if len(result.Unchanged) != 1 || result.Unchanged[0] != "jsonb-text" {
+		t.Fatalf("价格未变应判 unchanged，实际 %v", result.Unchanged)
+	}
+	if len(fake.inserted) != 0 || len(fake.upserted) != 0 {
+		t.Fatalf("价格未变不应写库：inserted=%+v upserted=%+v", fake.inserted, fake.upserted)
+	}
+}
+
 // TestWriteEntriesManualSourceBypassesProtection 用户显式上传（source=manual）是权威导入：
 // 即使模型已存在 manual 行、且未列入 overwriteManual，也必须正常替换（Node 的
 // `source !== 'manual' && isManualPrice` 分支不会命中）。
@@ -192,7 +220,7 @@ func TestWriteEntriesManualSourceBypassesProtection(t *testing.T) {
 	fake.manual["existing-manual"] = struct{}{}
 	fake.existing["existing-manual"] = store.PriceSyncExistingRow{
 		ModelName: "existing-manual", Source: SourceManual,
-		PriceData: map[string]any{"mode": "chat", "input_cost_per_token": 9.0},
+		PriceData: json.RawMessage(`{"mode": "chat", "input_cost_per_token": 9.0}`),
 	}
 
 	result, err := WriteEntries(context.Background(), fake,
@@ -237,15 +265,15 @@ func TestFindConflicts(t *testing.T) {
 	fake := newFakeStore()
 	fake.existing["manual-hit"] = store.PriceSyncExistingRow{
 		ModelName: "manual-hit", Source: SourceManual,
-		PriceData: map[string]any{"mode": "chat", "input_cost_per_token": 1.0},
+		PriceData: json.RawMessage(`{"mode": "chat", "input_cost_per_token": 1.0}`),
 	}
 	fake.existing["manual-no-cloud"] = store.PriceSyncExistingRow{
 		ModelName: "manual-no-cloud", Source: SourceManual,
-		PriceData: map[string]any{"mode": "chat"},
+		PriceData: json.RawMessage(`{"mode": "chat"}`),
 	}
 	fake.existing["cloud-row"] = store.PriceSyncExistingRow{
 		ModelName: "cloud-row", Source: SourceCloud,
-		PriceData: map[string]any{"mode": "chat"},
+		PriceData: json.RawMessage(`{"mode": "chat"}`),
 	}
 
 	cloud := map[string]map[string]any{
@@ -256,7 +284,7 @@ func TestFindConflicts(t *testing.T) {
 	}
 	fake.existing["manual-no-mode"] = store.PriceSyncExistingRow{
 		ModelName: "manual-no-mode", Source: SourceManual,
-		PriceData: map[string]any{"mode": "chat"},
+		PriceData: json.RawMessage(`{"mode": "chat"}`),
 	}
 
 	result, err := FindConflicts(context.Background(), fake, cloud)
@@ -323,7 +351,7 @@ func TestWriteEntriesUsesBatchWritesNotRowByRow(t *testing.T) {
 	fake := newFakeStore()
 	fake.existing["changed-source"] = store.PriceSyncExistingRow{
 		ModelName: "changed-source", Source: "litellm",
-		PriceData: map[string]any{"mode": "chat", "input_cost_per_token": 0.5},
+		PriceData: json.RawMessage(`{"mode": "chat", "input_cost_per_token": 0.5}`),
 	}
 	result, err := WriteEntries(context.Background(), fake, []Entry{
 		entry("brand-new", `{"mode":"chat","input_cost_per_token":0.1}`),

@@ -21,13 +21,14 @@ import (
 // PriceSyncExistingRow 是「每模型最新一行」在同步侧需要的字段。
 //
 // 只取这三列（不取 id/createdAt/updatedAt）：同步只需要判断「来源是否变化」与「价格是否变化」。
-// PriceData 保留**已解析**的通用结构而不是原始字节：Node 侧比对的是解析后的对象经
-// JSON.stringify 的文本（src/actions/model-prices.ts:42 isPriceDataEqual），比对必须在
-// 数值语义上进行，故这里也解析成 any。
+// PriceData 保留**原始字节**（jsonb 的文本形式），不在这里解析：整表约 1.1 万行、单行 8.5 KB，
+// 解析成 map[string]any 常驻会把这一层放大 3~5x（11838 行实测：原始 98 MB → 常驻 404 MB，
+// 见 jobs.BenchmarkPriceSyncExistingRowHeap），而比对只发生在「来源一致」的行上，
+// 按需解析即可（jobs.priceDataEqualRaw）。
 type PriceSyncExistingRow struct {
 	ModelName string
 	Source    string
-	PriceData any
+	PriceData json.RawMessage
 }
 
 // ListManualPriceModelNames 复刻 findAllManualPrices 的**键集合**。
@@ -83,15 +84,12 @@ func (p *Pools) ListLatestPriceRowsForSync(ctx context.Context) (map[string]Pric
 	// 容量按 Node 侧实测规模给（约 1.1 万模型），避免反复扩容。
 	existing := make(map[string]PriceSyncExistingRow, 12000)
 	for rows.Next() {
-		var name, source, priceData string
+		var name, source string
+		var priceData []byte
 		if err := rows.Scan(&name, &source, &priceData); err != nil {
 			return nil, fmt.Errorf("store: 读取最新价格行失败: %w", err)
 		}
-		var decoded any
-		if err := json.Unmarshal([]byte(priceData), &decoded); err != nil {
-			return nil, fmt.Errorf("store: 解析价格数据失败（model=%s）: %w", name, err)
-		}
-		existing[name] = PriceSyncExistingRow{ModelName: name, Source: source, PriceData: decoded}
+		existing[name] = PriceSyncExistingRow{ModelName: name, Source: source, PriceData: priceData}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: 遍历最新价格行失败: %w", err)
