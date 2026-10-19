@@ -252,11 +252,7 @@ func newAnthropicStreamEncoder(ctx ConvertCtx) StreamEncoder {
 }
 
 func (e *anthropicStreamEncoder) emit(event string, payload *Value) []byte {
-	return []byte(SerializeSSEFrame(SSEFrame{
-		Event:    event,
-		HasEvent: true,
-		Data:     payload.MarshalCompact(),
-	}))
+	return AppendJSONSSEFrame(nil, event, payload)
 }
 
 func (e *anthropicStreamEncoder) ensureStart() [][]byte {

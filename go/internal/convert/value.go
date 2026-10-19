@@ -282,88 +282,95 @@ func (v *Value) Clone() *Value {
 // MarshalCompact 按 JS JSON.stringify 的语义序列化：紧凑、无多余空格、键序保留、
 // 非 ASCII 原样输出、控制字符用 \u00XX。
 func (v *Value) MarshalCompact() string {
-	var builder strings.Builder
-	v.writeInto(&builder)
-	return builder.String()
+	return string(v.AppendCompact(make([]byte, 0, 256)))
 }
 
-func (v *Value) writeInto(out *strings.Builder) {
+// AppendCompact 把同一份紧凑 JSON 追加到 dst 末尾并返回新切片。
+//
+// 为何不先造 string：流式编码每帧都要把载荷写进一段带 `event: …\ndata: ` 前缀的字节里。
+// 经 MarshalCompact 中转等于多造一份全量副本（JSON → string → Builder → []byte），
+// 直接追加到目标缓冲只有一份。
+func (v *Value) AppendCompact(dst []byte) []byte {
 	if v == nil {
-		out.WriteString("null")
-		return
+		dst = append(dst, "null"...)
+		return dst
 	}
 	switch v.kind {
 	case kindNull:
-		out.WriteString("null")
+		dst = append(dst, "null"...)
 	case kindBool:
 		if v.boolean {
-			out.WriteString("true")
+			dst = append(dst, "true"...)
 		} else {
-			out.WriteString("false")
+			dst = append(dst, "false"...)
 		}
 	case kindNumber:
-		out.WriteString(v.literal)
+		dst = append(dst, v.literal...)
 	case kindString:
-		writeJSONString(out, v.str)
+		dst = appendJSONString(dst, v.str)
 	case kindArray:
-		out.WriteByte('[')
+		dst = append(dst, '[')
 		for i, item := range v.items {
 			if i > 0 {
-				out.WriteByte(',')
+				dst = append(dst, ',')
 			}
-			item.writeInto(out)
+			dst = item.AppendCompact(dst)
 		}
-		out.WriteByte(']')
+		dst = append(dst, ']')
 	case kindObject:
-		out.WriteByte('{')
+		dst = append(dst, '{')
 		for i := range v.members {
 			if i > 0 {
-				out.WriteByte(',')
+				dst = append(dst, ',')
 			}
-			writeJSONString(out, v.members[i].Key)
-			out.WriteByte(':')
-			v.members[i].Value.writeInto(out)
+			dst = appendJSONString(dst, v.members[i].Key)
+			dst = append(dst, ':')
+			dst = v.members[i].Value.AppendCompact(dst)
 		}
-		out.WriteByte('}')
+		dst = append(dst, '}')
 	default:
-		out.WriteString("null")
+		dst = append(dst, "null"...)
 	}
+	return dst
 }
 
 const hexDigits = "0123456789abcdef"
 
-// writeJSONString 复刻 JS JSON.stringify 的字符串转义：
+// appendJSONString 复刻 JS JSON.stringify 的字符串转义：
 // 只转义 ", \, 以及 < 0x20 的控制字符；非 ASCII 原样输出；不转义 <, >, &。
-func writeJSONString(out *strings.Builder, value string) {
-	out.WriteByte('"')
+//
+// 未转义区间整段搬运（而非逐字节 append）：正文里这类区间占绝对多数。
+func appendJSONString(dst []byte, value string) []byte {
+	dst = append(dst, '"')
+	start := 0
 	for i := 0; i < len(value); i++ {
 		b := value[i]
+		if b >= 0x20 && b != '"' && b != '\\' {
+			continue
+		}
+		dst = append(dst, value[start:i]...)
 		switch b {
 		case '"':
-			out.WriteString(`\"`)
+			dst = append(dst, '\\', '"')
 		case '\\':
-			out.WriteString(`\\`)
+			dst = append(dst, '\\', '\\')
 		case '\b':
-			out.WriteString(`\b`)
+			dst = append(dst, '\\', 'b')
 		case '\f':
-			out.WriteString(`\f`)
+			dst = append(dst, '\\', 'f')
 		case '\n':
-			out.WriteString(`\n`)
+			dst = append(dst, '\\', 'n')
 		case '\r':
-			out.WriteString(`\r`)
+			dst = append(dst, '\\', 'r')
 		case '\t':
-			out.WriteString(`\t`)
+			dst = append(dst, '\\', 't')
 		default:
-			if b < 0x20 {
-				out.WriteString(`\u00`)
-				out.WriteByte(hexDigits[b>>4])
-				out.WriteByte(hexDigits[b&0x0f])
-				continue
-			}
-			out.WriteByte(b)
+			dst = append(dst, '\\', 'u', '0', '0', hexDigits[b>>4], hexDigits[b&0x0f])
 		}
+		start = i + 1
 	}
-	out.WriteByte('"')
+	dst = append(dst, value[start:]...)
+	return append(dst, '"')
 }
 
 // ---------------------------------------------------------------------------

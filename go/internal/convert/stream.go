@@ -129,19 +129,38 @@ func splitLines(raw string) []string {
 
 // SerializeSSEFrame 序列化为线上文本（一律 LF 分隔，容忍度最广）。
 func SerializeSSEFrame(frame SSEFrame) string {
-	var builder strings.Builder
+	return string(AppendSSEFrame(nil, frame))
+}
+
+// AppendSSEFrame 把帧追加到 dst 并返回新切片（SerializeSSEFrame 的零中转版）。
+func AppendSSEFrame(dst []byte, frame SSEFrame) []byte {
 	if frame.HasEvent && frame.Event != "" {
-		builder.WriteString("event: ")
-		builder.WriteString(frame.Event)
-		builder.WriteString("\n")
+		dst = append(dst, "event: "...)
+		dst = append(dst, frame.Event...)
+		dst = append(dst, '\n')
 	}
-	for _, line := range strings.Split(frame.Data, "\n") {
-		builder.WriteString("data: ")
-		builder.WriteString(line)
-		builder.WriteString("\n")
+	for line := range strings.SplitSeq(frame.Data, "\n") {
+		dst = append(dst, "data: "...)
+		dst = append(dst, line...)
+		dst = append(dst, '\n')
 	}
-	builder.WriteString("\n")
-	return builder.String()
+	return append(dst, '\n')
+}
+
+// AppendJSONSSEFrame 把「单行 JSON 载荷」一帧直接写成线上字节：`event: X\ndata: {…}\n\n`。
+//
+// 为何单独一条：流式编码的每帧都同形，而载荷来自 AppendCompact。经 SerializeSSEFrame 中转
+// 会先把 JSON 造成 string、再拷进 Builder、再转 []byte——三份全量副本；这里只有一份。
+// 多行 Data 的通用行为仍由 AppendSSEFrame 承担（载荷是单行 JSON，不存在拆行）。
+func AppendJSONSSEFrame(dst []byte, event string, payload *Value) []byte {
+	if event != "" {
+		dst = append(dst, "event: "...)
+		dst = append(dst, event...)
+		dst = append(dst, '\n')
+	}
+	dst = append(dst, "data: "...)
+	dst = payload.AppendCompact(dst)
+	return append(dst, '\n', '\n')
 }
 
 // IsDoneFrame 判定是否为 Chat 的终止哨兵。
@@ -303,7 +322,10 @@ func (e *reasoningSeparatorEncoder) Flush() [][]byte { return e.inner.Flush() }
 type StreamPipe struct {
 	decoder StreamDecoder
 	encoder StreamEncoder
+	// pending 是跨块残字，恒为 pendingScratch 的切片（自有存储，不别名调用方的读缓冲）。
 	pending []byte
+	// pendingScratch 是 pending 的存储本体：splitCompleteUTF8 最多留下 4 字节残字。
+	pendingScratch [4]byte
 }
 
 // NewStreamPipe 建一条「上游协议线 → 客户端协议线」的字节转换器。
@@ -321,23 +343,31 @@ func NewStreamPipe(upstream WireProtocol, client WireProtocol, ctx ConvertCtx) (
 
 // Push 喂入一块上游字节，产出一块客户端字节（可能为空，表示本块尚未构成完整帧）。
 func (p *StreamPipe) Push(chunk []byte) []byte {
-	if len(p.pending) == 0 {
-		// 无残字：直接切分本块。避开 append(p.pending, chunk...) 的每块一次拷贝——pending 通常
-		// 为空，逐块拷贝在大正文下是纯多余的开销（行为与拷贝版一致，因为 pending 为空时
-		// append 就是 chunk 本身）。
-		text, rest := splitCompleteUTF8(chunk)
-		p.pending = rest
-		if text == "" {
-			return nil
-		}
-		return p.pipe(text)
-	}
-	text, rest := splitCompleteUTF8(append(p.pending, chunk...))
-	p.pending = rest
-	if text == "" {
+	text, rest := splitCompleteUTF8(p.joinPending(chunk))
+	p.setPending(rest)
+	if len(text) == 0 {
 		return nil
 	}
 	return p.pipe(text)
+}
+
+// joinPending 把残字与本次的块拼成一段完整字节；无残字时直接返回本块（不拷贝）。
+func (p *StreamPipe) joinPending(chunk []byte) []byte {
+	if len(p.pending) == 0 {
+		return chunk
+	}
+	joined := make([]byte, 0, len(p.pending)+len(chunk))
+	joined = append(joined, p.pending...)
+	return append(joined, chunk...)
+}
+
+// setPending 把残字拷进自有存储。
+//
+// 为什么必须拷：调用方复用同一个读缓冲（dataplane 每轮 Read 覆盖它）。残字若别名该缓冲，
+// 跨块被切开的多字节字符就会在下次 Read 之后变成乱码。
+func (p *StreamPipe) setPending(rest []byte) {
+	n := copy(p.pendingScratch[:], rest)
+	p.pending = p.pendingScratch[:n]
 }
 
 // Flush 结束上游：吐净残留并补发客户端线的终止事件。
@@ -345,7 +375,7 @@ func (p *StreamPipe) Flush() []byte {
 	out := make([][]byte, 0, 4)
 	if len(p.pending) > 0 {
 		// 上游在半个字符中间断流：按替换字符处理，与 TextDecoder 的容错一致。
-		out = append(out, p.pipe(string(p.pending)))
+		out = append(out, p.pipe(p.pending))
 		p.pending = nil
 	}
 	for _, chunk := range p.decoder.Flush() {
@@ -355,9 +385,9 @@ func (p *StreamPipe) Flush() []byte {
 	return concatBytes(out)
 }
 
-func (p *StreamPipe) pipe(text string) []byte {
+func (p *StreamPipe) pipe(text []byte) []byte {
 	out := make([][]byte, 0, 4)
-	for _, chunk := range p.decoder.Push([]byte(text)) {
+	for _, chunk := range p.decoder.Push(text) {
 		out = append(out, p.encoder.Push(chunk)...)
 	}
 	return concatBytes(out)
@@ -367,7 +397,9 @@ func (p *StreamPipe) pipe(text string) []byte {
 //
 // 为什么必须自己切：TS 侧用 TextDecoder 的 stream 模式跨块保留半个字符，Go 的 string
 // 没有等价物。不切就会在块边界产出替换字符，客户端看到乱码。
-func splitCompleteUTF8(buffer []byte) (string, []byte) {
+//
+// 返回的完整段是入参的子切片（只供本次转交解码器，解码器会自行持有副本），残留段最长 4 字节。
+func splitCompleteUTF8(buffer []byte) ([]byte, []byte) {
 	limit := len(buffer) - 4
 	if limit < 0 {
 		limit = 0
@@ -377,11 +409,11 @@ func splitCompleteUTF8(buffer []byte) (string, []byte) {
 			continue
 		}
 		if utf8.Valid(buffer[i-1:]) {
-			return string(buffer), nil
+			return buffer, nil
 		}
-		return string(buffer[:i-1]), buffer[i-1:]
+		return buffer[:i-1], buffer[i-1:]
 	}
-	return string(buffer), nil
+	return buffer, nil
 }
 
 func concatBytes(chunks [][]byte) []byte {
