@@ -747,17 +747,31 @@ func imageMediaTypeDetail(mediaType string) string {
 	return mediaType
 }
 
-func chatRenderToolMessage(item Item, options *chatRenderOptions) *Value {
+// chatRenderToolMessage 渲染一条 role:tool 消息，并把 tool 结果里**无法落在它上面**的图片
+// 作为第二个返回值交回调用方。
+//
+// chat 的 tool 消息 content 只能是字符串，而 tool_result 内嵌图片是截图类工具的常见形态；
+// 此前非文本块一律记损丢弃，图整幅消失。现改由调用方把它们挂到紧跟这一批 tool 消息之后的
+// user 消息上（见 flushToolResultMedia）。
+func chatRenderToolMessage(item Item, options *chatRenderOptions) (*Value, []*Value) {
 	texts := []string{}
+	media := []*Value{}
 	for _, block := range item.Blocks {
-		if block.Kind == BlockText {
+		switch block.Kind {
+		case BlockText:
 			if block.CacheHint != nil {
 				options.loss.Dropped(LossCacheControl, options.direction, "tool_result")
 			}
 			texts = append(texts, block.Text)
-			continue
+		case BlockImage:
+			if part := chatImageBlockToPart(block, options.loss, options.direction); part != nil {
+				media = append(media, part)
+			}
+		case BlockDocument:
+			options.loss.Dropped(LossDocument, options.direction, "chat_has_no_document")
+		default:
+			options.loss.Dropped(LossUnknownField, options.direction, "tool_result."+string(block.Kind))
 		}
-		options.loss.Dropped(LossUnknownField, options.direction, "tool_result."+string(block.Kind))
 	}
 	// tool_result 块自身的 cache_control：chat 线的 role:tool 消息只有 content，无承载位。
 	if item.CacheHint != nil {
@@ -766,10 +780,11 @@ func chatRenderToolMessage(item Item, options *chatRenderOptions) *Value {
 	if item.IsError {
 		options.loss.Dropped(LossToolResultIsError, options.direction, "chat_has_no_is_error")
 	}
-	return NewObject().
+	message := NewObject().
 		Set("role", NewString("tool")).
 		Set("tool_call_id", NewString(chatResolveEmitToolCallID(item.ToolCallID, options.seed, options))).
 		Set("content", NewString(strings.Join(texts, "")))
+	return message, media
 }
 
 // foldReasoningIntoFollowingAssistant 把 reasoning 项的思考**并入紧随其后的 assistant 消息**。
@@ -829,8 +844,14 @@ func foldReasoningIntoFollowingAssistant(items []Item, loss *LossCollector) []It
 	return out
 }
 
-func chatEncodeItems(items []Item, idMap map[string]string, loss *LossCollector, ctx ConvertCtx) []*Value {
+// chatEncodeItems 把枢纽 item 序列渲染成 chat messages。
+//
+// 第二个返回值是**尚未追加**的工具结果图片消息（无图时为 nil）：它必须在
+// backfillTrailingToolCallReasoning 之后才追加，否则末尾成了 user 消息，
+// 「历史以 tool 结果收尾」的判据就不再成立，末轮 assistant 的空 reasoning_content 补不上。
+func chatEncodeItems(items []Item, idMap map[string]string, loss *LossCollector, ctx ConvertCtx) ([]*Value, *Value) {
 	messages := []*Value{}
+	pendingMedia := []*Value{}
 	const direction = "request"
 	for index, item := range foldReasoningIntoFollowingAssistant(mergeRenderableItems(items, false), loss) {
 		options := &chatRenderOptions{
@@ -839,6 +860,13 @@ func chatEncodeItems(items []Item, idMap map[string]string, loss *LossCollector,
 			idMap:     idMap,
 			loss:      loss,
 			toWire:    ctx.ToWireToolName,
+		}
+		// 先补齐上一批 tool 结果的图片，再写本条：图片消息必须落在 tool 消息与后面的消息之间。
+		if item.Kind != ItemToolResult {
+			if flushed := flushToolResultMedia(pendingMedia); flushed != nil {
+				messages = append(messages, flushed)
+				pendingMedia = nil
+			}
 		}
 		switch item.Kind {
 		case ItemMessage:
@@ -856,7 +884,12 @@ func chatEncodeItems(items []Item, idMap map[string]string, loss *LossCollector,
 			}
 			messages = append(messages, chatRenderMessages(item.Role, item.Blocks, options)...)
 		case ItemToolResult:
-			messages = append(messages, chatRenderToolMessage(item, options))
+			message, media := chatRenderToolMessage(item, options)
+			messages = append(messages, message)
+			// 图片不能落在 role:tool 消息上（content 只能是字符串），故攒到 pendingMedia，由下一轮
+			// 循环开头（或循环末尾）补成一条 user 消息。不逐条紧跟：同一轮多个 tool 结果之间插一条
+			// user 会打断「assistant(tool_calls) 之后若干条 tool 消息连续」这一上游硬约束。
+			pendingMedia = append(pendingMedia, media...)
 		case ItemReasoning:
 			thinking := []Block{}
 			for _, block := range item.Blocks {
@@ -872,7 +905,18 @@ func chatEncodeItems(items []Item, idMap map[string]string, loss *LossCollector,
 			messages = append(messages, chatRenderMessages("assistant", thinking, options)...)
 		}
 	}
-	return messages
+	// 末尾这一批 tool 结果的图片不在此处追加，交回调方在补 reasoning_content 之后追加。
+	return messages, flushToolResultMedia(pendingMedia)
+}
+
+// flushToolResultMedia 把攒下的 tool 结果图片收成一条 user 消息（无图时返回 nil）。
+//
+// 用数组形态而非纯 image_url：与 user 内容块的原生形状一致，也不会因单图被上游改判。
+func flushToolResultMedia(media []*Value) *Value {
+	if len(media) == 0 {
+		return nil
+	}
+	return NewObject().Set("role", NewString("user")).Set("content", NewArray(media...))
 }
 
 // backfillTrailingToolCallReasoning 给「末尾 tool 结果所属的那条 assistant(tool_calls) 消息」
@@ -976,8 +1020,12 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	messages = append(messages, chatRenderMessages("system", request.System, &chatRenderOptions{
 		direction: direction, seed: "system", idMap: idMap, loss: loss, toWire: ctx.ToWireToolName,
 	})...)
-	messages = append(messages, chatEncodeItems(request.Items, idMap, loss, ctx)...)
+	itemMessages, trailingMedia := chatEncodeItems(request.Items, idMap, loss, ctx)
+	messages = append(messages, itemMessages...)
 	backfillTrailingToolCallReasoning(messages, loss, direction)
+	if trailingMedia != nil {
+		messages = append(messages, trailingMedia)
+	}
 	out.Set("messages", NewArray(messages...))
 
 	if len(request.Tools) > 0 {
