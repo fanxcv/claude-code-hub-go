@@ -617,7 +617,7 @@ func (e *chatStreamEncoder) finishFrame(stopReason *StopReason) []byte {
 	if e.usage != nil && !e.usage.IsEmpty() {
 		body.Set("usage", usageToOpenAIChat(e.usage))
 	}
-	return []byte(SerializeSSEFrame(SSEFrame{Data: body.MarshalCompact()}))
+	return AppendJSONSSEFrame(nil, "", body)
 }
 
 func (e *chatStreamEncoder) serializeFrame(choice *Value) []byte {
@@ -626,9 +626,9 @@ func (e *chatStreamEncoder) serializeFrame(choice *Value) []byte {
 		Set("object", NewString("chat.completion.chunk")).
 		Set("model", NewString(e.ctx.Model)).
 		Set("choices", NewArray(choice))
-	return []byte(SerializeSSEFrame(SSEFrame{Data: body.MarshalCompact()}))
+	return AppendJSONSSEFrame(nil, "", body)
 }
 
 func (e *chatStreamEncoder) doneFrame() []byte {
-	return []byte(SerializeSSEFrame(SSEFrame{Data: DoneSentinel}))
+	return []byte("data: " + DoneSentinel + "\n\n")
 }

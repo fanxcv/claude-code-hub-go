@@ -1,6 +1,9 @@
 package convert
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // openai-responses · 流式编解码
 //
@@ -25,7 +28,10 @@ type responsesDecodedBlock struct {
 	outputIndex int
 	kind        responsesDecodedKind
 	// emitted 是已作为 delta 发出的载荷（用于判断 done 帧是否需要补发全文）。
-	emitted string
+	//
+	// 用 Builder 而非 string +=：后者每帧把已发内容全量拷一遍，整条流 O(正文长度²)。
+	// 与 chat 线同口径（stream_chat.go 的 emitted）。
+	emitted strings.Builder
 	// seed 是读到的、未发出的 part 初始文本（content_part.added 兜底）。
 	seed string
 	// pending 是悬置待裁的增量：首个增量与 seed 逐字相同时，「上游重发首片」与「合法续写恰好同字」
@@ -72,7 +78,7 @@ type responsesStreamDecoder struct {
 	// 为什么另立一份：块级的 emitted 在两种情况下认不出回放——块被 tool item 关掉后同形帧又来，
 	// 或声明式收尾按 output[] 数组下标反推出与流式期不同的块键（此时新块 emitted 为空）。
 	// 见 messageReplay。
-	messageText string
+	messageText strings.Builder
 	// messageTextParts 是拼成 messageText 的帧数，用于消歧「本帧恰等于全篇」。
 	messageTextParts int
 }
@@ -118,7 +124,7 @@ func (d *responsesStreamDecoder) closeBlock(out *[]Chunk, decoded *responsesDeco
 	// 上游把整段正文放在 content_part.added 的 part.text 里、之后不发任何增量时，seed 是唯一
 	// 的内容来源：关闭前补发，否则整段正文随块一起消失。只在此块从未发出任何内容时补，故不重复
 	// （增量路径已由 flushSeed 兜住，走到这里的只剩“一个增量都没发”）。
-	if decoded.emitted == "" && decoded.seed != "" {
+	if decoded.emitted.Len() == 0 && decoded.seed != "" {
 		d.emitDeltaChunk(out, decoded, decoded.seed)
 		decoded.seed = ""
 	}
@@ -209,15 +215,15 @@ func (d *responsesStreamDecoder) flushSeed(out *[]Chunk, decoded *responsesDecod
 // 这些兜底建出的块 `emitted` 必然为空（块级记账在新块上无从比对），出口不兜就整段二次下发。
 // 判据本身见 messageReplay（stream.go）：与消息级已发全文逐字相等且该全文由多帧拼成。
 func (d *responsesStreamDecoder) emitDeltaChunk(out *[]Chunk, decoded *responsesDecodedBlock, delta string) {
-	if decoded.kind == responsesKindText && messageReplay(d.messageText, d.messageTextParts, delta) {
+	if decoded.kind == responsesKindText && messageReplay(d.messageText.String(), d.messageTextParts, delta) {
 		return
 	}
-	decoded.emitted += delta
+	decoded.emitted.WriteString(delta)
 	chunk := Chunk{Kind: ChunkBlockDelta, BlockIndex: intPtr(decoded.blockIndex)}
 	switch decoded.kind {
 	case responsesKindText:
 		chunk.TextDelta = stringPtr(delta)
-		d.messageText += delta
+		d.messageText.WriteString(delta)
 		d.messageTextParts++
 	case responsesKindToolCall:
 		chunk.ArgsDelta = stringPtr(delta)
@@ -354,7 +360,7 @@ func (d *responsesStreamDecoder) handleDelta(out *[]Chunk, eventType string, pay
 		kind = responsesKindText
 	}
 	// 消息级回放：tool item 关掉文本块之后，上游再发一条「累计全文」式增量时，块级记账比不到它。
-	if kind == responsesKindText && messageReplay(d.messageText, d.messageTextParts, delta) {
+	if kind == responsesKindText && messageReplay(d.messageText.String(), d.messageTextParts, delta) {
 		return
 	}
 	outputIndex := intOrDefault(payload, "output_index", 0)
@@ -384,7 +390,7 @@ func (d *responsesStreamDecoder) handleDelta(out *[]Chunk, eventType string, pay
 	// 既不会重复交付（重发型），也不会吞掉合法续写的首字（合法续写型）。见 reconcile。
 	//
 	// 悬置只到 responsesPendingMaxBytes 为止：等不到声明就无限攒，等于把整段正文扣在本地。
-	if decoded.emitted == "" && decoded.seed != "" {
+	if decoded.emitted.Len() == 0 && decoded.seed != "" {
 		switch {
 		case decoded.pending == "" && delta == decoded.seed && len(delta) <= responsesPendingMaxBytes:
 			decoded.pending = delta
@@ -427,11 +433,11 @@ func (d *responsesStreamDecoder) reconcile(out *[]Chunk, decoded *responsesDecod
 	// 消息级回放：声明式收尾按 output[] **数组下标**反推块键（见 recoverTerminalOutput），
 	// 与流式期的 output_index 不一致时会建出一个 emitted 为空的新块；此时块级差额算不出来，
 	// 只有消息级记账能认出这段「声明全文」其实是已发全篇。
-	if decoded.kind == responsesKindText && messageReplay(d.messageText, d.messageTextParts, declared) {
+	if decoded.kind == responsesKindText && messageReplay(d.messageText.String(), d.messageTextParts, declared) {
 		return
 	}
 	decoded.pending = ""
-	if tail := declaredTextTail(decoded.emitted, declared); len(tail) > 0 {
+	if tail := declaredTextTail(decoded.emitted.String(), declared); len(tail) > 0 {
 		d.emitDeltaChunk(out, decoded, tail)
 	}
 }
@@ -689,9 +695,13 @@ type responsesEncoderBlockState struct {
 	itemID      string
 	item        *Value
 	kind        responsesDecodedKind
-	text        string
-	args        string
-	reasoning   string
+	// text / args / reasoning 是本块已交付内容的累积（收块时写进声明式 done 帧）。
+	//
+	// 用 Builder 而非 string +=：后者每帧把已收内容全量拷一遍，整条流 O(正文长度²)。
+	// 故本结构体恒以指针传递（含活跃 Builder，不得按值复制）。
+	text      strings.Builder
+	args      strings.Builder
+	reasoning strings.Builder
 	// skipped 表示枢纽块在本线无表示（如仅有签名的 thinking）：其 delta/stop 一律忽略。
 	skipped bool
 	closed  bool
@@ -730,11 +740,7 @@ func (e *responsesStreamEncoder) frame(eventType string, payload *Value) []byte 
 	for _, member := range payload.Members() {
 		body.Set(member.Key, member.Value)
 	}
-	return []byte(SerializeSSEFrame(SSEFrame{
-		Event:    eventType,
-		HasEvent: true,
-		Data:     body.MarshalCompact(),
-	}))
+	return AppendJSONSSEFrame(nil, eventType, body)
 }
 
 func (e *responsesStreamEncoder) ensureCreated(out *[][]byte) {
@@ -772,7 +778,7 @@ func (e *responsesStreamEncoder) closeBlock(out *[][]byte, blockIndex int) {
 	case responsesKindText:
 		part := NewObject().
 			Set("type", NewString("output_text")).
-			Set("text", NewString(state.text)).
+			Set("text", NewString(state.text.String())).
 			Set("annotations", NewArray())
 		state.item.Set("status", NewString("completed"))
 		state.item.Set("content", NewArray(part))
@@ -780,7 +786,7 @@ func (e *responsesStreamEncoder) closeBlock(out *[][]byte, blockIndex int) {
 			Set("item_id", NewString(itemID)).
 			Set("output_index", NewNumberInt(int64(outputIndex))).
 			Set("content_index", NewNumberInt(0)).
-			Set("text", NewString(state.text))))
+			Set("text", NewString(state.text.String()))))
 		*out = append(*out, e.frame("response.content_part.done", NewObject().
 			Set("item_id", NewString(itemID)).
 			Set("output_index", NewNumberInt(int64(outputIndex))).
@@ -788,21 +794,21 @@ func (e *responsesStreamEncoder) closeBlock(out *[][]byte, blockIndex int) {
 			Set("part", part)))
 	case responsesKindToolCall:
 		state.item.Set("status", NewString("completed"))
-		state.item.Set("arguments", NewString(state.args))
+		state.item.Set("arguments", NewString(state.args.String()))
 		*out = append(*out, e.frame("response.function_call_arguments.done", NewObject().
 			Set("item_id", NewString(itemID)).
 			Set("output_index", NewNumberInt(int64(outputIndex))).
-			Set("arguments", NewString(state.args))))
+			Set("arguments", NewString(state.args.String()))))
 	default:
 		part := NewObject().
 			Set("type", NewString("summary_text")).
-			Set("text", NewString(state.reasoning))
+			Set("text", NewString(state.reasoning.String()))
 		state.item.Set("summary", NewArray(part))
 		*out = append(*out, e.frame("response.reasoning_summary_text.done", NewObject().
 			Set("item_id", NewString(itemID)).
 			Set("output_index", NewNumberInt(int64(outputIndex))).
 			Set("summary_index", NewNumberInt(0)).
-			Set("text", NewString(state.reasoning))))
+			Set("text", NewString(state.reasoning.String()))))
 		*out = append(*out, e.frame("response.reasoning_summary_part.done", NewObject().
 			Set("item_id", NewString(itemID)).
 			Set("output_index", NewNumberInt(int64(outputIndex))).
@@ -870,7 +876,7 @@ func (e *responsesStreamEncoder) openBlock(out *[][]byte, chunk Chunk) {
 		// 块起始就带正文的上游（Anthropic 的 content_block_start 允许带 text）：本线没有
 		// 「起始帧带正文」的位置，必须转成增量帧，否则整段正文随块一起消失。
 		if len(block.Text) > 0 {
-			state.text = block.Text
+			state.text.WriteString(block.Text)
 			*out = append(*out, e.frame("response.output_text.delta", NewObject().
 				Set("item_id", NewString(itemID)).
 				Set("output_index", NewNumberInt(int64(outputIndex))).
@@ -902,7 +908,7 @@ func (e *responsesStreamEncoder) openBlock(out *[][]byte, chunk Chunk) {
 			Set("output_index", NewNumberInt(int64(outputIndex))).
 			Set("item", state.item)))
 		if len(block.Args) > 0 {
-			state.args = block.Args
+			state.args.WriteString(block.Args)
 			*out = append(*out, e.frame("response.function_call_arguments.delta", NewObject().
 				Set("item_id", NewString(itemID)).
 				Set("output_index", NewNumberInt(int64(outputIndex))).
@@ -953,7 +959,7 @@ func (e *responsesStreamEncoder) openBlock(out *[][]byte, chunk Chunk) {
 				Set("type", NewString("summary_text")).
 				Set("text", NewString("")))))
 		if len(block.Text) > 0 {
-			state.reasoning = block.Text
+			state.reasoning.WriteString(block.Text)
 			*out = append(*out, e.frame("response.reasoning_summary_text.delta", NewObject().
 				Set("item_id", NewString(itemID)).
 				Set("output_index", NewNumberInt(int64(outputIndex))).
@@ -1004,7 +1010,7 @@ func (e *responsesStreamEncoder) applyDelta(out *[][]byte, chunk Chunk) {
 	outputIndex := state.outputIndex
 
 	if chunk.TextDelta != nil && state.kind == responsesKindText {
-		state.text += *chunk.TextDelta
+		state.text.WriteString(*chunk.TextDelta)
 		*out = append(*out, e.frame("response.output_text.delta", NewObject().
 			Set("item_id", NewString(itemID)).
 			Set("output_index", NewNumberInt(int64(outputIndex))).
@@ -1013,7 +1019,7 @@ func (e *responsesStreamEncoder) applyDelta(out *[][]byte, chunk Chunk) {
 		return
 	}
 	if chunk.ArgsDelta != nil && state.kind == responsesKindToolCall {
-		state.args += *chunk.ArgsDelta
+		state.args.WriteString(*chunk.ArgsDelta)
 		*out = append(*out, e.frame("response.function_call_arguments.delta", NewObject().
 			Set("item_id", NewString(itemID)).
 			Set("output_index", NewNumberInt(int64(outputIndex))).
@@ -1021,7 +1027,7 @@ func (e *responsesStreamEncoder) applyDelta(out *[][]byte, chunk Chunk) {
 		return
 	}
 	if chunk.ReasoningDelta != nil && state.kind == responsesKindThinking {
-		state.reasoning += *chunk.ReasoningDelta
+		state.reasoning.WriteString(*chunk.ReasoningDelta)
 		*out = append(*out, e.frame("response.reasoning_summary_text.delta", NewObject().
 			Set("item_id", NewString(itemID)).
 			Set("output_index", NewNumberInt(int64(outputIndex))).
