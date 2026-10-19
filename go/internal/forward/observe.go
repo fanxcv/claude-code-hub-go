@@ -782,8 +782,18 @@ func hasCompletionMarker(format convert.ClientFormat, payload *convert.Value, ev
 	}
 }
 
-// errorTextFromPayload 提取流内错误帧的文案（多线形态：error 字段或顶层 type=error）。
+// errorTextFromPayload 提取流内错误帧的文案（多线形态：error 字段、顶层 type=error，
+// 以及 Responses 的 response.failed——错误嵌在 response.error 里，顶层没有 error 字段）。
 func errorTextFromPayload(payload *convert.Value) (string, bool) {
+	if kind, ok := payload.StringField("type"); ok && kind == "response.failed" {
+		failed := payload.ObjectField("response").ObjectField("error")
+		if message, ok := failed.StringField("message"); ok && message != "" {
+			return message, true
+		}
+		if text, ok := failed.String(); ok && text != "" {
+			return text, true
+		}
+	}
 	errorValue := payload.ObjectField("error")
 	if errorValue == nil {
 		if kind, ok := payload.StringField("type"); ok && kind == "error" {
