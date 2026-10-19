@@ -39,7 +39,10 @@ type chatStreamDecoder struct {
 	// 为什么需要：上游存在「声明式」形态（尾帧 `delta` 或 `message` 载累计全文、而非新增片段），
 	// 无对账就会把整篇二次放出——客户端看到「前半 == 后半」，且 usage 只计一份。
 	// 与 responses 线的 responsesDecodedBlock.emitted 同义（stream_responses.go:27-28）。
-	emitted string
+	//
+	// 用 Builder 而非 string +=：后者每帧把已收正文全量拷一遍，整条流 O(正文长度²)，
+	// 输出越长每帧越慢（生产表现为「流到后面明显掉速」）。
+	emitted strings.Builder
 	// emittedParts 是「当前块内已发过几个正文帧」，用于消歧「本帧文本恰等于已发内容」：
 	// 详见 chatReconcile 的「已知边界」。
 	emittedParts int
@@ -47,7 +50,7 @@ type chatStreamDecoder struct {
 	//
 	// 为什么另立一份：emitted 是块级的（块一关就清），而生产实测的整段回放恰好落在块边界之后
 	// （tool_calls 关掉文本块、随后同形帧重发全篇），块级记账比不到它——见 messageReplay。
-	messageText string
+	messageText strings.Builder
 	// messageTextParts 是拼成 messageText 的帧数，用于消歧「本帧恰等于全篇」。
 	messageTextParts int
 	// toolArgsEmitted 是「上游 tool_calls index → 已作为参数增量发出的字节」，用于同一类对账。
@@ -208,13 +211,13 @@ func (d *chatStreamDecoder) emitText(text string, out *[]Chunk, declared bool) {
 	}
 	// 消息级回放：块边界（tool_calls / thinking）之后重发的整段文本。
 	// 块内那一份由下面的 chatReconcile 管，但块一关它的记账就归零，这条补的是跨块那一段。
-	if messageReplay(d.messageText, d.messageTextParts, text) {
+	if messageReplay(d.messageText.String(), d.messageTextParts, text) {
 		return
 	}
 	newBlock := d.openBlock == nil || d.openBlock.kind != chatBlockText
 	// 对账只在**同一块内**做：新块没有已发内容可比，emitted 随开块重置。
 	if !newBlock {
-		tail, isReplay := chatReconcile(d.emitted, text, declared, d.emittedParts)
+		tail, isReplay := chatReconcile(d.emitted.String(), text, declared, d.emittedParts)
 		if isReplay {
 			text = tail
 		}
@@ -228,7 +231,7 @@ func (d *chatStreamDecoder) emitText(text string, out *[]Chunk, declared bool) {
 		index := d.nextBlockIndex
 		d.nextBlockIndex++
 		d.openBlock = &chatOpenBlock{index: index, kind: chatBlockText}
-		d.emitted = ""
+		d.emitted.Reset()
 		d.emittedParts = 0
 		*out = append(*out, Chunk{
 			Kind:       ChunkBlockStart,
@@ -237,9 +240,9 @@ func (d *chatStreamDecoder) emitText(text string, out *[]Chunk, declared bool) {
 		})
 	}
 	d.textStarted = true
-	d.emitted += text
+	d.emitted.WriteString(text)
 	d.emittedParts++
-	d.messageText += text
+	d.messageText.WriteString(text)
 	d.messageTextParts++
 	*out = append(*out, Chunk{
 		Kind:       ChunkBlockDelta,
