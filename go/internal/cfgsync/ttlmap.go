@@ -101,11 +101,17 @@ func (m *TTLMap[K, V]) Has(key K) bool {
 }
 
 // Clear 清空全表。
+//
+// 原地删除而不是重建两张 map：配置失效是常态（每次失效广播都会走到这里），重建会
+// 每次给 GC 交一批新堆块（4096 条的容量提示对应近百 KB），而 Go 的 delete 不缩容，
+// 复用底层数组正是这里要的。
 func (m *TTLMap[K, V]) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.order = make(map[K]time.Time, m.maxSize)
-	m.items = make(map[K]V, m.maxSize)
+	for key := range m.order {
+		delete(m.order, key)
+		delete(m.items, key)
+	}
 }
 
 // PurgeExpired 清掉全部过期项。
