@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // 本文件是**后台任务**（internal/jobs 的云价格同步）需要的 model_prices / cloud_pricing_catalog 读写面。
@@ -127,26 +130,54 @@ type ModelPriceWrite struct {
 	Source    string
 }
 
+// priceWriteBatchRows 是一次 unnest 写的行数上限。
+//
+// 整表同步 11838 行、单行约 8.7 KB：一次性绑参会让 pgx 为整批再编码一份同量级的参数缓冲
+// （实测活跃堆里约 100 MB）。分批后这份缓冲的峰值只与批大小成正比，原子性不变——各批
+// 始终在同一个事务里，任一批失败即整批回滚。
+const priceWriteBatchRows = 1000
+
+// insertModelPricesSQL 是批量写唯一的语句形状；分批只是换行数切片复用同一句。
+const insertModelPricesSQL = `INSERT INTO model_prices (model_name, price_data, source)
+	 SELECT u.model_name, u.price_data::jsonb, u.source
+	 FROM unnest($1::text[], $2::text[], $3::text[]) AS u(model_name, price_data, source)`
+
 // priceWriteColumns 把写入项摊成三条并行数组（unnest 的入参形态）。
 //
 // 顺序即行顺序：数组下标 i 的三个元素属于同一行。
-func priceWriteColumns(writes []ModelPriceWrite) (names []string, payloads []string, sources []string) {
+//
+// payloads 用 pgtype.FlatArray[[]byte]：json.RawMessage 的底层就是 []byte，摊平只复制切片头
+// （每行 24 字节），不复制正文；[]string 会为整表再拷一份约 100 MB 的 JSON。
+// 用 FlatArray 而不是裸 [][]byte，是为了把「一维数组」写死在调用方：后者的形状靠 pgx 的
+// 按值包装推导，不由调用方声明。
+func priceWriteColumns(writes []ModelPriceWrite) (names []string, payloads pgtype.FlatArray[[]byte], sources []string) {
 	names = make([]string, len(writes))
-	payloads = make([]string, len(writes))
+	payloads = make(pgtype.FlatArray[[]byte], len(writes))
 	sources = make([]string, len(writes))
 	for index, write := range writes {
 		names[index] = write.ModelName
-		payloads[index] = string(write.PriceData)
+		payloads[index] = write.PriceData
 		sources[index] = write.Source
 	}
 	return names, payloads, sources
 }
 
-// InsertModelPrices 复刻 N 次 createModelPrice，但只花一次往返。
+// insertModelPriceRows 在给定事务里按批插入；任一批失败即返回错误，由调用方回滚整个事务。
+func insertModelPriceRows(ctx context.Context, tx pgx.Tx, writes []ModelPriceWrite) error {
+	for start := 0; start < len(writes); start += priceWriteBatchRows {
+		names, payloads, sources := priceWriteColumns(writes[start:min(start+priceWriteBatchRows, len(writes))])
+		if _, err := tx.Exec(ctx, insertModelPricesSQL, names, payloads, sources); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// InsertModelPrices 复刻 N 次 createModelPrice，但只花少量往返。
 //
-// 语义等价性：单条 `INSERT ... SELECT unnest(...)` 本身是原子的——任一行非法则整条失败且
-// 一行不落库，与「逐条插入、每条各自事务」在**全部成功**时结果相同。调用方（价格同步与手动
-// 导入）在批量失败后会退化成逐条写，以保持「哪个模型失败」的精确归因，故失败路径也与改前一致。
+// 语义等价性：分批的 unnest 写包在**一个事务**里——任一行非法则整批回滚且一行不落库，
+// 与「逐条插入、每条各自事务」在**全部成功**时结果相同。调用方（价格同步与手动导入）
+// 在批量失败后会退化成逐条写，以保持「哪个模型失败」的精确归因，故失败路径也与改前一致。
 func (p *Pools) InsertModelPrices(ctx context.Context, writes []ModelPriceWrite) error {
 	if len(writes) == 0 {
 		return nil
@@ -155,19 +186,23 @@ func (p *Pools) InsertModelPrices(ctx context.Context, writes []ModelPriceWrite)
 	if err != nil {
 		return err
 	}
-	names, payloads, sources := priceWriteColumns(writes)
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO model_prices (model_name, price_data, source)
-		 SELECT u.model_name, u.price_data::jsonb, u.source
-		 FROM unnest($1::text[], $2::text[], $3::text[]) AS u(model_name, price_data, source)`,
-		names, payloads, sources); err != nil {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("store: 开启模型价格批量事务失败: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if err := insertModelPriceRows(ctx, tx, writes); err != nil {
 		return fmt.Errorf("store: 批量写入模型价格失败: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("store: 提交模型价格批量事务失败: %w", err)
 	}
 	return nil
 }
 
 // ReplaceModelPrices 复刻 N 次 upsertModelPrice（同一事务里先删该模型全部旧行、再插一行），
-// 但把 N 个模型合到**一个事务**里：两条语句、四次往返，而不是每个模型四条。
+// 但把 N 个模型合到**一个事务**里：一次 DELETE 加每条 INSERT 分批，而不是每个模型四条。
 //
 // 为什么仍是「先删后插」而不是 ON CONFLICT：与 AdminUpsertModelPrice 同一口径——Node 侧就是硬删除，
 // 改成真 upsert 会让旧行（含 id 与历史）留存，两端行数与 id 分叉。
@@ -190,15 +225,14 @@ func (p *Pools) ReplaceModelPrices(ctx context.Context, writes []ModelPriceWrite
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	names, payloads, sources := priceWriteColumns(writes)
+	names := make([]string, len(writes))
+	for index, write := range writes {
+		names[index] = write.ModelName
+	}
 	if _, err := tx.Exec(ctx, "DELETE FROM model_prices WHERE model_name = ANY($1::text[])", names); err != nil {
 		return fmt.Errorf("store: 清理旧模型价格失败: %w", err)
 	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO model_prices (model_name, price_data, source)
-		 SELECT u.model_name, u.price_data::jsonb, u.source
-		 FROM unnest($1::text[], $2::text[], $3::text[]) AS u(model_name, price_data, source)`,
-		names, payloads, sources); err != nil {
+	if err := insertModelPriceRows(ctx, tx, writes); err != nil {
 		return fmt.Errorf("store: 批量替换模型价格失败: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
