@@ -1021,12 +1021,6 @@ func precommitShadowEnabled() bool {
 	return PrecommitShadowDefault
 }
 
-// 编译期断言：未使用的辅助函数与错误值在此显式保留，避免误删。
-var (
-	_ = errors.Is
-	_ = numericToFloat
-)
-
 // publicStatusRollupRecorder 建 public-status 投影的事件捕获器（终态结算的旁路）。
 //
 // 需要三样：Redis 写面（桶的哈希累加 + 覆盖起点 NX）、内部配置快照读面（分组与模型白名单）、

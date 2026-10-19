@@ -214,13 +214,6 @@ func exportFileExtension(format string) string {
 	return "csv"
 }
 
-func exportEncodingFor(format string) string {
-	if format == "xlsx" {
-		return "base64"
-	}
-	return "utf8"
-}
-
 // exportProgress 复刻 buildUsageLogsExportProgress。
 //
 // 三处易错：totalRows 会被抬到「已处理 + 1」（还有更多时，避免进度显示成 100% 却还在跑）；

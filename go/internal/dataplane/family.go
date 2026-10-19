@@ -268,9 +268,3 @@ func ResolveEndpointFamily(pathname string) (EndpointFamily, bool) {
 	}
 	return EndpointFamily{}, false
 }
-
-// IsKnownDataPlanePath 等价于 Node 的 `isStandardProxyEndpointPath`。
-func IsKnownDataPlanePath(pathname string) bool {
-	_, ok := ResolveEndpointFamily(pathname)
-	return ok
-}

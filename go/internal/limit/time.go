@@ -267,10 +267,3 @@ func ceilSeconds(delta time.Duration) int64 {
 	}
 	return (millis + 999) / 1000
 }
-
-func maxInt64(left int64, right int64) int64 {
-	if left > right {
-		return left
-	}
-	return right
-}

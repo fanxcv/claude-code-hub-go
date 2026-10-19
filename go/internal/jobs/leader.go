@@ -160,14 +160,6 @@ func (l *LeaderLock) Release(ctx context.Context) error {
 	return nil
 }
 
-// Name 返回锁名，便于日志与测试断言。
-func (l *LeaderLock) Name() string {
-	if l == nil {
-		return ""
-	}
-	return l.name
-}
-
 // leaderEntryFor 取（或懒建）该锁名的进程内状态。会话本身在首次取锁时才建
 // （见 leaderEntry.sessionFor），这里不必碰网络。
 func leaderEntryFor(_ context.Context, pools *store.Pools, name string) (*leaderEntry, error) {
@@ -183,17 +175,6 @@ func leaderEntryFor(_ context.Context, pools *store.Pools, name string) (*leader
 		return actual.(*leaderEntry), nil
 	}
 	return actual.(*leaderEntry), nil
-}
-
-// Release 的实现辅助：会话句柄。
-func (l *LeaderLock) entrySession() (*store.DedicatedSession, error) {
-	if l.entry == nil {
-		return nil, fmt.Errorf("jobs: 锁已释放")
-	}
-	if l.entry.session == nil {
-		return nil, fmt.Errorf("jobs: 专用会话不可用")
-	}
-	return l.entry.session, nil
 }
 
 // 锁名与 Node 对齐：回填用 Node 的锁名，保证并存期只有一侧真正执行回填。

@@ -233,9 +233,3 @@ func (s *Server) appVersion() string {
 	}
 	return appversion.ResolveBare(os.Getenv)
 }
-
-// normalizeHealthVersion 去掉前导 `v`（Node 的 getAppVersion 是 `APP_VERSION.replace(/^v/i, "")`）。
-// 与 `appversion.Bare` 同义，保留本名供本包测试直接验证对外形状。
-func normalizeHealthVersion(raw string) string {
-	return appversion.Bare(raw)
-}

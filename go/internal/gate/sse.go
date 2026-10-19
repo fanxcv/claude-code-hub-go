@@ -297,12 +297,6 @@ func (p *Parser) appendDataHead(data []byte) {
 	}
 }
 
-// currentDataHead 返回「已积累 data 头部 + 当前未完成行的 data 头部」，供豁免判定用。
-// 拼接只在残行路径上做（完整行直接走 assertBufferLimitForLine）。
-func (p *Parser) currentDataHead() string {
-	return string(p.currentDataHeadBytes(p.pendingLineHead()))
-}
-
 func (p *Parser) currentDataHeadBytes(lineHead []byte) []byte {
 	if p.dataHeadLen >= dataHeadBytes {
 		return p.dataHead[:p.dataHeadLen]

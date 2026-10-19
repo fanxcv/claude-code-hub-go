@@ -298,20 +298,6 @@ func marshalNotifyPayloads(items []any) ([]jobs.NotifyPayload, error) {
 	return payloads, nil
 }
 
-// notificationPayloadSourceRef 给出该类型生成器的 TS 位置（供日志与报告引用）。
-func notificationPayloadSourceRef(jobType string) string {
-	switch jobType {
-	case jobs.NotifyTypeDailyLeaderboard:
-		return "src/lib/notification/tasks/daily-leaderboard.ts:11"
-	case jobs.NotifyTypeCostAlert:
-		return "src/lib/notification/tasks/cost-alert.ts:14"
-	case jobs.NotifyTypeCacheHitRateAlert:
-		return "src/lib/notification/tasks/cache-hit-rate-alert.ts:209"
-	default:
-		return ""
-	}
-}
-
 // 守住接口实现（装配处改签名时这里先报错）。
 var _ jobs.NotifyDeliverer = (*NotificationDelivery)(nil)
 var _ jobs.NotifyPayloadSource = (*NotificationAlerts)(nil)
