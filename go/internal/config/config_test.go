@@ -68,12 +68,15 @@ func TestLoadProductionPoolDefault(t *testing.T) {
 	if cfg.PoolTotal != DefaultProductionPoolTotal {
 		t.Fatalf("生产档 DB_POOL_MAX 默认应为 %d，收到 %d", DefaultProductionPoolTotal, cfg.PoolTotal)
 	}
-	// 计划 §8：40 -> data=31 -> maxOutstanding=248。
-	if cfg.Pool.Data != 31 {
-		t.Errorf("DB_POOL_MAX=40 时 data 应为 31，收到 %d", cfg.Pool.Data)
+	// 生产默认 24 -> data=18 -> maxOutstanding=144（拆分公式见 SplitPoolBudget）。
+	if cfg.Pool.Data != 18 {
+		t.Errorf("DB_POOL_MAX=24 时 data 应为 18，收到 %d", cfg.Pool.Data)
 	}
-	if got := cfg.Pool.MaxOutstanding(LaneData); got != 248 {
-		t.Errorf("DB_POOL_MAX=40 时 maxOutstanding 应为 248，收到 %d", got)
+	if cfg.Pool.Control != 5 || cfg.Pool.Writer != 1 {
+		t.Errorf("DB_POOL_MAX=24 时 control/writer 应为 5/1，收到 %d/%d", cfg.Pool.Control, cfg.Pool.Writer)
+	}
+	if got := cfg.Pool.MaxOutstanding(LaneData); got != 144 {
+		t.Errorf("DB_POOL_MAX=24 时 maxOutstanding 应为 144，收到 %d", got)
 	}
 }
 

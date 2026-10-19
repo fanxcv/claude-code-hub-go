@@ -103,9 +103,12 @@ const (
 	minOutstandingPerPool    = 32
 	outstandingPerConnection = 8
 
-	// DefaultProductionPoolTotal / DefaultDevelopmentPoolTotal 复刻 db.ts 的
-	// defaultTotal：生产 40 → data=31 → maxOutstanding=248。
-	DefaultProductionPoolTotal  = 40
+	// DefaultProductionPoolTotal / DefaultDevelopmentPoolTotal 是连接池总量（按
+	// SplitPoolBudget 切分）。生产档取 24（data=18 / control=5 / writer=1）而非 db.ts 时代的 40：
+	// 512MiB 容器里少 16 条常驻连接就少 16 份 socket 与 pgx 读写缓冲，而生产实测约
+	// 0.5 QPS（message_request 近期 1000-1800 行/小时），24 条远超需求；要更大的池由
+	// DB_POOL_MAX 显式抬升。
+	DefaultProductionPoolTotal  = 24
 	DefaultDevelopmentPoolTotal = 10
 )
 

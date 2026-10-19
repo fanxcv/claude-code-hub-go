@@ -113,14 +113,14 @@ func TestAdmissionIsConcurrencySafe(t *testing.T) {
 	}
 }
 
-// 分道预算与准入上限必须与 TS 侧的具体数字一致（plan 文档 §8 与 db.ts 的注释）。
+// 分道预算与准入上限：生产默认 24 条要切成 18/5/1，准入上限按每连接 8 条算出。
 func TestPoolBudgetMatchesTS(t *testing.T) {
 	production := config.SplitPoolBudget(config.DefaultProductionPoolTotal)
-	if production.Data != 31 || production.Control != 8 || production.Writer != 1 {
-		t.Fatalf("DB_POOL_MAX=40 分道错误: %+v", production)
+	if production.Data != 18 || production.Control != 5 || production.Writer != 1 {
+		t.Fatalf("DB_POOL_MAX=24 分道错误: %+v", production)
 	}
-	if got := production.MaxOutstanding(config.LaneData); got != 248 {
-		t.Fatalf("data 准入上限 = %d, want 248", got)
+	if got := production.MaxOutstanding(config.LaneData); got != 144 {
+		t.Fatalf("data 准入上限 = %d, want 144", got)
 	}
 
 	single := config.SplitPoolBudget(1)
