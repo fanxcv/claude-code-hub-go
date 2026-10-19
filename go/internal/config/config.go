@@ -104,11 +104,14 @@ const (
 	outstandingPerConnection = 8
 
 	// DefaultProductionPoolTotal / DefaultDevelopmentPoolTotal 是连接池总量（按
-	// SplitPoolBudget 切分）。生产档取 24（data=18 / control=5 / writer=1）而非 db.ts 时代的 40：
-	// 512MiB 容器里少 16 条常驻连接就少 16 份 socket 与 pgx 读写缓冲，而生产实测约
-	// 0.5 QPS（message_request 近期 1000-1800 行/小时），24 条远超需求；要更大的池由
-	// DB_POOL_MAX 显式抬升。
-	DefaultProductionPoolTotal  = 24
+	// SplitPoolBudget 切分）。生产档取 40（data=31 / control=8 / writer=1，data 准入 248）：
+	//
+	// v1.12.3 曾降到 24（data=18，准入 144）以省内存，但**平均 QPS 不是容量判据**——
+	// 每次请求的鉴权、选路、开行、终态写都在首字节之前或流式期间占连接，突发并发下
+	// 18 条连接直接抬高每请求的 DB 等待，表现为首字变慢、流式掉速。512MiB 容器里
+	// 16 条空闲连接的 socket 开销远低于这一退化代价。内存吃紧应改由 DB_POOL_MAX 显式下调，
+	// 不拿默认值做内存优化。
+	DefaultProductionPoolTotal  = 40
 	DefaultDevelopmentPoolTotal = 10
 )
 
