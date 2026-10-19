@@ -329,8 +329,13 @@ func TestPriceSyncVersionShortCircuitSkipsAllWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("同步失败: %v", err)
 	}
-	if len(result.Unchanged) != 3 || len(result.Added) != 0 || len(result.Updated) != 0 {
-		t.Fatalf("短路应全部判 unchanged, 实际 %+v", result)
+	// 短路发生在下载正文之前，模型名只存在于未下载的正文里，故名单为空；
+	// Total 取目录记录的行数，与 len(Unchanged) 脱钩。
+	if len(result.Unchanged) != 0 || len(result.Added) != 0 || len(result.Updated) != 0 {
+		t.Fatalf("短路应零分类, 实际 %+v", result)
+	}
+	if result.Total != fake.catalog.ModelCount {
+		t.Fatalf("短路结果的 Total 应取目录行数 %d, 实际 %d", fake.catalog.ModelCount, result.Total)
 	}
 	if len(fake.inserts) != 0 || len(fake.upserts) != 0 || fake.deleteKeep != nil {
 		t.Fatalf("短路后不应有任何写入: inserts=%v upserts=%v keep=%v",
