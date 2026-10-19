@@ -127,31 +127,10 @@ func splitLines(raw string) []string {
 	return lines
 }
 
-// SerializeSSEFrame 序列化为线上文本（一律 LF 分隔，容忍度最广）。
-func SerializeSSEFrame(frame SSEFrame) string {
-	return string(AppendSSEFrame(nil, frame))
-}
-
-// AppendSSEFrame 把帧追加到 dst 并返回新切片（SerializeSSEFrame 的零中转版）。
-func AppendSSEFrame(dst []byte, frame SSEFrame) []byte {
-	if frame.HasEvent && frame.Event != "" {
-		dst = append(dst, "event: "...)
-		dst = append(dst, frame.Event...)
-		dst = append(dst, '\n')
-	}
-	for line := range strings.SplitSeq(frame.Data, "\n") {
-		dst = append(dst, "data: "...)
-		dst = append(dst, line...)
-		dst = append(dst, '\n')
-	}
-	return append(dst, '\n')
-}
-
 // AppendJSONSSEFrame 把「单行 JSON 载荷」一帧直接写成线上字节：`event: X\ndata: {…}\n\n`。
 //
-// 为何单独一条：流式编码的每帧都同形，而载荷来自 AppendCompact。经 SerializeSSEFrame 中转
+// 为何单独一条：流式编码的每帧都同形，而载荷来自 AppendCompact。串行化再转字节
 // 会先把 JSON 造成 string、再拷进 Builder、再转 []byte——三份全量副本；这里只有一份。
-// 多行 Data 的通用行为仍由 AppendSSEFrame 承担（载荷是单行 JSON，不存在拆行）。
 func AppendJSONSSEFrame(dst []byte, event string, payload *Value) []byte {
 	if event != "" {
 		dst = append(dst, "event: "...)

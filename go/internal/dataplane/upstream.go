@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
@@ -1060,18 +1059,6 @@ func usageFromConvert(usage convert.Usage, cacheTTL string) terminal.Usage {
 		out.CacheCreation1hInputTokens = &value
 	}
 	return out
-}
-
-// numericToFloat 把 numeric 列的 json.Number 投影成倍率浮点。
-func numericToFloat(value json.Number) *float64 {
-	if value.String() == "" {
-		return nil
-	}
-	parsed, err := strconv.ParseFloat(value.String(), 64)
-	if err != nil {
-		return nil
-	}
-	return &parsed
 }
 
 // tailPreview 取窗口文本的末 n 个字符，供「缺用量」现场判定归属。

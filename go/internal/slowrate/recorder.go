@@ -632,14 +632,6 @@ func isSlow(rate, baseline float64, params Params) bool {
 	return rate < baseline*params.Ratio
 }
 
-func (r *Recorder) warnFields(event string, fields map[string]any, err error) {
-	if r.logger == nil {
-		return
-	}
-	fields["error"] = err.Error()
-	r.logger.Warn(event, fields)
-}
-
 func (r *Recorder) warn(event string, facts Facts, err error) {
 	if r.logger == nil {
 		return

@@ -149,12 +149,6 @@ var adminProviderWriteFields = []adminProviderWriteField{
 	{"cc", "cc", providerNullableIntKind},
 }
 
-// AdminProviderWriteFieldSupported 报告某个 payload 字段是否在写入白名单内。
-func AdminProviderWriteFieldSupported(payload string) bool {
-	_, ok := adminProviderWriteFieldFor(payload)
-	return ok
-}
-
 func adminProviderWriteFieldFor(payload string) (adminProviderWriteField, bool) {
 	for _, field := range adminProviderWriteFields {
 		if field.Payload == payload {

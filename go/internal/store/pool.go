@@ -319,16 +319,6 @@ func (s *DedicatedSession) Close() {
 	}
 }
 
-// closeLockConn 归还连接并关掉它所属的单连接池。
-func closeLockConn(conn *pgxpool.Conn, pool *pgxpool.Pool) {
-	if conn != nil {
-		conn.Release()
-	}
-	if pool != nil {
-		pool.Close()
-	}
-}
-
 // createPool 建一个分道池。
 func (p *Pools) createPool(ctx context.Context, lane config.Lane) (*Pool, error) {
 	cfg, err := pgxpool.ParseConfig(p.dsn)

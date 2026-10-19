@@ -116,13 +116,6 @@ func (s *Scheduler) Names() []string {
 	return names
 }
 
-// Len 返回任务数量。
-func (s *Scheduler) Len() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.tasks)
-}
-
 // RunNow 立即执行指定任务一次（受超时与单例约束）。
 //
 // 用途：启动期的首轮（价格同步的「启动即跑一次」与回填的 bootstrap）、以及测试。

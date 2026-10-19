@@ -552,25 +552,6 @@ func asProjectionOutcome(value any) string {
 	}
 }
 
-// asProjectionString 复刻 Node 的 `String(x)`（仅用于非 outcome 的展示类字段）。
-func asProjectionString(value any) string {
-	switch typed := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return typed
-	case float64:
-		return strconv.FormatFloat(typed, 'f', -1, 64)
-	case bool:
-		if typed {
-			return "true"
-		}
-		return "false"
-	default:
-		return fmt.Sprint(value)
-	}
-}
-
 // asProjectionTimestamp 解析 occurred_at。
 //
 // 与 Node 的**有意差异**（登记在报告 §3）：Node 用 `new Date(x)`，值非法时得到 Invalid Date，

@@ -367,9 +367,6 @@ func (w *CostWindows) scriptSource(constName string) (string, error) {
 	return script.Source, nil
 }
 
-// TrackFixedCostWindowScript 暴露内联脚本正文，供测试与 Node 侧同名内联脚本对账。
-func TrackFixedCostWindowScript() string { return fixedCostWindowLua }
-
 // ParseCostText 把 Redis 返回的成本值解析为浮点数；非法值按 0 处理（Node 侧 parseFloat 语义）。
 func ParseCostText(value any) float64 {
 	switch typed := value.(type) {

@@ -199,14 +199,6 @@ func NewAuthIssuer(options AuthIssuerOptions) (*AuthIssuer, error) {
 	}, nil
 }
 
-// SessionTokenMode 返回生效的会话令牌模式（供启动日志如实报告）。
-func (i *AuthIssuer) SessionTokenMode() string {
-	if i == nil {
-		return ""
-	}
-	return i.mode
-}
-
 // RegisterAuthRoutes 注册根级认证面的两条路由。
 //
 // 路径是**绝对路径**（含 /api 前缀），因为这两条不在 /api/v1 挂载点下：Router 的归一化只剥

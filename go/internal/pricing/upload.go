@@ -174,9 +174,6 @@ func orderedObjectPairs(raw []byte) ([]orderedPair, error) {
 // errNotJSONObject 对应 processPriceTableInternal 的「价格表必须是一个JSON对象」。
 var errNotJSONObject = errors.New("价格表必须是一个JSON对象")
 
-// ErrNotJSONObject 暴露给调用方做状态映射（Node 该错误同样落到 400 action_failed）。
-func ErrNotJSONObject() error { return errNotJSONObject }
-
 // ConvertedTableEntries 把 CPT 转换结果摊平成 Entry 列表。
 //
 // **顺序说明（有意偏离）**：Node 的 converted.models 是对象，迭代顺序 = 插入顺序

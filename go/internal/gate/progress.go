@@ -163,14 +163,6 @@ func (l *Ladder) Deadline() (time.Time, bool) {
 	return l.startedAt.Add(stages[l.stage].elapsed), true
 }
 
-// StageCount 返回本次生效的档位数。
-func (l *Ladder) StageCount() int {
-	if !l.Enabled() {
-		return 0
-	}
-	return len(l.allStages())
-}
-
 // Stage 返回尚未裁决的档位序号（0 起）。用于可观测性与测试。
 func (l *Ladder) Stage() int {
 	if !l.Enabled() {

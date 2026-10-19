@@ -244,15 +244,6 @@ func echoFamilyOf(format convert.ClientFormat) gate.Family {
 	}
 }
 
-// parserBound 是分帧器缓冲上限。
-//
-// **不得为「长行」抬高此值**：包内不变量是「每流驻留量与正文长度无关」，由
-// TestObserverResidencyStaysBoundedForLargeStream 守着；抬高它会让该值进入
-// `RetainedBytes` 并随窗口一起超限。超长行的补救走窗口回退（见 recoverFromWindows）。
-func parserBoundOf(opts ObservationOptions) int {
-	return max(opts.HeadBytes, 64<<10)
-}
-
 // Push 吃入一个上游 chunk：更新计数、窗口与帧级事实。
 func (o *Observer) Push(chunk []byte) {
 	if len(chunk) == 0 {
