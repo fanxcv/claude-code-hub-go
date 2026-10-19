@@ -378,28 +378,27 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 	case !in.Client.HasBody:
 		body = nil
 	case plan.Conversion != nil:
-		if err := rejectUnservableStateful(in.Client, plan.Conversion); err != nil {
+		// 正文只解析一次：状态型字段判定与转换解码读同一棵树（判定侧只读，可安全复用）。
+		value, err := convert.ParseJSON(in.Client.Body)
+		if err != nil {
+			// 与原先 convertBody 内部的 fmt.Errorf("%w: %v", ErrInvalidBody, err) 文案逐字相同。
+			recordBodyConversionFailure(plan, ErrInvalidBody.Error()+": "+err.Error())
+			break
+		}
+		if err := rejectUnservableStateful(in.Client, plan.Conversion, value); err != nil {
 			return nil, err
 		}
-		converted, loss, restore, err := convertBody(in.Client, plan.Conversion)
+		converted, loss, restore, err := convertBody(in.Client, plan.Conversion, value)
 		if err != nil {
 			// Node 语义：转换不可用时退回原生直通，而不是把未转换正文发到目标端点上。
 			// 回退语义不变；此处只额外**保留失败事实**（原因文本在落库前脱敏），
 			// 否则排障时无法区分「没转换」与「转换失败」。
-			plan.ConversionFailure = &convert.ConversionFailure{
-				ClientProtocol: plan.Conversion.ClientProtocol,
-				TargetProtocol: plan.Conversion.TargetProtocol,
-				Phase:          convert.PhaseBodyConversion,
-				Reason:         err.Error(),
-				Fallback:       true,
-			}
-			plan.Conversion = nil
-			plan.ConversionFallback = true
-		} else {
-			body = converted
-			plan.ConversionLoss = loss
-			plan.ToolNameRestore = restore
+			recordBodyConversionFailure(plan, err.Error())
+			break
 		}
+		body = converted
+		plan.ConversionLoss = loss
+		plan.ToolNameRestore = restore
 	}
 	// 模型改写必须在**最终正文**上做（不得因「本次发生了转换」而跳过）：
 	//
@@ -534,7 +533,23 @@ func buildGeminiPassthroughPlan(in PlanInput, baseURL string) (*Plan, error) {
 	return plan, nil
 }
 
+// recordBodyConversionFailure 记下「本想转换但正文这一环失败了」，并按 Node 语义置回退：
+// 计划仍可用，只是正文退回客户端原样（不报错）。
+func recordBodyConversionFailure(plan *Plan, reason string) {
+	plan.ConversionFailure = &convert.ConversionFailure{
+		ClientProtocol: plan.Conversion.ClientProtocol,
+		TargetProtocol: plan.Conversion.TargetProtocol,
+		Phase:          convert.PhaseBodyConversion,
+		Reason:         reason,
+		Fallback:       true,
+	}
+	plan.Conversion = nil
+	plan.ConversionFallback = true
+}
+
 // rejectUnservableStateful 在转换真的会把状态型字段丢掉时返回 fail-closed 错误。
+//
+// value 是调用方已解析的同一份正文：判定只读，无需再解析一次。
 //
 // 只对 OpenAI 两族客户端判定：这几个键本就是 Responses 线的参数，其它方言里出现同名字段只是
 // 杂项键；同时客户端收到的错误体是 OpenAI 形状（`guard.BuildError`），只有这两族读得懂——
@@ -543,18 +558,14 @@ func buildGeminiPassthroughPlan(in PlanInput, baseURL string) (*Plan, error) {
 // 本错误是**候选级**的，不是请求级：forward 的两条路径（串行 attempt.go、竞速 hedge.go）都把
 // 它当成「该候选不可服务」，把供应商记入排除集后换下一个候选；只有当所有候选都无法承载时，
 // 它才作为本次请求的结论交给客户端（400 + 字段名）。
-func rejectUnservableStateful(client ClientRequest, plan *convert.ConversionPlan) error {
+func rejectUnservableStateful(client ClientRequest, plan *convert.ConversionPlan, value *convert.Value) error {
 	if client.Format != convert.FormatResponse && client.Format != convert.FormatOpenAI {
 		return nil
 	}
 	if plan == nil || !client.HasBody || len(client.Body) == 0 {
 		return nil
 	}
-	body, err := convert.ParseJSON(client.Body)
-	if err != nil {
-		return nil
-	}
-	if field := convert.StatefulConversionConflict(plan.ClientProtocol, body); field != "" {
+	if field := convert.StatefulConversionConflict(plan.ClientProtocol, value); field != "" {
 		return &StatefulConversionError{Field: field}
 	}
 	return nil
@@ -565,14 +576,13 @@ func rejectUnservableStateful(client ClientRequest, plan *convert.ConversionPlan
 // 与 Node 的 buildUpstreamRequest 一致：编码用的模型名取自**快照正文**的 model 字段，
 // 而不是重定向后的模型——重定向若要对转换路径生效，调用方必须在生成快照时就写入目标模型
 // （Node 的 primeOriginalBody 在模型重定向之后取快照，故首个供应商的重定向会进入快照）。
+//
+// value 是调用方已解析的正文：本函数不再自行 ParseJSON。
 func convertBody(
 	client ClientRequest,
 	plan *convert.ConversionPlan,
+	value *convert.Value,
 ) ([]byte, *convert.LossReport, map[string]string, error) {
-	value, err := convert.ParseJSON(client.Body)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("%w: %v", ErrInvalidBody, err)
-	}
 	ctx := convert.ConvertCtx{
 		ClientFormat:              clientFormatOfProtocol(plan.ClientProtocol),
 		TargetProto:               plan.TargetProtocol,
@@ -627,7 +637,7 @@ func ClientStreamRequested(body []byte) bool {
 // ClientStreamRequestedFromValue 是 ClientStreamRequestedFor 的「已持有解析结果」变体：
 // 调用方若已经把同一份正文 ParseJSON 过，就直接问那棵树，省掉一次全量重解析。
 //
-// 用途：convertBody 先 ParseJSON 再解码，那里正是「已持有」的场景；
+// 用途：BuildPlan 的转换分支先 ParseJSON 再判定/解码，那里正是「已持有」的场景；
 // 传进来的 value 必定非 nil——非法正文在 ParseJSON 那一步就已经返回错误了。
 func ClientStreamRequestedFromValue(pathname string, rawQuery string, value *convert.Value) bool {
 	if field, ok := value.Get("stream"); ok {

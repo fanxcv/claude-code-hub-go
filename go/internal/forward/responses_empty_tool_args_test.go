@@ -156,7 +156,11 @@ func TestBuildPlanConversionPathBodyUnaffectedByEmptyArgsNormalization(t *testin
 		t.Fatalf("前置不成立：本用例需转换成功，实际 conversion=%v fallback=%v",
 			plan.Conversion != nil, plan.ConversionFallback)
 	}
-	expected, _, _, err := convertBody(client, plan.Conversion)
+	parsed, err := convert.ParseJSON(client.Body)
+	if err != nil {
+		t.Fatalf("解析客户端正文失败: %v", err)
+	}
+	expected, _, _, err := convertBody(client, plan.Conversion, parsed)
 	if err != nil {
 		t.Fatalf("convertBody 失败: %v", err)
 	}
