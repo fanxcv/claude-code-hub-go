@@ -62,6 +62,27 @@ func TestTTLMapPurgeExpired(t *testing.T) {
 	}
 }
 
+func TestTTLMapClearReusesStorage(t *testing.T) {
+	table := NewTTLMap[string, int](time.Hour, 64)
+	for index := 0; index < 64; index++ {
+		table.Set(string(rune('a'+index)), index)
+	}
+
+	// Clear 不得重建 map（重建每次至少 2 次分配），也不得留下条目。
+	if allocs := testing.AllocsPerRun(10, table.Clear); allocs != 0 {
+		t.Fatalf("Clear 平均每次分配 %v 次，应为 0", allocs)
+	}
+	if table.Size() != 0 {
+		t.Fatalf("Clear 后应无条目，Size=%d", table.Size())
+	}
+
+	// 底层数组复用后仍可正常读写。
+	table.Set("k", 7)
+	if value, ok := table.Get("k"); !ok || value != 7 {
+		t.Fatalf("Clear 后写入的键必须可读，收到 %v/%v", value, ok)
+	}
+}
+
 func TestValueCacheMergesInFlightLoads(t *testing.T) {
 	cache := NewValueCache[string](time.Minute)
 	var loads int32
