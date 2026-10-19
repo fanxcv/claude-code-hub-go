@@ -153,6 +153,15 @@ func (f *StreamFixer) Write(chunk []byte) []byte {
 		return append(out, chunk...)
 	}
 
+	// 完整块直通：缓冲为空且本块以 LF 收尾时没有跨块残行要拼，直接把本块交给修复序列，
+	// 省掉入缓冲与 take 的两份拷贝。与走到缓冲路径逐字节等价（进程末尾 = len(chunk)）。
+	//
+	// 契约：返回的 []byte 可能借用 chunk，调用方必须在下次上游 Read 之前同步消费完。
+	// dataplane 的顺序 Read→fixer.Write→converter.Push→emit 满足这条。
+	if len(f.buffer) == 0 && len(chunk) > 0 && !f.pendingCR && chunk[len(chunk)-1] == byteLF {
+		return f.applyFixers(chunk)
+	}
+
 	f.push(chunk)
 	end := f.processableEndBytes()
 	if end <= 0 {
