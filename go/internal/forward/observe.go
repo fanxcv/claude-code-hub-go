@@ -408,11 +408,81 @@ func (o *Observer) observeFrame(frame gate.Frame) {
 		}
 		return
 	}
+	if !frameNeedsParse(o.opts.Format, data) {
+		return
+	}
 	payload, err := convert.ParseJSON([]byte(data))
 	if err != nil || !payload.IsObject() {
 		return
 	}
 	o.observePayload(payload, frame.Event)
+}
+
+// frameGate 列出「哪些字节出现才值得解析这一帧」，按客户端方言分列。
+//
+// 依据：observePayload 只取模型名、用量、停止原因、错误文案与终态标记，而流里绝大多数帧是
+// 正文增量（不含任何这些键）。解析是每帧最贵的一步（实测 786 ns / 1152 B / 20 allocs，占整条
+// 观测路径 1.8 µs / 10 KB / 27 allocs 的绝大部分），字节预筛把它降到一次子串扫描。
+//
+// 判据必须**宁可多解析**：命中即解析，漏判则静默丢终态事实（usage 丢了就是少计费）。
+// 故这里只收 observePayload 实际会读的键，且键按方言列全（含各线的嵌套位置）。
+var frameGate = map[convert.ClientFormat][]string{
+	convert.FormatClaude: {
+		`"usage"`,
+		`"model"`,
+		`"stop_reason"`,
+		`"error"`,
+		`"message"`,
+		`"message_stop"`,
+	},
+	convert.FormatOpenAI: {
+		`"usage"`,
+		`"model"`,
+		`"finish_reason"`,
+		`"error"`,
+		`"message"`,
+	},
+	convert.FormatResponse: {
+		`"usage"`,
+		`"model"`,
+		`"status"`,
+		`"error"`,
+		`"message"`,
+		`"response.completed"`,
+		`"response.done"`,
+		`"response.incomplete"`,
+	},
+	convert.FormatGemini: {
+		`"usageMetadata"`,
+		`"modelVersion"`,
+		`"finishReason"`,
+		`"error"`,
+		`"message"`,
+	},
+	convert.FormatGeminiCLI: {
+		`"usageMetadata"`,
+		`"modelVersion"`,
+		`"finishReason"`,
+		`"error"`,
+		`"message"`,
+	},
+}
+
+// frameNeedsParse 做字节预筛：命中任一受关注键才解析。未知方言一律解析（不预筛）。
+//
+// 用 strings.Contains 而非 bytes.Contains：帧的 data 已经是 string，转 []byte 会多一次分配，
+// 正是这里要省掉的东西。
+func frameNeedsParse(format convert.ClientFormat, data string) bool {
+	keys, known := frameGate[format]
+	if !known {
+		return true
+	}
+	for _, key := range keys {
+		if strings.Contains(data, key) {
+			return true
+		}
+	}
+	return false
 }
 
 // observePayload 按客户端方言提取模型名、用量、终态标记与错误。

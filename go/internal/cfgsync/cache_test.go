@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestTTLMapExpiryAndBump(t *testing.T) {
+func TestTTLMapExpiry(t *testing.T) {
 	now := time.Unix(0, 0)
 	table := NewTTLMap[string, int](time.Second, 4)
 	table.now = func() time.Time { return now }
@@ -38,10 +38,10 @@ func TestTTLMapEvictsOldestByInsertionOrder(t *testing.T) {
 		now = now.Add(time.Millisecond)
 	}
 
-	// 第 11 次写入触发淘汰：应淘汰最旧的约 10%（至少 1 条），即 "a"。
+	// 第 11 次写入触发淘汰：应淘汰最接近到期的约 10%（至少 1 条），即 "a"。
 	table.Set("k", 99)
 	if _, ok := table.Get("a"); ok {
-		t.Fatal("容量满时应淘汰最旧条目 a")
+		t.Fatal("容量满时应淘汰最接近到期的条目 a")
 	}
 	if value, ok := table.Get("k"); !ok || value != 99 {
 		t.Fatalf("新写入的键必须可读，收到 %v/%v", value, ok)
@@ -365,4 +365,40 @@ func TestSpecMatchesNodeChannels(t *testing.T) {
 // SubscriberBackoffForTest 暴露退避计算供测试断言（生产不应依赖）。
 func SubscriberBackoffForTest(failures int) time.Duration {
 	return subscriberBackoff(failures)
+}
+
+// TestTTLMapConcurrentReadsAndWrites 是 C2（RWMutex）的最小并发自检：
+// 读多写少下不得丢条目、不得少写、不得残留过期项。
+func TestTTLMapConcurrentReadsAndWrites(t *testing.T) {
+	table := NewTTLMap[int, int](time.Hour, 4096)
+	const writers = 4
+	const readers = 8
+	const perGoroutine = 200
+
+	var waitGroup sync.WaitGroup
+	for writer := 0; writer < writers; writer++ {
+		waitGroup.Add(1)
+		go func(base int) {
+			defer waitGroup.Done()
+			for index := 0; index < perGoroutine; index++ {
+				table.Set(base*perGoroutine+index, index)
+			}
+		}(writer)
+	}
+	for reader := 0; reader < readers; reader++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for index := 0; index < perGoroutine; index++ {
+				table.Get(index % (writers * perGoroutine))
+				table.Has(index)
+				_ = table.Size()
+			}
+		}()
+	}
+	waitGroup.Wait()
+
+	if got := table.Size(); got != writers*perGoroutine {
+		t.Fatalf("Size = %d, want %d", got, writers*perGoroutine)
+	}
 }

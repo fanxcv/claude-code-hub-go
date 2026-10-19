@@ -14,11 +14,11 @@ import (
 func TestAdmissionRejectsAtLimit(t *testing.T) {
 	pool := &Pool{lane: config.LaneData, maxOutstanding: 2}
 
-	releaseFirst, err := pool.acquire()
+	first, err := pool.acquire()
 	if err != nil {
 		t.Fatalf("第一次准入应当成功: %v", err)
 	}
-	releaseSecond, err := pool.acquire()
+	second, err := pool.acquire()
 	if err != nil {
 		t.Fatalf("第二次准入应当成功: %v", err)
 	}
@@ -47,12 +47,12 @@ func TestAdmissionRejectsAtLimit(t *testing.T) {
 		t.Fatal("IsAdmissionError 应当判别为真")
 	}
 
-	releaseFirst()
-	releaseFirst() // 重复释放必须幂等，否则在途计数会漂移成负数。
+	first.release()
+	first.release() // 重复释放必须幂等，否则在途计数会漂移成负数。
 	if got := pool.Outstanding(); got != 1 {
 		t.Fatalf("重复释放后计数 = %d, want 1", got)
 	}
-	releaseSecond()
+	second.release()
 	if got := pool.Outstanding(); got != 0 {
 		t.Fatalf("全部释放后计数 = %d, want 0", got)
 	}
@@ -76,7 +76,7 @@ func TestAdmissionIsConcurrencySafe(t *testing.T) {
 	for index := 0; index < workers; index++ {
 		go func() {
 			defer done.Done()
-			release, err := pool.acquire()
+			permit, err := pool.acquire()
 			mutex.Lock()
 			if err != nil {
 				rejected++
@@ -91,7 +91,7 @@ func TestAdmissionIsConcurrencySafe(t *testing.T) {
 			}
 			// 持住不放，制造真实并发：此时在途数应当恰好顶到上限。
 			<-releaseAll
-			release()
+			permit.release()
 		}()
 	}
 

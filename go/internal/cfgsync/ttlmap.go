@@ -6,17 +6,16 @@ import (
 	"time"
 )
 
-// TTLMap 是带 TTL 与 LRU 淘汰的进程内键值表，逐条对应
-// src/lib/cache/ttl-map.ts：命中会把条目移到迭代序末尾（LRU bump），
-// 容量满时先清过期项，仍满则淘汰最旧的约 10%。
+// TTLMap 是带 TTL 与容量淘汰的进程内键值表，逐条对应
+// src/lib/cache/ttl-map.ts：容量满时先清过期项，仍满则淘汰最接近到期的一批（约 10%）。
 //
-// 并发纪律：所有读写都持写锁。该表只服务热路径上「几乎不变的管理配置」，
-// 命中率远高于写入频率，故不为读路径引入 RWMutex 的双结构复杂度。
+// 并发纪律：读路径持读锁，写入与清理持写锁。命中是热路径（每个请求都要查几次管理配置），
+// 读锁让并发请求互不排队；唯一需要写锁的读是「读到过期项并顺手删除」，它本身就是写。
 type TTLMap[K comparable, V any] struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	ttl     time.Duration
 	maxSize int
-	// order 是插入序（近似访问序）：每次 set 都先删后插，故尾部即最近使用。
+	// order 是插入序：每次 set 都先删后插，故尾部即最近写入。
 	order map[K]time.Time
 	items map[K]V
 	now   func() time.Time
@@ -41,28 +40,30 @@ func NewTTLMap[K comparable, V any](ttl time.Duration, maxSize int) *TTLMap[K, V
 
 // Get 读一条未过期记录；过期即删除并返回 false。
 func (m *TTLMap[K, V]) Get(key K) (V, bool) {
+	m.mu.RLock()
+	expiresAt, ok := m.order[key]
+	if ok && m.now().Before(expiresAt) {
+		// 命中只读：不重排插入序。淘汰按 expiresAt 升序（见 evictLocked），而本表所有条目 TTL 相同、
+		// 到期时间只由 set 时刻决定，故重排迭代序对淘汰结果没有任何影响——那四次 map 操作是空转。
+		value := m.items[key]
+		m.mu.RUnlock()
+		return value, true
+	}
+	m.mu.RUnlock()
+
+	var zero V
+	if !ok {
+		return zero, false
+	}
+
+	// 过期：删除是写操作，须升为写锁。重查一遍再删，避免删掉期间被 Set 刷新过的条目。
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	expiresAt, ok := m.order[key]
-	if !ok {
-		var zero V
-		return zero, false
-	}
-	if !m.now().Before(expiresAt) {
+	if latest, stillThere := m.order[key]; stillThere && !m.now().Before(latest) {
 		delete(m.order, key)
 		delete(m.items, key)
-		var zero V
-		return zero, false
 	}
-
-	// LRU bump：删除后重新插入，使其落到迭代序末尾。
-	value := m.items[key]
-	delete(m.order, key)
-	delete(m.items, key)
-	m.order[key] = expiresAt
-	m.items[key] = value
-	return value, true
+	return zero, false
 }
 
 // Set 写入一条记录，必要时先淘汰。
@@ -129,16 +130,16 @@ func (m *TTLMap[K, V]) PurgeExpired() {
 
 // Size 返回当前条目数（含未过期与未清理的过期项）。
 func (m *TTLMap[K, V]) Size() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return len(m.items)
 }
 
-// evictLocked 先清过期项，仍满则按插入序淘汰最旧的约 10%（至少一条）。
+// evictLocked 先清过期项，仍满则按到期时间升序淘汰最近到期的一批（至少一条）。
 //
-// 插入序用 existsAt 升序表达：本表所有条目的 TTL 相同，且 Get 的 LRU bump 不刷新
-// 到期时间（与 ttl-map.ts 一致，TTL 从 set 时刻算），故 existsAt 的顺序就是 TS 里
-// Map 迭代序的顺序。不用额外维护序列号，也不用依赖 Go map 的随机迭代序。
+// 淘汰顺序用 expiresAt 升序表达：本表所有条目的 TTL 相同，而 TTL 从 set 时刻算、读不刷新，
+// 故 expiresAt 的顺序就是 TS 里 Map 迭代序的顺序。不用额外维护序列号，也不用依赖 Go map
+// 的随机迭代序。
 func (m *TTLMap[K, V]) evictLocked() {
 	now := m.now()
 	for key, expiresAt := range m.order {
