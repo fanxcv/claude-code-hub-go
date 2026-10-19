@@ -29,30 +29,31 @@ const (
 	thinkingLevelMedium = "medium"
 	thinkingLevelHigh   = "high"
 
-	// 预算→等级的阈值（token，**上界包含**）：
+	// 预算→等级的阈值（token，**下界包含**，与 Claude Code / Anthropic 文档口径一致）：
 	//
-	//	budget <=  1024 → low
-	//	budget <=  8192 → medium
-	//	budget >   8192 → high
+	//	budget <  8192  → low
+	//	budget < 32768  → medium
+	//	budget >= 32768 → high
 	//
-	// 取值依据：Anthropic 要求 `budget_tokens` ≥ 1024，官方常见档位为 1024 / 8192；
-	// 阈值与 relaykit 的 `EffortFromBudget`（`reasoning/intent.go`）同口径——两边对同一份预算
-	// 必须给出同一等级，否则同一请求经两条实现落到不同上游强度。
-	thinkingBudgetLowCeiling    = 1024
-	thinkingBudgetMediumCeiling = 8192
+	// 为何不用 relaykit 的「上界包含 1024/8192」：那套阈值把 2048~8191 与 8193~32767 两段
+	// 整体上抬一档（2048 由 low 变 medium、12000 由 medium 变 high），而思考强度直接决定
+	// 上游的思考 token 预算——抬高即拉长首字时间、压低流式吞吐（生产实测 v1.11.0 起劣化）。
+	// 跨线换算应保守：宁可少想，不可替客户端放大思考。
+	thinkingBudgetMediumFloor = 8192
+	thinkingBudgetHighFloor   = 32768
 )
 
-// ThinkingLevelFromBudget 把 token 预算反查为等级（阈值上界包含）。
+// ThinkingLevelFromBudget 把 token 预算反查为等级（阈值下界包含）。
 //
 // 非正数视为无效输入，返回 low（调用方不应在预算 ≤ 0 时来找等级——那是「未给预算」的形态）。
 func ThinkingLevelFromBudget(budget float64) string {
 	switch {
-	case budget <= thinkingBudgetLowCeiling:
-		return thinkingLevelLow
-	case budget <= thinkingBudgetMediumCeiling:
+	case budget >= thinkingBudgetHighFloor:
+		return thinkingLevelHigh
+	case budget >= thinkingBudgetMediumFloor:
 		return thinkingLevelMedium
 	default:
-		return thinkingLevelHigh
+		return thinkingLevelLow
 	}
 }
 

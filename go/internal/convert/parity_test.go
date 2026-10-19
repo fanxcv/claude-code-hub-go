@@ -19,19 +19,23 @@ import (
 // 1. 思考强度代数
 // ——————————————————————————————————————————————————————————————
 
-// TestThinkingLevelFromBudgetThresholds 钉住阈值与 relaykit `EffortFromBudget` 同口径。
+// TestThinkingLevelFromBudgetThresholds 钉住预算→等级阈值为「下界包含」的 8192/32768。
 //
-// 本次修正了这条期望：旧实现是「下界包含」的 8192/32768（budget=2048 给 low，relaykit 给 medium），
-// 同一份预算在两条实现下落到不同等级。改为上界包含的 1024/8192 后两边一致（见审计 T2）。
+// 为何不能用 relaykit 的「上界包含 1024/8192」：那套阈值把 2048~8191 与 8193~32767 两段
+// 整体上抬一档（2048 由 low 变 medium、12000 由 medium 变 high）。思考强度直接决定上游
+// 思考 token 预算，抬高即拉长首字时间、压低流式吞吐（v1.11.0 引入后生产实测劣化）。
 func TestThinkingLevelFromBudgetThresholds(t *testing.T) {
 	cases := []struct {
 		budget float64
 		want   string
 	}{
 		{1024, thinkingLevelLow},
-		{thinkingBudgetLowCeiling + 1, thinkingLevelMedium},
-		{thinkingBudgetMediumCeiling, thinkingLevelMedium},
-		{thinkingBudgetMediumCeiling + 1, thinkingLevelHigh},
+		{2048, thinkingLevelLow},
+		{thinkingBudgetMediumFloor - 1, thinkingLevelLow},
+		{thinkingBudgetMediumFloor, thinkingLevelMedium},
+		{12000, thinkingLevelMedium},
+		{thinkingBudgetHighFloor - 1, thinkingLevelMedium},
+		{thinkingBudgetHighFloor, thinkingLevelHigh},
 		{200_000, thinkingLevelHigh},
 		{1, thinkingLevelLow}, // 非法小值按最低档（调用方不应在此路径给出 ≤0）
 	}
@@ -371,16 +375,17 @@ func TestChatToolCacheControlRecordedAsLoss(t *testing.T) {
 // TestAnthropicThinkingWithoutBudgetStillCarriesStrength 钉住 T3/T4：
 // `thinking.type=adaptive` 与「`enabled` 但无 `budget_tokens`」都必须留下强度，不得整块消失。
 //
-// 为何：旧实现的 switch 只认 `enabled+budget` 与 `disabled`，两种形态都落 `Reasoning=nil`
-// 且零记损，用户表现为「思考强度整个消失」；relaykit 对两种形态都给 EffortHigh
-// （`reasoning/intent.go:668-670`、`shared/claude/reasoning.go:76-84`）。
+// 强度取档不从 relaykit 的 high：思考强度直接决定上游思考 token 预算，替客户端放大到 high
+// 会拉长首字时间、压低流式吞吐（v1.11.0 起生产实测劣化）。故取保守档：
+// `adaptive`（由模型自行决定）→ medium；`enabled` 无预算（最不确定的形态）→ low。
 func TestAnthropicThinkingWithoutBudgetStillCarriesStrength(t *testing.T) {
 	cases := []struct {
 		label    string
 		thinking string
+		want     string
 	}{
-		{"adaptive", `{"type":"adaptive"}`},
-		{"enabled 无预算", `{"type":"enabled"}`},
+		{"adaptive", `{"type":"adaptive"}`, thinkingLevelMedium},
+		{"enabled 无预算", `{"type":"enabled"}`, thinkingLevelLow},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.label, func(t *testing.T) {
@@ -394,8 +399,8 @@ func TestAnthropicThinkingWithoutBudgetStillCarriesStrength(t *testing.T) {
 			if !present {
 				t.Fatalf("chat 出站必须带强度（否则思考强度整个丢失）：%s", encoded.Body.MarshalCompact())
 			}
-			if level, _ := effort.String(); level != thinkingLevelHigh {
-				t.Fatalf("chat 出站强度应为 %q，实际 %q", thinkingLevelHigh, level)
+			if level, _ := effort.String(); level != testCase.want {
+				t.Fatalf("chat 出站强度应为 %q，实际 %q", testCase.want, level)
 			}
 
 			// anthropic 目标：无预算可搬，落到 output_config.effort（本线唯一的等级载体）。
@@ -406,8 +411,8 @@ func TestAnthropicThinkingWithoutBudgetStillCarriesStrength(t *testing.T) {
 			if !present {
 				t.Fatalf("anthropic 出站应把强度落到 output_config：%s", sameEncoded.Body.MarshalCompact())
 			}
-			if level, _ := stringField(outputConfig, "effort"); level != thinkingLevelHigh {
-				t.Fatalf("output_config.effort 应为 %q，实际 %q", thinkingLevelHigh, level)
+			if level, _ := stringField(outputConfig, "effort"); level != testCase.want {
+				t.Fatalf("output_config.effort 应为 %q，实际 %q", testCase.want, level)
 			}
 		})
 	}

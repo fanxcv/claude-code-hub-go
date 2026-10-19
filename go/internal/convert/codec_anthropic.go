@@ -361,23 +361,25 @@ func decodeAnthropicReasoning(body *Value, loss *LossCollector) *Reasoning {
 		thinkingType, _ := stringField(thinking, "type")
 		switch thinkingType {
 		case "enabled":
-			// 缺 budget_tokens 时不得整块丢弃：relaykit 在 ModeEnabled 且无预算时给 EffortHigh
-			// （`reasoning/intent.go:668-670`）。旧实现 `found` 保持 false，思考强度整个消失。
+			// 缺 budget_tokens 时按最低档 low 而非 high：思考强度决定上游思考 token 预算，
+			// 替客户端放大到 high 会直接拉长首字时间、压低流式吞吐（v1.11.0 起生产实测劣化）。
+			// 保守取档：宁可少想，不可代客户端加码。
 			if budget, ok := numberField(thinking, "budget_tokens"); ok {
 				reasoning.BudgetTokens = budget
 			} else {
-				reasoning.Effort = thinkingLevelHigh
+				reasoning.Effort = thinkingLevelLow
 				reasoning.HasEffort = true
+				loss.Downgraded(LossThinkingDerived, "request", "thinking.type.enabled(no budget)→effort="+thinkingLevelLow)
 			}
 			found = true
 		case "adaptive":
 			// 自适应思考在枢纽里无承载位（Reasoning 无对应字段，扩枢纽会波及本 lane 之外的
-			// 文件）。按 relaykit 对未知模型的口径降为手动 high（`shared/claude/reasoning.go:76-84`）：
-			// 强度保留、模式丢失，故记一条换算降级而非静默。
-			reasoning.Effort = thinkingLevelHigh
+			// 文件）。取 medium 而非 high：high 是把「由模型自行决定」改写为「想最多」，
+			// 直接抬高思考预算（生产实测 v1.11.0 起首字与吞吐双劣）。模式丢失仍记一条换算降级。
+			reasoning.Effort = thinkingLevelMedium
 			reasoning.HasEffort = true
 			found = true
-			loss.Downgraded(LossThinkingDerived, "request", "thinking.type.adaptive→effort="+thinkingLevelHigh)
+			loss.Downgraded(LossThinkingDerived, "request", "thinking.type.adaptive→effort="+thinkingLevelMedium)
 		case "disabled":
 			reasoning.Effort = "none"
 			reasoning.HasEffort = true
