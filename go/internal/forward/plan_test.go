@@ -787,3 +787,45 @@ func TestBuildPlanRecordsNoFailureWhenConversionNotRequested(t *testing.T) {
 			plan.Conversion, plan.ConversionFailure, plan.ConversionFallback)
 	}
 }
+
+// planBenchBody 造一个约 size 字节的 responses 形状请求体（跨线转换路径的真实形状）。
+//
+// 用 responses 线而非 chat：它同时是 rejectUnservableStateful 的判定方言，
+// 故「同一份正文被解析几次」在这条路径上最能体现出来。
+func planBenchBody(size int) []byte {
+	var builder strings.Builder
+	builder.WriteString(`{"model":"gpt-5","stream":true,"input":[`)
+	for builder.Len() < size {
+		if builder.Len() > len(`{"model":"gpt-5","stream":true,"input":[`) {
+			builder.WriteString(",")
+		}
+		builder.WriteString(`{"type":"message","role":"user","content":[{"type":"input_text","text":"`)
+		builder.WriteString(strings.Repeat("x", 96))
+		builder.WriteString(`"}]}`)
+	}
+	builder.WriteString(`]}`)
+	return []byte(builder.String())
+}
+
+// BenchmarkBuildPlanConversionResponses 量「跨线转换路径整次计划编译」的每请求成本。
+//
+// 为什么钉在这里：BuildPlan 的转换分支里，状态型字段判定与正文转换曾各自 ParseJSON 一次
+// （同一份正文解析两遍）。基准是「解析一次 vs 两次」的唯一判据。
+func BenchmarkBuildPlanConversionResponses(b *testing.B) {
+	provider := claudeProvider("https://relay.example.com")
+	provider.Type = convert.ProviderClaude
+	client := responsesClient(string(planBenchBody(80 << 10)))
+	input := PlanInput{Client: client, Target: Target{Provider: provider}, ConversionEnabled: true}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(client.Body)))
+	for index := 0; index < b.N; index++ {
+		plan, err := BuildPlan(input)
+		if err != nil {
+			b.Fatalf("BuildPlan 失败: %v", err)
+		}
+		if plan.Conversion == nil {
+			b.Fatal("前置不成立：本基准需转换成功")
+		}
+	}
+}
