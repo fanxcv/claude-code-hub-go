@@ -34,11 +34,11 @@ func TestAcquireNeverExceedsLimitUnderContention(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				release, err := pool.acquire()
+				permit, err := pool.acquire()
 				if err != nil {
 					return
 				}
-				defer release()
+				defer permit.release()
 				now := held.Add(1)
 				for observed := peak.Load(); now > observed; observed = peak.Load() {
 					if peak.CompareAndSwap(observed, now) {
