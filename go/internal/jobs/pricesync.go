@@ -24,8 +24,9 @@ import (
 //
 // 一轮的步骤（与 Node 逐条对应）：
 //  1. 拉取 CPT v1 JSON（Accept: application/json；30 秒超时；重定向到非预期地址即失败）
+//     拉取分两段：先读开头 4 KiB 取 version，未变即关闭正文（不必下载完整 32 MB），变了续读余下正文。
 //  2. 解析（cpt-schema）并转换（cpt-convert）为以 bare model_name 为键的价格表
-//  3. 版本短路：目录指纹一致且云端行数一致时整轮跳过
+//  3. 版本短路：目录指纹一致且云端行数一致时整轮跳过（第一段的头读已判过一遍）
 //  4. 逐模型写入：manual 保护（除非显式列入 overwrite）→ 新增 / 替换 / 不变
 //  5. 整表切换：删除本次表内不存在的非 manual 行
 //  6. 写 cloud_pricing_catalog（版本指纹 + provider 字典 + vendor 汇总 + 实际云端行数）
@@ -42,6 +43,9 @@ const (
 	cloudPriceFetchTimeout = 30 * time.Second
 	// cloudPriceMaxBodyBytes 是本实现的硬上限（Node 无此限制），实测正文约 28 MiB。
 	cloudPriceMaxBodyBytes = 128 << 20
+	// cloudPriceHeadProbeBytes 是头读的窗口：实测正文前 200 字节内即含 version，4 KiB 给足余量。
+	// 头读命中时只花一次小请求（实测 335 ms）就能判「未变更」，不必下载完整正文（实测 56.4 s / 32.4 MB）。
+	cloudPriceHeadProbeBytes = 4 << 10
 	// defaultPriceSyncInterval 对应 instrumentation.ts:222 的 30 分钟。
 	defaultPriceSyncInterval = 30 * time.Minute
 	// cptConverterRevision 对应 CPT_CONVERTER_REV = 1：转换逻辑变更时递增，
@@ -221,7 +225,17 @@ func (s *PriceSyncer) RunOnce(ctx context.Context) (*PriceUpdateResult, error) {
 	}
 
 	started := time.Now()
-	rawTable, err := s.fetchTable(ctx)
+	// 头读与全量共用同一次请求：先读开头 4 KiB 判版本，未变就关闭正文（不下载剩余 32 MB），
+	// 变了就在同一连接内续读余下正文（不重发请求）。
+	stream, err := s.openTableStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.close()
+	if result, skipped := s.headShortCircuit(ctx, stream.head); skipped {
+		return result, nil
+	}
+	rawTable, err := stream.readAll(cloudPriceMaxBodyBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -288,50 +302,176 @@ func (s *PriceSyncer) RunOnce(ctx context.Context) (*PriceUpdateResult, error) {
 
 // fetchTable 拉取价格表正文（cloud-price-table.ts:63 fetchCloudPriceTableJson）。
 func (s *PriceSyncer) fetchTable(ctx context.Context) ([]byte, error) {
-	expected, err := url.Parse(s.url)
+	stream, err := s.openTableStream(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("价格表地址非法: %w", err)
+		return nil, err
 	}
+	defer stream.close()
+	return stream.readAll(cloudPriceMaxBodyBytes)
+}
 
-	reqCtx, cancel := context.WithTimeout(ctx, cloudPriceFetchTimeout)
-	defer cancel()
+// tableStream 是一次请求的正文：开头 head 已读入内存，余下 body 未读。
+//
+// 拆成两段是为了让头读与全量共享同一次请求（见 RunOnce）。
+type tableStream struct {
+	head []byte
+	body io.Reader
+	// close 关闭响应体并收回请求的超时上下文，必须在读完正文后调用。
+	close func()
+}
 
-	request, err := http.NewRequestWithContext(reqCtx, http.MethodGet, s.url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("价格表请求构造失败: %w", err)
-	}
-	request.Header.Set("Accept", "application/json")
-
-	response, err := s.client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("云端价格表拉取失败：%w", err)
-	}
-	defer func() { _ = response.Body.Close() }()
-
-	// 重定向到非预期地址即失败（安全硬化，与 Node 同口径）。
-	if response.Request != nil && response.Request.URL != nil {
-		final := response.Request.URL
-		if final.Scheme != expected.Scheme || final.Host != expected.Host || final.Path != expected.Path {
-			return nil, errors.New("云端价格表拉取失败：重定向到非预期地址")
-		}
-	}
-
-	if response.StatusCode < 200 || response.StatusCode > 299 {
-		return nil, fmt.Errorf("云端价格表拉取失败：HTTP %d", response.StatusCode)
-	}
-
-	limited := io.LimitReader(response.Body, cloudPriceMaxBodyBytes+1)
-	body, err := io.ReadAll(limited)
+// readAll 读完整个正文（已读的 head 在内），limit 是正文硬上限。
+func (t *tableStream) readAll(limit int) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(io.MultiReader(bytes.NewReader(t.head), t.body), int64(limit)+1))
 	if err != nil {
 		return nil, fmt.Errorf("云端价格表拉取失败：%w", err)
 	}
-	if len(body) > cloudPriceMaxBodyBytes {
-		return nil, fmt.Errorf("云端价格表拉取失败：正文超过 %d 字节上限", cloudPriceMaxBodyBytes)
+	if len(body) > limit {
+		return nil, fmt.Errorf("云端价格表拉取失败：正文超过 %d 字节上限", limit)
 	}
 	if len(bytes.TrimSpace(body)) == 0 {
 		return nil, errors.New("云端价格表拉取失败：内容为空")
 	}
 	return body, nil
+}
+
+// tableVersionFromHead 从正文开头取顶层 version；取不到就返回空串（调用方据此降级全量）。
+//
+// 逐 token 走而不直接 json.Unmarshal：头读窗口按定义只装得下正文开头，整段 JSON 是残的，
+// 严格解码必然失败。version 之前的字段只跳过、不解析（窗口内，代价有限）。
+func tableVersionFromHead(head []byte) string {
+	decoder := json.NewDecoder(bytes.NewReader(head))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('{') {
+		return ""
+	}
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return ""
+		}
+		key, ok := token.(string)
+		if !ok {
+			return ""
+		}
+		if key == "version" {
+			var version string
+			if err := decoder.Decode(&version); err != nil {
+				return ""
+			}
+			return version
+		}
+		var skipped json.RawMessage
+		if err := decoder.Decode(&skipped); err != nil {
+			return ""
+		}
+	}
+	return ""
+}
+
+// openTableStream 发起请求、校验响应（重定向守卫 + 非 2xx 即失败）并读入正文开头。
+func (s *PriceSyncer) openTableStream(ctx context.Context) (*tableStream, error) {
+	response, cancel, err := s.openTable(ctx)
+	if err != nil {
+		return nil, err
+	}
+	closeStream := func() {
+		_ = response.Body.Close()
+		cancel()
+	}
+	head, err := io.ReadAll(io.LimitReader(response.Body, cloudPriceHeadProbeBytes))
+	if err != nil {
+		closeStream()
+		return nil, fmt.Errorf("云端价格表拉取失败：%w", err)
+	}
+	return &tableStream{head: head, body: response.Body, close: closeStream}, nil
+}
+
+// openTable 发起请求并校验响应（重定向守卫 + 非 2xx 即失败），返回仍可读的响应。
+//
+// cancel 必须由调用方在读完正文后调用：它收回请求的超时上下文，与响应体的生命周期无关。
+func (s *PriceSyncer) openTable(ctx context.Context) (*http.Response, context.CancelFunc, error) {
+	expected, err := url.Parse(s.url)
+	if err != nil {
+		return nil, nil, fmt.Errorf("价格表地址非法: %w", err)
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, cloudPriceFetchTimeout)
+
+	request, err := http.NewRequestWithContext(reqCtx, http.MethodGet, s.url, nil)
+	if err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("价格表请求构造失败: %w", err)
+	}
+	request.Header.Set("Accept", "application/json")
+
+	response, err := s.client.Do(request)
+	if err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("云端价格表拉取失败：%w", err)
+	}
+
+	// 重定向到非预期地址即失败（安全硬化，与 Node 同口径）。
+	if response.Request != nil && response.Request.URL != nil {
+		final := response.Request.URL
+		if final.Scheme != expected.Scheme || final.Host != expected.Host || final.Path != expected.Path {
+			_ = response.Body.Close()
+			cancel()
+			return nil, nil, errors.New("云端价格表拉取失败：重定向到非预期地址")
+		}
+	}
+
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		_ = response.Body.Close()
+		cancel()
+		return nil, nil, fmt.Errorf("云端价格表拉取失败：HTTP %d", response.StatusCode)
+	}
+	return response, cancel, nil
+}
+
+// headShortCircuit 用正文开头的 version 判定「未变更」，命中时调用方直接关闭正文，不再下载剩余部分。
+//
+// 上游无 ETag / Last-Modified / Range，条件请求不可用，故退一步：正文前 4 KiB 内即含 version
+// （实测 <200 字节），读这么点就能算指纹。任一条件不成立（无 overwriteManual、版本为空、
+// 目录读不到、指纹或行数不匹配、头读取不到 version）都判未命中，由调用方续读全量——
+// 读不到 version 时退回的是改动前的行为，绝不会更差。
+func (s *PriceSyncer) headShortCircuit(ctx context.Context, head []byte) (*PriceUpdateResult, bool) {
+	if len(s.overwriteManual) > 0 {
+		return nil, false
+	}
+	catalog, err := s.store.GetCloudPricingCatalog(ctx)
+	if err != nil {
+		s.logger.Debug("price_sync_short_circuit_check_failed", map[string]any{"error": err.Error()})
+		return nil, false
+	}
+	if catalog == nil || catalog.Version == "" {
+		return nil, false
+	}
+	version := tableVersionFromHead(head)
+	if version == "" || versionFingerprint(version) != catalog.Version {
+		return nil, false
+	}
+	cloudCount, err := s.store.CountCloudModelPrices(ctx)
+	if err != nil {
+		s.logger.Debug("price_sync_short_circuit_check_failed", map[string]any{"error": err.Error()})
+		return nil, false
+	}
+	if cloudCount != catalog.ModelCount {
+		return nil, false
+	}
+
+	// 模型名只存在于未下载的正文里，故短路路径不返回名单；消费方只读 len()。
+	s.logger.Info("price_sync_unchanged_skipping_write", map[string]any{
+		"version": version,
+		"total":   catalog.ModelCount,
+	})
+	return &PriceUpdateResult{
+		Added:            []string{},
+		Updated:          []string{},
+		Unchanged:        []string{},
+		Failed:           []string{},
+		Total:            catalog.ModelCount,
+		SkippedConflicts: []string{},
+	}, true
 }
 
 // shortCircuit 复刻版本短路（cloud-price-updater.ts:167-201）。
