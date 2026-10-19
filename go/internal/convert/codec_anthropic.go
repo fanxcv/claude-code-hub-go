@@ -333,8 +333,21 @@ func decodeAnthropicReasoning(body *Value, loss *LossCollector) *Reasoning {
 		case "enabled":
 			if budget, ok := numberField(thinking, "budget_tokens"); ok {
 				reasoning.BudgetTokens = budget
-				found = true
+			} else {
+				// 缺 budget_tokens 时按最低档 low 而非 high：思考强度决定上游思考 token 预算，
+				// 替客户端放大到 high 会直接拉长首字时间、压低流式吞吐。
+				reasoning.Effort = thinkingLevelLow
+				reasoning.HasEffort = true
+				loss.Downgraded(LossThinkingDerived, "request", "thinking.type.enabled(no budget)→effort="+thinkingLevelLow)
 			}
+			found = true
+		case "adaptive":
+			// 自适应思考在枢纽里无承载位。取 medium 而非 high：high 是把「由模型自行决定」
+			// 改写为「想最多」，直接抬高思考预算。模式丢失仍记一条换算降级。
+			reasoning.Effort = thinkingLevelMedium
+			reasoning.HasEffort = true
+			found = true
+			loss.Downgraded(LossThinkingDerived, "request", "thinking.type.adaptive→effort="+thinkingLevelMedium)
 		case "disabled":
 			reasoning.Effort = "none"
 			reasoning.HasEffort = true
