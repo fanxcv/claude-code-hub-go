@@ -45,6 +45,12 @@ type HedgeOptions struct {
 	After func(d time.Duration, fn func()) hedgeTimer
 	// Now 是时钟注入；nil 用 deps 的时钟。
 	Now func() time.Time
+	// DialHeadersTimeout 是拨号阶段的超时；0 取 dial.DefaultHeadersTimeout。
+	//
+	// 为何要单独一个拨号超时：dial 的 ResponseHeaderTimeout 从**请求写完**才开始计时，
+	// HTTP/2 流控阻塞卡在 writeRequest 时它永不触发。没有这道闸，卡住的 goroutine
+	// 会永久持有 attempt.plan（含完整请求体）。详见 runAttempt 里的说明。
+	DialHeadersTimeout time.Duration
 	// WinnerDetached 是观测接缝：胜者交接后携带该次尝试的传输上下文（生产不接，
 	// 供测试断言「胜者 ctx 随流终态取消、而非随 attempt 返回取消」）。
 	WinnerDetached func(providerID int64, attemptCtx context.Context)
@@ -168,6 +174,15 @@ type hedgeRace struct {
 	// drainTimeout / maxDrainBytes 是输家 drain 的绝对上限（从 cfg 解析一次）。
 	drainTimeout  time.Duration
 	maxDrainBytes int64
+	// headersTimeout 是拨号阶段的超时（只约束「发出请求 → 拿到响应头」）。
+	//
+	// 为何必须有：dial 的 ResponseHeaderTimeout 从**请求写完**才开始计时，而 HTTP/2
+	// 流控阻塞卡在 writeRequest 时请求永远写不完，它就不触发。没有这道闸，卡住的
+	// goroutine 会永久持有 attempt.plan（含完整请求体）。
+	//
+	// 为何不能直接给 attemptCtx 加：胜者长流可能持续数分钟，超时会在正文读完前腰斩。
+	// 故只包住拨号这一次调用，拿到响应头即收回。
+	headersTimeout time.Duration
 
 	mu              sync.Mutex
 	launched        []int64            // 按启动顺序记录供应商 id
@@ -240,19 +255,24 @@ func ForwardStreamHedge(
 	if maxDrainBytes <= 0 {
 		maxDrainBytes = DefaultHedgeLoserMaxDrainBytes
 	}
+	dialHeadersTimeout := cfg.DialHeadersTimeout
+	if dialHeadersTimeout <= 0 {
+		dialHeadersTimeout = dial.DefaultHeadersTimeout
+	}
 
 	race := &hedgeRace{
-		ctx:           ctx,
-		pc:            pc,
-		deps:          deps,
-		options:       options,
-		cfg:           cfg,
-		now:           cfg.Now,
-		drainTimeout:  drainTimeout,
-		maxDrainBytes: maxDrainBytes,
-		launchedSet:   make(map[int64]struct{}),
-		attempts:      make(map[int]*hedgeAttempt),
-		resultCh:      make(chan hedgeResult, 1),
+		ctx:            ctx,
+		pc:             pc,
+		deps:           deps,
+		options:        options,
+		cfg:            cfg,
+		now:            cfg.Now,
+		drainTimeout:   drainTimeout,
+		maxDrainBytes:  maxDrainBytes,
+		headersTimeout: dialHeadersTimeout,
+		launchedSet:    make(map[int64]struct{}),
+		attempts:       make(map[int]*hedgeAttempt),
+		resultCh:       make(chan hedgeResult, 1),
 	}
 
 	race.launchAttempt(initial, maxInFlight)
@@ -275,6 +295,17 @@ func ForwardStreamHedge(
 			out.result = race.exhaustedResultLocked()
 			race.mu.Unlock()
 		}
+		// 终局即释放 attempt 表：attempts 只增不删（registerAttempt 写入，全文件无 delete），
+		// 而每个 hedgeAttempt 都持有 plan（含完整请求体）。不在这里清，只要 race 被某个
+		// 仍在途的协程引用着（如卡在拨号的 attempt），整表连同所有正文就一直活着
+		// ——2026-10-20 生产实测的 RSS 单调上涨正是这条。
+		//
+		// 安全性：胜者路径的 plan 已被 newStream 捕获（见 reportContent 的交接），
+		// 清表不影响已提交的流；耗尽路径的 exhaustedResultLocked 在锁内已把留痕造好。
+		race.mu.Lock()
+		clear(race.attempts)
+		race.mu.Unlock()
+
 		if out.result != nil && out.result.Stream == nil && len(out.result.Attempts) > 0 && deps.Settle != nil {
 			var failure *Failure
 			_ = errors.As(out.err, &failure)
@@ -454,14 +485,47 @@ func (r *hedgeRace) runAttempt(c *Candidate, seq int, maxInFlight int) {
 	r.recordWSFacts(attempt, outcome.WS)
 	cancelDial := context.CancelFunc(func() {})
 	if response == nil {
+		// 拨号阶段单独加超时：attemptCtx 本身不带 deadline（胜者长流可能持续数分钟，
+		// 给它加超时会在正文读完前腰斩流）。但拨号没有超时就是一条泄漏路径——上游
+		// HTTP/2 流卡在 writeRequest 时 client.Do 永不返回，本 goroutine 及其 plan
+		// （含完整请求体）就永久挂住（2026-10-20 生产实测：RSS 20 分钟涨 800MB）。
+		//
+		// 超时值取 headersTimeout：它就是「请求写完后到响应头到达」的既有上限，
+		// 拨号成功即拿到响应头，故用它作为拨号的天然界。0 表示不限（保持旧行为）。
+		// 用 WithCancel + AfterFunc 而不是 WithTimeout：后者派生的 ctx 自带 deadline，
+		// 即使不显式取消，到点也会**自动**取消——那会让时长超过 headersTimeout 的胜者
+		// 长流在中途被掐断（本仓有 TestHedgeWinnerStreamNotTruncatedBySlowUpstream 钉住）。
+		// AfterFunc 可在拿到响应头后 Stop，超时只在「还没拿到响应头」这段生效。
+		dialCtx, dialCancel := context.WithCancel(attemptCtx)
+		var dialTimer *time.Timer
+		if r.headersTimeout > 0 {
+			dialTimer = time.AfterFunc(r.headersTimeout, dialCancel)
+		}
 		var failure *Failure
-		response, cancelDial, failure = r.deps.dialAttempt(attemptCtx, plan, &outcome, true)
+		response, cancelDial, failure = r.deps.dialAttempt(dialCtx, plan, &outcome, true)
+		if dialTimer != nil {
+			// 拿到响应头（或拨号失败）即停表：此后正文读多久都不受这道闸约束。
+			dialTimer.Stop()
+		}
 		if failure != nil {
+			dialCancel()
 			r.finishAttemptFailed(attempt, failure)
 			return
 		}
+		// 成功：dialCtx 的取消权并入正文生命周期（与 cancelDial 同刻释放），
+		// 否则这条子 ctx 会活到请求 ctx 结束。
+		previousCancelDial := cancelDial
+		cancelDial = func() {
+			previousCancelDial()
+			dialCancel()
+		}
 	}
-	defer cancelDial()
+	// 与 attemptCtx 同一保护：胜者把正文交给流生命周期后，这里再取消会把还没读完的正文掐断。
+	defer func() {
+		if !transferred {
+			cancelDial()
+		}
+	}()
 	attempt.dispatched = true
 
 	// 非 2xx：完整读回错误正文，按串行路径同一口径分类。
