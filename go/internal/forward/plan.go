@@ -700,21 +700,201 @@ func clientFormatOfProtocol(protocol convert.WireProtocol) convert.ClientFormat 
 	}
 }
 
-// rewriteModelField 就地改写 JSON 正文的 model 字段，保留其余键序。
+// jsonModelKey 是模型改写要定位的顶层键（含引号，按字节比较）。
+const jsonModelKey = `"model"`
+
+// rewriteModelField 改写 JSON 正文**顶层**的 model 字段，其余字节逐字不变。
+//
+// 为什么不解析整棵树（旧实现是 json.Unmarshal + json.Marshal）：1.9MB 正文实测 21.3ms、
+// 分配 19.6MB（337k 次分配，正文被放大约 10×，见 BenchmarkRewriteModelFieldLargeBody），
+// 且会把全部键序重排成字典序（`{"x":1,"model":"a"}` 变成 `{"model":"TARGET","x":1}`）
+// ——出站字节的稳定性直接决定上游前缀缓存的命中率。
+// 这里只做字节级定位与替换：未命中时原样返回入参（零分配），命中时只复制一份正文。
+//
+// 只认 depth==1 的 model 键：嵌套对象里的同名键（如工具 schema 里的 model）不碰。
+// 顶层同名键重复出现时逐处替换（旧实现是「后者覆盖前者」再整体序列化，两者对上游等价：
+// 任何 JSON 解码器都只看最后一个 model，逐处替换连「读第一个」的解码器也一并覆盖）。
 func rewriteModelField(body []byte, model string) ([]byte, error) {
-	var decoded map[string]any
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidBody, err)
+	start := skipJSONSpace(body, 0)
+	if start >= len(body) || body[start] != '{' {
+		// 旧实现把正文解码进 map：`null` 是合法输入且拿不到 model，故原样返回；
+		// 其余非对象形状（数组/标量/非法）旧实现同样报 ErrInvalidBody，这里一致。
+		if bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
+			return body, nil
+		}
+		return nil, invalidBodyError()
 	}
-	if _, ok := decoded["model"]; !ok {
+
+	// out 与 quoted 都延迟到**真的命中**顶层 model 才产生：未命中路径零分配。
+	var out, quoted []byte
+	copied := 0
+	i := skipJSONSpace(body, start+1)
+	if i < len(body) && body[i] == '}' {
+		i++
+	} else {
+		for {
+			if i >= len(body) || body[i] != '"' {
+				return nil, invalidBodyError()
+			}
+			keyEnd, ok := skipJSONString(body, i)
+			if !ok {
+				return nil, invalidBodyError()
+			}
+			colon := skipJSONSpace(body, keyEnd)
+			if colon >= len(body) || body[colon] != ':' {
+				return nil, invalidBodyError()
+			}
+			valueStart := skipJSONSpace(body, colon+1)
+			valueEnd, ok := skipJSONValueEnd(body, valueStart)
+			if !ok {
+				return nil, invalidBodyError()
+			}
+			if isJSONModelKey(body[i:keyEnd]) {
+				if out == nil {
+					marshaled, err := json.Marshal(model)
+					if err != nil {
+						// json.Marshal 对字符串不会失败；留着错误通道以免将来改动被静默吞掉。
+						return nil, fmt.Errorf("forward: 模型名序列化失败: %w", err)
+					}
+					quoted = marshaled
+					out = make([]byte, 0, len(body)+len(quoted))
+				}
+				out = append(out, body[copied:valueStart]...)
+				out = append(out, quoted...)
+				copied = valueEnd
+			}
+			i = skipJSONSpace(body, valueEnd)
+			if i >= len(body) {
+				return nil, invalidBodyError()
+			}
+			if body[i] == ',' {
+				i = skipJSONSpace(body, i+1)
+				continue
+			}
+			if body[i] != '}' {
+				return nil, invalidBodyError()
+			}
+			i++
+			break
+		}
+	}
+	// 尾随数据一律拒（旧实现经 json.Unmarshal 同样拒绝）。
+	if tail := skipJSONSpace(body, i); tail != len(body) {
+		return nil, invalidBodyError()
+	}
+	if out == nil {
 		return body, nil
 	}
-	decoded["model"] = model
-	rewritten, err := json.Marshal(decoded)
-	if err != nil {
-		return nil, fmt.Errorf("forward: 模型改写序列化失败: %w", err)
+	return append(out, body[copied:]...), nil
+}
+
+// invalidBodyError 统一正文不可改写的错误文案（哨兵仍是 ErrInvalidBody，调用方按它判类）。
+func invalidBodyError() error {
+	return fmt.Errorf("%w: 无法在顶层定位 model 字段", ErrInvalidBody)
+}
+
+// isJSONModelKey 报告这个（含引号的）键是否为 JSON 语义上的 `model`。
+//
+// 先比字节（常态路径），只有键里带转义时（`"\u006dodel"`）才解一下：旧实现经 map 解码后
+// 认的就是解码后的名字，否则同一个键会因写法不同而漏改写（上游收到的仍是客户端别名）。
+func isJSONModelKey(raw []byte) bool {
+	if len(raw) == len(jsonModelKey) && string(raw) == jsonModelKey {
+		return true
 	}
-	return rewritten, nil
+	if !bytes.ContainsRune(raw, '\\') {
+		return false
+	}
+	var name string
+	if err := json.Unmarshal(raw, &name); err != nil {
+		return false
+	}
+	return name == "model"
+}
+
+// skipJSONSpace 跳过 JSON 空白，返回下一个非空白字节的下标。
+func skipJSONSpace(body []byte, i int) int {
+	for i < len(body) {
+		switch body[i] {
+		case ' ', '\t', '\n', '\r':
+			i++
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+// skipJSONString 返回以 body[i]（开引号）开始的字符串之后的下标；未闭合返回 false。
+func skipJSONString(body []byte, i int) (int, bool) {
+	for i++; i < len(body); i++ {
+		switch body[i] {
+		case '\\':
+			// 转义序列整体跳过：\" \\ \/ \b \f \n \r \t \uXXXX 的被转义字符都不是 '"'。
+			i++
+		case '"':
+			return i + 1, true
+		}
+	}
+	return 0, false
+}
+
+// skipJSONValueEnd 返回从 body[i] 开始的 JSON 值之后的下标。
+//
+// 容器只数**同种**括号：字符串整体跳过，故 `[{"a":"}"}]` 这类嵌套不会把括号数错。
+// 容器内部的结构不逐层校验（那等于再写一个 JSON 解析器）；顶层成员的结构由调用方校验。
+func skipJSONValueEnd(body []byte, i int) (int, bool) {
+	if i >= len(body) {
+		return 0, false
+	}
+	switch body[i] {
+	case '"':
+		return skipJSONString(body, i)
+	case '{', '[':
+		opener := body[i]
+		closer := byte('}')
+		if opener == '[' {
+			closer = ']'
+		}
+		depth := 0
+		for ; i < len(body); i++ {
+			switch body[i] {
+			case '"':
+				end, ok := skipJSONString(body, i)
+				if !ok {
+					return 0, false
+				}
+				i = end - 1
+			case opener:
+				depth++
+			case closer:
+				depth--
+				if depth == 0 {
+					return i + 1, true
+				}
+			}
+		}
+		return 0, false
+	default:
+		// 数字 / true / false / null：吃到分隔符或结构字节为止。
+		start := i
+		for i < len(body) && !isJSONValueStop(body[i]) {
+			i++
+		}
+		if i == start {
+			return 0, false
+		}
+		return i, true
+	}
+}
+
+// isJSONValueStop 报告该字节是否终结一个裸值（数字/字面量）。
+func isJSONValueStop(b byte) bool {
+	switch b {
+	case ',', '}', ']', ' ', '\t', '\n', '\r':
+		return true
+	default:
+		return false
+	}
 }
 
 // resolveModelRedirect 在供应商规则里找出匹配当前模型的规则。
