@@ -574,15 +574,6 @@ func (s *PriceSyncer) apply(
 			}
 		}
 
-		encoded, err := json.Marshal(priceData)
-		if err != nil {
-			result.Failed = append(result.Failed, modelName)
-			s.logger.Warn("price_sync_model_encode_failed", map[string]any{
-				"model": modelName, "error": err.Error(),
-			})
-			continue
-		}
-
 		existingRow, found := existing[modelName]
 		// 库里的价格只存了原始字节，仅在「来源一致」时才解析比对（解析后立即丢弃，不驻留）。
 		priceUnchanged := false
@@ -595,16 +586,26 @@ func (s *PriceSyncer) apply(
 			}
 			priceUnchanged = equal
 		}
-		switch {
-		case !found:
-			pending = append(pending, pendingPriceWrite{modelName: modelName, encoded: encoded, added: true})
-			classifiedAdded++
-		case !priceUnchanged:
-			// 与 Node 同口径：整行替换（先删后插），而不是原地更新。
-			pending = append(pending, pendingPriceWrite{modelName: modelName, encoded: encoded})
-			classifiedUpdated++
-		default:
+		if found && priceUnchanged {
 			result.Unchanged = append(result.Unchanged, modelName)
+		} else {
+			// json.Marshal 放到这里：unchanged 的行不需要正文，先编码等于整表白备一份。
+			encoded, err := json.Marshal(priceData)
+			if err != nil {
+				result.Failed = append(result.Failed, modelName)
+				s.logger.Warn("price_sync_model_encode_failed", map[string]any{
+					"model": modelName, "error": err.Error(),
+				})
+				continue
+			}
+			if found {
+				// 与 Node 同口径：整行替换（先删后插），而不是原地更新。
+				pending = append(pending, pendingPriceWrite{modelName: modelName, encoded: encoded})
+				classifiedUpdated++
+			} else {
+				pending = append(pending, pendingPriceWrite{modelName: modelName, encoded: encoded, added: true})
+				classifiedAdded++
+			}
 		}
 
 		if s.progressEvery > 0 && (index+1)%s.progressEvery == 0 {
