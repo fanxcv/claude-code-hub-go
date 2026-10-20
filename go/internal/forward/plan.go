@@ -388,7 +388,7 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		if err := rejectUnservableStateful(in.Client, plan.Conversion, value); err != nil {
 			return nil, err
 		}
-		converted, loss, restore, err := convertBody(in.Client, plan.Conversion, value)
+		converted, loss, restore, err := convertBody(in.Client, plan.Conversion, value, redirect)
 		if err != nil {
 			// Node 语义：转换不可用时退回原生直通，而不是把未转换正文发到目标端点上。
 			// 回退语义不变；此处只额外**保留失败事实**（原因文本在落库前脱敏），
@@ -404,13 +404,14 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 	//
 	// Node 的顺序是 `ModelRedirector.apply`（forwarder.ts:3284，**就地**改 `session.request.message.model`
 	// 并重建 buffer）**先于**协议转换（forwarder.ts:3749 才快照/编码），故转换产出的目标方言正文里带的
-	// 已经是重定向目标名。分方言看也成立：三个编码器都写**顶层** `model`
-	// （codec_chat.go:806 / codec_responses.go:685 / codec_anthropic.go:629），而 `rewriteModelField`
-	// 正是改写顶层 `model`，所以一次改写对三方言都命中。
+	// 已经是重定向目标名，且只造一份正文。
+	//
+	// 分工：转换路的改写已在 convertBody 里对解码前的树做过（那棵树就在手边，原位 Set 不复制正文）；
+	// 这里只负责 native 路与转换失败回退路——那两条都**没有树**，只能在字节上定位顶层 model。
 	//
 	// 历史缺陷：这里曾写 `plan.Conversion == nil && …`，于是**凡发生转换的请求都不改写**——上游收到的是
 	// 客户端别名，凡「跨协议 + 配了 model_redirects」的供应商必 400/404（矩阵台 model 模式 3/9 的真因）。
-	if redirect != nil && body != nil {
+	if redirect != nil && plan.Conversion == nil && body != nil {
 		rewritten, err := rewriteModelField(body, redirect.Target)
 		if err != nil {
 			return nil, err
@@ -574,19 +575,30 @@ func rejectUnservableStateful(client ClientRequest, plan *convert.ConversionPlan
 // convertBody 用枢纽编解码把客户端协议正文转换为目标协议正文。
 //
 // 与 Node 的 buildUpstreamRequest 一致：编码用的模型名取自**快照正文**的 model 字段，
-// 而不是重定向后的模型——重定向若要对转换路径生效，调用方必须在生成快照时就写入目标模型
-// （Node 的 primeOriginalBody 在模型重定向之后取快照，故首个供应商的重定向会进入快照）。
+// 重定向在快照之前写入（Node 的 ModelRedirector.apply 先就地改 message.model，
+// primeOriginalBody 才取快照）。故本函数先在已解析的树上原位改 model，再解码/编码——
+// 不复制正文（旧做法是编码完再整份做一次 rewriteModelField，见其注释）。
 //
 // value 是调用方已解析的正文：本函数不再自行 ParseJSON。
 func convertBody(
 	client ClientRequest,
 	plan *convert.ConversionPlan,
 	value *convert.Value,
+	redirect *ModelRedirect,
 ) ([]byte, *convert.LossReport, map[string]string, error) {
+	model := client.Model
+	if redirect != nil {
+		model = redirect.Target
+		// 树与 ctx **两处都要写**：编码器取顶层 model 的次序不同——anthropic / responses 是
+		// firstString(request.Model, ctx.Model)（codec_anthropic.go:715 / codec_responses.go:857），
+		// chat 反序 firstString(ctx.Model, request.Model)（codec_chat.go:1016）。只改一处必剩一条线
+		// 发客户端别名。树的 Set 原位替换、键序不动。
+		value.Set("model", convert.NewString(model))
+	}
 	ctx := convert.ConvertCtx{
 		ClientFormat:              clientFormatOfProtocol(plan.ClientProtocol),
 		TargetProto:               plan.TargetProtocol,
-		Model:                     client.Model,
+		Model:                     model,
 		Stream:                    ClientStreamRequestedFromValue(client.Path, client.Query, value),
 		ToWireToolName:            convert.NormalizeToolName,
 		GatewayInjectedBodyFields: client.GatewayInjectedBodyFields,

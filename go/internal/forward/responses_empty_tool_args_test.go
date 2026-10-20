@@ -160,7 +160,7 @@ func TestBuildPlanConversionPathBodyUnaffectedByEmptyArgsNormalization(t *testin
 	if err != nil {
 		t.Fatalf("解析客户端正文失败: %v", err)
 	}
-	expected, _, _, err := convertBody(client, plan.Conversion, parsed)
+	expected, _, _, err := convertBody(client, plan.Conversion, parsed, nil)
 	if err != nil {
 		t.Fatalf("convertBody 失败: %v", err)
 	}
