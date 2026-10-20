@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"strings"
@@ -35,22 +36,51 @@ type SSEFrame struct {
 // 判定「完整帧」的规则：出现空行分隔符（`\n\n`、`\r\n\r\n`，含跨块形式）；以 `\r` 结尾时
 // 保留不解，等下一块（可能是被切开的 `\r\n`）。
 func ParseSSEFrames(buffer string) ([]SSEFrame, string) {
-	frames := make([]SSEFrame, 0, 4)
+	var frames sseFrameBuffer
+	split := frames.push([]byte(buffer))
+	return split, string(frames.rest)
+}
+
+// sseFrameBuffer 是流式解码器的字节累积器：追加一块、吐出其中新切出的完整帧。
+//
+// 为什么不用 `buffer += string(chunk)` + 整体重扫：未闭合的超长帧（如 256 KiB 的参数增量）
+// 被小分块喂入时，每块都要把已累积的全部字节重拷并重扫一遍，整条流 O(帧长²)。
+// 这里只追加、只扫新增部分（scanned 记已扫位置），残留以字节持有，不重复转字符串。
+type sseFrameBuffer struct {
+	rest []byte
+	// scanned 是 rest 中「已确认不含分隔符」的长度，下次从这里继续扫。
+	scanned int
+}
+
+// push 追加一块上游字节，返回其中新切出的完整帧；未成帧的残留留在 rest 里。
+func (b *sseFrameBuffer) push(chunk []byte) []SSEFrame {
+	b.rest = append(b.rest, chunk...)
+	var frames []SSEFrame
 	cursor := 0
-	start, end, found := findFrameBoundary(buffer, cursor)
-	for found {
-		frame, ok := parseFrameBody(buffer[cursor:start])
-		if ok {
+	for {
+		start, end, found := findFrameBoundary(b.rest, max(b.scanned, cursor))
+		if !found {
+			// 最长分隔符 4 字节（`\r\n\r\n`）：回退 3 字节重扫，跨块的分隔符不会漏。
+			b.scanned = max(cursor, len(b.rest)-3)
+			break
+		}
+		if frame, ok := parseFrameBody(b.rest[cursor:start]); ok {
 			frames = append(frames, frame)
 		}
-		cursor = end
-		start, end, found = findFrameBoundary(buffer, cursor)
+		cursor, b.scanned = end, end
 	}
-	return frames, buffer[cursor:]
+	if cursor == 0 {
+		return nil
+	}
+	// 残留搬到缓冲头部（同一切片，memmove）：只在真切出帧时发生，未闭合的长帧
+	// 不会因逐块追加而被搬来搬去。
+	b.rest = append(b.rest[:0], b.rest[cursor:]...)
+	b.scanned = max(b.scanned-cursor, 0)
+	return frames
 }
 
 // findFrameBoundary 从 from 起寻找分隔符，返回分隔符起止（start 之前的正文不含分隔符）。
-func findFrameBoundary(buffer string, from int) (int, int, bool) {
+func findFrameBoundary(buffer []byte, from int) (int, int, bool) {
 	for i := from; i < len(buffer); i++ {
 		switch buffer[i] {
 		case '\n':
@@ -76,37 +106,45 @@ func findFrameBoundary(buffer string, from int) (int, int, bool) {
 }
 
 // parseFrameBody 解析单帧正文：忽略注释/心跳行，收集 `event:` 与 `data:`。
-func parseFrameBody(raw string) (SSEFrame, bool) {
+//
+// 帧正文以字节切片传入：切帧层持有的是字节缓冲，若每帧先转字符串则多一次全文拷贝。
+// `Data` 仍必须拷成自有字符串——它可能别名解码器的追加缓冲，而那块缓冲会被后续 push 改写。
+func parseFrameBody(raw []byte) (SSEFrame, bool) {
 	event := ""
 	hasEvent := false
-	dataParts := make([]string, 0, 2)
+	var data strings.Builder
 	for _, line := range splitLines(raw) {
-		if strings.HasPrefix(line, ":") {
+		if len(line) > 0 && line[0] == ':' {
 			continue
 		}
-		if strings.HasPrefix(line, "event:") {
-			event = strings.TrimSpace(line[len("event:"):])
+		if bytes.HasPrefix(line, []byte("event:")) {
+			event = string(bytes.TrimSpace(line[len("event:"):]))
 			hasEvent = true
 			continue
 		}
-		if strings.HasPrefix(line, "data:") {
+		if bytes.HasPrefix(line, []byte("data:")) {
+			if data.Len() > 0 {
+				data.WriteByte('\n')
+			}
 			text := line[len("data:"):]
-			text = strings.TrimPrefix(text, " ")
-			dataParts = append(dataParts, text)
+			if len(text) > 0 && text[0] == ' ' {
+				text = text[1:]
+			}
+			data.Write(text)
 		}
 	}
-	if !hasEvent && len(dataParts) == 0 {
+	if !hasEvent && data.Len() == 0 {
 		return SSEFrame{}, false
 	}
-	return SSEFrame{Event: event, HasEvent: hasEvent, Data: strings.Join(dataParts, "\n")}, true
+	return SSEFrame{Event: event, HasEvent: hasEvent, Data: data.String()}, true
 }
 
 // splitLines 按 \n / \r\n / \r 切行（与 JS 的 /\r?\n/ 语义对齐，另容忍孤立 \r）。
-func splitLines(raw string) []string {
-	if !strings.ContainsAny(raw, "\r\n") {
-		return []string{raw}
+func splitLines(raw []byte) [][]byte {
+	if !bytes.ContainsAny(raw, "\r\n") {
+		return [][]byte{raw}
 	}
-	lines := make([]string, 0, 4)
+	lines := make([][]byte, 0, 4)
 	start := 0
 	for i := 0; i < len(raw); i++ {
 		switch raw[i] {

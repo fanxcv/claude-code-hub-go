@@ -61,7 +61,7 @@ var responsesDoneKinds = map[string]responsesDecodedKind{
 type responsesStreamDecoder struct {
 	ctx ConvertCtx
 
-	buffer   string
+	buffer   sseFrameBuffer
 	started  bool
 	finished bool
 
@@ -646,11 +646,8 @@ func (d *responsesStreamDecoder) Push(chunk []byte) []Chunk {
 	if d.finished {
 		return nil
 	}
-	d.buffer += string(chunk)
-	frames, rest := ParseSSEFrames(d.buffer)
-	d.buffer = rest
 	var out []Chunk
-	for _, frame := range frames {
+	for _, frame := range d.buffer.push(chunk) {
 		out = append(out, d.handleFrame(frame)...)
 	}
 	return out

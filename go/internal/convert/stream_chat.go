@@ -21,7 +21,7 @@ const (
 
 type chatStreamDecoder struct {
 	ctx    ConvertCtx
-	buffer string
+	buffer sseFrameBuffer
 
 	started  bool
 	finished bool
@@ -55,7 +55,9 @@ type chatStreamDecoder struct {
 	messageTextParts int
 	// toolArgsEmitted 是「上游 tool_calls index → 已作为参数增量发出的字节」，用于同一类对账。
 	// 不做则累计型 arguments 会产出 `{...}{...}` 非法 JSON。
-	toolArgsEmitted map[int]string
+	// 用 Builder 而非 `emitted + args`（理由同 emitted）：对账要拿已发全文做前缀比较，
+	// 而 `+=` 每帧重拷全文使整条工具参数流 O(参数长度²)。
+	toolArgsEmitted map[int]*strings.Builder
 	// toolArgsParts 语义同 emittedParts，按 tool index 分别计。
 	toolArgsParts map[int]int
 
@@ -73,7 +75,7 @@ func newChatStreamDecoder(ctx ConvertCtx) StreamDecoder {
 		ctx:             ctx,
 		lastToolIndex:   -1,
 		toolBlocks:      map[int]int{},
-		toolArgsEmitted: map[int]string{},
+		toolArgsEmitted: map[int]*strings.Builder{},
 		toolArgsParts:   map[int]int{},
 	}
 }
@@ -82,11 +84,8 @@ func (d *chatStreamDecoder) Push(chunk []byte) []Chunk {
 	if d.finished {
 		return nil
 	}
-	d.buffer += string(chunk)
-	frames, rest := ParseSSEFrames(d.buffer)
-	d.buffer = rest
 	var out []Chunk
-	for _, frame := range frames {
+	for _, frame := range d.buffer.push(chunk) {
 		d.consumeFrame(frame, &out)
 	}
 	return out
@@ -391,21 +390,19 @@ func (d *chatStreamDecoder) consumeToolCall(call chatToolCallEntry, declared boo
 				Name: d.ctx.fromWireName(wireName),
 			},
 		})
-		if _, opened := d.toolBlocks[call.index]; !opened {
-			d.toolArgsEmitted[call.index] = ""
-			d.toolArgsParts[call.index] = 0
-		}
 	}
 
 	if args, ok := stringField(fn, "arguments"); ok && len(args) > 0 {
 		emitted := d.toolArgsEmitted[call.index]
-		if emitted != "" {
-			if tail, isReplay := chatReconcile(emitted, args, declared, d.toolArgsParts[call.index]); isReplay {
-				args = tail
-			}
+		if emitted == nil {
+			emitted = &strings.Builder{}
+			d.toolArgsEmitted[call.index] = emitted
+		}
+		if tail, isReplay := chatReconcile(emitted.String(), args, declared, d.toolArgsParts[call.index]); isReplay {
+			args = tail
 		}
 		if len(args) > 0 {
-			d.toolArgsEmitted[call.index] = emitted + args
+			emitted.WriteString(args)
 			d.toolArgsParts[call.index]++
 			*out = append(*out, Chunk{
 				Kind:       ChunkBlockDelta,
