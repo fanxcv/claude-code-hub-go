@@ -35,10 +35,16 @@ var ReservedInternalHeaderNames = []string{
 
 // outboundTransportHeaderBlacklist 是出站黑名单，对齐 forwarder.ts 的
 // OUTBOUND_TRANSPORT_HEADER_BLACKLIST。这些头由传输层自己决定，客户端值不得透传。
+//
+// content-encoding 同样归本层决定，且恒为「不压缩」：出站正文只有一处来源
+// （数据面的 planFacts 取正文访问器的 Bytes，那已是 ingress 解压后的明文），协议转换与
+// 整流/覆写产出的也都是明文，故无任何路径会把压缩态字节发出去。留住客户端声明的编码
+// 等于向上游撒谎，上游会按 gzip 去解一段明文。
 var outboundTransportHeaderBlacklist = []string{
 	"content-length",
 	"connection",
 	"transfer-encoding",
+	"content-encoding",
 }
 
 // clientIPHeaderNames 是为保留客户端 IP 而豁免黑名单的头（对齐 HeaderProcessor 的 clientIpHeaders）。

@@ -200,8 +200,9 @@ func (a *BodyAccessor) Factory() BodyFactory {
 
 // ContentType 是转发时应当写回的内容类型。
 //
-// 正文被改写后一定是不压缩的 JSON，故与 Node 一致地去掉 content-encoding：转发器在
-// Bytes 之后必须按本函数的结论覆写这两个头部，否则会把明文当压缩体发出去。
+// 正文被改写后一定是不压缩的 JSON，故与 Node 一致地不带 content-encoding：该头部不是由
+// 本函数回写的，而是被出站黑名单无条件剔除（见 forward 的 outboundTransportHeaderBlacklist）。
+// 出站正文只有明文一种来源，留着客户端的声明就是让上游按压缩体去解一段明文。
 func (a *BodyAccessor) EncodedHeaders() http.Header {
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json")

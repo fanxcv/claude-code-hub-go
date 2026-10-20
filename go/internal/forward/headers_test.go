@@ -75,6 +75,32 @@ func TestBuildUpstreamHeadersOverrideOrder(t *testing.T) {
 	}
 }
 
+// TestBuildUpstreamHeadersDropsContentEncoding 钉住出站正文的编码事实：出站字节恒为明文，
+// 故客户端声明的 content-encoding 不得随头透传（否则上游按 gzip 解一段明文），
+// 且供应商自定义头也不得把它重新注入。
+func TestBuildUpstreamHeadersDropsContentEncoding(t *testing.T) {
+	headers := BuildUpstreamHeaders(HeaderInput{
+		ClientHeaders: newClientHeaders(
+			"content-encoding", "gzip",
+			"content-type", "application/json",
+		),
+		Provider: Provider{
+			ID:            3,
+			Type:          convert.ProviderClaude,
+			Key:           "sk-upstream",
+			CustomHeaders: map[string]string{"content-encoding": "br"},
+		},
+		BaseURL: "https://api.example.com",
+	})
+
+	if got := headers.Get("content-encoding"); got != "" {
+		t.Fatalf("出站正文是明文，不得带 content-encoding: %q", got)
+	}
+	if got := headers.Get("content-type"); got != "application/json" {
+		t.Fatalf("content-type = %q", got)
+	}
+}
+
 // TestBuildUpstreamHeadersStripsClientAuthAndForwarding 断言客户端鉴权与转发头一律不出站。
 func TestBuildUpstreamHeadersStripsClientAuthAndForwarding(t *testing.T) {
 	headers := BuildUpstreamHeaders(HeaderInput{
