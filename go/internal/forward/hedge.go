@@ -740,6 +740,8 @@ func (r *hedgeRace) runGate(
 		return nil, err
 	}
 	// 提交时若仍有在飞读，必须改读门控交回的续读句柄，否则那批已从上游取走的字节会丢。
+	// 同时显式打提交时刻的戳（TTFT 起点，与串行路径同口径）。
+	commitAt := r.options.now()
 	source := response.Body
 	if result.Continuation != nil {
 		source = continuationSource{reader: result.Continuation, closer: response.Body}
@@ -752,6 +754,7 @@ func (r *hedgeRace) runGate(
 		Source:              source,
 		ReaderDone:          result.ReaderDone,
 		UpstreamFirstByteAt: upstreamFirstByteAt,
+		CommitAt:            commitAt,
 		Lease:               result.Lease,
 		Gated:               true,
 		FramesSeen:          result.FramesSeen,
@@ -1120,6 +1123,8 @@ func (r *hedgeRace) drainLoser(
 	observer := NewObserver(ObservationOptions{
 		StartedAt:           r.options.StartedAt,
 		UpstreamFirstByteAt: content.UpstreamFirstByteAt,
+		CommitAt:            content.CommitAt,
+		Family:              content.Family,
 		Format:              r.options.Format,
 		HeadBytes:           r.options.HeadBytes,
 		TailBytes:           r.options.TailBytes,

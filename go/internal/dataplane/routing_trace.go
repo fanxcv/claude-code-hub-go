@@ -120,7 +120,9 @@ type routingTraceFacts struct {
 	Saturations []routingTraceEventV1
 	StatusCode  int
 	DurationMS  int64
-	// FirstByteMS / TTFTMS 为 nil 表示本次没有实测值（例如非流式），此时 summary.ttftMs 写 null。
+	// FirstByteMS / TTFTMS 为 nil 表示本次没有实测值（例如非流式），此时对应字段写 null。
+	//
+	// 两者不得相互回填：TTFT 是首 Token，FirstByte 是首字节，回落会把 TTFB 当 TTFT 显示。
 	FirstByteMS *int64
 	TTFTMS      *int64
 }
@@ -275,9 +277,6 @@ func newRoutingTrace(facts routingTraceFacts) (routingTraceV1, bool) {
 		WinnerOrigin:       winnerOrigin,
 		WinnerProviderID:   winnerProviderID,
 		WinnerRound:        winnerRound,
-	}
-	if summary.TTFTMs == nil {
-		summary.TTFTMs = facts.FirstByteMS
 	}
 	summary.MaxActiveAttempts = maxActiveAttempts(facts, mode)
 

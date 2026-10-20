@@ -203,6 +203,12 @@ type streamAttempt struct {
 	// UpstreamFirstByteAt 是上游首个非空 chunk 的到达时刻（门控的 OnFirstByte）。
 	// 零值表示门控未见到字节；它只用于测算真 TTFB（`first_byte_ms`）。
 	UpstreamFirstByteAt time.Time
+	// CommitAt 是门控的提交时刻（客户端此刻才可能看到第一个字节）。
+	//
+	// 门控下提交前客户端零字节，故提交时刻就是「首个有效内容」时刻，即 TTFT 的起点。
+	// 它是显式事实而非推断：按「首个 Push 恰好是提交」去取时刻，正确性就依附在调用顺序上
+	// （速率闸把提交点往后推时，首个 Push 就不再是第一个内容帧）。
+	CommitAt time.Time
 	// FramesSeen 是门控期间分类过的帧数。
 	FramesSeen int
 	// Marker 是提交标记（CaptureCommitMarker 为真时非空）。
@@ -374,6 +380,10 @@ func (d Deps) gateStreamAttempt(
 
 	// 门控提交：前缀与上游正文都交给调用方，租约随之一并转移。
 	// 提交时若仍有在飞读，必须改读门控交回的续读句柄，否则那批已从上游取走的字节会丢。
+	//
+	// commitAt 在这里显式打戳：门控下客户端直到此刻才可能看到第一个字节，故它就是
+	// 「首个有效内容」时刻（TTFT 的起点）。不取「首次 Push 的时刻」：那是调用顺序的巧合。
+	commitAt := options.now()
 	source := response.Body
 	if result.Continuation != nil {
 		source = continuationSource{reader: result.Continuation, closer: response.Body}
@@ -392,6 +402,7 @@ func (d Deps) gateStreamAttempt(
 			Lease:               result.Lease,
 			Gated:               true,
 			UpstreamFirstByteAt: upstreamFirstByteAt,
+			CommitAt:            commitAt,
 			FramesSeen:          result.FramesSeen,
 			Marker:              result.Marker,
 			GateWait:            options.now().Sub(startedAt),
@@ -658,6 +669,8 @@ func newStream(
 	stream.observer = NewObserver(ObservationOptions{
 		StartedAt:           options.StartedAt,
 		UpstreamFirstByteAt: attempt.UpstreamFirstByteAt,
+		CommitAt:            attempt.CommitAt,
+		Family:              attempt.Family,
 		Format:              observeFormatFor(plan, options.Format),
 		HeadBytes:           options.HeadBytes,
 		TailBytes:           options.TailBytes,

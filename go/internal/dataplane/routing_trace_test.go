@@ -258,3 +258,20 @@ func TestRoutingTraceRecorderIsConcurrencySafe(t *testing.T) {
 		t.Fatalf("有饱和事件时模式应为 %s，实际 %s", routingTraceModeLegacyHedge, trace.Mode)
 	}
 }
+
+// TestRoutingTraceDoesNotFallBackTTFTToFirstByte 钉住「TTFT 缺失就留 null」。
+//
+// 改造前这里有 `if summary.TTFTMs == nil { summary.TTFTMs = facts.FirstByteMS }`：
+// 回落让前端把 TTFB 当 TTFT 显示（src/types/routing-trace.ts 的 ttftMs），
+// 即用首字节冒充首 Token。缺实测值时必须给 null，宁可缺数也不给假数。
+func TestRoutingTraceDoesNotFallBackTTFTToFirstByte(t *testing.T) {
+	startedAt := time.Date(2026, 9, 13, 3, 0, 0, 0, time.UTC)
+	facts := baseRoutingTraceFacts(startedAt)
+	facts.TTFTMS = nil // 只有首字节实测值，没有 TTFT
+
+	trace := decodeRoutingTrace(t, buildRoutingTrace(facts))
+	if trace.Summary.TTFTMs != nil {
+		t.Fatalf("无 TTFT 实测值时 summary.ttftMs 必须为 null，实际 %v（不得回落 FirstByteMS）",
+			*trace.Summary.TTFTMs)
+	}
+}

@@ -81,11 +81,18 @@ type Observation struct {
 	Chunks int64
 	// FirstByteAt 是首个非空 chunk 的到达时刻；零值表示未见到任何字节。
 	FirstByteAt time.Time
-	// TTFT 是首字节相对请求开始（ObservationOptions.StartedAt）的延迟。
+	// FirstContentAt 是**首个有效内容**可供客户端的时刻：门控行取提交时刻
+	//（ObservationOptions.CommitAt），非门控行取首个 VerdictContent 帧的到达时刻。
+	// 零值表示整条流没有有效内容（只有中性帧），此时 TTFT 留零（落库列保持 NULL）。
+	FirstContentAt time.Time
+	// TTFT 是首个有效内容相对请求开始（ObservationOptions.StartedAt）的延迟。
+	//
+	// 它落库到 `ttfb_ms`（列名历史遗留）。**不是**首字节：首字节见 FirstByte。
+	// 只认内容的原因是用户体感：中性帧（message_start / response.created）到达时屏幕仍是空的。
 	TTFT time.Duration
 	// FirstByte 是**真 TTFB**：上游首个非空 chunk 相对请求开始的延迟
-	// （ObservationOptions.UpstreamFirstByteAt 可得时用它；不可得时退化为 TTFT，
-	// 与 Node 的 `markFirstByte` 兼作 TTFB 兑底同义）。
+	// （ObservationOptions.UpstreamFirstByteAt 可得时用它；不可得时退化为首个非空 chunk
+	// 的到达时刻，与 Node 的 `markFirstByte` 同义）。
 	//
 	// 它是公开页 TPS 的分母起点，也是排行榜 tok/s 榜的必备列
 	//（Node 的 `firstByteMs`）。
@@ -140,8 +147,19 @@ type ObservationOptions struct {
 	// 为何要单独一个字段：门控前缀是在**提交后**才喂进观测器的（见 forward/stream.go），
 	// 若拿喂入时刻当首字节，非流式以外所有门控流的 FirstByte 都会退化成提交时刻，
 	// 从而把 TPS 的生成窗口算小（Node 的 firstByteMs 取的就是上游侧时刻）。
-	// 零值表示门控未见到字节（如未走门控的路径），此时 FirstByte 退化成 TTFT。
+	// 零值表示门控未见到字节（如未走门控的路径），此时 FirstByte 退化成首个非空 chunk 的时刻。
 	UpstreamFirstByteAt time.Time
+	// CommitAt 是门控的**提交时刻**（客户端此刻才可能看到第一个字节）。
+	//
+	// 门控路径必须显式给：门控下提交前客户端零字节，故提交时刻就是用户可见首字时刻；
+	// 若靠「前缀恰好提交后才 Push」的巧合去取首次 Push 时刻，语义正确性就依附在调用顺序上。
+	// 非门控路径留零值，由 observer 自己按首个 VerdictContent 帧打戳。
+	CommitAt time.Time
+	// Family 是上游协议家族，决定用哪个分类器判「有效内容帧」。
+	//
+	// 零值表示家族未知：此时无法判定内容，TTFT 退化为首个非空 chunk（与改造前一致）。
+	// 生产上走到这里的只有 MapProviderTypeToFamily 认不出的供应商，而它们本就无法转发。
+	Family gate.Family
 	// Format 是客户端入站格式，决定终止标记与用量字段的方言。
 	Format convert.ClientFormat
 	// HeadBytes / TailBytes 是有界窗口容量；0 取默认（默认刻意小，见本文件头注释）。
@@ -171,6 +189,9 @@ type Observer struct {
 	total    int64
 
 	parser *gate.Parser
+	// family 是本观测用于帧分类的上游家族：显式注入的优先，否则按观测方言推导。
+	// 为空表示认不出家族，此时内容判定与回显豁免都不可用。
+	family gate.Family
 	// parserBound 是分帧器保留缓冲的上限：驻留量统计把它按上限计入，
 	// 宁可多报也不少报（真实占用在 0 与该上限之间）。
 	parserBound int
@@ -207,7 +228,11 @@ func NewObserver(opts ObservationOptions) *Observer {
 		echoFrameBound = parserBound
 	}
 	return &Observer{
-		opts:        opts,
+		opts:   opts,
+		family: resolvedFamily(opts),
+		// 门控行的首内容时刻就是提交时刻：显式打戳，不靠「前缀恰好提交后才 Push」的巧合。
+		// 非门控行留零值，由 markFirstContent 按首个 VerdictContent 帧打戳。
+		observation: Observation{FirstContentAt: opts.CommitAt},
 		head:        make([]byte, 0, opts.HeadBytes),
 		tail:        make([]byte, opts.TailBytes),
 		parserBound: parserBound,
@@ -218,18 +243,31 @@ func NewObserver(opts ObservationOptions) *Observer {
 			Exemption: &gate.BufferLimitExemption{
 				MaxBufferedBytes: echoFrameBound,
 				Matches: func(event string, dataHead string) bool {
-					return gate.IsRequestEchoFrame(echoFamilyOf(opts.Format), event, dataHead)
+					return gate.IsRequestEchoFrame(resolvedFamily(opts), event, dataHead)
 				},
 			},
 		}),
 	}
 }
 
-// echoFamilyOf 把观测器的方言映射为门控家族，用于请求回显帧判定。
+// resolvedFamily 取帧分类用的上游家族：显式注入的优先，其次按观测方言推导。
 //
-// 已知家族才返回可命中的家族；未知方言返回空串（IsRequestEchoFrame 对未知家族恒为 false，
-// 于是回退到「没有豁免」的保守行为）。
-func echoFamilyOf(format convert.ClientFormat) gate.Family {
+// 为什么要有方言兜底：`ObservationOptions.Family` 是后加的，旧调用方不设它；而方言本身
+// 就是上游线（转换生效时 observeFormatFor 已切成目标线），据此推导与显式注入同源。
+// 两者都拿不到时返回空串：`IsRequestEchoFrame` 对空家族恒假（没有豁免），`gate.Classify`
+// 对空家族恒中性（判不出内容）。
+func resolvedFamily(opts ObservationOptions) gate.Family {
+	if opts.Family != "" {
+		return opts.Family
+	}
+	return gateFamilyOf(opts.Format)
+}
+
+// gateFamilyOf 把观测器的方言映射为门控家族。
+//
+// 两处用它：请求回显帧的缓冲豁免，与「首个有效内容帧」的分类。未知方言返回空串
+// （`IsRequestEchoFrame` 恒假，于是回退到「没有豁免」的保守行为）。
+func gateFamilyOf(format convert.ClientFormat) gate.Family {
 	switch format {
 	case convert.FormatResponse:
 		return gate.FamilyOpenAIResponses
@@ -268,14 +306,18 @@ func (o *Observer) Snapshot() Observation {
 	if o.parserLost {
 		o.recoverFromWindows(&snapshot)
 	}
-	if !snapshot.FirstByteAt.IsZero() {
-		snapshot.TTFT = snapshot.FirstByteAt.Sub(o.opts.StartedAt)
+	if !snapshot.FirstContentAt.IsZero() {
+		snapshot.TTFT = snapshot.FirstContentAt.Sub(o.opts.StartedAt)
 	}
-	// FirstByte 优先取上游侧时刻（门控的 OnFirstByte）；拿不到时退化为 TTFT，
-	// 与 Node 的 `markFirstByte` 兼作 TTFB 兑底一致。
-	snapshot.FirstByte = snapshot.TTFT
-	if !o.opts.UpstreamFirstByteAt.IsZero() {
+	// FirstByte 是**真 TTFB**：优先取上游侧时刻（门控的 OnFirstByte）；非门控路径拿不到它，
+	// 退化为首个非空 chunk 的到达时刻（即首次 Push）。它绝不退化成 TTFT——两者语义不同，
+	// 相互冒充会让 TPS 的分母与 `first_byte_ms` 列一起失真。
+	snapshot.FirstByte = time.Duration(0)
+	switch {
+	case !o.opts.UpstreamFirstByteAt.IsZero():
 		snapshot.FirstByte = o.opts.UpstreamFirstByteAt.Sub(o.opts.StartedAt)
+	case !snapshot.FirstByteAt.IsZero():
+		snapshot.FirstByte = snapshot.FirstByteAt.Sub(o.opts.StartedAt)
 	}
 	return snapshot
 }
@@ -399,6 +441,7 @@ func (o *Observer) observeFrame(frame gate.Frame) {
 		}
 		return
 	}
+	o.markFirstContent(frame, data)
 	if !frameNeedsParse(o.opts.Format, data) {
 		return
 	}
@@ -465,6 +508,72 @@ var frameGate = map[convert.ClientFormat][]string{
 // 正是这里要省掉的东西。
 func frameNeedsParse(format convert.ClientFormat, data string) bool {
 	keys, known := frameGate[format]
+	if !known {
+		return true
+	}
+	for _, key := range keys {
+		if strings.Contains(data, key) {
+			return true
+		}
+	}
+	return false
+}
+
+// markFirstContent 在**首个有效内容帧**到达时打 TTFT 的戳。
+//
+// 为何不是首字节：中性帧（message_start / response.created / role 宣告）到达时客户端屏幕仍是空的，
+// 拿它当 TTFT 会让非门控行系统性偏乐观，且与门控行（提交时刻）不可比。
+//
+// 两道门槛都是必需的：
+//   - 打戳一次即停（FirstContentAt 非零后零成本），故分类只在流首部跑几帧；
+//   - 帧先过 contentGate 字节预筛才解析，故心跳/生命周期帧不付 JSON 解析的钱。
+//
+// 门控路径不走这里：它显式给 ObservationOptions.CommitAt（提交时刻），那是更准的口径
+// （速率闸会把提交点推到内容帧之后，按帧打戳会偏早）。
+func (o *Observer) markFirstContent(frame gate.Frame, data string) {
+	if !o.observation.FirstContentAt.IsZero() || !o.opts.CommitAt.IsZero() {
+		return
+	}
+	// 请求回显帧先排掉：responses 家族的回显帧（response.created / in_progress / queued）
+	// 会带完整请求体（实测可达 213 KB），而它永远不是内容（classify.go 的判定同此）。
+	// 不先排就会为一条非门控流白解析一次大 JSON，而且就发生在交付路径上。
+	if gate.IsRequestEchoFrame(o.family, frame.Event, data) {
+		return
+	}
+	if !frameMayCarryContent(o.family, data) {
+		return
+	}
+	if gate.Classify(o.family, frame.Event, frame.Data) == gate.VerdictContent {
+		o.observation.FirstContentAt = o.opts.Now()
+	}
+}
+
+// contentGate 是内容预筛表：子串全不命中就一定不是内容帧，免去 Classify 的 JSON 解析。
+//
+// 它与 frameGate（终态事实预筛）用途不同、**不可合并**：frameGate 收的是 usage/model 这些
+// 终态键，而内容规则（classify.go 的 contentRules）的载荷路径根段是另一套，
+// 拿 frameGate 筛内容会漏掉最普通的正文增量帧。两张表各自只扫一次子串。
+//
+// 每族的键取 contentRules 全部 anyPaths/valueMatches 的**路径根段**（覆盖规则即可，不必列到叶）：
+//   - anthropic：content_block_delta 与 content_block_start 两族
+//   - openai-chat：两条规则（delta 族与完整 message 族）都挂在 choices 下
+//   - openai-responses：按载荷键与 response.* 类型前缀
+//   - gemini：所有内容规则都在 candidates 下（含 envelope 解包后的内层）
+//
+// 判据宁可多放行：多放行只多一次解析，漏判则把首内容帧当中性（TTFT 偏晚）。
+var contentGate = map[gate.Family][]string{
+	gate.FamilyAnthropic:       {`"delta"`, `"content_block"`},
+	gate.FamilyOpenAIChat:      {`"choices"`},
+	gate.FamilyOpenAIResponses: {`"delta"`, `"text"`, `"item"`, `"arguments"`, `"input"`, `"code"`, `"transcript"`, `"refusal"`, `"partial_image_b64"`, `"encrypted_content"`},
+	gate.FamilyGemini:          {`"candidates"`},
+}
+
+// frameMayCarryContent 做内容预筛：命中任一载荷键才交给 gate.Classify 解析。
+//
+// 未知家族（含空串）一律放行：宁多一次解析，也不错过首内容帧。
+// 与 frameNeedsParse 同样用 strings.Contains（data 已是 string，转 []byte 会多一次分配）。
+func frameMayCarryContent(family gate.Family, data string) bool {
+	keys, known := contentGate[family]
 	if !known {
 		return true
 	}

@@ -319,10 +319,13 @@ func scanMessageRequest(row pgx.Row) (MessageRequest, error) {
 // DetailsPatch 复刻 MessageRequestDetailsUpdate：指针为 nil 表示本次不写该列，
 // 与 TS 的 `details.x !== undefined` 判定一一对应。
 type DetailsPatch struct {
-	DurationMS                 *int
-	StatusCode                 *int
-	InputTokens                *int64
-	OutputTokens               *int64
+	DurationMS   *int
+	StatusCode   *int
+	InputTokens  *int64
+	OutputTokens *int64
+	// TTFTMS 落 `ttfb_ms`（列名历史遗留）：**首个有效内容**的相对延迟，即用户可见首字。
+	// 它既不是首字节也不是首 chunk：中性帧（message_start 等）到达时屏幕上仍是空的。
+	// 真正的首字节在 FirstByteMS（`first_byte_ms`）。
 	TTFTMS                     *int
 	FirstByteMS                *int
 	CacheCreationInputTokens   *int64
@@ -397,8 +400,8 @@ func (patch DetailsPatch) clauses() []setClause {
 		add("output_tokens", "", *patch.OutputTokens)
 	}
 	if patch.TTFTMS != nil {
-		// 列名是历史遗留：ttfb_ms 存的是首 Token 时间（TTFT），真 TTFB 在 first_byte_ms。
-		// 见 src/drizzle/schema.ts 的 messageRequest.ttftMs 注释。
+		// 列名是历史遗留：ttfb_ms 存的是首个**有效内容**的时间（TTFT，用户可见首字），
+		// 真 TTFB 在 first_byte_ms。两者不是一回亊，不能互相回填。
 		add("ttfb_ms", "", int64(*patch.TTFTMS))
 	}
 	if patch.FirstByteMS != nil {

@@ -473,8 +473,8 @@ func (s *storeSettler) Stream(ctx context.Context, pc *pctx.Context, outcome for
 	}
 	// first_byte_ms = **真 TTFB**：上游首个非空 chunk 相对请求开始的延迟（Node 的
 	// `recordFirstByte(attempt.firstByteAt)`，即 `session.firstByteMs`）。
-	// 它与 ttfb_ms 是两个口径：Node 的 ttftMs 取「门控提交后的首个内容帧」，
-	// firstByteMs 取上游侧时刻（见 aggregation-core.ts 的 TPS 注释）。
+	// 它与 ttfb_ms 是两个口径：ttfb_ms 是「首个有效内容」（门控行取提交时刻，非门控行
+	// 取首个 VerdictContent 帧），first_byte_ms 取上游侧首字节（见 aggregation-core.ts 的 TPS 注释）。
 	if observation.FirstByte > 0 {
 		firstByte := int(observation.FirstByte.Milliseconds())
 		settlement.FirstByteMS = &firstByte
