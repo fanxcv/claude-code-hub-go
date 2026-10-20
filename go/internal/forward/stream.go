@@ -321,11 +321,15 @@ func (d Deps) executeStreamAttempt(
 
 	family, gated := options.gateFamily(provider)
 	if !gated || !options.shouldGate(response.Header, plan) {
-		defer func() { _ = response.Body.Close() }()
 		// 不做门控：要么这不是流（按非流式读回），要么我们认不出协议家族（fail-open 透传）。
 		if !options.isStreamShaped(response.Header, plan) && !options.ForceGate {
+			// 非流式：本函数内就把正文读完，故关闭责任留在本层。
+			defer func() { _ = response.Body.Close() }()
 			return d.completeResponse(response, plan, outcome)
 		}
+		// 流式：正文被借给 streamAttempt 并由 pump 关闭（pump.go 的 Source.Close）。
+		// 此处**不得**再注册 defer——那会在本函数返回时把借出的流关掉，
+		// 调用方拿到已关闭的正文，表现为 HTTP 200 却零字节。
 		return &attemptResponse{
 			StatusCode: response.StatusCode,
 			Status:     response.Status,
