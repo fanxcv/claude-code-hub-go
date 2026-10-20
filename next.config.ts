@@ -11,17 +11,6 @@ const uiExport = process.env.CCH_UI_EXPORT === "1";
 const nextConfig: NextConfig = {
   // 转译 ESM 模块（@lobehub/icons 需要）
   transpilePackages: ["@lobehub/icons"],
-
-  // 排除服务端专用包（避免打包到客户端）：三者都含 Node.js 原生模块
-  // （net, tls, crypto, stream, perf_hooks）。
-  serverExternalPackages: ["ioredis", "postgres", "drizzle-orm"],
-
-  // 强制把 undici 收进 standalone 输出。
-  // Next.js 依赖追踪无法正确追踪动态导入和类型导入的传递依赖
-  // 参考: https://nextjs.org/docs/app/api-reference/config/next-config-js/output
-  outputFileTracingIncludes: {
-    "/**": ["./node_modules/undici/**/*"],
-  },
 };
 
 if (uiExport) {
@@ -32,10 +21,6 @@ if (uiExport) {
   // 导出是**打包步骤**：客户端组件以 `import type` 从服务端模块取类型，导出构建不做
   // 类型检查——类型门禁由 `bun run typecheck` 独立把守。
   nextConfig.typescript = { ignoreBuildErrors: true };
-  // 服务端专属键在导出下无意义（依赖追踪/外部包豁免），避免干扰。
-  for (const key of ["serverExternalPackages", "outputFileTracingIncludes"] as const) {
-    delete nextConfig[key];
-  }
 }
 
 // Wrap the Next.js config with next-intl plugin

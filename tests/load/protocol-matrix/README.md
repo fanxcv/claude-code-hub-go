@@ -3,7 +3,7 @@
 用**一台真·多协议上游**（同一 URL 同时讲 anthropic / openai-chat / openai-responses）在**本地**端到端跑
 「客户端协议 × 上游协议」的 9 个组合，并穿过 tools / 思考强度 / 多轮三件事。
 
-不做的事：不动生产、不依赖 Node（用 `CCH_EGRESS_PAGES=off` + `CCH_EGRESS_ROUTES='* /v1/*'` 让 Go 自答数据面）。
+不做的事：不动生产、不依赖 Node（用 `CCH_EGRESS_PAGES=off` 让本进程自答数据面）。
 
 ## 三段用法
 

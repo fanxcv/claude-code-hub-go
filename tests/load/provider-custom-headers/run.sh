@@ -97,9 +97,9 @@ s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.clos
 PY
 )
 env -i PATH="$PATH" HOME="$HOME" \
-  PORT="$PORT" CCH_INTERNAL_PORT="$((PORT + 1))" \
+  PORT="$PORT" \
   DSN="$DSN" REDIS_URL="$REDIS_URL" \
-  CCH_EGRESS_MODE=go CCH_EGRESS_ROUTES='* /v1/*,* /api/*' CCH_EGRESS_PAGES=off \
+  CCH_EGRESS_PAGES=off \
   AUTO_MIGRATE=false ADMIN_TOKEN=matrix-admin-token \
   "$BIN" >"$HERE/.gateway.log" 2>&1 &
 echo $! >"$HERE/.gateway.pid"

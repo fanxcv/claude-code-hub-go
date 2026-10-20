@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # 三协议转换矩阵 · 起一个**本地** cchd（Go 数据面），不动生产、不依赖 Node。
 #
-# 关键环境变量（依据 go/internal/egress/decision.go 的归属语义）：
-#   CCH_EGRESS_MODE=go    但**白名单为空时全部回退 Node**（ReasonGoNoRules）⇒ 必须显式给 ROUTES
-#   CCH_EGRESS_ROUTES='* /v1/*'  让 Go 独占数据面；其余路径由前端自答
-#   CCH_EGRESS_PAGES=off         非 API 路径由本进程自答（本机没有 Node 可反代）
+# 关键环境变量（本进程独占全部路径：Node 后端已退役，没有回退档）：
+#   CCH_EGRESS_PAGES=off         非 API 路径由本进程自答 404
 #   AUTO_MIGRATE=false           库结构已由既有测试库/smoke 库提供
 #
 # 用法：bash start.sh          （后台起进程，PID 写到 .cchd.pid 与 .cchd.port）
@@ -37,7 +35,6 @@ import socket
 s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()
 PY
 )
-internal=$((port + 1))
 
 BIN="${MATRIX_CCHD_BIN:-/tmp/cchd-matrix}"
 if [ ! -x "$BIN" ]; then
@@ -48,11 +45,8 @@ fi
 echo "启动 cchd：PORT=${port} DSN=${DSN%%:*}://***  REDIS_URL(dbid)=${REDIS_URL##*/}"
 env -i PATH="$PATH" HOME="$HOME" \
   PORT="$port" \
-  CCH_INTERNAL_PORT="$internal" \
   DSN="$DSN" \
   REDIS_URL="$REDIS_URL" \
-  CCH_EGRESS_MODE=go \
-  CCH_EGRESS_ROUTES='* /v1/*' \
   CCH_EGRESS_PAGES=off \
   AUTO_MIGRATE=false \
   ADMIN_TOKEN=matrix-admin-token \
