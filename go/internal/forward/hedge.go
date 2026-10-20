@@ -204,6 +204,9 @@ type hedgeRace struct {
 	launchPending bool
 	outcomes      []AttemptOutcome
 	resultCh      chan hedgeResult
+	// shared 是本次请求内与候选无关的转换产物（见 plan_shared.go）：竞速的各路 attempt
+	// 目标协议线可能各不相同，故这里按协议线分键，同协议线才共用同一份出站正文。
+	shared *PlanShared
 }
 
 // hedgeResult 是竞速的终局。
@@ -273,6 +276,7 @@ func ForwardStreamHedge(
 		launchedSet:    make(map[int64]struct{}),
 		attempts:       make(map[int]*hedgeAttempt),
 		resultCh:       make(chan hedgeResult, 1),
+		shared:         NewPlanShared(),
 	}
 
 	race.launchAttempt(initial, maxInFlight)
@@ -305,6 +309,9 @@ func ForwardStreamHedge(
 		race.mu.Lock()
 		clear(race.attempts)
 		race.mu.Unlock()
+		// 共享产物同理（见 PlanShared）：终局后不会再有 attempt 需要它们，留着只会让仍在途的
+		// 协程把整场竞速的正文一直拖着。
+		race.shared.drop()
 
 		if out.result != nil && out.result.Stream == nil && len(out.result.Attempts) > 0 && deps.Settle != nil {
 			var failure *Failure
@@ -428,6 +435,7 @@ func (r *hedgeRace) runAttempt(c *Candidate, seq int, maxInFlight int) {
 		ClientUserAgent:   r.deps.Facts.ClientUserAgent,
 		FilteredUserAgent: r.deps.Facts.FilteredUserAgent,
 		UserAgentModified: r.deps.Facts.UserAgentModified,
+		Shared:            r.shared,
 	})
 	if err != nil {
 		// 候选级不可服务（状态型字段在目标线没有承载位）：不是上游故障，也没拨过号，故不走

@@ -657,7 +657,7 @@ func TestBuildPlanRecordsBodyConversionFailure(t *testing.T) {
 	provider := claudeProvider("https://relay.example.com")
 	provider.Type = convert.ProviderOpenAICompatible
 
-	// 正文不是合法 JSON → convertBody 在解析阶段即失败（跨协议转换已计划成立）。
+	// 正文不是合法 JSON → 转换在解析阶段即失败（跨协议转换已计划成立）。
 	plan, err := BuildPlan(PlanInput{
 		Client:            newClaudeRequest(`{"model":"claude-sonnet-4-5-20250929","messages":[`),
 		Target:            Target{Provider: provider},

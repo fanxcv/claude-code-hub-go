@@ -89,7 +89,7 @@ func TestAppendEntriesRecordsConversionLossBesideConversion(t *testing.T) {
 
 // TestAppendEntriesOmitsConversionLossWhenConversionClean 钉住「零损失不写条目」。
 //
-// `convertBody` 对每次成功的转换都会返回一个**非 nil** 的 LossReport（可能零条目），
+// `forward` 的转换产物对每次成功的转换都会带一个**非 nil** 的 LossReport（可能零条目），
 // 所以「有损失集」不等于「有损失」——判据必须是条目数，否则每个干净转换都会白写一条空 groups。
 func TestAppendEntriesOmitsConversionLossWhenConversionClean(t *testing.T) {
 	plan := &forward.Plan{
@@ -130,7 +130,7 @@ func TestAppendEntriesRecordsNoLossForNativeRequest(t *testing.T) {
 // TestAuditCarriesLossFromRealConversion 钉住「真实跨线转换 → 计划损失集 → 审计条目」这条链。
 //
 // 为何要端到端钉这一环：本文件其余用例都是**手工构造** forward.Plan（把一份损失集喂给审计），
-// 而损失集的上一环——`forward.BuildPlan` 真的把 `convertBody` 的损失挂到 `plan.ConversionLoss` 上——
+// 而损失集的上一环——`forward.BuildPlan` 真的把转换产物的损失挂到 `plan.ConversionLoss` 上——
 // 此前没有任何用例断言过（全仓除本文件外无提及）。两环各自绿而中间断掉，审计会静默退回为空。
 func TestAuditCarriesLossFromRealConversion(t *testing.T) {
 	plan, err := forward.BuildPlan(forward.PlanInput{

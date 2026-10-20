@@ -153,6 +153,10 @@ type PlanInput struct {
 	ClientUserAgent   string
 	FilteredUserAgent string
 	UserAgentModified bool
+	// Shared 非 nil 时复用本次请求内与候选无关的转换产物（见 PlanShared）；nil 表示每次现算。
+	//
+	// 只有竞速会传它：一路请求的多个 attempt 才会同时需要同一份产物。
+	Shared *PlanShared
 }
 
 // Target 是本次尝试的目标（供应商 + 端点）。
@@ -371,34 +375,33 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		return nil, err
 	}
 	plan.Redirect = redirect
+	// 重定向目标名参与转换产物的编码键（见 plan_shared.go 的 encodeKey）：模型重定向是供应商级的，
+	// 同一场竞速里同协议的两个候选可以指向不同目标名，故只有协议线做键是不够的。
+	redirectTo := ""
+	if redirect != nil {
+		redirectTo = redirect.Target
+	}
 
-	// 4) 正文：先转换，再改写模型，最后施加供应商覆写。整个过程只保留一份正文。
+	// 4) 正文：转换（含模型改写）在前，供应商覆写最后。整个过程只保留一份正文。
 	body := in.Client.Body
 	switch {
 	case !in.Client.HasBody:
 		body = nil
 	case plan.Conversion != nil:
-		// 正文只解析一次：状态型字段判定与转换解码读同一棵树（判定侧只读，可安全复用）。
-		value, err := convert.ParseJSON(in.Client.Body)
-		if err != nil {
-			// 与原先 convertBody 内部的 fmt.Errorf("%w: %v", ErrInvalidBody, err) 文案逐字相同。
-			recordBodyConversionFailure(plan, ErrInvalidBody.Error()+": "+err.Error())
-			break
+		product := in.Shared.conversion(in.Client, plan.Conversion, redirectTo)
+		if product.rejected != nil {
+			return nil, product.rejected
 		}
-		if err := rejectUnservableStateful(in.Client, plan.Conversion, value); err != nil {
-			return nil, err
-		}
-		converted, loss, restore, err := convertBody(in.Client, plan.Conversion, value, redirect)
-		if err != nil {
+		if product.failure != nil {
 			// Node 语义：转换不可用时退回原生直通，而不是把未转换正文发到目标端点上。
 			// 回退语义不变；此处只额外**保留失败事实**（原因文本在落库前脱敏），
 			// 否则排障时无法区分「没转换」与「转换失败」。
-			recordBodyConversionFailure(plan, err.Error())
+			recordBodyConversionFailure(plan, product.failure.Error())
 			break
 		}
-		body = converted
-		plan.ConversionLoss = loss
-		plan.ToolNameRestore = restore
+		body = product.body
+		plan.ConversionLoss = product.loss
+		plan.ToolNameRestore = product.restore
 	}
 	// 模型改写必须在**最终正文**上做（不得因「本次发生了转换」而跳过）：
 	//
@@ -406,8 +409,9 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 	// 并重建 buffer）**先于**协议转换（forwarder.ts:3749 才快照/编码），故转换产出的目标方言正文里带的
 	// 已经是重定向目标名，且只造一份正文。
 	//
-	// 分工：转换路的改写已在 convertBody 里对解码前的树做过（那棵树就在手边，原位 Set 不复制正文）；
-	// 这里只负责 native 路与转换失败回退路——那两条都**没有树**，只能在字节上定位顶层 model。
+	// 分工：转换路的改写已在编码前写进枢纽请求（见 plan_shared.go 的 encodeConvertedBody，
+	// 逐 (协议线, 目标名) 复制的是请求结构而不是正文），这里只负责 native 路与转换失败回退路
+	// ——那两条都**没有树**，只能在字节上定位顶层 model。
 	//
 	// 历史缺陷：这里曾写 `plan.Conversion == nil && …`，于是**凡发生转换的请求都不改写**——上游收到的是
 	// 客户端别名，凡「跨协议 + 配了 model_redirects」的供应商必 400/404（矩阵台 model 模式 3/9 的真因）。
@@ -559,7 +563,14 @@ func recordBodyConversionFailure(plan *Plan, reason string) {
 // 本错误是**候选级**的，不是请求级：forward 的两条路径（串行 attempt.go、竞速 hedge.go）都把
 // 它当成「该候选不可服务」，把供应商记入排除集后换下一个候选；只有当所有候选都无法承载时，
 // 它才作为本次请求的结论交给客户端（400 + 字段名）。
-func rejectUnservableStateful(client ClientRequest, plan *convert.ConversionPlan, value *convert.Value) error {
+//
+// 返回具体指针类型而不是 error：调用方总要拿字段名，且「typed nil 装进 error 接口即非 nil」
+// 那个坑在这里没有任何收益。
+func rejectUnservableStateful(
+	client ClientRequest,
+	plan *convert.ConversionPlan,
+	value *convert.Value,
+) *StatefulConversionError {
 	if client.Format != convert.FormatResponse && client.Format != convert.FormatOpenAI {
 		return nil
 	}
@@ -570,67 +581,6 @@ func rejectUnservableStateful(client ClientRequest, plan *convert.ConversionPlan
 		return &StatefulConversionError{Field: field}
 	}
 	return nil
-}
-
-// convertBody 用枢纽编解码把客户端协议正文转换为目标协议正文。
-//
-// 与 Node 的 buildUpstreamRequest 一致：编码用的模型名取自**快照正文**的 model 字段，
-// 重定向在快照之前写入（Node 的 ModelRedirector.apply 先就地改 message.model，
-// primeOriginalBody 才取快照）。故本函数先在已解析的树上原位改 model，再解码/编码——
-// 不复制正文（旧做法是编码完再整份做一次 rewriteModelField，见其注释）。
-//
-// value 是调用方已解析的正文：本函数不再自行 ParseJSON。
-func convertBody(
-	client ClientRequest,
-	plan *convert.ConversionPlan,
-	value *convert.Value,
-	redirect *ModelRedirect,
-) ([]byte, *convert.LossReport, map[string]string, error) {
-	model := client.Model
-	if redirect != nil {
-		model = redirect.Target
-		// 树与 ctx **两处都要写**：编码器取顶层 model 的次序不同——anthropic / responses 是
-		// firstString(request.Model, ctx.Model)（codec_anthropic.go:715 / codec_responses.go:857），
-		// chat 反序 firstString(ctx.Model, request.Model)（codec_chat.go:1016）。只改一处必剩一条线
-		// 发客户端别名。树的 Set 原位替换、键序不动。
-		value.Set("model", convert.NewString(model))
-	}
-	ctx := convert.ConvertCtx{
-		ClientFormat:              clientFormatOfProtocol(plan.ClientProtocol),
-		TargetProto:               plan.TargetProtocol,
-		Model:                     model,
-		Stream:                    ClientStreamRequestedFromValue(client.Path, client.Query, value),
-		ToWireToolName:            convert.NormalizeToolName,
-		GatewayInjectedBodyFields: client.GatewayInjectedBodyFields,
-	}
-	decoded, ok := convert.DecodeRequest(plan.ClientProtocol, value, ctx)
-	if !ok {
-		return nil, nil, nil, fmt.Errorf("%w: 客户端协议 %s 无解码器", ErrUnsupportedProviderType, plan.ClientProtocol)
-	}
-	encoded, ok := convert.EncodeRequest(plan.TargetProtocol, decoded.Value, ctx)
-	if !ok || encoded.Body == nil {
-		return nil, nil, nil, fmt.Errorf("%w: 目标协议 %s 无编码器", ErrUnsupportedProviderType, plan.TargetProtocol)
-	}
-	loss := decoded.Loss
-	loss.Entries = append(loss.Entries, encoded.Loss.Entries...)
-	// 逆转表取自被解码的客户端请求：编码器写进上游的是规范化名，响应侧要还原回原名。
-	restore := convert.BuildToolNameRestoreMap(toolNamesOf(decoded.Value))
-	if len(restore) == 0 {
-		restore = nil
-	}
-	return []byte(encoded.Body.MarshalCompact()), &loss, restore, nil
-}
-
-// toolNamesOf 取枢纽请求里声明的工具名（响应侧逆转表的来源）。
-func toolNamesOf(request *convert.Request) []string {
-	if request == nil {
-		return nil
-	}
-	names := make([]string, 0, len(request.Tools))
-	for _, tool := range request.Tools {
-		names = append(names, tool.Name)
-	}
-	return names
 }
 
 // ClientStreamRequested 读取客户端正文里的 stream 标记；不存在即 false。

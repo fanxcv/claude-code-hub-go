@@ -194,7 +194,7 @@ func TestImageLossOncePerChainAcrossDirections(t *testing.T) {
 					if !ok {
 						t.Fatalf("%s 必须能编码", direction.target)
 					}
-					// 与 forward.convertBody 同口径：解码侧与编码侧的损失合并成一份台账。
+					// 与 forward 的 encodeConvertedBody 同口径（plan_shared.go）：解码侧与编码侧的损失合并成一份台账。
 					imageEntries := []LossEntry{}
 					for _, entry := range append(append([]LossEntry{}, decoded.Loss.Entries...), encoded.Loss.Entries...) {
 						if entry.Capability == LossImage {

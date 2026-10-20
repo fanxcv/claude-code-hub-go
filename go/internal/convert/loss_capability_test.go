@@ -166,7 +166,7 @@ func TestImageLossCountedOncePerLogicalImage(t *testing.T) {
 	if !ok {
 		t.Fatal("chat 线必须能编码")
 	}
-	// 与 forward.convertBody 同口径：解码侧与编码侧的损失合并成一份台账。
+	// 与 forward 的 encodeConvertedBody 同口径（plan_shared.go）：解码侧与编码侧的损失合并成一份台账。
 	entries := append(append([]LossEntry{}, decoded.Loss.Entries...), encoded.Loss.Entries...)
 	imageEntries := []LossEntry{}
 	for _, entry := range entries {

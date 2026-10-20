@@ -13,7 +13,12 @@ import (
 const conversionRedirectRules = `[{"matchType":"exact","source":"claude-sonnet-4-5-20250929","target":"glm-4.6"}]`
 
 // buildConversionPlan 编译一次「跨线转换 + 模型重定向」的计划，并断言转换真的生效。
-func buildConversionPlan(t *testing.T, client ClientRequest, providerType convert.ProviderType) *Plan {
+func buildConversionPlan(
+	t *testing.T,
+	client ClientRequest,
+	providerType convert.ProviderType,
+	shared *PlanShared,
+) *Plan {
 	t.Helper()
 	provider := claudeProvider("https://relay.example.com")
 	provider.Type = providerType
@@ -22,6 +27,7 @@ func buildConversionPlan(t *testing.T, client ClientRequest, providerType conver
 		Client:            client,
 		Target:            Target{Provider: provider},
 		ConversionEnabled: true,
+		Shared:            shared,
 	})
 	if err != nil {
 		t.Fatalf("BuildPlan 失败: %v", err)
@@ -66,7 +72,7 @@ func TestConvertedBodyModelRewriteKeepsKeyOrder(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			plan := buildConversionPlan(t, tc.client, tc.provider)
+			plan := buildConversionPlan(t, tc.client, tc.provider, nil)
 			if plan.Redirect == nil || plan.Redirect.Target != "glm-4.6" {
 				t.Fatalf("重定向事实应留在计划上（供落链/计费）: %+v", plan.Redirect)
 			}
@@ -104,52 +110,58 @@ func topLevelKeys(t *testing.T, body []byte) []string {
 	return keys
 }
 
-// TestConvertedBodyModelRewriteSkipsByteRewrite 钉住转换路**不再**做字节级整份改写。
+// TestConvertedBodyModelRewriteSkipsByteRewrite 钉住转换路**不再**做字节级整份改写：
+// 模型名在编码**前**就位，不是编码完再对已转换正文做一次 rewriteModelField。
 //
-// 判据：把同一份正文按转换路重算一遍，但让 redirect 目标名与客户端模型名等长——
-// rewriteModelField 命中时必然复制一份正文（见其注释），而树上原位 Set 不复制。
-// 故按「分配量之差」间接证伪；这里取更稳的等价断言：convertBody 拿到的 value 树
-// 在返回后已带目标模型名（即改写发生在树里，而不是编码后又在字节上改一次），
-// 且出站正文与「树里已是目标名、不带 redirect 再编码一次」逐字节相同。
+// 判据（不靠分配量）：直接拿枢纽请求手编一遍、只把 Model 换成目标名，若与计划产物逐字节
+// 相同，则说明计划走的就是「先在树上就位再编码」这条路。旧做法两者也会相同（字节改写结果
+// 一样），故额外钉住**共享的枢纽请求没有被改写**——这正是新结构下的真实危险：把重定向写进
+// 共享树，下一个同协议候选就会拿到别人的模型名。
 func TestConvertedBodyModelRewriteSkipsByteRewrite(t *testing.T) {
 	client := chatClient(`{"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"ping"}]}`)
-	plan := buildConversionPlan(t, client, convert.ProviderClaude)
+	shared := NewPlanShared()
+	plan := buildConversionPlan(t, client, convert.ProviderClaude, shared)
 
-	// 手工复现「只在树上改、不带 redirect 编码」：若两者逐字节相同，说明计划走的正是这条路。
-	parsed, err := convert.ParseJSON(client.Body)
-	if err != nil {
-		t.Fatalf("解析客户端正文失败: %v", err)
+	// 共享产物里躺着的枢纽请求必须仍是客户端别名（重定向只写进浅拷贝）。
+	if got := shared.decoded.request.Model; got != "claude-sonnet-4-5-20250929" {
+		t.Fatalf("共享的枢纽请求被重定向改写了：model = %q（会把甲的模型名发给乙）", got)
 	}
-	parsed.Set("model", convert.NewString("glm-4.6"))
-	expected, _, _, err := convertBody(client, plan.Conversion, parsed, nil)
-	if err != nil {
-		t.Fatalf("convertBody 失败: %v", err)
+
+	// 手工复现「编码前就已是目标名」：与计划产物逐字节相同即证明改写发生在编码前。
+	redirected := *shared.decoded.request
+	redirected.Model = "glm-4.6"
+	encoded, ok := convert.EncodeRequest(plan.Conversion.TargetProtocol, &redirected, convert.ConvertCtx{
+		ClientFormat:   client.Format,
+		TargetProto:    plan.Conversion.TargetProtocol,
+		Model:          "glm-4.6",
+		Stream:         shared.decoded.stream,
+		ToWireToolName: convert.NormalizeToolName,
+	})
+	if !ok || encoded.Body == nil {
+		t.Fatal("手工编码失败")
 	}
-	if string(plan.Body) != string(expected) {
-		t.Fatalf("转换路正文与「树上原位改 model 再编码」不一致：\n got = %s\nwant = %s", plan.Body, expected)
+	if string(plan.Body) != string(encoded.Body.MarshalCompact()) {
+		t.Fatalf("转换路正文与「编码前就改好 model」不一致：\n got = %s\nwant = %s",
+			plan.Body, encoded.Body.MarshalCompact())
 	}
 }
 
 // TestConvertBodyRedirectNilKeepsSnapshotModel 钉住「无重定向时模型取正文快照里的值」。
 //
-// convertBody 的注释承诺编码用的模型名来自快照正文；加了 redirect 参数后这条不得被顺手改掉，
-// 否则所有转换请求的模型名都会退化成 client.Model（两者在真实请求里通常相同，掩盖问题）。
+// 编码用的模型名来自快照正文；重定向参数化后这条不得被顺手改掉，否则所有转换请求的模型名
+// 都会退化成 client.Model（两者在真实请求里通常相同，掩盖问题）。
 func TestConvertBodyRedirectNilKeepsSnapshotModel(t *testing.T) {
 	client := chatClient(`{"model":"in-body-model","messages":[{"role":"user","content":"ping"}]}`)
 	// client.Model 与正文里的 model 故意不同：编码结果必须跟正文走。
 	client.Model = "header-side-model"
 	plan := buildConversionPlanWithoutRedirect(t, client, convert.ProviderCodex)
 
-	parsed, err := convert.ParseJSON(client.Body)
-	if err != nil {
-		t.Fatalf("解析客户端正文失败: %v", err)
-	}
-	body, _, _, err := convertBody(client, plan.Conversion, parsed, nil)
-	if err != nil {
-		t.Fatalf("convertBody 失败: %v", err)
+	body := computeConversion(client, plan.Conversion, "")
+	if body.failure != nil {
+		t.Fatalf("转换失败: %v", body.failure)
 	}
 	var decoded map[string]any
-	if err := json.Unmarshal(body, &decoded); err != nil {
+	if err := json.Unmarshal(body.body, &decoded); err != nil {
 		t.Fatalf("正文不是 JSON: %v", err)
 	}
 	if decoded["model"] != "in-body-model" {
