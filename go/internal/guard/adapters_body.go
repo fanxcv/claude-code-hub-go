@@ -21,14 +21,16 @@ type BodyAccessOptions struct {
 	// MaxBytes 是解压后字节上限；<=0 时取 Ingress 的取值（再由 ingress 兜默认）。
 	MaxBytes int64
 	// Admission 是进程级正文准入（内存余量 + 在途字节）。nil 时用本包默认单例
-	// defaultAdmission；装配方（W3 接入 config.MaxInflightBytes 后）应显式注入，
-	// 使预算随配置与 GOMEMLIMIT 变化。
+	// defaultAdmission（按环境变量自建，仅供测试与未接线的调用方）。
+	// 生产装配由 dataplane 注入唯一一份（见 assemble.go），使预算随进程配置与 GOMEMLIMIT 变化。
 	Admission *ingress.Admission
 }
 
-// defaultAdmission 是未显式注入准入层时的进程级单例。
+// defaultAdmission 是**仅在未显式注入时**使用的进程级单例。
 //
 // 必须进程级共享：限流器按「在途总量」记账，每次读体各建一份等于没有闸门。
+// 生产路径（dataplane.NewStoreBacked）恒注入自己的实例，本单例只给测试与直接调用
+// NewBodyAccessor 的调用方兜底；两者都按同名环境变量构造，故兜底值不偏离配置真源。
 var defaultAdmission = ingress.DefaultAdmission()
 
 // BodyAccessor 是 BodyAccess 的真实实现：正文只解析一次，多处共用同一棵树。

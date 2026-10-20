@@ -227,6 +227,9 @@ type Config struct {
 	EgressPages EgressPages
 
 	// MaxInflightBytes 是所有在途请求正文的字节上限，超限即拒绝而非排队。
+	//
+	// 本字段是唯一真源：`cmd/cchd` 把它填进 dataplane 的正文准入层（见
+	// dataplane.StoreOptions.MaxInflightBytes），进程内只此一份预算。
 	MaxInflightBytes int64
 	// MaxStreams 是同时存在的流式响应数上限。
 	//

@@ -229,6 +229,9 @@ type Options struct {
 	// Stream 是流式路径的基础配置（Format / ForceGate / Settle 由本包按请求填）。
 	Stream forward.StreamOptions
 	// BodyOptions 是入站正文的解压与限额参数；零值时用 ingress 默认（不做在途准入）。
+	//
+	// 生产装配在这里传入进程级共享的一份（见 assemble.go 的 newBodyOptions）：正文准入与
+	// 解压限流器都按「在途总量」记账，本包的两个消费者（请求路径与模型列表路由）必须拿同一实例。
 	BodyOptions guard.BodyAccessOptions
 	// ClientIP 解析客户端 IP；nil 时用 RemoteAddr 与 X-Forwarded-For 的首跳。
 	ClientIP func(*http.Request) string

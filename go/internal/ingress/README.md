@@ -28,10 +28,12 @@
 | `MAX_COMPRESSED_REQUEST_BYTES` | 跟随解压上限 | 单请求压缩体上限（读体前的结构性天花板），越界 413 |
 | `MAX_CONCURRENT_REQUEST_DECOMPRESSIONS` | 4 | 同时在途的解压任务数，饱和即拒绝（不排队） |
 | `MAX_INFLIGHT_REQUEST_DECOMPRESSION_BYTES` | 128 MiB | 在途解压占用的压缩体字节总量 |
-| `CCH_GO_MAX_INFLIGHT_BYTES` | 256 MiB | 进程级在途请求体（含解压后明文）总量 |
+| `CCH_GO_MAX_INFLIGHT_BYTES` | 64 MiB | 进程级在途请求体（含解压后明文）总量 |
 
 前四项与 Node 同名同默认，便于逐项对账（解析语义一致：非法值回退默认，不接受 `10MiB` 后缀）。
 `CCH_GO_MAX_INFLIGHT_BYTES` 是 Go 侧新增的总量闸门，与 `GOMEMLIMIT` 叠加生效。
+其唯一真源是 `config.Config.MaxInflightBytes`（带区间校验与启动日志），由 `dataplane` 的
+装配处注入为进程级唯一一份 `Admission`；`DefaultAdmission` 只在未注入时兜底。
 层数上限是常量（1 层）：真实客户端（含 Codex）只发单层编码，多层只是一次解压放大的攻击面。
 
 ## 错误语义

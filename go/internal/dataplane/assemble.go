@@ -140,6 +140,11 @@ type StoreOptions struct {
 	HedgeLoserDrainTimeoutMS int
 	// MaxUpstreamConnections 为 0 时不限制在途上游请求数。
 	MaxUpstreamConnections int
+	// MaxInflightBytes 是进程级在途请求体字节上限（CCH_GO_MAX_INFLIGHT_BYTES，见
+	// config.Config.MaxInflightBytes）；<=0 时由 ingress 自己读同名环境变量，效果一致。
+	//
+	// 装配后进程内**只有一份** Admission：它按「在途总量」记账，每请求各建一份等于没有闸门。
+	MaxInflightBytes int64
 	// ClientIP 覆盖客户端 IP 解析；nil 时用数据面的保守取值。
 	ClientIP func(*http.Request) string
 	// EndpointCircuitBreakerEnabled 取自 ENABLE_ENDPOINT_CIRCUIT_BREAKER：关闭时端点级与
@@ -237,6 +242,21 @@ func resolveHealth(options StoreOptions) *route.HealthReader {
 	})
 }
 
+// newBodyOptions 构造入站正文的共享参数：解压限额与进程级正文准入各一份。
+//
+// 必须由装配函数建一次并交给所有消费者：Admission 与解压限流器都按「在途总量」记账，
+// 每请求、每个消费者各建一份等于没有闸门。maxInflightBytes 是总量的唯一真源
+// （config.Config.MaxInflightBytes）；<=0 时才由 ingress 自己读同名环境变量兜底。
+func newBodyOptions(maxInflightBytes int64) guard.BodyAccessOptions {
+	return guard.BodyAccessOptions{
+		// 解压限额进程级共享：在途解压任务与字节都受预算约束（解压发生在鉴权之后）。
+		Ingress: ingress.DefaultOptions(),
+		Admission: ingress.NewAdmission(ingress.AdmissionOptions{
+			MaxInflightBodyBytes: maxInflightBytes,
+		}),
+	}
+}
+
 func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	if options.Pools == nil {
 		return nil, ErrNoStore
@@ -287,6 +307,10 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 	routeOptions := options.RouteOptions
 	routeOptions.Health = healthReader
 
+	// 进程级正文准入：在途字节与内存余量两层。两个消费者（守卫链的每请求工厂与模型列表路由）
+	// 共用同一实例——限流器按「在途总量」记账，每请求各建一份等于没有闸门。
+	bodyOptions := newBodyOptions(options.MaxInflightBytes)
+
 	adapters, err := guard.NewAdapters(guard.AdapterOptions{
 		Pools:        options.Pools,
 		Bus:          options.Bus,
@@ -296,10 +320,6 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 		Settler:      interceptSettler,
 		RateLimit:    options.RateLimit,
 		AuthThrottle: options.AuthThrottle,
-		BodyOptions: guard.BodyAccessOptions{
-			// 解压限额进程级共享：在途解压任务与字节都受预算约束（解压发生在鉴权之后）。
-			Ingress: ingress.DefaultOptions(),
-		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("dataplane: 守卫适配器构造失败: %w", err)
@@ -620,7 +640,8 @@ func NewStoreBacked(options StoreOptions) (*Assembly, error) {
 			PrecommitShadow:        precommitShadowEnabled(),
 			CaptureCommitMarker:    false,
 		},
-		BodyOptions: guard.BodyAccessOptions{Ingress: ingress.DefaultOptions()},
+		// 与守卫链共用同一份：正文准入与解压限流器必须进程级共享。
+		BodyOptions: bodyOptions,
 		ClientIP:    options.ClientIP,
 		// 有效分组来自密钥/用户缓存（与守卫链的分组过滤同一份读取），不另起一条查询链。
 		EffectiveGroup: func(pc *pctx.Context) string {
