@@ -625,7 +625,10 @@ func checkSameOrigin(request *http.Request) bool {
 		return fetchSite != "cross-site"
 	}
 
-	host := strings.ToLower(strings.TrimSpace(request.Header.Get("host")))
+	// 用 request.Host 而非 Header.Get("host")：net/http 把 Host 从 Header 里取出放进 URL.Host，
+	// Header 中不再有该键，取值恒为空串，会让一切带 Origin 的同源请求都被判成跨源。
+	// 不读 X-Forwarded-Host：Node 的 createCsrfOriginGuard 也不信任它，直连与经前门须同判。
+	host := strings.ToLower(strings.TrimSpace(request.Host))
 	if host == "" {
 		return false
 	}

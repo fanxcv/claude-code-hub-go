@@ -159,6 +159,12 @@ func (h *authHarness) postFrom(
 		if !found {
 			t.Fatalf("请求头写法应为 `Name: value`，收到 %q", header)
 		}
+		// Host 在 net/http 里不是普通头：请求到达处理器时它已在 request.Host，Header 无此键。
+		// 用 Header.Set 设它会得到一个没人读的键，让 CSRF 同源门的缺陷在测试里隐身。
+		if strings.EqualFold(name, "Host") {
+			request.Host = value
+			continue
+		}
 		request.Header.Set(name, value)
 	}
 	recorder := httptest.NewRecorder()
