@@ -35,17 +35,20 @@ var defaultAdmission = ingress.DefaultAdmission()
 
 // BodyAccessor 是 BodyAccess 的真实实现：正文只解析一次，多处共用同一棵树。
 //
-// 三条不变量：
-//  1. 字节只读一次：ctx.TakeBody 拿到的流读完即弃（对流式上游透传来说，正文此时已必须
-//     重写，故 Store 之后由 Bytes 重新序列化）。
+// 四条不变量：
+//  1. 字节只读一次：ctx.TakeBody 拿到的流读完即弃。
 //  2. JSON 与 Store 返回**同一棵树**，任何一处就地修改对其它调用方可见——这正是守卫链
 //     「过滤规则改正文、转发器读改后正文」所需的语义。
-//  3. 不持有第二份正文：raw 只在 Store 之后缓存最近一次序列化结果，供转发取字节。
+//  3. 未 Store 时 Bytes 返回**入站原字节**，逐字节相同——这是正确性基线。
+//  4. Store 之后只在原字节上定点重写被改动的顶层成员，其余字节逐字保留（见 body_patch.go）。
 type BodyAccessor struct {
-	mu    sync.Mutex
-	tree  map[string]any
-	raw   []byte
-	dirty bool
+	mu       sync.Mutex
+	tree     map[string]any
+	original []byte            // 入站原字节：未 Store 时即出站字节，Store 后作补丁底本
+	digester *bodyDigester     // 值指纹器（基线重算必须与解析期同一个 seed）
+	digests  map[string]uint64 // 解析时各顶层成员的值指纹（补丁的对照基线）
+	patched  []byte            // Store 之后的出站字节缓存
+	dirty    bool              // 是否已被 Store 改写
 }
 
 // reservationBytes 给出正文读取前的准入申请字节数。
@@ -121,7 +124,7 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 	}
 	if len(payload) == 0 {
 		// 空体：解析成空对象而不是报错，与 Node 的 `{}` 语义一致（无正文的端点也会走到守卫）。
-		return &BodyAccessor{mu: sync.Mutex{}, tree: map[string]any{}, raw: payload}, nil
+		return &BodyAccessor{tree: map[string]any{}, original: payload}, nil
 	}
 
 	var tree map[string]any
@@ -131,7 +134,8 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 	if tree == nil {
 		tree = map[string]any{}
 	}
-	return &BodyAccessor{mu: sync.Mutex{}, tree: tree, raw: payload}, nil
+	digester := newBodyDigester()
+	return &BodyAccessor{tree: tree, original: payload, digester: digester, digests: digester.digestBodyMembers(tree)}, nil
 }
 
 // JSON 返回解析后的正文对象（同一请求内多次调用返回同一棵树）。
@@ -150,7 +154,7 @@ func (a *BodyAccessor) JSON() (map[string]any, error) {
 // Store 写回修改后的正文。
 //
 // 只置脏标记，不立刻序列化：一次请求里可能被多个过滤器连续改写，每次序列化都是白做的
-// 一次 O(正文)；真正要字节的时机是转发（见 Bytes）。
+// 一次 O(正文)；真正要字节的时机是转发（见 Bytes）。写回后 Bytes 只重写被改动的顶层成员。
 func (a *BodyAccessor) Store(body map[string]any) error {
 	if a == nil {
 		return ErrBodyUnavailable
@@ -161,31 +165,73 @@ func (a *BodyAccessor) Store(body map[string]any) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.tree = body
-	a.raw = nil
+	a.patched = nil
 	a.dirty = true
 	return nil
 }
 
-// Bytes 返回当前正文的字节；被 Store 改写过后重新序列化，否则返回原始字节。
+// Bytes 返回当前正文的字节。
+//
+// 未经 Store 时逐字返回入站原字节（正确性基线）；Store 之后在原字节上定点重写被改动的
+// 顶层成员，其余字节（键序、空白、转义、数字写法）一律保留。
 func (a *BodyAccessor) Bytes() ([]byte, error) {
 	if a == nil {
 		return nil, ErrBodyUnavailable
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.raw != nil {
-		return a.raw, nil
+	if a.patched != nil {
+		return a.patched, nil
 	}
 	if !a.dirty {
-		a.raw = []byte{}
-		return a.raw, nil
+		// 未经 Store：原字节即出站字节（含空正文的零长切片）。就地改树而不 Store 的改动
+		// 对出站不可见——与旧实现同一条语义，转发器不读未写回的改动。
+		if a.original == nil {
+			a.original = []byte{}
+		}
+		return a.original, nil
 	}
-	encoded, err := json.Marshal(a.tree)
+	patched, err := a.patchLocked()
 	if err != nil {
-		return nil, fmt.Errorf("guard: 正文序列化失败: %w", err)
+		return nil, err
 	}
-	a.raw = encoded
-	return a.raw, nil
+	a.patched = patched
+	return a.patched, nil
+}
+
+// patchLocked 在原字节上定点重写被改动的顶层成员。
+//
+// 原文不是 JSON 对象（空正文，或 `null` 一类的异构形状）时退回整份序列化：那种场景本来就没有
+// 「未改动的字节」可保。
+func (a *BodyAccessor) patchLocked() ([]byte, error) {
+	layout, err := scanBodyLayout(a.original)
+	if err != nil {
+		return appendEncodedJSON(nil, a.tree)
+	}
+	changed := make(map[string]bool, len(layout.members))
+	rewritten := 0
+	for _, span := range layout.members {
+		value, exists := a.tree[span.key]
+		if !exists {
+			rewritten++
+			continue
+		}
+		if before, known := a.digests[span.key]; known && a.digester.digest(value) == before {
+			continue
+		}
+		changed[span.key] = true
+		rewritten++
+	}
+	// 树与原文语义相同（例如过滤规则命中却没改动正文）：不复制、不重写，原字节就是答案。
+	if rewritten == 0 && len(a.tree) == len(layout.members) {
+		if a.original == nil {
+			a.original = []byte{}
+		}
+		return a.original, nil
+	}
+	return appendPatchedObject(a.digester, make([]byte, 0, len(a.original)+64), a.original, layout, a.tree, func(key string) bool {
+		return changed[key]
+	})
 }
 
 // Factory 返回绑定到本访问器的工厂。
