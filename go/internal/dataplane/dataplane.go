@@ -420,11 +420,6 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.writeGuardResponse(writer, nil, guard.BuildError(http.StatusBadRequest, "请求上下文构造失败", ""))
 		return
 	}
-	if err := pc.SetOwner(egress.OwnerGo); err != nil {
-		// 归属只能决定一次：前门已经判过，重复判定说明装配出错。按冲突处理而不是继续。
-		h.logger.Warn("dataplane.owner_conflict", map[string]any{"path": request.URL.Path, "error": err.Error()})
-	}
-
 	state := &RequestState{
 		PC:         pc,
 		Format:     spec.Format,

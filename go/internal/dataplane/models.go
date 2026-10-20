@@ -706,9 +706,6 @@ func (h *Handler) serveModelListRequest(writer http.ResponseWriter, request *htt
 		writeJSONError(writer, http.StatusBadRequest, "请求上下文构造失败", "internal_server_error")
 		return
 	}
-	if err := pc.SetOwner(egress.OwnerGo); err != nil {
-		h.logger.Warn("dataplane.owner_conflict", map[string]any{"path": request.URL.Path, "error": err.Error()})
-	}
 	body := newBodyAccess(requestCtx, pc, h.options.BodyOptions)
 	deps := h.options.Base
 	deps.Body = body.factory

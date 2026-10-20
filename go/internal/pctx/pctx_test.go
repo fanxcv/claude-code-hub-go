@@ -4,14 +4,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/egress"
-	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 )
 
 // countingBody 记录读取次数，用于断言「构造期不读体」。
@@ -132,54 +130,6 @@ func TestTakeBodyIsOneShot(t *testing.T) {
 	}
 }
 
-func TestOwnerIsDecidedOnce(t *testing.T) {
-	var buf strings.Builder
-	ctx := newTestContext(t, Init{Logger: logx.New(&buf)})
-
-	if _, ok := ctx.Owner(); ok {
-		t.Fatal("未决定时 Owner 不应有值")
-	}
-	if err := ctx.SetOwner(egress.OwnerGo); err != nil {
-		t.Fatalf("首次 SetOwner 失败: %v", err)
-	}
-	owner, ok := ctx.Owner()
-	if !ok || owner != egress.OwnerGo {
-		t.Fatalf("Owner = %q/%v, want go/true", owner, ok)
-	}
-
-	if err := ctx.SetOwner(egress.OwnerNode); !errors.Is(err, ErrOwnerAlreadySet) {
-		t.Fatalf("改判应返回 ErrOwnerAlreadySet，得到 %v", err)
-	}
-	if err := ctx.SetOwner(egress.OwnerGo); !errors.Is(err, ErrOwnerAlreadySet) {
-		t.Fatalf("同值重设也应返回 ErrOwnerAlreadySet，得到 %v", err)
-	}
-	if owner, _ := ctx.Owner(); owner != egress.OwnerGo {
-		t.Fatalf("改判被静默接受: %q", owner)
-	}
-
-	logged := buf.String()
-	for _, want := range []string{"pctx.owner.rejected", `"attempt":"node"`, `"existing":"go"`} {
-		if !strings.Contains(logged, want) {
-			t.Fatalf("日志缺少 %s，实际: %s", want, logged)
-		}
-	}
-}
-
-func TestOwnerRejectsUnknownValues(t *testing.T) {
-	ctx := newTestContext(t, Init{})
-	for _, owner := range []egress.Owner{"", "k8s", "GO"} {
-		if err := ctx.SetOwner(owner); !errors.Is(err, ErrUnknownOwner) {
-			t.Fatalf("非法归属 %q 应返回 ErrUnknownOwner，得到 %v", owner, err)
-		}
-	}
-	if _, ok := ctx.Owner(); ok {
-		t.Fatal("非法归属不应写入上下文")
-	}
-	if err := ctx.SetOwner(egress.OwnerNode); err != nil {
-		t.Fatalf("非法尝试后仍应允许设置合法归属: %v", err)
-	}
-}
-
 func TestSlotsAreCopiedNotAliased(t *testing.T) {
 	ctx := newTestContext(t, Init{})
 
@@ -273,7 +223,6 @@ func TestConcurrentAccessIsRaceFreeAndSingleWinner(t *testing.T) {
 	const goroutines = 16
 	var (
 		bodyWinners  atomic.Int32
-		ownerWinners atomic.Int32
 		settleWinner atomic.Int32
 		wg           sync.WaitGroup
 	)
@@ -290,9 +239,6 @@ func TestConcurrentAccessIsRaceFreeAndSingleWinner(t *testing.T) {
 			if _, err := ctx.TakeBody(); err == nil {
 				bodyWinners.Add(1)
 			}
-			if err := ctx.SetOwner(egress.OwnerGo); err == nil {
-				ownerWinners.Add(1)
-			}
 			if ctx.MarkSettled(Settlement{StatusCode: 200, Success: true}) {
 				settleWinner.Add(1)
 			}
@@ -303,13 +249,7 @@ func TestConcurrentAccessIsRaceFreeAndSingleWinner(t *testing.T) {
 	if got := bodyWinners.Load(); got != 1 {
 		t.Fatalf("正文赢家应为 1，得到 %d", got)
 	}
-	if got := ownerWinners.Load(); got != 1 {
-		t.Fatalf("归属赢家应为 1，得到 %d", got)
-	}
 	if got := settleWinner.Load(); got != 1 {
 		t.Fatalf("结算赢家应为 1，得到 %d", got)
-	}
-	if _, ok := ctx.Owner(); !ok {
-		t.Fatal("并发后归属应当已写入")
 	}
 }

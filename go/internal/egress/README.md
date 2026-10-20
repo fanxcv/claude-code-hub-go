@@ -43,8 +43,6 @@ frontDoor.Unimplemented()   // 未实现路径的 404 终端
 
 | 符号 | 为什么留 |
 | --- | --- |
-| `Owner` / `OwnerGo` | `internal/pctx` 的 `SetOwner` 校验契约；数据面与模型面在建上下文时恒传 `OwnerGo` |
-| `OwnerNode` | 只作 pctx 取值契约的词汇保留（已无生产者）；删除须同时改 `internal/pctx` |
 | `Family` + 四个具名族 | 协议方言词汇，消费者在 `internal/dataplane/routes.go` 与 `internal/pctx` |
 | `NormalizePath` | 数据面与管理面路由表的键归一化（`/v1//messages` 必须与 `/v1/messages` 同键） |
 

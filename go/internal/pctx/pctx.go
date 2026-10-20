@@ -1,11 +1,8 @@
 // Package pctx 承载一次代理请求的上下文与契约，对应 src/app/v1/_lib/proxy/session.ts 的职责切面。
 //
 // 三条不变量：
-//  1. 归属在入口一次性决定。SetOwner 只允许成功一次；再次设置返回错误并记日志，绝不静默覆盖。
-//     理由：message_request 没有幂等键，两侧同时结算必然错账
-//
-// 探针 3 的「后写全胜且产生混合终态」）。
-// 同一理由适用于 SetMessageRequestID：一行请求只允许开一次。
+//  1. 日志行在入口一次性开户。SetMessageRequestID 只允许成功一次；再次设置返回错误，绝不静默覆盖。
+//     理由：message_request 没有幂等键，重复开户必然产生两行而只结算其一。
 //  2. 正文只被消费一次。TakeBody 成功后再取返回可判别错误，用于防止同一份字节被多处重复驻留。
 //  3. 本包只做上下文与契约，不做业务。选路、限流、结算的判定都在各自包里，本包只提供槽位。
 //
@@ -30,10 +27,6 @@ import (
 var (
 	// ErrInvalidInit 表示初始化参数非法。
 	ErrInvalidInit = errors.New("pctx: 初始化参数非法")
-	// ErrUnknownOwner 表示归属取值不在已知集合内。
-	ErrUnknownOwner = errors.New("pctx: 归属取值非法")
-	// ErrOwnerAlreadySet 表示归属已经决定，不允许改判。
-	ErrOwnerAlreadySet = errors.New("pctx: 归属已决定，不可改判")
 	// ErrBodyAlreadyTaken 表示正文已经被消费过。
 	ErrBodyAlreadyTaken = errors.New("pctx: 正文已被消费")
 	// ErrNoBody 表示本次请求没有正文。
@@ -154,9 +147,6 @@ type Context struct {
 
 	messageRequestID    int64
 	messageRequestIDSet bool
-
-	owner    egress.Owner
-	ownerSet bool
 
 	persistDebug bool
 
@@ -380,39 +370,6 @@ func (c *Context) MessageRequestID() (int64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.messageRequestID, c.messageRequestIDSet
-}
-
-// SetOwner 写入归属标记，只允许成功一次。
-//
-// 第二次调用（无论取值是否相同）返回 ErrOwnerAlreadySet 并记一条 warn：静默覆盖会让
-// 「谁结算」这件事在两个调度器之间漂移，是错账的直接来源。
-func (c *Context) SetOwner(owner egress.Owner) error {
-	if owner != egress.OwnerGo && owner != egress.OwnerNode {
-		return fmt.Errorf("%w: %q", ErrUnknownOwner, owner)
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.ownerSet {
-		err := fmt.Errorf("%w: 现有归属 %q，请求改判为 %q", ErrOwnerAlreadySet, c.owner, owner)
-		c.log.Warn("pctx.owner.rejected", map[string]any{
-			"existing": string(c.owner),
-			"attempt":  string(owner),
-		})
-		return err
-	}
-	c.owner = owner
-	c.ownerSet = true
-	return nil
-}
-
-// Owner 读取归属标记；未决定时返回 false。
-func (c *Context) Owner() (egress.Owner, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.ownerSet {
-		return "", false
-	}
-	return c.owner, true
 }
 
 // MarkSettled 记录终态结算结果，返回是否本次调用完成了结算。
