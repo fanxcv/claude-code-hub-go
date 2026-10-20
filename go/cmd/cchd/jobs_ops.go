@@ -118,6 +118,13 @@ func startOpsRuntime(
 		}
 	}
 
+	// outbox 已发布行的保留期清理：无条件点亮（与探活历史清理同判——默认关闭会让表继续只增不减，
+	// 而这正是本任务要修的那类静默问题）。保留天数与间隔由 config 层解析并校验，这里只翻译。
+	options.OutboxRetention = jobs.NewOpsOutboxEventsRetention(deps, jobs.OpsOutboxEventsRetentionConfig{
+		Retention: time.Duration(cfg.OutboxRetention.RetentionDays) * 24 * time.Hour,
+		Interval:  cfg.OutboxRetention.Interval,
+	})
+
 	tasks := jobs.OpsTasks(deps, options)
 	if len(tasks) == 0 {
 		logger.Info("ops_jobs_skipped", map[string]any{"reason": "no_tasks"})

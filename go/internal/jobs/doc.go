@@ -15,6 +15,8 @@
 //	CCH_JOB_LOG_CLEANUP_ENABLED      日志自动清理，默认 true
 //	CCH_JOB_LOG_CLEANUP_TICK_MS      日志清理到点判定间隔，默认 3600000（1 小时）
 //	CCH_JOB_AVAIL_BACKFILL_INTERVAL_MS 回填检查间隔，默认 300000（5 分钟）
+//	CCH_JOB_OUTBOX_RETENTION_DAYS    outbox 已发布行保留天数，默认 7（取值 1-90）
+//	CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS outbox 保留期清理间隔，默认 3600000（1 小时）
 //	CCH_CLOUD_PRICE_TABLE_URL        价格表地址，默认 https://cch-plus.com/pricing/v1/models.json
 //
 // 为什么默认开启：本轮目标是 Node 完全下线后由 Go 独占这些职责；若默认关闭，Node 停掉后

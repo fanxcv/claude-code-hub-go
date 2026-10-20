@@ -1,4 +1,4 @@
-// jobsrun 手动驱动后台任务一轮：云价格同步与可用性投影回填。
+// jobsrun 手动驱动后台任务一轮：云价格同步、可用性投影回填与 outbox 保留期清理。
 //
 // 用途：验收与排障。cchd 内部的 Scheduler 有错峰与单例约束，手工排查时需要「立刻跑一轮
 // 并看到原始计数」的入口。参数与 cchd 的开关一致（同读 CCH_* 环境变量）。
@@ -7,6 +7,7 @@
 //
 //	CCH_TEST_DSN=... go run ./cmd/jobsrun -job=price-sync
 //	CCH_TEST_DSN=... go run ./cmd/jobsrun -job=avail-backfill
+//	CCH_TEST_DSN=... go run ./cmd/jobsrun -job=outbox-retention
 //	CCH_TEST_DSN=... go run ./cmd/jobsrun -job=all
 package main
 
@@ -15,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/config"
@@ -24,7 +26,7 @@ import (
 )
 
 func main() {
-	job := flag.String("job", "all", "price-sync | avail-backfill | all")
+	job := flag.String("job", "all", "price-sync | avail-backfill | outbox-retention | all")
 	dsnEnv := flag.String("dsn-env", "CCH_TEST_DSN", "读取 DSN 的环境变量名")
 	timeout := flag.Duration("timeout", 15*time.Minute, "整体超时")
 	// force 用一个不存在的模型名填 overwriteManual：按 Node 口径，非空列表会跳过版本短路，
@@ -103,7 +105,37 @@ func main() {
 		}
 	}
 
+	if *job == "all" || *job == "outbox-retention" {
+		// 单轮上限与生产同口径（批 1000 / 时长 5 分钟）；保留天数取 CCH_JOB_OUTBOX_RETENTION_DAYS。
+		retentionDays := intEnvValue(os.Getenv("CCH_JOB_OUTBOX_RETENTION_DAYS"), 7)
+		task := jobs.NewOpsOutboxEventsRetention(
+			jobs.OpsDeps{Pools: pools, Logger: logger},
+			jobs.OpsOutboxEventsRetentionConfig{Retention: time.Duration(retentionDays) * 24 * time.Hour},
+		)
+		started := time.Now()
+		outcome, err := task.Run(ctx)
+		if err != nil {
+			logger.Error("outbox_retention_failed", map[string]any{"error": err.Error()})
+			failed = true
+		} else {
+			fields := map[string]any{"deleted": outcome.Processed, "elapsedMs": time.Since(started).Milliseconds()}
+			for key, value := range outcome.Fields {
+				fields[key] = value
+			}
+			logger.Info("outbox_retention_done", fields)
+		}
+	}
+
 	if failed {
 		os.Exit(1)
 	}
+}
+
+// intEnvValue 读一个整数环境变量；非法或未设置时取 fallback（手工入口不因旋钮写错而拒绝运行）。
+func intEnvValue(raw string, fallback int) int {
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }

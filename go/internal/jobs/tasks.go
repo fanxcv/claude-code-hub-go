@@ -50,6 +50,15 @@ func OpsTasks(deps OpsDeps, options OpsTaskOptions) []OpsTask {
 		})
 	}
 
+	// outbox 已发布行的保留期清理：只删 published_at IS NOT NULL（见 outbox_retention.go）。
+	if options.OutboxRetention != nil && deps.Pools != nil {
+		tasks = append(tasks, OpsTask{
+			Name:  "outbox-events-retention",
+			Every: options.OutboxRetention.Interval(),
+			Run:   options.OutboxRetention.Run,
+		})
+	}
+
 	if options.OutboxReplay && deps.Redis != nil && deps.Pools != nil {
 		replay := NewOutboxReplay(deps)
 		tasks = append(tasks, OpsTask{
@@ -85,7 +94,9 @@ type OpsTaskOptions struct {
 	// LogCleanup 是日志自动清理（审计缺口 G4；Node 对应 Bull cron「每日 cleanupSchedule」）。
 	LogCleanup    LogCleanupConfig
 	ReplayCleanup *ReplayCleanup
-	OutboxReplay  bool
+	// OutboxRetention 是 outbox 已发布行的保留期清理；nil 即不注册（由 jobs_ops.go 装配）。
+	OutboxRetention *OpsOutboxEventsRetention
+	OutboxReplay    bool
 	// PublicStatusRebuild 是否启用 public-status 投影重建（Node 无开关，装配方在
 	// 有 Redis 时传 true）。
 	PublicStatusRebuild bool

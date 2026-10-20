@@ -488,3 +488,87 @@ func TestLoadAcceptsEmbedPages(t *testing.T) {
 		t.Fatalf("CCH_EGRESS_PAGES 应为 embed，收到 %q", cfg.EgressPages)
 	}
 }
+
+// outbox 保留期清理的两个旋钮：默认值与边界。
+//
+// 为何在 config 层钉：jobs 层的 cfg 只是这一层翻译后的结论（`RetentionDays` → Duration），
+// 取值边界放在这里才能「非法即 fail fast」——一个 CCH_JOB_OUTBOX_RETENTION_DAYS=0 若被
+// 静默当成「保留 0 天」，启动后的第一轮就会把全表已发布行扫空。
+func TestOutboxRetentionConfigDefaults(t *testing.T) {
+	cfg, err := Load(envMap(nil))
+	if err != nil {
+		t.Fatalf("默认值必须可装载: %v", err)
+	}
+	if cfg.OutboxRetention.RetentionDays != 7 {
+		t.Errorf("CCH_JOB_OUTBOX_RETENTION_DAYS 默认应为 7，收到 %d", cfg.OutboxRetention.RetentionDays)
+	}
+	if cfg.OutboxRetention.Interval != time.Hour {
+		t.Errorf("CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS 默认应为 1 小时，收到 %s", cfg.OutboxRetention.Interval)
+	}
+}
+
+func TestOutboxRetentionConfigAcceptsBounds(t *testing.T) {
+	cases := []struct {
+		name     string
+		env      map[string]string
+		wantDays int
+		wantTick time.Duration
+	}{
+		{
+			name:     "下限",
+			env:      map[string]string{"CCH_JOB_OUTBOX_RETENTION_DAYS": "1"},
+			wantDays: 1,
+			wantTick: time.Hour,
+		},
+		{
+			name: "上限",
+			env: map[string]string{
+				"CCH_JOB_OUTBOX_RETENTION_DAYS":      "90",
+				"CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS": "60000",
+			},
+			wantDays: 90,
+			wantTick: time.Minute,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			cfg, err := Load(envMap(testCase.env))
+			if err != nil {
+				t.Fatalf("边界值必须合法: %v", err)
+			}
+			if cfg.OutboxRetention.RetentionDays != testCase.wantDays {
+				t.Errorf("保留天数应为 %d，收到 %d", testCase.wantDays, cfg.OutboxRetention.RetentionDays)
+			}
+			if cfg.OutboxRetention.Interval != testCase.wantTick {
+				t.Errorf("间隔应为 %s，收到 %s", testCase.wantTick, cfg.OutboxRetention.Interval)
+			}
+		})
+	}
+}
+
+func TestOutboxRetentionConfigRejectsInvalid(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantVar string
+	}{
+		{"保留天数为 0", map[string]string{"CCH_JOB_OUTBOX_RETENTION_DAYS": "0"}, "CCH_JOB_OUTBOX_RETENTION_DAYS"},
+		{"保留天数为负", map[string]string{"CCH_JOB_OUTBOX_RETENTION_DAYS": "-1"}, "CCH_JOB_OUTBOX_RETENTION_DAYS"},
+		{"保留天数超上界", map[string]string{"CCH_JOB_OUTBOX_RETENTION_DAYS": "91"}, "CCH_JOB_OUTBOX_RETENTION_DAYS"},
+		{"保留天数非整数", map[string]string{"CCH_JOB_OUTBOX_RETENTION_DAYS": "7.5"}, "CCH_JOB_OUTBOX_RETENTION_DAYS"},
+		{"间隔为 0", map[string]string{"CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS": "0"}, "CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS"},
+		{"间隔超上界", map[string]string{"CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS": "86400001"}, "CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS"},
+		{"间隔非整数", map[string]string{"CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS": "1h"}, "CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := Load(envMap(testCase.env))
+			if err == nil {
+				t.Fatal("期望校验失败，实际通过")
+			}
+			if !strings.Contains(err.Error(), testCase.wantVar) {
+				t.Fatalf("错误信息必须包含变量名 %s，收到: %v", testCase.wantVar, err)
+			}
+		})
+	}
+}

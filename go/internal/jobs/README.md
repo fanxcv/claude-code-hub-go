@@ -11,6 +11,7 @@
 | 可用性投影回填 | `availproj.go` | 上游 availability projection worker | 启动即跑一次，之后每 5 分钟复查标记 |
 | 调度 | `scheduler.go` | 各自的 setInterval / 启动期一次性调用 | — |
 | 单例锁 | `leader.go` | 上游的 withAdvisoryLock | 每轮任务 |
+| outbox 已发布行保留期清理 | `outbox_retention.go` + `store/outbox_cleanup.go` | 无（Go 专有；上游从不删这张表） | 启动即跑一次，之后每 1 小时 |
 
 手工跑一轮（验收与排障用）：
 
@@ -34,6 +35,7 @@ CCH_TEST_DSN=... go run ./cmd/jobsrun -job=avail-backfill
 | 7 | `ListManualPriceModelNames` 只返回名字集合 | Node 返回整行 Map，调用点只做 `has(modelName)`。差异不影响判定。 |
 | 8 | 锁连接不占分道预算（`store.OpenDedicatedConn`） | 从池里借锁连接会让第二个等锁实例**阻塞在借连接上**而不是快速得到「锁被占了」；预算为 1 的分道会直接死锁。Node 同样是另开 `max: 1` 的客户端。 |
 | 9 | `RequestSync` 尚无生产调用点 | Node 在响应处理命中未知模型时触发（`response-handler.ts:6735`）；Go 数据面的对应位置未接线。接线只需调一次本方法。 |
+| 10 | outbox 按时间删**已发布**行（保留 7 天，分批 1000） | 上游从不删。这张表只增不减（生产实测 88 万行 / 483 MB），而已发布行没有任何读方（唯一读路径带 `WHERE published_at IS NULL`），幂等去重落在 `proj_applied_requests` 主键上。删除谓词必含 `published_at IS NOT NULL`，未发布行任何情况下不删：删了即投影永久缺口且无补偿路径（回填已 done）。 |
 
 ## 口径一致性（已实测）
 
@@ -56,7 +58,12 @@ Node 已下线，此节只留结论备查：价格同步双跑最坏是同一模
 cd go
 go test ./internal/jobs/                     # 无库：转换器、同步语义、回填分块、调度器、漂移钉子
 CCH_TEST_DSN=... go test ./internal/jobs/    # 真库：锁互斥、新 store 方法的 SQL
+CCH_TEST_SYNC_DSN=... go test ./internal/jobs/ -run 'OutboxRetention'   # 可弃库：真删行的保留期清理
 ```
+
+`CCH_TEST_SYNC_DSN` 指向的必须是**可弃库**（`CREATE DATABASE x TEMPLATE cch_loadtest` 一类）：
+那条用例会真删 `outbox_events` 的行，落在共享测试库上等于替别的套件清库。
+它包含最关键的一条负例：未发布（`published_at IS NULL`）但很旧的行**必须保留**。
 
 真库用例**刻意不覆盖会污染共享库的路径**（整表删除、写 `backfill_done`、写 `cloud_pricing_catalog`），
 那三条语义由无库的 fake store 用例覆盖——用合成夹具驱动真库的整表切换等于清空该库的云端价格。

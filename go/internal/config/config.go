@@ -64,6 +64,18 @@ type PatrolConfig struct {
 	MaxRowsPerRound int
 }
 
+// OutboxRetentionConfig 是 `outbox_events` 已发布行保留期清理的配置（CCH_JOB_OUTBOX_*）。
+//
+// 这条清理只删 `published_at IS NOT NULL` 的行（已发布行没有任何读路径，幂等去重落在
+// proj_applied_requests 主键上）。保留天数的上界 90 是防呆：上限内的数据仍可能被回放对照，
+// 再往上就不该用「保留期」表达需求，而应先想清楚谁在读它。
+type OutboxRetentionConfig struct {
+	// RetentionDays 是已发布行的保留天数（1–90，默认 7）。
+	RetentionDays int
+	// Interval 是清理任务的触发间隔（默认 1 小时）。
+	Interval time.Duration
+}
+
 // DefaultPprofAddr 是性能剖析面的默认监听地址：**只绑回环**。
 //
 // 历史：它曾从 `CCH_INTERNAL_PORT`（Node 回退端口）派生，以避开与回退端口相撞。回退端口已随
@@ -249,6 +261,9 @@ type Config struct {
 	// Patrol 是未落终态行的自愈巡检（Go 专有）。
 	Patrol PatrolConfig
 
+	// OutboxRetention 是 outbox 已发布行的保留期清理（Go 专有）。
+	OutboxRetention OutboxRetentionConfig
+
 	// Pprof 是性能剖析面（Go 专有，默认关闭）。
 	Pprof PprofConfig
 
@@ -336,6 +351,19 @@ func LoadLookup(lookup LookupEnvFunc) (Config, error) {
 		return Config{}, err
 	}
 
+	// outbox 保留期清理：两个旋钮都在这里解析与校验（非法即 fail fast），jobs 层只读结论。
+	outboxRetentionDays, err := parseIntRange(
+		lookupValue(lookup, "CCH_JOB_OUTBOX_RETENTION_DAYS"), "CCH_JOB_OUTBOX_RETENTION_DAYS", 7, 1, 90)
+	if err != nil {
+		return Config{}, err
+	}
+	outboxCleanupIntervalMs, err := parseIntRange(
+		lookupValue(lookup, "CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS"), "CCH_JOB_OUTBOX_CLEANUP_INTERVAL_MS",
+		60*60*1000, 1_000, 24*60*60*1000)
+	if err != nil {
+		return Config{}, err
+	}
+
 	// 性能剖析面：即便关闭也把地址解析出来——启动日志要如实报出「关着，地址是哪个」，
 	// 否则排查时无法区分「开关没开」与「地址写错了」。
 	pprofAddr, err := parsePprofAddr(lookupValue(lookup, "CCH_PPROF_ADDR"))
@@ -407,6 +435,10 @@ func LoadLookup(lookup LookupEnvFunc) (Config, error) {
 			Interval:        time.Duration(patrolInterval) * time.Millisecond,
 			BatchSize:       patrolBatchSize,
 			MaxRowsPerRound: patrolMaxRows,
+		},
+		OutboxRetention: OutboxRetentionConfig{
+			RetentionDays: outboxRetentionDays,
+			Interval:      time.Duration(outboxCleanupIntervalMs) * time.Millisecond,
 		},
 		Pprof: PprofConfig{
 			// 默认关闭：剖析面会暴露调用栈与堆内容，不该在没人看着时开着。
@@ -504,6 +536,8 @@ func (c Config) Redacted() map[string]any {
 		"patrolEnabled":       c.Patrol.Enabled,
 		"patrolAfterMs":       c.Patrol.UnsettledAfter.Milliseconds(),
 		"patrolIntervalMs":    c.Patrol.Interval.Milliseconds(),
+		"outboxRetentionDays": c.OutboxRetention.RetentionDays,
+		"outboxCleanupMs":     c.OutboxRetention.Interval.Milliseconds(),
 		"pprofEnabled":        c.Pprof.Enabled,
 		"pprofAddr":           c.Pprof.Addr,
 		"memoryLimitSet":      c.MemoryLimitSet,
