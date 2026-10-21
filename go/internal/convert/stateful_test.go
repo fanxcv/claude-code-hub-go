@@ -466,3 +466,67 @@ func TestPromptCacheKeyCarriedExceptAnthropic(t *testing.T) {
 		t.Fatalf("网关注入的 prompt_cache_key 不算客户端约束，不得记损，实际 %v", losses)
 	}
 }
+
+// TestCodexConversionKeepsRewriteTierEmpty 用真实 Codex 形状的请求体跑 responses→chat，
+// 钉住「请求级开关重分档后该转换的 rewrite 档计数为 0」。
+//
+// 为何要钉：Codex 每个请求都带 `include:["reasoning.encrypted_content"]`，它此前落
+// unknown_field.param（rewrite 档），于是几乎每条转换请求恒挂一枚「内容改写」徽章——生产实测
+// 24h 内 1982/7899 行带徽章，其中 90.8%（2159 项）只由这一格构成。计数口径必须是整份台账按
+// LossSeverityOf 累加，而非只数某几个 capability：漏一条就是又让一条噪声点亮徽章。
+//
+// 对照组（presence_penalty）证明 rewrite 档没被整体改瞎：采样惩罚直接改生成分布，必须仍计入。
+func TestCodexConversionKeepsRewriteTierEmpty(t *testing.T) {
+	const codexBody = `{"model":"gpt-5-codex","instructions":"you are codex",` +
+		`"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}],` +
+		`"tools":[{"type":"function","name":"shell","description":"run a command","strict":false,` +
+		`"parameters":{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}}],` +
+		`"tool_choice":"auto","parallel_tool_calls":true,"store":false,` +
+		`"reasoning":{"effort":"medium","summary":"auto"},` +
+		`"include":["reasoning.encrypted_content"],"stream":true}`
+
+	run := func(t *testing.T, body string) (rewriteCount int, entries []string) {
+		t.Helper()
+		ctx := ConvertCtx{
+			ClientFormat:   clientFormatOfProtocol(ProtocolOpenAIResponses),
+			TargetProto:    ProtocolOpenAIChat,
+			Model:          "m",
+			ToWireToolName: NormalizeToolName,
+		}
+		decoded, ok := DecodeRequest(ProtocolOpenAIResponses, mustParsePayload(t, body), ctx)
+		if !ok {
+			t.Fatal("responses 线必须能解码")
+		}
+		encoded, ok := EncodeRequest(ProtocolOpenAIChat, decoded.Value, ctx)
+		if !ok {
+			t.Fatal("chat 线必须能编码")
+		}
+		// 与 forward 的 encodeConvertedBody 同口径：两侧损失合并成一份台账。
+		for _, entry := range append(append([]LossEntry{}, decoded.Loss.Entries...), encoded.Loss.Entries...) {
+			entries = append(entries, entry.Capability+"/"+string(entry.Action)+"/"+entry.Detail)
+			if LossSeverityOf(entry.Capability, entry.Action) == SeverityRewrite {
+				rewriteCount++
+			}
+		}
+		return rewriteCount, entries
+	}
+
+	rewriteCount, entries := run(t, codexBody)
+	if rewriteCount != 0 {
+		t.Fatalf("真实 Codex 请求的转换不得有 rewrite 档损失，实际 %d 条：%v", rewriteCount, entries)
+	}
+	if !slices.Contains(entries, LossRequestOption+"/dropped/include") {
+		t.Fatalf("include 必须落 %s/dropped/include，实际台账：%v", LossRequestOption, entries)
+	}
+
+	// 对照组：采样惩罚直接改生成分布，丢掉它必然换一种答法 ⇒ 必须仍在 rewrite 档。
+	controlBody := strings.Replace(codexBody, `"stream":true`, `"presence_penalty":0.5,"stream":true`, 1)
+	controlCount, controlEntries := run(t, controlBody)
+	if controlCount < 1 {
+		t.Fatalf("presence_penalty 必须计进 rewrite 档（对照组的可证伪点），实际 0 条：%v", controlEntries)
+	}
+	if !slices.Contains(controlEntries, LossRequestSampler+"/dropped/presence_penalty") {
+		t.Fatalf("presence_penalty 必须落 %s/dropped/presence_penalty，实际台账：%v",
+			LossRequestSampler, controlEntries)
+	}
+}

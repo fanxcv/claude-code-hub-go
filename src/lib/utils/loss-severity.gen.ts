@@ -24,6 +24,8 @@ export const LOSS_SEVERITY_BY_CAPABILITY: Readonly<
   prompt_cache_key: "info",
   "reasoning.replay": "degrade",
   "reasoning.summary": "info",
+  "request.option": "info",
+  "request.policy": "degrade",
   store: "info",
   "thinking.derived": "degrade",
   "thinking.encrypted": "degrade",

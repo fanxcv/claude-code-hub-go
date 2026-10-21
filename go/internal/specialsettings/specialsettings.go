@@ -392,8 +392,8 @@ func ConversionFailureEntry(failure *convert.ConversionFailure) map[string]any {
 // 的 Loss* 常量旁）维护一份，界面自建一张表就是第二份真源。
 //
 // 体积上界（可核）：capability 取自 convert 的 `Loss*` 常量（hub.go 的两段 capability
-// const 块，含 catch-all 细分后的 28 个），action 只有 dropped/downgraded/rewritten 三种，
-// 故 groups **至多 28×3=84 组**、每组约 80 字节，加上协议对、total 与三档合计共约 7KB 的
+// const 块，含 catch-all 细分后的 39 个），action 只有 dropped/downgraded/rewritten 三种，
+// 故 groups **至多 39×3=117 组**、每组约 80 字节，加上协议对、total 与三档合计共约 10KB 的
 // 硬上界（仍远小于同层既有条目如 provider_parameter_override 的上界）。
 //
 // 分组顺序按 (capability, action) 字典序固定：同一份损失集必须序列化成同一份字节，

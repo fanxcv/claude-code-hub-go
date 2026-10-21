@@ -513,6 +513,31 @@ const (
 	LossTextControls   = "text.controls"
 	LossStoreFlag      = "store"
 
+	// 以下三个是**请求级开关**按「丢弃后上游生成的正文会不会不同」重分档后的归因类别
+	// （键清单见 stateful.go 的 foreignDroppableFields）。
+	//
+	// 为何不再一律用 unknown_field.param：那一格把 include（响应侧附加载荷）与
+	// presence_penalty（采样惩罚，真改分布）混成同档，于是 rewrite 徽章对几乎每条转换
+	// 请求点亮——生产实测 24h 内 1982/7899 行带徽章，其中 90.8%（2159 项）只由该格构成。
+	// 分三档的理由：条目的 detail 刻意不进审计条目（见 specialsettings.ConversionLossEntry），
+	// 故 capability 是审核面上唯一能回答「丢的是哪类东西」的字段。
+
+	// LossRequestOption 装「丢后正文一字不变，只是少了一项附加载荷或标识」的键：
+	// include / top_logprobs / service_tier / user / safety_identifier / client_metadata。
+	// 判据：上游收到的提示与采样参数一项没变，故 info。client_metadata 与既有 metadata
+	// （LossUnknownFieldIdentity）同一语义，必须同档，否则同一事实两个口径。
+	LossRequestOption = "request.option"
+
+	// LossRequestPolicy 装「正文不变，但**交付方式**变了」的键：truncation（超长上下文由
+	// 「自动丢最旧」变成直接报错）、background（由「立刻给句柄轮询」变成同步阻塞）。
+	// 用户拿到的东西形状不同，故降一档（degrade）而不是 info。
+	LossRequestPolicy = "request.policy"
+
+	// LossRequestSampler 装「直接改生成分布」的键：presence_penalty / frequency_penalty。
+	// 上游看到的采样参数变了 ⇒ 正文会不同，故保持默认 rewrite 档，**不进**
+	// lossSeverityByCapability（默认档进表只是噪声）。
+	LossRequestSampler = "request.sampler"
+
 	// LossReasoningSummary 是请求侧 `reasoning.summary` 在无承载位目标线上的丢弃。
 	//
 	// 为何单独设类而不是继续走 catch-all：Codex 每个请求都带 `reasoning.summary:"auto"`，
@@ -665,6 +690,8 @@ var lossSeverityByCapability = map[string]LossSeverity{
 	LossCacheControl:         SeverityDegrade,
 	LossThinkingEncrypted:    SeverityDegrade,
 	LossToolStrict:           SeverityDegrade,
+	LossRequestOption:        SeverityInfo,
+	LossRequestPolicy:        SeverityDegrade,
 }
 
 // lossSeverityByCapabilityAction 是「同一能力按动作分档」的例外表。

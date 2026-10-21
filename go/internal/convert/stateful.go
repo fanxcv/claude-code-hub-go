@@ -81,24 +81,32 @@ var foreignDroppableFields = []foreignDroppableField{
 	{key: "prompt_cache_key", class: LossPromptCacheKey},
 
 	// 以下十一个键是 Responses / Chat 线的请求级开关与采样参数：枢纽没有承载位，跨线时整键丢。
-	// 类别沿用 catch-all 家族的 `unknown_field.param`（seed / stop / parallel_tool_calls 等同属
-	// 这一类），而不新造常量：它们正是「源线有、枢纽无」的同一类事实，detail 取键名，故台账里
-	// 仍能按键定位。
+	// 分档判据统一为「丢弃后上游生成的正文会不会不同」，据此落三个类别（定义见 hub.go）：
+	//   - request.option（info）：丢的只是附加载荷或标识，正文一字不变——include（加密推理 /
+	//     日志概率）、top_logprobs、service_tier、user、safety_identifier、client_metadata；
+	//   - request.policy（degrade）：正文不变但**交付方式**变了——truncation（超长上下文从
+	//     「自动丢最旧」变成报错）、background（从「立刻给句柄轮询」变成同步阻塞）；
+	//   - request.sampler（默认 rewrite）：直接改生成分布——presence_penalty、frequency_penalty。
 	//
-	// metadata 例外：它是身份/观测类元数据，目标线不承载时**生成内容一点不变**，故归 info 档
-	// 而非 rewrite。判据见 hub.go 的 lossSeverityByCapability 注释（rewrite = 上游看到的东西变了）。
+	// 为何不再一律用 catch-all 的 `unknown_field.param`：那一格把 include 与 presence_penalty
+	// 判成同档，徽章就对几乎每条转换请求点亮——生产实测 Codex 每个请求都带
+	// `include:["reasoning.encrypted_content"]`，故每行恒 +1 条 rewrite；24h 内该格独占全部
+	// rewrite 项的 90.8%（2159/2379），真损失反被淹没。seed / stop / parallel_tool_calls 之类
+	// 经 unknownFieldRules 归类的仍是真改行为，保持 rewrite。
+	//
+	// metadata 与 client_metadata 是同一语义（身份/观测类元数据，正文不变），故必须同档。
 	{key: "metadata", class: LossUnknownFieldIdentity},
-	{key: "client_metadata", class: LossUnknownFieldParam},
-	{key: "include", class: LossUnknownFieldParam},
-	{key: "truncation", class: LossUnknownFieldParam},
+	{key: "client_metadata", class: LossRequestOption},
+	{key: "include", class: LossRequestOption},
+	{key: "truncation", class: LossRequestPolicy},
 	// background:false 是默认语义（同步作答），目标线本来也是同步 ⇒ 与 store:false 同因不记。
-	{key: "background", class: LossUnknownFieldParam, requireTruthy: true},
-	{key: "top_logprobs", class: LossUnknownFieldParam},
-	{key: "presence_penalty", class: LossUnknownFieldParam},
-	{key: "frequency_penalty", class: LossUnknownFieldParam},
-	{key: "user", class: LossUnknownFieldParam},
-	{key: "service_tier", class: LossUnknownFieldParam},
-	{key: "safety_identifier", class: LossUnknownFieldParam},
+	{key: "background", class: LossRequestPolicy, requireTruthy: true},
+	{key: "top_logprobs", class: LossRequestOption},
+	{key: "presence_penalty", class: LossRequestSampler},
+	{key: "frequency_penalty", class: LossRequestSampler},
+	{key: "user", class: LossRequestOption},
+	{key: "service_tier", class: LossRequestOption},
+	{key: "safety_identifier", class: LossRequestOption},
 
 	// context_management 是 Responses 线的上下文编辑指令（如清空思考）：目标线无承载位也无
 	// 等价能力，丢的是线级结构而非可降级约束，故走结构子类（改写档）。
