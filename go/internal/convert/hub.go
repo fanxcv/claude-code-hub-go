@@ -251,7 +251,15 @@ type Request struct {
 	// 编码器原样写出，anthropic（无此概念）仍记 info 档损失。
 	PromptCacheKey    string
 	HasPromptCacheKey bool
-	Passthrough       map[WireProtocol]*Value
+	// ResponseFormat 是客户端的结构化输出约束，**保留源线原始形状**：chat 的 response_format
+	// 或 responses 的 text.format 整份对象，由编码器按目标线重排外壳（见 structured_output.go）。
+	//
+	// 为何不拆成中立字段：json_schema 内层的 `schema` 子树动辄 50 KiB，拆字段等于逼两个编码器
+	// 各自重建它；整份挂源树的指针才谈得上零拷贝（schema_sharing_test.go 钉住这条基线）。
+	// 为何是按需分配的指针：Request 守在 224 字节这一档 size class（它正好填掉 bool 之后的
+	// 对齐空隙：216 → 224，实际占位不变，见 TestRequestSizeStaysAt224）。
+	ResponseFormat *Value
+	Passthrough    map[WireProtocol]*Value
 }
 
 // Response 是枢纽响应。

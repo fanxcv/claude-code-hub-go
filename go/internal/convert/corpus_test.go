@@ -180,6 +180,13 @@ var intentionalRequestDivergences = map[string]intentionalDivergence{
 		Value:  "low",
 		Reason: "同上，落至 responses 的 reasoning.effort",
 	},
+	"request.openai-chat.reasoning-image-sampling.to.openai-responses": {
+		Kind:  kindAddedField,
+		Path:  []string{"text", "format", "type"},
+		Value: "json_object",
+		Reason: "Node 把 chat 的 response_format 静默丢掉；Go 转成 responses 的同义载体 text.format" +
+			"（可承载却丢弃），故多出这一个字段",
+	},
 	"request.openai-responses.mcp-items.to.anthropic-messages": {
 		Kind: kindOmitEmptyContentMessages,
 		Reason: "responses 的 mcp_call / web_search_call / item_reference 项在 anthropic 线无表示：" +

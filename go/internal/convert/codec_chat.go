@@ -471,6 +471,10 @@ func decodeChatRequest(body *Value, ctx ConvertCtx) DecodeResult[*Request] {
 	if reasoning := decodeChatReasoningConfig(source, loss); reasoning != nil {
 		request.Reasoning = reasoning
 	}
+	// 结构化输出约束进枢纽：chat 的 response_format 与 responses 的 text.format 是同一件事的
+	// 两种外壳，跨线由编码器按目标线重排（见 structured_output.go）。无法等价互转的未知 type
+	// 不抬进枢纽，留在本线 passthrough 由记损清单兜住。
+	request.ResponseFormat = takeChatResponseFormat(source)
 	// 缓存路由键进枢纽（而非只活在 passthrough）：responses / chat 编码器要原样写出，见 Request.PromptCacheKey。
 	if key, ok := stringField(source, "prompt_cache_key"); ok && key != "" {
 		request.PromptCacheKey = key
@@ -1084,6 +1088,11 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	// 此前它只活在 responses 线 passthrough 里，responses→chat 时被静默丢掉，等于白补。
 	if request.HasPromptCacheKey {
 		out.Set("prompt_cache_key", NewString(request.PromptCacheKey))
+	}
+	// 结构化输出约束：同线直通时 out 已从 passthrough 拿到原字节（不重写），只在跨线过来
+	// （本线尚无该键）时按本线形状渲染；内层 schema 子树仍是源树指针，不复制。
+	if request.ResponseFormat != nil && !out.Has("response_format") {
+		out.Set("response_format", renderChatResponseFormat(request.ResponseFormat))
 	}
 	if request.ToolChoice != nil {
 		if len(request.Tools) == 0 {

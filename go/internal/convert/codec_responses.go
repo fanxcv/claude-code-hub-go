@@ -621,6 +621,9 @@ func decodeResponsesRequest(body *Value, ctx ConvertCtx) DecodeResult[*Request] 
 	if reasoning := decodeResponsesReasoning(fieldOrNil(source, "reasoning"), loss); reasoning != nil {
 		request.Reasoning = reasoning
 	}
+	// 结构化输出约束进枢纽（responses 的载体是 text.format，chat 侧是 response_format），
+	// 跨线由编码器按目标线重排外壳（见 structured_output.go）。
+	request.ResponseFormat = takeResponsesTextFormat(source)
 	passthrough := collectPassthrough(source, responsesKnownRequestKeys)
 	if len(preservedTools) > 0 {
 		// 本线无枢纽表示的非 function 工具定义：随本线 passthrough 保存（Node：`passthrough.tools = preserved`），
@@ -984,6 +987,11 @@ func encodeResponsesRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	// 缓存路由键原样回写：本线原生时它本就在 passthrough 里，跨线过来时靠枢纽带过。
 	if request.HasPromptCacheKey {
 		out.Set("prompt_cache_key", NewString(request.PromptCacheKey))
+	}
+	// 同上（结构化输出）：text 还是 verbosity 的容器，故同线直通时以 passthrough 的原字节
+	// 为准（out 里已有 text 即不重写），只在跨线过来时渲染本线的 text.format。
+	if request.ResponseFormat != nil && !out.Has("text") {
+		out.Set("text", NewObject().Set("format", renderResponsesTextFormat(request.ResponseFormat)))
 	}
 	return EncodeResult{Body: out, Loss: loss.Report()}
 }

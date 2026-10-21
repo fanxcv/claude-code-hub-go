@@ -1,13 +1,15 @@
 package convert
 
-// 本文件承载两类「请求侧高层字段在跨线转换时无承载位」的处置：
+// 本文件承载三类「请求侧高层字段在跨线转换时无承载位」的处置：
 //
 //	1. 状态型字段（previous_response_id / conversation / store:true）——丢失的不是约束而是
 //	   上下文或落库语义，故由调用方在**转换真的发生时** fail-closed（见 forward.BuildPlan）；
-//	2. 约束型字段（prompt_cache_key / response_format / text / store）——丢失后可降级继续，
-//	   但必须记损，否则用户看到的是「约束静默失效」。
+//	2. 约束型字段（prompt_cache_key / store）——丢失后可降级继续，但必须记损，否则用户
+//	   看到的是「约束静默失效」；
+//	3. 结构化输出（response_format ↔ responses 的 text.format）——有承载位、能等价互转的
+//	   就转（见 structured_output.go），只有目标线无承载位（anthropic）时才落回记损。
 //
-// 两者都只对**外线**字段生效：各编码器只读本线 passthrough（Node 亦然），而 request 侧的
+// 后两类都只对**外线**字段生效：各编码器只读本线 passthrough（Node 亦然），而 request 侧的
 // passthrough 全仓没有任何消费者（`passthroughFor` 的调用点都取目标线），所以外线字段在
 // 跨线转换里 100% 会丢。工具声明那批已由 reportForeignPreservedTools 记损，本文件补齐其余。
 
@@ -49,6 +51,9 @@ func isTrue(value *Value) bool {
 type foreignDroppableField struct {
 	key   string
 	class string
+	// structuredOutput 为真表示该键是结构化输出约束：它由枢纽承载（Request.ResponseFormat）
+	// 且 chat ↔ responses 两线能等价互转，故只在目标线无承载位时才记损。
+	structuredOutput bool
 	// requireTruthy 为真时只有值为真才记损。
 	//
 	// 为何 `store` 需要它：`store:false` 是多数 Responses 客户端的默认值，语义等价于「不额外
@@ -62,15 +67,15 @@ type foreignDroppableField struct {
 // foreignDroppableFields 是有承载体但与目标线不兼容的顶层字段清单。
 //
 // 键名与线的关系：response_format 是 chat 线的结构化输出载体，responses 线走 text.format——
-// 故 responses 侧记的是整键 `text.controls`（含 format 与 verbosity，两者在 anthropic/chat 上
-// 都没有等价物）。
+// 两者可互转（structuredOutput 标记的那一对），故它们只对 anthropic 目标记损；text 里除 format
+// 之外的成员（verbosity）在另两线上同样没有等价物，仍逐成员留痕。
 //
 // `prompt_cache_key` 列在表里：responses 源线的解码器把它抬进枢纽（故不再落 passthrough），
 // chat / anthropic 源线则留在本线 passthrough 中、跨线时目标线读不到——正是本表要补的那一侧。
 // responses 源线到 anthropic 的那一条由编码器记（见 codec_anthropic.go），本表不会重复。
 var foreignDroppableFields = []foreignDroppableField{
-	{key: "response_format", class: LossResponseFormat},
-	{key: "text", class: LossTextControls},
+	{key: "response_format", class: LossResponseFormat, structuredOutput: true},
+	{key: "text", class: LossTextControls, structuredOutput: true},
 	{key: "store", class: LossStoreFlag, requireTruthy: true},
 
 	{key: "prompt_cache_key", class: LossPromptCacheKey},
@@ -123,6 +128,14 @@ func reportForeignDroppableFields(request *Request, target WireProtocol, loss *L
 			}
 			// 网关注入的字段不算客户端声明的约束（见 ConvertCtx.GatewayInjectedBodyFields）。
 			if ctx.isGatewayInjectedField(item.key) {
+				continue
+			}
+			// 结构化输出能带就带：枢纽持有该约束且目标线有承载位时不丢。
+			if item.structuredOutput && request.ResponseFormat != nil && supportsStructuredOutput(target) {
+				if item.key == "text" {
+					// text 容器里除 format 之外的成员（verbosity）仍然无等价物。
+					reportResidualTextMembers(value, loss, direction)
+				}
 				continue
 			}
 			loss.Dropped(item.class, direction, item.key)

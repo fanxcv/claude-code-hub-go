@@ -64,17 +64,16 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 		wantLoss []string
 	}{
 		{
-			// 缓存路由键**不再记损**：它已进枢纽并由 chat/responses 两线原样回写（守卫链主动补它是为了
-			// 命中供应商前缀缓存，丢掉等于白补）。这里只钉住剩下的结构型字段。
-			name:   "responses→chat：结构化输出记损（缓存键改为转发）",
+			// 结构化输出不再记损：chat 的 response_format 与 responses 的 text.format 现已互转
+			// （见 structured_output.go）；缓存路由键由枢纽原样回写，store:false 与目标线同义。
+			// 本格必须为**空**：参数化记过的旧行为（整键 text 丢一条）正是本 lane 要消除的。
+			name:   "responses→chat：结构化输出与缓存键都改为转发（不再记损）",
 			source: ProtocolOpenAIResponses,
 			target: ProtocolOpenAIChat,
 			body: `{"model":"gpt-5","input":"hi","prompt_cache_key":"k1",` +
 				`"text":{"format":{"type":"json_schema","name":"r","schema":{"type":"object"}}},` +
 				`"store":false}`,
-			wantLoss: []string{
-				LossTextControls + "/dropped/text",
-			},
+			wantLoss: []string{},
 		},
 		{
 			// store:false 是多数 Responses 客户端的默认值，与「目标线不落库」等价 ⇒ 不记损。
@@ -96,11 +95,21 @@ func TestForeignDroppableFieldsRecordedAsLoss(t *testing.T) {
 			wantLoss: []string{LossStoreFlag + "/dropped/store"},
 		},
 		{
-			name:     "chat→responses：response_format",
+			// 两线互转成立 ⇒ 不再记损（json_object 是两线同形的三种 type 之一）。
+			name:     "chat→responses：response_format 改为转发",
 			source:   ProtocolOpenAIChat,
 			target:   ProtocolOpenAIResponses,
 			body:     `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}`,
-			wantLoss: []string{LossResponseFormat + "/dropped/response_format"},
+			wantLoss: []string{},
+		},
+		{
+			// anthropic 线没有「约束本次输出」的请求字段：那一侧仍必须留痕。
+			name:   "responses→anthropic：text.controls 仍记损",
+			source: ProtocolOpenAIResponses,
+			target: ProtocolAnthropicMessages,
+			body: `{"model":"gpt-5","input":"hi",` +
+				`"text":{"format":{"type":"json_schema","name":"r","schema":{"type":"object"}}}}`,
+			wantLoss: []string{LossTextControls + "/dropped/text"},
 		},
 		{
 			name:     "chat→anthropic：response_format 同样记损",
