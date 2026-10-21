@@ -56,6 +56,7 @@ var responsesDoneKinds = map[string]responsesDecodedKind{
 	"response.reasoning_text.done":          responsesKindThinking,
 	"response.reasoning_summary_text.done":  responsesKindThinking,
 	"response.function_call_arguments.done": responsesKindToolCall,
+	"response.custom_tool_call_input.done":  responsesKindToolCall,
 }
 
 type responsesStreamDecoder struct {
@@ -255,7 +256,9 @@ func (d *responsesStreamDecoder) emitDelta(out *[]Chunk) {
 	*out = append(*out, chunk)
 }
 
-func (d *responsesStreamDecoder) terminal(out *[]Chunk, response *Value) {
+// terminal 收尾本流。failed 为真时只把已生成内容交付出去，**不**发正常终止帧：
+// 上游已宣告失败，替它补终止帧等于向客户端宣称响应完整（response.failed 伪成功的根因）。
+func (d *responsesStreamDecoder) terminal(out *[]Chunk, response *Value, failed bool) {
 	if response != nil {
 		d.captureUsage(response)
 		status, hasStatus := stringField(response, "status")
@@ -266,6 +269,11 @@ func (d *responsesStreamDecoder) terminal(out *[]Chunk, response *Value) {
 	}
 	d.recoverTerminalOutput(out, response)
 	d.closeAll(out)
+	if failed {
+		*out = append(*out, Chunk{Kind: ChunkEnd, Failed: true})
+		d.finished = true
+		return
+	}
 	d.emitDelta(out)
 	*out = append(*out, Chunk{Kind: ChunkEnd})
 	d.finished = true
@@ -291,21 +299,18 @@ func (d *responsesStreamDecoder) handleOutputItemAdded(out *[]Chunk, payload *Va
 	itemType, _ := stringField(item, "type")
 	switch itemType {
 	case "function_call":
-		callID, _ := stringField(item, "call_id")
-		if callID == "" {
-			callID = itemID
-		}
-		name, _ := stringField(item, "name")
-		block := &Block{
-			Kind: BlockToolCall,
-			ID:   callID,
-			// 带 id/name 的块起始帧：名字须还原成客户端原名，否则客户端路由不到自己的工具
-			Name: d.ctx.fromWireName(name),
-		}
-		decoded := d.startBlock(out, "item:"+itemID, responsesKindToolCall, block, outputIndex)
 		// 上游可能在 added 帧就带全量参数（如本地伪造流），一并转成分片
-		if args, ok := stringField(item, "arguments"); ok && len(args) > 0 {
+		args, _ := stringField(item, "arguments")
+		decoded := d.openToolCallBlock(out, item, itemID, outputIndex)
+		if len(args) > 0 {
 			d.emitDeltaChunk(out, decoded, args)
+		}
+	case "custom_tool_call":
+		// 与 function_call 同构，参数藏在 `input` 里（见 customToolCallArgs）
+		input, _ := stringField(item, "input")
+		decoded := d.openToolCallBlock(out, item, itemID, outputIndex)
+		if len(input) > 0 {
+			d.emitDeltaChunk(out, decoded, customToolCallArgs(input))
 		}
 	case "message":
 		// 文本由 content_part.added / output_text.delta 承载；此处不取 item.content，否则重复
@@ -320,6 +325,27 @@ func (d *responsesStreamDecoder) handleOutputItemAdded(out *[]Chunk, payload *Va
 	default:
 		// web_search_call 等：流式下无枢纽表示
 	}
+}
+
+// openToolCallBlock 建（或复用）一个工具调用块。function_call 与 custom_tool_call 同形，
+// 只有参数来源不同，故块骨架在此一处。
+func (d *responsesStreamDecoder) openToolCallBlock(
+	out *[]Chunk, item *Value, itemID string, outputIndex int,
+) *responsesDecodedBlock {
+	callID, _ := stringField(item, "call_id")
+	if callID == "" {
+		callID = itemID
+	}
+	name, _ := stringField(item, "name")
+	// 带 id/name 的块起始帧：名字须还原成客户端原名，否则客户端路由不到自己的工具
+	return d.startBlock(out, "item:"+itemID, responsesKindToolCall,
+		&Block{Kind: BlockToolCall, ID: callID, Name: d.ctx.fromWireName(name)}, outputIndex)
+}
+
+// customToolCallArgs 把 custom_tool_call 的 `input` 字符串包成 {"input":...}，与请求侧
+// appendResponsesCustomToolCall 同口径：目标线的工具参数是 JSON，裸文本会被客户端当成畸形参数。
+func customToolCallArgs(input string) string {
+	return NewObject().Set("input", NewString(input)).MarshalCompact()
 }
 
 func (d *responsesStreamDecoder) handleContentPartAdded(out *[]Chunk, payload *Value) {
@@ -354,7 +380,7 @@ func (d *responsesStreamDecoder) handleDelta(out *[]Chunk, eventType string, pay
 	d.ensureStart(out)
 	kind := responsesKindThinking
 	switch eventType {
-	case "response.function_call_arguments.delta":
+	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 		kind = responsesKindToolCall
 	case "response.output_text.delta", "response.refusal.delta":
 		kind = responsesKindText
@@ -457,6 +483,11 @@ func (d *responsesStreamDecoder) handleDone(out *[]Chunk, eventType string, payl
 			full = args
 		}
 	}
+	if full == "" {
+		if input, ok := stringField(payload, "input"); ok {
+			full = customToolCallArgs(input)
+		}
+	}
 	if decoded == nil {
 		// 上游跳过 added/delta 直接给 done：按载荷补一个完整块，避免丢内容
 		if len(full) == 0 {
@@ -532,16 +563,18 @@ func (d *responsesStreamDecoder) recoverItemContent(out *[]Chunk, payload *Value
 	itemType, _ := stringField(item, "type")
 	switch itemType {
 	case "function_call":
-		callID, _ := stringField(item, "call_id")
-		if callID == "" {
-			callID = itemID
-		}
-		name, _ := stringField(item, "name")
+		args, _ := stringField(item, "arguments")
 		d.ensureStart(out)
-		decoded := d.startBlock(out, "item:"+itemID, responsesKindToolCall,
-			&Block{Kind: BlockToolCall, ID: callID, Name: d.ctx.fromWireName(name)}, outputIndex)
-		if args, ok := stringField(item, "arguments"); ok && len(args) > 0 {
+		decoded := d.openToolCallBlock(out, item, itemID, outputIndex)
+		if len(args) > 0 {
 			d.reconcile(out, decoded, args)
+		}
+	case "custom_tool_call":
+		input, _ := stringField(item, "input")
+		d.ensureStart(out)
+		decoded := d.openToolCallBlock(out, item, itemID, outputIndex)
+		if len(input) > 0 {
+			d.reconcile(out, decoded, customToolCallArgs(input))
 		}
 	case "reasoning":
 		text := responsesReasoningTextOf(item)
@@ -608,11 +641,11 @@ func (d *responsesStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 		d.handleContentPartAdded(&out, payload)
 	case "response.output_text.delta", "response.refusal.delta",
 		"response.reasoning_text.delta", "response.reasoning_summary_text.delta",
-		"response.function_call_arguments.delta":
+		"response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 		d.handleDelta(&out, eventType, payload)
 	case "response.output_text.done", "response.refusal.done",
 		"response.reasoning_text.done", "response.reasoning_summary_text.done",
-		"response.function_call_arguments.done":
+		"response.function_call_arguments.done", "response.custom_tool_call_input.done":
 		d.handleDone(&out, eventType, payload)
 	case "response.output_item.done":
 		d.handleOutputItemDone(&out, payload)
@@ -630,12 +663,18 @@ func (d *responsesStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 			}
 			d.closeBlock(&out, part)
 		}
-	case "response.completed", "response.incomplete", "response.done", "response.failed":
+	case "response.completed", "response.incomplete", "response.done":
 		response := payload.ObjectField("response")
 		if response == nil {
 			response = payload
 		}
-		d.terminal(&out, response)
+		d.terminal(&out, response, false)
+	case "response.failed":
+		response := payload.ObjectField("response")
+		if response == nil {
+			response = payload
+		}
+		d.terminal(&out, response, true)
 	default:
 		// 未映射事件（error / 各类工具生命周期）：静默忽略
 	}
@@ -1086,6 +1125,13 @@ func (e *responsesStreamEncoder) Push(chunk Chunk) [][]byte {
 			e.stopReason = chunk.StopReason
 		}
 	case ChunkEnd:
+		if chunk.Failed {
+			// 上游已失败：只关块，不发 response.completed / response.incomplete。
+			e.ensureCreated(&out)
+			e.closeAll(&out)
+			e.finished = true
+			return out
+		}
 		e.finish(&out)
 	default:
 		// 未知 kind：忽略

@@ -562,12 +562,20 @@ func encodeAnthropicToolResult(item Item, options *anthropicRenderOptions) *Valu
 }
 
 // encodeAnthropicMessage 渲染一条 role 消息；无可见内容时返回 nil。
+//
+// 空 text 块在此层顶替为 `...`（而非在 encodeAnthropicBlock 里）：该函数也用于 system 与响应，
+// 那两处顶替会把「没说的话」变成「说了个省略号」。消息正文才需要它——Anthropic 把空 text 块
+// 当作空内容（`to_claude_messages_req.go:167` 同口径顶替）。
 func encodeAnthropicMessage(role string, blocks []Block, options *anthropicRenderOptions) *Value {
 	content := []*Value{}
 	blockIndex := 0
 	for _, block := range blocks {
 		seed := options.seed + ":" + strconv.Itoa(blockIndex)
 		blockIndex++
+		if block.Kind == BlockText && block.Text == "" {
+			block.Text = "..."
+			options.loss.Rewritten(LossUnknownField, options.direction, "content_part.text.empty")
+		}
 		if encoded, ok := encodeAnthropicBlock(block, seed, options); ok {
 			content = append(content, encoded)
 		}
@@ -625,6 +633,19 @@ func encodeAnthropicMessages(items []Item, idMap map[string]string, loss *LossCo
 			messages = append(messages, NewObject().
 				Set("role", NewString("user")).
 				Set("content", NewArray(encodeAnthropicToolResult(item, options))))
+		}
+	}
+	// Anthropic 要求首条消息为 user。客户端历史以 assistant 开头（如 chat 源里的预填回复）时，
+	// 直接输出会被上游拒；插一条占位 user（`to_claude_messages_req.go:208-213`）。
+	// 判据取自**渲染结果**而非输入 items：首条 item 可能因无可见内容整条不产出。
+	if len(messages) > 0 {
+		if role, _ := stringField(messages[0], "role"); role != "user" {
+			messages = append([]*Value{NewObject().
+				Set("role", NewString("user")).
+				Set("content", NewArray(NewObject().
+					Set("type", NewString("text")).
+					Set("text", NewString("..."))))}, messages...)
+			loss.Rewritten(LossUnknownField, "request", "messages[0].role.placeholder")
 		}
 	}
 	return messages

@@ -227,6 +227,9 @@ type Chunk struct {
 	ReasoningDelta *string
 	StopReason     *StopReason
 	Usage          *Usage
+	// Failed 表示本次流以上游失败收尾。ChunkEnd 带上它时，编码器只关块、不补正常终止帧：
+	// 补了就等于向客户端宣称「响应完整」，把上游的失败伪装成成功。
+	Failed bool
 }
 
 func intPtr(value int) *int          { return &value }
