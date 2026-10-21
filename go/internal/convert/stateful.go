@@ -65,12 +65,30 @@ type foreignDroppableField struct {
 // 故 responses 侧记的是整键 `text.controls`（含 format 与 verbosity，两者在 anthropic/chat 上
 // 都没有等价物）。
 //
-// `prompt_cache_key` **不在本表**：它已进枢纽（Request.PromptCacheKey），由 chat / responses
-// 两线原样回写，只有 anthropic（无此概念）在编码器里记损。留在这里会把它重复记一遍。
+// `prompt_cache_key` **不在本表**：它已进枢纽（Request.PromptCacheKey）——chat 与 responses
+// 两线的解码器都读它（decodeChatRequest / decodeResponsesRequest），两线的编码器都原样回写，
+// 只有 anthropic（无此概念）在编码器里记损。留在这里会把它重复记一遍。
 var foreignDroppableFields = []foreignDroppableField{
 	{key: "response_format", class: LossResponseFormat},
 	{key: "text", class: LossTextControls},
 	{key: "store", class: LossStoreFlag, requireTruthy: true},
+
+	// 以下十一个键是 Responses / Chat 线的请求级开关与采样参数：枢纽没有承载位，跨线时整键丢。
+	// 类别沿用 catch-all 家族的 `unknown_field.param`（seed / stop / parallel_tool_calls 等同属
+	// 这一类），而不新造常量：它们正是「源线有、枢纽无」的同一类事实，detail 取键名，故台账里
+	// 仍能按键定位。
+	{key: "metadata", class: LossUnknownFieldParam},
+	{key: "client_metadata", class: LossUnknownFieldParam},
+	{key: "include", class: LossUnknownFieldParam},
+	{key: "truncation", class: LossUnknownFieldParam},
+	// background:false 是默认语义（同步作答），目标线本来也是同步 ⇒ 与 store:false 同因不记。
+	{key: "background", class: LossUnknownFieldParam, requireTruthy: true},
+	{key: "top_logprobs", class: LossUnknownFieldParam},
+	{key: "presence_penalty", class: LossUnknownFieldParam},
+	{key: "frequency_penalty", class: LossUnknownFieldParam},
+	{key: "user", class: LossUnknownFieldParam},
+	{key: "service_tier", class: LossUnknownFieldParam},
+	{key: "safety_identifier", class: LossUnknownFieldParam},
 }
 
 // reportForeignDroppableFields 把「留在外线 passthrough 里、目标线无法承载的高层字段」记入损失。
@@ -101,4 +119,55 @@ func reportForeignDroppableFields(request *Request, target WireProtocol, loss *L
 			loss.Dropped(item.class, direction, item.key)
 		}
 	}
+}
+
+// hubCarriedRequestKeys 是「落在 passthrough 里、但已由枢纽读走」的键。
+//
+// 为何单列：prompt_cache_key 不在任何线的 knownKeys 里（故会落进 passthrough），但两个解码器
+// 都把它读进 Request.PromptCacheKey 并在 chat/responses 编码器回写（anthropic 那条另有
+// LossPromptCacheKey 专用记录）。不列入就是重复记损。metadata 同属枢纽承载键，但它已在
+// foreignDroppableFields 清单里（上一条记过），故这里不重复列。
+var hubCarriedRequestKeys = knownKeys{
+	"prompt_cache_key": true,
+}
+
+// reportUnknownForeignFields 把「白名单外的外线顶层字段」也记入损失。
+//
+// 为何需要兜底：reportForeignDroppableFields 只认清单——清单外的键（`container`、
+// `max_tool_calls` 之类）落进 passthrough 后无任何消费者，跨线即零痕迹。漏一个键就是一条
+// 静默丢弃，而清单永远是滞后的那一侧；故以「不在清单、也不在本线 knownKeys」为判据反推。
+func reportUnknownForeignFields(request *Request, target WireProtocol, loss *LossCollector, direction string, ctx ConvertCtx) {
+	if request == nil || loss == nil {
+		return
+	}
+	for wire, fields := range request.Passthrough {
+		if wire == target || fields == nil {
+			continue
+		}
+		// 已消费键集合 = 该线 knownKeys ∪ 白名单键 ∪ 枢纽承载键。三层缺一即重复记损。
+		consumed := knownRequestKeysFor(wire)
+		for _, member := range fields.Members() {
+			if consumed.contains(member.Key) || hubCarriedRequestKeys.contains(member.Key) ||
+				isForeignDroppableKey(member.Key) {
+				continue
+			}
+			if !isMeaningful(member.Value) {
+				continue
+			}
+			if ctx.isGatewayInjectedField(member.Key) {
+				continue
+			}
+			loss.Dropped(LossUnknownFieldParam, direction, member.Key)
+		}
+	}
+}
+
+// isForeignDroppableKey 报告键是否已在 foreignDroppableFields 清单里（已由上一个函数记过）。
+func isForeignDroppableKey(key string) bool {
+	for _, item := range foreignDroppableFields {
+		if item.key == key {
+			return true
+		}
+	}
+	return false
 }

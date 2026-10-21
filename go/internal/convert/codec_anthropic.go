@@ -712,6 +712,7 @@ func encodeAnthropicRequest(request *Request, ctx ConvertCtx) EncodeResult {
 	// 外线留存的非 function 工具（如 responses 线的 MCP / web_search 工具声明）本线无法承载时记损。
 	reportForeignPreservedTools(request, anthropicWire, loss, direction)
 	reportForeignDroppableFields(request, anthropicWire, loss, direction, ctx)
+	reportUnknownForeignFields(request, anthropicWire, loss, direction, ctx)
 	out.Set("model", NewString(firstString(request.Model, ctx.Model)))
 	out.Set("messages", NewArray(encodeAnthropicMessages(request.Items, idMap, loss, ctx)...))
 
