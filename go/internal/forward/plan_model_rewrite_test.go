@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/dial"
 )
 
 // rewriteBody 把 rewriteModelField 的分段结果拼成连续字节（与出站正文同字节）。
@@ -706,4 +709,169 @@ func TestBuildPlanModelRewriteCommutesWithEmptyToolArgs(t *testing.T) {
 	if got := outboundBody(t, plan); string(got) != want {
 		t.Fatalf("出站正文 = %q，期望 %q", got, want)
 	}
+}
+
+// TestPlanRequestGetBodyReplaysSegmentedBody 钉住 307/308 的重放契约：分段计划的拨号请求必须
+// 给出 GetBody，且每次调用都交出一份**独立的、从头开始**的分段 reader（零拷贝）；非分段计划
+// 不碰 GetBody（bytes.NewReader 那个由 http.NewRequestWithContext 自动设置）。
+func TestPlanRequestGetBodyReplaysSegmentedBody(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"ping"}]}`
+	want := []byte(`{"model":"glm-4.6","messages":[{"role":"user","content":"ping"}]}`)
+
+	plan, err := BuildPlan(PlanInput{Client: newClaudeRequest(body), Target: Target{Provider: redirectProvider("glm-4.6")}})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+	if plan.parts == nil {
+		t.Fatal("前置不成立：本用例需要分段正文")
+	}
+	request := plan.Request()
+	if request.GetBody == nil {
+		t.Fatal("分段正文必须给出 GetBody，否则上游回 307/308 时不会带体重放")
+	}
+	first, err := request.GetBody()
+	if err != nil {
+		t.Fatalf("GetBody 失败: %v", err)
+	}
+	defer func() { _ = first.Close() }()
+	firstBody, err := io.ReadAll(first)
+	if err != nil {
+		t.Fatalf("读第一份重放正文失败: %v", err)
+	}
+	if !bytes.Equal(firstBody, want) {
+		t.Fatalf("第一份重放正文 = %q，期望 %q", firstBody, want)
+	}
+	second, err := request.GetBody()
+	if err != nil {
+		t.Fatalf("第二次 GetBody 失败: %v", err)
+	}
+	defer func() { _ = second.Close() }()
+	if first == second {
+		t.Fatal("重放必须交出独立 reader 实例：旧 reader 在重定向时已被读完")
+	}
+	secondBody, err := io.ReadAll(second)
+	if err != nil {
+		t.Fatalf("读第二份重放正文失败: %v", err)
+	}
+	if !bytes.Equal(secondBody, want) {
+		t.Fatalf("第二份重放正文 = %q，期望 %q", secondBody, want)
+	}
+
+	// 非分段路径不设 GetBody：交由 http.NewRequestWithContext 对 bytes.Reader 自动设置。
+	plain, err := BuildPlan(PlanInput{Client: newClaudeRequest(body), Target: Target{Provider: claudeProvider("https://relay.example.com")}})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+	if plain.parts != nil {
+		t.Fatal("前置不成立：无重定向时不应产成分段正文")
+	}
+	if plainRequest := plain.Request(); plainRequest.GetBody != nil {
+		t.Fatal("非分段路径不得设置 GetBody（bytes.Reader 的已由 Go 自动设好，重复设置只是噪声）")
+	}
+}
+
+// TestPlanRequestRedirectCarriesSegmentedBody 是本 lane 的回归钉子：上游回 307 时，分段正文
+// 必须像旧实现的 bytes.Reader 一样被带体重放。两个子测试成对，证明用例能捕获回退而不是恒过：
+// 设 GetBody 时跟随到目标拿到 200，不设时空手把 307 原样交回调用方（修复前就是这个行为）。
+func TestPlanRequestRedirectCarriesSegmentedBody(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"ping"}]}`
+	want := []byte(`{"model":"glm-4.6","messages":[{"role":"user","content":"ping"}]}`)
+
+	// 目标服务器把收到的正文送进通道（通道同时给出 happens-before 边，-race 下也干净）。
+	received := make(chan string, 4)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			payload = []byte("读正文失败: " + err.Error())
+		}
+		received <- string(payload)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(gateway.Close)
+
+	post := func(t *testing.T, request dial.Request) *dial.Response {
+		t.Helper()
+		client, err := dial.New(dial.Options{})
+		if err != nil {
+			t.Fatalf("dial.New 失败: %v", err)
+		}
+		t.Cleanup(client.Close)
+		response, err := client.RoundTrip(t.Context(), request)
+		if err != nil {
+			t.Fatalf("RoundTrip 失败: %v", err)
+		}
+		t.Cleanup(func() { _ = response.Body.Close() })
+		return response
+	}
+	receive := func(t *testing.T) (string, bool) {
+		t.Helper()
+		select {
+		case payload := <-received:
+			return payload, true
+		default:
+			return "", false
+		}
+	}
+
+	provider := redirectProvider("glm-4.6")
+	provider.URL = gateway.URL
+	plan, err := BuildPlan(PlanInput{Client: newClaudeRequest(body), Target: Target{Provider: provider}})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+	if plan.parts == nil {
+		t.Fatal("前置不成立：本用例需要分段正文")
+	}
+
+	t.Run("设 GetBody 时带体重放", func(t *testing.T) {
+		response := post(t, plan.Request())
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("状态码 = %d，期望 200（307 被原样交回说明正文没被重放）", response.StatusCode)
+		}
+		payload, ok := receive(t)
+		if !ok {
+			t.Fatal("重定向目标没收到请求")
+		}
+		if payload != string(want) {
+			t.Fatalf("重定向目标收到的正文 = %q，期望 %q", payload, want)
+		}
+	})
+
+	t.Run("不设 GetBody 时原样返回 307", func(t *testing.T) {
+		request := plan.Request()
+		request.GetBody = nil // 复刻修复前的拨号请求形态
+		response := post(t, request)
+		if response.StatusCode != http.StatusTemporaryRedirect {
+			t.Fatalf("状态码 = %d，期望 307（本子用例是回退的可证伪点）", response.StatusCode)
+		}
+		if payload, ok := receive(t); ok {
+			t.Fatalf("不设 GetBody 时不该有请求到达重定向目标，却收到了 %q", payload)
+		}
+	})
+
+	t.Run("非分段计划仍由 Go 自动设的 GetBody 重放", func(t *testing.T) {
+		plain, err := BuildPlan(PlanInput{Client: newClaudeRequest(body), Target: Target{Provider: claudeProvider(gateway.URL)}})
+		if err != nil {
+			t.Fatalf("BuildPlan 失败: %v", err)
+		}
+		if plain.parts != nil {
+			t.Fatal("前置不成立：无重定向时不应产成分段正文")
+		}
+		expected := outboundBody(t, plain)
+		response := post(t, plain.Request())
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("状态码 = %d，期望 200（Go 对 bytes.Reader 自动设置的 GetBody 被覆盖了）", response.StatusCode)
+		}
+		payload, ok := receive(t)
+		if !ok {
+			t.Fatal("重定向目标没收到请求")
+		}
+		if payload != string(expected) {
+			t.Fatalf("重定向目标收到的正文 = %q，期望 %q", payload, expected)
+		}
+	})
 }

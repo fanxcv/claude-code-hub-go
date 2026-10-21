@@ -64,6 +64,11 @@ type Request struct {
 	Body    io.Reader
 	// ContentLength 为 -1 表示长度未知（分块写出）。
 	ContentLength int64
+	// GetBody 供 http.Client 在 307/308 重定向时重放正文；nil 表示不可重放。
+	// 为什么需要它：http.NewRequestWithContext 只对 *bytes.Buffer / *bytes.Reader /
+	// *strings.Reader 自动设置 GetBody，自实现的 reader 必须显式给出，否则重定向会退化成
+	// 「原样返回 307/308」而不是带体跟随。
+	GetBody func() (io.ReadCloser, error)
 }
 
 // Response 是上游返回的原始响应。调用方负责关闭 Body。
@@ -203,6 +208,11 @@ func (c *Client) attempt(ctx context.Context, request Request, client *http.Clie
 		httpRequest.Host = ""
 	}
 	httpRequest.ContentLength = request.ContentLength
+	if request.GetBody != nil {
+		// 只在显式给出时赋值：bytes.Reader 形态的 GetBody 由 NewRequestWithContext 自动设好，
+		// 这里不碰。
+		httpRequest.GetBody = request.GetBody
+	}
 	applyHeaders(httpRequest.Header, request.Headers)
 	ForceIdentityEncoding(httpRequest.Header)
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -273,7 +274,13 @@ func (p *Plan) Request() dial.Request {
 	}
 	switch {
 	case p.parts != nil:
-		req.Body = &bodyPartsReader{parts: p.parts.segments, length: int64(p.parts.length)}
+		// 局部取出各段：MaterializedBody 会把 p.parts 置空，闭包不该跟着变。
+		segments, length := p.parts.segments, int64(p.parts.length)
+		req.Body = &bodyPartsReader{parts: segments, length: length}
+		// 307/308 要带体重放，每次给一份从头开始的新 reader（重定向时旧 reader 已读完）。
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(&bodyPartsReader{parts: segments, length: length}), nil
+		}
 	case p.Body != nil:
 		req.Body = bytes.NewReader(p.Body)
 	}
