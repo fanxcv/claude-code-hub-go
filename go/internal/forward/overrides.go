@@ -116,9 +116,13 @@ func hasConfiguredPreference(provider Provider, protocol convert.WireProtocol) b
 
 	switch {
 	case provider.Type == convert.ProviderClaude, provider.Type == convert.ProviderClaudeAuth:
+		// adaptive 的判定必须走 parseAdaptiveThinking：列是 jsonb，SQL NULL 经 row_to_json
+		// 读回是字面量 `null`（len=4），按「非空串」判会把「未配置」误判成「已配置」——
+		// 于是零配置早退失效，每条 claude 请求都白做一次 ParseJSON + Clone。
+		_, hasAdaptive := parseAdaptiveThinking(provider.AnthropicAdaptiveThinking)
 		return configured(provider.AnthropicMaxTokensPreference) ||
 			configured(provider.AnthropicThinkingBudgetPreference) ||
-			len(strings.TrimSpace(string(provider.AnthropicAdaptiveThinking))) > 0 ||
+			hasAdaptive ||
 			configured(provider.CacheTTLPreference)
 	case provider.Type == convert.ProviderCodex:
 		return configured(provider.CodexParallelToolCallsPreference) ||

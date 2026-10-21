@@ -102,10 +102,11 @@ func (d Deps) wsAttempt(
 	}
 	// 走到这里即为「真的尝试」：链上的 WS 事实由下面的 result 分支写。
 
+	// WS 帧正文要一整片字节：分段正文在这里落地（仅 Responses 通道）。
 	result := d.WS.DialWS(ctx, upws.Request{
 		EndpointURL: plan.URL,
 		Headers:     plan.Headers,
-		Body:        plan.Body,
+		Body:        plan.MaterializedBody(),
 		SessionID:   wsSessionID(pc),
 	})
 	facts := &AttemptWSFacts{ClientTransport: wsClientTransportValue}

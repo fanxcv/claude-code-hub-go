@@ -209,8 +209,8 @@ func TestNativePathModelRewriteStaysByteLevel(t *testing.T) {
 	if plan.Conversion != nil {
 		t.Fatalf("本用例不转换（原生直通），实际 conversion=%+v", plan.Conversion)
 	}
-	if string(plan.Body) != want {
-		t.Fatalf("native 路正文未逐字保留（应只换 model 值）：\n got = %q\nwant = %q", plan.Body, want)
+	if got := string(outboundBody(t, plan)); got != want {
+		t.Fatalf("native 路正文未逐字保留（应只换 model 值）：\n got = %q\nwant = %q", got, want)
 	}
 }
 

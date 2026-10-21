@@ -276,7 +276,7 @@ func TestBuildPlanModelRedirect(t *testing.T) {
 			t.Fatalf("重定向未生效: %+v", plan.Redirect)
 		}
 		var decoded map[string]any
-		if err := json.Unmarshal(plan.Body, &decoded); err != nil {
+		if err := json.Unmarshal(outboundBody(t, plan), &decoded); err != nil {
 			t.Fatalf("正文不是 JSON: %v", err)
 		}
 		if decoded["model"] != "glm-4.6" {
@@ -618,7 +618,7 @@ func TestBuildPlanModelRedirectAppliesOnResolutionFallback(t *testing.T) {
 	}
 
 	var decoded map[string]any
-	if err := json.Unmarshal(plan.Body, &decoded); err != nil {
+	if err := json.Unmarshal(outboundBody(t, plan), &decoded); err != nil {
 		t.Fatalf("回退后正文应为合法的客户端方言 JSON: %v", err)
 	}
 	if decoded["model"] != "glm-4.6" {
@@ -626,7 +626,7 @@ func TestBuildPlanModelRedirectAppliesOnResolutionFallback(t *testing.T) {
 	}
 	// 回退意味着不转换：正文必须仍是客户端方言（anthropic 的 messages/system 形态）。
 	if _, ok := decoded["messages"]; !ok {
-		t.Fatalf("路径解析失败后正文应保持客户端方言: %s", plan.Body)
+		t.Fatalf("路径解析失败后正文应保持客户端方言: %s", outboundBody(t, plan))
 	}
 }
 

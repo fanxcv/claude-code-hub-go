@@ -36,12 +36,18 @@ const includeUsageChatPath = "/v1/chat/completions"
 // 正文模型用 convert.Value 而非 Go map 往返：后者经 encoding/json 序列化会把键序变字典序、
 // 把 `<` 转成 `\u003c`、把数字经 float64 重排（`1e21` → `1e+21`、超 2^53 的整数丢精度）。
 // Value 保序、保数字字面量，输出为紧凑形态（空白与转义形态会归一，语义不变）。
+// chatUsageOptionApplies 报告本请求是否落在 include_usage 补齐的适用面上（不看正文）。
+// 计划编译也用它判断「要不要为这一步把分段正文落地」。
+func chatUsageOptionApplies(providerType convert.ProviderType, requestPath string) bool {
+	return providerType == convert.ProviderOpenAICompatible && requestPath == includeUsageChatPath
+}
+
 func applyOpenAIChatStreamUsageOption(
 	body []byte,
 	providerType convert.ProviderType,
 	requestPath string,
 ) ([]byte, bool) {
-	if len(body) == 0 || providerType != convert.ProviderOpenAICompatible || requestPath != includeUsageChatPath {
+	if len(body) == 0 || !chatUsageOptionApplies(providerType, requestPath) {
 		return body, false
 	}
 	decoded, err := convert.ParseJSON(body)

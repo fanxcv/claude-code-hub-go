@@ -4,11 +4,39 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
 )
+
+// rewriteBody 把 rewriteModelField 的分段结果拼成连续字节（与出站正文同字节）。
+func rewriteBody(t *testing.T, body []byte, model string) []byte {
+	t.Helper()
+	parts, err := rewriteModelField(body, model)
+	if err != nil {
+		t.Fatalf("rewriteModelField 失败: %v", err)
+	}
+	if parts == nil {
+		return body
+	}
+	return parts.materialize()
+}
+
+// outboundBody 读出计划真正发给上游的字节（分段 reader 或单切片）。
+func outboundBody(t *testing.T, plan *Plan) []byte {
+	t.Helper()
+	request := plan.Request()
+	if request.Body == nil {
+		return nil
+	}
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		t.Fatalf("读取出站正文失败: %v", err)
+	}
+	return body
+}
 
 // TestRewriteModelFieldKeepsBytesVerbatim 钉住「只换顶层 model 的值，其余字节逐字不变」。
 //
@@ -25,6 +53,24 @@ func TestRewriteModelFieldKeepsBytesVerbatim(t *testing.T) {
 		{"顶层在前", `{"model":"a","x":1}`, "TARGET", `{"model":"TARGET","x":1}`},
 		{"顶层在后", `{"x":1,"model":"a"}`, "TARGET", `{"x":1,"model":"TARGET"}`},
 		{"唯一键", `{"model":"a"}`, "TARGET", `{"model":"TARGET"}`},
+		{
+			"新名更短",
+			`{"model":"claude-sonnet-4-5-20250929","x":1}`,
+			"glm",
+			`{"model":"glm","x":1}`,
+		},
+		{
+			"新名等长",
+			`{"model":"claude","x":1}`,
+			"ABCDEF",
+			`{"model":"ABCDEF","x":1}`,
+		},
+		{
+			"新名更长",
+			`{"model":"glm","x":1}`,
+			"claude-sonnet-4-5-20250929",
+			`{"model":"claude-sonnet-4-5-20250929","x":1}`,
+		},
 		{
 			"保留空白与键序",
 			"{ \"x\" : 1 ,\n  \"model\" : \"a\" ,\t\"y\":[1, 2] }",
@@ -115,10 +161,7 @@ func TestRewriteModelFieldKeepsBytesVerbatim(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			original := []byte(tc.body)
 			before := string(original)
-			rewritten, err := rewriteModelField(original, tc.model)
-			if err != nil {
-				t.Fatalf("rewriteModelField 失败: %v", err)
-			}
+			rewritten := rewriteBody(t, original, tc.model)
 			if string(rewritten) != tc.want {
 				t.Fatalf("正文 = %q，期望 %q", rewritten, tc.want)
 			}
@@ -138,10 +181,10 @@ func TestRewriteModelFieldKeepsBytesVerbatim(t *testing.T) {
 	}
 }
 
-// TestRewriteModelFieldAbsentModelReturnsInput 钉住「找不到顶层 model 时原样返回同一份切片」。
+// TestRewriteModelFieldAbsentModelReturnsNil 钉住「找不到顶层 model 时不产出任何分段」。
 //
-// 这是常态路径（绝大多数请求没有配模型重定向）的零成本要求：既不得复制，也不得报错。
-func TestRewriteModelFieldAbsentModelReturnsInput(t *testing.T) {
+// 这是常态路径（绝大多数请求没有配模型重定向）的零成本要求：既不复制，也不报错。
+func TestRewriteModelFieldAbsentModelReturnsNil(t *testing.T) {
 	for _, body := range []string{
 		`{"x":1}`,
 		`{}`,
@@ -150,20 +193,19 @@ func TestRewriteModelFieldAbsentModelReturnsInput(t *testing.T) {
 		// JSON 的 `null` 解进 map 是合法的「无 model」：旧实现同样原样返回。
 		`null`,
 	} {
-		original := []byte(body)
-		rewritten, err := rewriteModelField(original, "TARGET")
+		parts, err := rewriteModelField([]byte(body), "TARGET")
 		if err != nil {
 			t.Fatalf("%s: rewriteModelField 失败: %v", body, err)
 		}
-		if len(rewritten) != len(original) || &rewritten[0] != &original[0] {
-			t.Fatalf("%s: 未命中时应原样返回同一份切片，实际 %q", body, rewritten)
+		if parts != nil {
+			t.Fatalf("%s: 未命中时不该产出分段，实际 %d 段", body, len(parts.segments))
 		}
 	}
 
 	absent := []byte(`{"x":1,"nested":{"model":"b"}}`)
 	if allocs := testing.AllocsPerRun(100, func() {
-		if _, err := rewriteModelField(absent, "TARGET"); err != nil {
-			t.Fatalf("rewriteModelField 失败: %v", err)
+		if parts, err := rewriteModelField(absent, "TARGET"); err != nil || parts != nil {
+			t.Fatalf("rewriteModelField = %v, %v", parts, err)
 		}
 	}); allocs != 0 {
 		t.Fatalf("未命中路径分配了 %v 次，期望 0（零分配是这条路径的全部意义）", allocs)
@@ -210,8 +252,12 @@ func TestBuildPlanModelRedirectKeepsKeyOrder(t *testing.T) {
 	if plan.Conversion != nil {
 		t.Fatalf("本用例不转换（原生直通），实际 conversion=%+v", plan.Conversion)
 	}
-	if string(plan.Body) != want {
-		t.Fatalf("正文 = %q，期望 %q", plan.Body, want)
+	// 请求期不得落地：正文仍分段，只引用入参切片。
+	if plan.Body != nil || plan.parts == nil {
+		t.Fatalf("正文应保持分段（Body = %q，分段 = %v）", plan.Body, plan.parts)
+	}
+	if got := outboundBody(t, plan); string(got) != want {
+		t.Fatalf("正文 = %q，期望 %q", got, want)
 	}
 }
 
@@ -235,7 +281,9 @@ func modelRewriteBenchBody(size int) []byte {
 
 // BenchmarkRewriteModelFieldLargeBody 量「1.9MB 正文改写一次」的耗时与分配。
 //
-// 旧实现（解析整棵树再序列化）在同尺寸正文上实测 8.33ms / 6.14MB 分配（3.1× 放大）。
+// 改写只产出分段（引用入参切片 + 新模型名），故 B/op 应只剩新模型名那一小份；
+// 旧实现（解析整棵树再序列化）在同尺寸正文上实测 8.33ms / 6.14MB 分配（3.1× 放大），
+// 逐字替换版曾为 1.95MB/op（整篇副本）。
 func BenchmarkRewriteModelFieldLargeBody(b *testing.B) {
 	body := modelRewriteBenchBody(1900 << 10)
 	b.ReportAllocs()
@@ -246,7 +294,7 @@ func BenchmarkRewriteModelFieldLargeBody(b *testing.B) {
 		if err != nil {
 			b.Fatalf("rewriteModelField 失败: %v", err)
 		}
-		if len(rewritten) == len(body) {
+		if rewritten == nil || rewritten.length == len(body) {
 			b.Fatal("前置不成立：本基准需真的改写（模型名长度应不同）")
 		}
 	}
@@ -297,8 +345,10 @@ func BenchmarkBuildPlanNativeLargeBody(b *testing.B) {
 // BenchmarkBuildPlanNativeLargeBodyWithRedirect 量「原生直通 + 模型重定向」的每 attempt 计划成本。
 //
 // 这条是甲项的真实验收面：1.9MB 正文 + 配了 redirects 时，旧实现每次尝试
-// 17.0ms / 14.6MB / 202k 次分配，现在 2.6ms / 1.96MB / 52 次（剩下的 1.96MB 是替换后
-// 那一份正文的**唯一**拷贝，字节级替换绕不过）。竞速时每个候选都付一次这个账。
+// 17.0ms / 14.6MB / 202k 次分配；逐字替换版降到 2.6ms / 1.96MB / 52 次（那 1.96MB 是
+// 替换后正文的整篇拷贝）；分段版降到约 2.4ms / 5KB / 53 次——**请求期不再有那份整篇副本**。
+// 计划本身也不在请求期物化：只有结算期的探针与（有缓存块时的）TTL 解析才会拼出连续正文，
+// 那时上游响应已到，不计入本基准。
 func BenchmarkBuildPlanNativeLargeBodyWithRedirect(b *testing.B) {
 	var builder strings.Builder
 	builder.WriteString(`{"model":"claude-sonnet-4-5-20250929","stream":true,"max_tokens":1024,"messages":[`)
@@ -329,6 +379,50 @@ func BenchmarkBuildPlanNativeLargeBodyWithRedirect(b *testing.B) {
 	}
 }
 
+// BenchmarkBuildPlanNativeLargeBodyWithRedirectProductionShape 量「生产装配形态」下的同一件事：
+// 供应商从库里读回（SQL NULL 的 jsonb 解成字面量 `null`）+ 数据面总会挂上的覆写器。
+//
+// 为什么要单列：零配置早退的判定若把 `null` 当成已配置，每次计划编译都会白做一次
+// ParseJSON + Clone，整篇副本也回来——普通基准（provider 字段为 nil）看不见。
+// 2026-10 修前实测 9.27–9.48ms / 16,078,588–16,079,872 B/op / 218,048–218,049 allocs；修后与无偏好路径一致。
+func BenchmarkBuildPlanNativeLargeBodyWithRedirectProductionShape(b *testing.B) {
+	var builder strings.Builder
+	builder.WriteString(`{"model":"claude-sonnet-4-5-20250929","stream":true,"max_tokens":1024,"messages":[`)
+	for builder.Len() < 1900<<10 {
+		builder.WriteString(`{"role":"user","content":"`)
+		builder.WriteString(strings.Repeat("x", 96))
+		builder.WriteString(`"},`)
+	}
+	builder.WriteString(`{"role":"user","content":"tail"}]}`)
+
+	client := newClaudeRequest(builder.String())
+	provider := claudeProvider("https://relay.example.com")
+	provider.ModelRedirects = json.RawMessage(
+		`[{"matchType":"exact","source":"claude-sonnet-4-5-20250929","target":"glm-4.6"}]`)
+	provider.AnthropicAdaptiveThinking = json.RawMessage(`null`)
+	input := PlanInput{
+		Client:    client,
+		Target:    Target{Provider: provider},
+		Overrides: NewProviderOverrideApplier("/v1/messages"),
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(client.Body)))
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		plan, err := BuildPlan(input)
+		if err != nil {
+			b.Fatalf("BuildPlan 失败: %v", err)
+		}
+		if plan.Redirect == nil {
+			b.Fatal("前置不成立：本基准需命中重定向")
+		}
+		if plan.parts == nil || plan.Body != nil {
+			b.Fatal("前置不成立：生产形态（jsonb null 未配置）应保持分段，不得物化")
+		}
+	}
+}
+
 // BenchmarkBuildPlanConversionLargeBody 量「跨线转换一次计划编译」的每 attempt 成本。
 func BenchmarkBuildPlanConversionLargeBody(b *testing.B) {
 	client := responsesClient(string(planBenchBody(1900 << 10)))
@@ -348,5 +442,268 @@ func BenchmarkBuildPlanConversionLargeBody(b *testing.B) {
 		if plan.Conversion == nil || plan.ConversionFallback {
 			b.Fatal("前置不成立：本基准需转换成功")
 		}
+	}
+}
+
+// redirectProvider 是 native 路配上「客户端模型 → target」一条 exact 重定向的供应商。
+func redirectProvider(target string) Provider {
+	provider := claudeProvider("https://relay.example.com")
+	provider.ModelRedirects = json.RawMessage(
+		`[{"matchType":"exact","source":"claude-sonnet-4-5-20250929","target":"` + target + `"}]`)
+	return provider
+}
+
+// TestBuildPlanModelRewriteIsSegmented 钉住 native 路的重定向不在计划期复制整篇正文：
+// 出站字节由可 Seek 的分段 reader 给出，ContentLength 是各段之和（不得退化成 -1）。
+func TestBuildPlanModelRewriteIsSegmented(t *testing.T) {
+	const body = `{"max_tokens":1024,"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"ping"}]}`
+	want := []byte(`{"max_tokens":1024,"model":"glm-4.6","messages":[{"role":"user","content":"ping"}]}`)
+
+	plan, err := BuildPlan(PlanInput{Client: newClaudeRequest(body), Target: Target{Provider: redirectProvider("glm-4.6")}})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+	if plan.parts == nil {
+		t.Fatal("native 路 + 重定向应产成分段正文（计划期不得复制整篇）")
+	}
+	if plan.Body != nil {
+		t.Fatalf("分段形态下 Body 必须为 nil，实际分配了 %d 字节", len(plan.Body))
+	}
+	if plan.ContentLength != int64(len(want)) {
+		t.Fatalf("ContentLength = %d，期望 %d", plan.ContentLength, len(want))
+	}
+	request := plan.Request()
+	if request.ContentLength != int64(len(want)) || request.ContentLength == -1 {
+		t.Fatalf("拨号 ContentLength = %d，期望精确长度 %d（-1 会退化成 chunked）", request.ContentLength, len(want))
+	}
+	if _, ok := request.Body.(io.Seeker); !ok {
+		t.Fatal("拨号正文必须可 Seek：dial 的 rewindBody 在 h2 失败后要重放正文")
+	}
+	if got := outboundBody(t, plan); !bytes.Equal(got, want) {
+		t.Fatalf("出站正文 = %q，期望 %q", got, want)
+	}
+}
+
+// TestBuildPlanModelRewriteLeavesSharedBodyUntouched 钉住竞速共享语义：同一份入参正文连编
+// 两个目标名不同的候选，各自出站正确、互不串线，且入参切片一个字节未动（禁止就地改写）。
+func TestBuildPlanModelRewriteLeavesSharedBodyUntouched(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"ping"}]}`
+	client := newClaudeRequest(body)
+	before := string(client.Body)
+
+	build := func(target string) *Plan {
+		plan, err := BuildPlan(PlanInput{Client: client, Target: Target{Provider: redirectProvider(target)}})
+		if err != nil {
+			t.Fatalf("BuildPlan(%s) 失败: %v", target, err)
+		}
+		return plan
+	}
+	first := build("glm-4.6")
+	second := build("upstream-b")
+
+	firstBody := outboundBody(t, first)
+	secondBody := outboundBody(t, second)
+	if !bytes.Contains(firstBody, []byte(`"model":"glm-4.6"`)) || bytes.Contains(firstBody, []byte("upstream-b")) {
+		t.Fatalf("候选甲的正文串线或未改写: %s", firstBody)
+	}
+	if !bytes.Contains(secondBody, []byte(`"model":"upstream-b"`)) || bytes.Contains(secondBody, []byte("glm-4.6")) {
+		t.Fatalf("候选乙的正文串线或未改写: %s", secondBody)
+	}
+	if string(client.Body) != before {
+		t.Fatalf("共享的入参正文被就地改写: %q", client.Body)
+	}
+	// 分段引用入参切片：前缀段与入参同一底层数组，说明这份正文没有被复制。
+	if len(first.parts.segments[0]) == 0 || &first.parts.segments[0][0] != &client.Body[0] {
+		t.Fatal("分段正文应引用入参切片（前缀段与入参不同源说明发生了复制）")
+	}
+}
+
+// TestPlanRequestBodySeekable 钉住拨号层的重放契约：分段 reader Seek 回起点后完整重读，
+// Seek 到中间偏移读出正确后缀。
+func TestPlanRequestBodySeekable(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"ping"}]}`
+	want := []byte(`{"model":"glm-4.6","messages":[{"role":"user","content":"ping"}]}`)
+	plan, err := BuildPlan(PlanInput{Client: newClaudeRequest(body), Target: Target{Provider: redirectProvider("glm-4.6")}})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+
+	request := plan.Request()
+	seeker, ok := request.Body.(io.Seeker)
+	if !ok {
+		t.Fatal("拨号正文必须可 Seek")
+	}
+	first, err := io.ReadAll(request.Body)
+	if err != nil || !bytes.Equal(first, want) {
+		t.Fatalf("首读 = %q, %v，期望 %q", first, err, want)
+	}
+	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("Seek 回起点失败: %v", err)
+	}
+	again, err := io.ReadAll(request.Body)
+	if err != nil || !bytes.Equal(again, first) {
+		t.Fatalf("回起点重读 = %q, %v，期望 %q（h2→h1 回退要重放同一份正文）", again, err, first)
+	}
+	offset := int64(len(want)/2 + 1)
+	if _, err := seeker.Seek(offset, io.SeekStart); err != nil {
+		t.Fatalf("Seek 到中间偏移失败: %v", err)
+	}
+	suffix, err := io.ReadAll(request.Body)
+	if err != nil || !bytes.Equal(suffix, want[offset:]) {
+		t.Fatalf("中间偏移读出的后缀 = %q, %v，期望 %q", suffix, err, want[offset:])
+	}
+	if got, err := seeker.Seek(0, io.SeekEnd); err != nil || got != int64(len(want)) {
+		t.Fatalf("Seek 到末尾 = %d, %v，期望 %d", got, err, len(want))
+	}
+	if rest, err := io.ReadAll(request.Body); err != nil || len(rest) != 0 {
+		t.Fatalf("末尾之后应读到 EOF，实际 %q, %v", rest, err)
+	}
+	if _, err := seeker.Seek(-1, io.SeekStart); err == nil {
+		t.Fatal("负偏移应报错（与 bytes.Reader 同语义）")
+	}
+}
+
+// TestPlanMaterializedBodyIsIdempotent 钉住物化入口：首调拼接并缓存，之后零分配，
+// 且与分段 reader 读出的字节一致。
+func TestPlanMaterializedBodyIsIdempotent(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-5-20250929","messages":[]}`
+	const want = `{"model":"glm-4.6","messages":[]}`
+	plan, err := BuildPlan(PlanInput{Client: newClaudeRequest(body), Target: Target{Provider: redirectProvider("glm-4.6")}})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+
+	segmented := outboundBody(t, plan)
+	materialized := plan.MaterializedBody()
+	if !bytes.Equal(materialized, segmented) {
+		t.Fatalf("物化结果 = %q，分段读出的 = %q", materialized, segmented)
+	}
+	if string(materialized) != want {
+		t.Fatalf("正文 = %q，期望 %q", materialized, want)
+	}
+	if plan.parts != nil {
+		t.Fatal("物化后不应再持有分段")
+	}
+	if allocs := testing.AllocsPerRun(100, func() { _ = plan.MaterializedBody() }); allocs != 0 {
+		t.Fatalf("物化后再取正文分配了 %v 次，期望 0", allocs)
+	}
+}
+
+// TestPlanAppliedCacheTTLAcrossSegments 钉住缓存 TTL 的读取不漏分段：`"cache_control"`
+// 恰好横跨两段时仍须命中；正文里没有缓存块时不得物化。
+func TestPlanAppliedCacheTTLAcrossSegments(t *testing.T) {
+	t.Run("恰好横跨两段", func(t *testing.T) {
+		body := []byte(`{"model":"x","system":[{"type":"text","text":"s",` +
+			`"cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[]}`)
+		cut := bytes.Index(body, []byte(`"cache_control"`)) + 5
+		plan := &Plan{parts: &bodyParts{segments: [][]byte{body[:cut], body[cut:]}, length: len(body)}}
+		if got := plan.AppliedCacheTTL(); got != cacheTTLLong {
+			t.Fatalf("AppliedCacheTTL = %q，期望 %q（跨段边界也必须命中）", got, cacheTTLLong)
+		}
+	})
+	t.Run("没有缓存块时不物化", func(t *testing.T) {
+		body := []byte(`{"model":"x","messages":[]}`)
+		plan := &Plan{parts: &bodyParts{segments: [][]byte{body[:5], body[5:]}, length: len(body)}}
+		if got := plan.AppliedCacheTTL(); got != "" {
+			t.Fatalf("AppliedCacheTTL = %q，期望空串", got)
+		}
+		if plan.Body != nil || plan.parts == nil {
+			t.Fatal("没有缓存块的正文不该被物化成连续副本")
+		}
+	})
+}
+
+// TestBuildPlanModelRewriteStaysSegmentedForZeroConfigOverrides 钉住生产形态：装配总给一个
+// 覆写器，而绝大多数供应商没有配置偏好（见 overrides.go 的零配置早退）——此时不得为它物化。
+//
+// adaptive thinking 必须设成 `null` 字面量：那是 SQL NULL 经 row_to_json 读回的形态，
+// 不是 nil。按「非空串」判会把「未配置」误判成「已配置」，本用例即红。
+func TestBuildPlanModelRewriteStaysSegmentedForZeroConfigOverrides(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-5-20250929","max_tokens":64,"messages":[]}`
+	provider := redirectProvider("glm-4.6")
+	provider.AnthropicAdaptiveThinking = json.RawMessage(`null`)
+	plan, err := BuildPlan(PlanInput{
+		Client:    newClaudeRequest(body),
+		Target:    Target{Provider: provider},
+		Overrides: NewProviderOverrideApplier("/v1/messages"),
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+	if plan.Body != nil || plan.parts == nil {
+		t.Fatal("零配置覆写把分段正文拼回了整篇副本")
+	}
+	if got := outboundBody(t, plan); !bytes.Contains(got, []byte(`"model":"glm-4.6"`)) {
+		t.Fatalf("模型名未改写: %s", got)
+	}
+}
+
+// TestBuildPlanModelRewriteMaterializesForConfiguredOverrides 钉住另一头：覆写真的会改写正文时，
+// 模型名改写必须先就位（覆写会重新序列化整棵树），出站同时带新模型名与覆写值。
+func TestBuildPlanModelRewriteMaterializesForConfiguredOverrides(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-5-20250929","max_tokens":64,"messages":[]}`
+	provider := redirectProvider("glm-4.6")
+	provider.AnthropicMaxTokensPreference = "2048"
+	plan, err := BuildPlan(PlanInput{
+		Client:    newClaudeRequest(body),
+		Target:    Target{Provider: provider},
+		Overrides: NewProviderOverrideApplier("/v1/messages"),
+	})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(outboundBody(t, plan), &decoded); err != nil {
+		t.Fatalf("出站正文不是 JSON: %v", err)
+	}
+	if decoded["model"] != "glm-4.6" {
+		t.Fatalf("覆写后模型名被改回了: %v", decoded["model"])
+	}
+	if decoded["max_tokens"] != float64(2048) {
+		t.Fatalf("覆写未生效: %v", decoded["max_tokens"])
+	}
+}
+
+// TestBuildPlanModelRewriteWithChatUsageOption 钉住 chat 线的 include_usage 补齐与重定向同时生效
+// （该步会重新序列化正文，故模型名改写必须先落地）。
+func TestBuildPlanModelRewriteWithChatUsageOption(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-5-20250929","stream":true,"messages":[{"role":"user","content":"ping"}]}`
+	provider := openAICompatibleProvider("https://relay.example.com")
+	provider.ModelRedirects = json.RawMessage(
+		`[{"matchType":"exact","source":"claude-sonnet-4-5-20250929","target":"glm-4.6"}]`)
+	plan, err := BuildPlan(PlanInput{Client: chatClient(body), Target: Target{Provider: provider}})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(outboundBody(t, plan), &decoded); err != nil {
+		t.Fatalf("出站正文不是 JSON: %v", err)
+	}
+	if decoded["model"] != "glm-4.6" {
+		t.Fatalf("模型名未改写: %v", decoded["model"])
+	}
+	options, ok := decoded["stream_options"].(map[string]any)
+	if !ok || options["include_usage"] != true {
+		t.Fatalf("include_usage 未补齐: %v", decoded["stream_options"])
+	}
+}
+
+// TestBuildPlanModelRewriteCommutesWithEmptyToolArgs 钉住 native 路的空参数归一与模型改写
+// 可交换：两者都只替换一段互不重叠的字节，先后顺序不改变出站字节。
+func TestBuildPlanModelRewriteCommutesWithEmptyToolArgs(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-5-20250929","messages":[{"role":"user","content":"ping"},` +
+		`{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"t","arguments":""}}]}]}`
+	want := `{"model":"glm-4.6","messages":[{"role":"user","content":"ping"},` +
+		`{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"t","arguments":"{}"}}]}]}`
+
+	provider := openAICompatibleProvider("https://relay.example.com")
+	provider.ModelRedirects = json.RawMessage(
+		`[{"matchType":"exact","source":"claude-sonnet-4-5-20250929","target":"glm-4.6"}]`)
+	plan, err := BuildPlan(PlanInput{Client: chatClient(body), Target: Target{Provider: provider}})
+	if err != nil {
+		t.Fatalf("BuildPlan 失败: %v", err)
+	}
+	if got := outboundBody(t, plan); string(got) != want {
+		t.Fatalf("出站正文 = %q，期望 %q", got, want)
 	}
 }

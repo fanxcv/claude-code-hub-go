@@ -13,10 +13,10 @@ import (
 //
 // 两者都要留、且要可区分：
 //   - requested：客户端原始值，**建行时**由守卫链写入（`anthropic_effort` 等，见 internal/specialsettings）；
-//   - forwarded：**转换器产物**（`forward.Plan.Body`）里该字段的值，**终态**追加一条
+//   - forwarded：**转换器产物**（`forward.Plan.MaterializedBody()`）里该字段的值，**终态**追加一条
 //     `thinking_effort_forwarded`。
 //
-// 硬约束：forwarded **只能**来自 `plan.Body`（即将发给上游的那份字节），
+// 硬约束：forwarded **只能**来自 `plan.MaterializedBody()`（即将发给上游的那份字节），
 // **禁止**由记录侧从客户端值二次推导——那样它就成了「我以为发了什么」而不是「实际发了什么」，
 // 也就无法作为转换正确性的证据。转换把字段丢掉时记 `dropped=true`（显式），不是静默为空。
 //
@@ -84,9 +84,9 @@ func specialSettingsAppendEntries(state *RequestState, plan *forward.Plan) []byt
 	var forwarded specialsettings.EffortForwarded
 	switch {
 	case converted:
-		forwarded = specialsettings.ForwardedTrimmedEffort(plan.Protocol, plan.Body)
+		forwarded = specialsettings.ForwardedTrimmedEffort(plan.Protocol, plan.MaterializedBody())
 	case state != nil:
-		forwarded = specialsettings.ForwardedTrimmedEffortAt(plan.Body, state.requestedEffort.Field, plan.Protocol)
+		forwarded = specialsettings.ForwardedTrimmedEffortAt(plan.MaterializedBody(), state.requestedEffort.Field, plan.Protocol)
 	}
 	// 转换条目二选一：成功则记「已转换」，失败则记「转不了，为什么」。
 	// 两个分支互斥由 plan 的事实保证（Conversion 与 ConversionFailure 不会同时非 nil）。

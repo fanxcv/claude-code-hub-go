@@ -208,10 +208,13 @@ type Plan struct {
 	Method  string
 	URL     string
 	Headers http.Header
-	// Body 是发往上游的正文，至多一份；nil 表示无正文。
+	// Body 是发往上游的正文，至多一份；nil 表示无正文或正文仍是分段形态（见 parts）。
 	Body []byte
 	// ContentLength 为 -1 表示长度未知。
 	ContentLength int64
+	// parts 是正文的**分段**形态（模型名改写的产物）：与 Body 互斥，各段引用入参切片。
+	// 出站时由 Request 交给拨号层；确实需要连续字节的读取方走 MaterializedBody。
+	parts *bodyParts
 
 	// Protocol 是本次正文实际所属的协议线（转换生效时为目标线，否则为客户端线）。
 	Protocol convert.WireProtocol
@@ -259,7 +262,8 @@ type Plan struct {
 
 // Request 把计划转换为拨号层请求。
 //
-// Body 以 reader 形式交出：内容仍是同一份切片，不复制第二份正文。
+// 正文以 reader 形式交出：分段形态给一个可 Seek 的分段 reader（dial 的 rewindBody 要求
+// 可回放），单切片形态仍是同一份切片，都不复制第二份正文。
 func (p *Plan) Request() dial.Request {
 	req := dial.Request{
 		Method:        p.Method,
@@ -267,7 +271,10 @@ func (p *Plan) Request() dial.Request {
 		Headers:       p.Headers,
 		ContentLength: p.ContentLength,
 	}
-	if p.Body != nil {
+	switch {
+	case p.parts != nil:
+		req.Body = &bodyPartsReader{parts: p.parts.segments, length: int64(p.parts.length)}
+	case p.Body != nil:
 		req.Body = bytes.NewReader(p.Body)
 	}
 	return req
@@ -415,12 +422,21 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 	//
 	// 历史缺陷：这里曾写 `plan.Conversion == nil && …`，于是**凡发生转换的请求都不改写**——上游收到的是
 	// 客户端别名，凡「跨协议 + 配了 model_redirects」的供应商必 400/404（矩阵台 model 模式 3/9 的真因）。
-	if redirect != nil && plan.Conversion == nil && body != nil {
+	//
+	// 为什么产出**分段**而不是一整片：入参正文被竞速的多个 attempt 共享（各候选的重定向目标可以不同），
+	// 就地改写会串线；复制一整篇则让同一份正文在堆上同时三份。分段零拷贝，且只在后面某一步确实要
+	// **重新序列化**正文时才需先落地——那两个步骤会按自己的转义形态重写 model 值（见 body_parts.go）。
+	pendingModel := redirect != nil && plan.Conversion == nil && body != nil
+	if pendingModel && (overridesMayRewriteBody(in.Overrides, provider, plan.Protocol) ||
+		chatUsageOptionApplies(provider.Type, in.Client.Path)) {
 		rewritten, err := rewriteModelField(body, redirect.Target)
 		if err != nil {
 			return nil, err
 		}
-		body = rewritten
+		if rewritten != nil {
+			body = rewritten.materialize()
+		}
+		pendingModel = false
 	}
 	if in.Overrides != nil && body != nil {
 		applied, err := in.Overrides.Apply(provider, plan.Protocol, body)
@@ -464,10 +480,22 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 	if plan.Conversion == nil && plan.Protocol == convert.ProtocolOpenAIResponses && body != nil {
 		body = rectify.NormalizeResponsesEmptyToolArgs(body)
 	}
+	// 模型改写落到定稿正文上（分段，零拷贝）。走到这里意味着正文没被任何**重新序列化**的步骤
+	// 改过：空参数归一只做互不重叠的字节区间替换，与改写可交换，先后不影响出站字节。
+	var parts *bodyParts
+	if pendingModel {
+		rewritten, err := rewriteModelField(body, redirect.Target)
+		if err != nil {
+			return nil, err
+		}
+		parts = rewritten
+	}
+	plan.parts = parts
 	plan.Body = body
 	plan.ContentLength = int64(len(body))
-	if body == nil {
-		plan.ContentLength = 0
+	if parts != nil {
+		plan.Body = nil
+		plan.ContentLength = int64(parts.length)
 	}
 
 	// 5) 出站 headers 最后构造：它依赖最终基址。
@@ -481,6 +509,21 @@ func BuildPlan(in PlanInput) (*Plan, error) {
 		UserAgentModified: in.UserAgentModified,
 	})
 	return plan, nil
+}
+
+// overridesMayRewriteBody 报告供应商覆写这一步是否可能改写正文。
+//
+// 已知实现（ProviderOverrideApplier）只在供应商配了偏好时才改写：零配置早退在**不解析正文**的
+// 前提下原样返回入参，而生产上绝大多数供应商没有任何偏好。判否时正文可以保持分段——为一次
+// 不会发生的改写复制整篇正文，正是本 lane 要消掉的那份副本。未知实现无从判断，按会改写处理。
+func overridesMayRewriteBody(applier OverrideApplier, provider Provider, protocol convert.WireProtocol) bool {
+	if applier == nil {
+		return false
+	}
+	if _, ok := applier.(*ProviderOverrideApplier); !ok {
+		return true
+	}
+	return hasConfiguredPreference(provider, protocol)
 }
 
 // buildGeminiPassthroughPlan 编译 Gemini 线的**原生透传**计划。
@@ -665,30 +708,35 @@ func clientFormatOfProtocol(protocol convert.WireProtocol) convert.ClientFormat 
 // jsonModelKey 是模型改写要定位的顶层键（含引号，按字节比较）。
 const jsonModelKey = `"model"`
 
-// rewriteModelField 改写 JSON 正文**顶层**的 model 字段，其余字节逐字不变。
+// rewriteModelField 改写 JSON 正文**顶层**的 model 字段，返回**分段**结果：各段按序拼接
+// 就是出站正文，段本身引用入参 body（不复制）。未命中顶层 model 时返回 nil，调用方沿用入参。
 //
 // 为什么不解析整棵树（旧实现是 json.Unmarshal + json.Marshal）：1.9MB 正文实测 21.3ms、
 // 分配 19.6MB（337k 次分配，正文被放大约 10×，见 BenchmarkRewriteModelFieldLargeBody），
 // 且会把全部键序重排成字典序（`{"x":1,"model":"a"}` 变成 `{"model":"TARGET","x":1}`）
 // ——出站字节的稳定性直接决定上游前缀缓存的命中率。
-// 这里只做字节级定位与替换：未命中时原样返回入参（零分配），命中时只复制一份正文。
+//
+// 为什么不返回一整片 []byte：入参正文被竞速的多个 attempt 共享（各候选的重定向目标可以不同），
+// 就地改写会串线；而复制一整篇会让同一份正文在堆上同时三份（生产活堆实测这一份占 16.1%）。
+// 分段只复制那个几十字节的新模型名，出站字节逐字不变。
 //
 // 只认 depth==1 的 model 键：嵌套对象里的同名键（如工具 schema 里的 model）不碰。
 // 顶层同名键重复出现时逐处替换（旧实现是「后者覆盖前者」再整体序列化，两者对上游等价：
 // 任何 JSON 解码器都只看最后一个 model，逐处替换连「读第一个」的解码器也一并覆盖）。
-func rewriteModelField(body []byte, model string) ([]byte, error) {
+func rewriteModelField(body []byte, model string) (*bodyParts, error) {
 	start := skipJSONSpace(body, 0)
 	if start >= len(body) || body[start] != '{' {
 		// 旧实现把正文解码进 map：`null` 是合法输入且拿不到 model，故原样返回；
 		// 其余非对象形状（数组/标量/非法）旧实现同样报 ErrInvalidBody，这里一致。
 		if bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
-			return body, nil
+			return nil, nil
 		}
 		return nil, invalidBodyError()
 	}
 
-	// out 与 quoted 都延迟到**真的命中**顶层 model 才产生：未命中路径零分配。
-	var out, quoted []byte
+	// parts 与 quoted 都延迟到**真的命中**顶层 model 才产生：未命中路径零分配。
+	var parts *bodyParts
+	var quoted []byte
 	copied := 0
 	i := skipJSONSpace(body, start+1)
 	if i < len(body) && body[i] == '}' {
@@ -712,17 +760,17 @@ func rewriteModelField(body []byte, model string) ([]byte, error) {
 				return nil, invalidBodyError()
 			}
 			if isJSONModelKey(body[i:keyEnd]) {
-				if out == nil {
+				if parts == nil {
 					marshaled, err := json.Marshal(model)
 					if err != nil {
 						// json.Marshal 对字符串不会失败；留着错误通道以免将来改动被静默吞掉。
 						return nil, fmt.Errorf("forward: 模型名序列化失败: %w", err)
 					}
 					quoted = marshaled
-					out = make([]byte, 0, len(body)+len(quoted))
+					parts = &bodyParts{}
 				}
-				out = append(out, body[copied:valueStart]...)
-				out = append(out, quoted...)
+				parts.append(body[copied:valueStart])
+				parts.append(quoted)
 				copied = valueEnd
 			}
 			i = skipJSONSpace(body, valueEnd)
@@ -744,10 +792,11 @@ func rewriteModelField(body []byte, model string) ([]byte, error) {
 	if tail := skipJSONSpace(body, i); tail != len(body) {
 		return nil, invalidBodyError()
 	}
-	if out == nil {
-		return body, nil
+	if parts == nil {
+		return nil, nil
 	}
-	return append(out, body[copied:]...), nil
+	parts.append(body[copied:])
+	return parts, nil
 }
 
 // invalidBodyError 统一正文不可改写的错误文案（哨兵仍是 ErrInvalidBody，调用方按它判类）。

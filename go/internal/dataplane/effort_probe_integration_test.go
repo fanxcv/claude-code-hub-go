@@ -152,6 +152,81 @@ func TestIntegrationEffortProbeOnNativePassthrough(t *testing.T) {
 	}
 }
 
+// TestIntegrationEffortProbeOnNativePassthroughWithModelRedirect 钉住「两个时点的正文同源」：
+// 拨号期交给上游的字节，与结算期探针读到的字节，必须是同一份。
+//
+// 为什么这条用例必须存在：模型名改写后的出站正文现在是**分段**表示（前缀段 + 目标名段 + 后缀段，
+// 均引用入站正文的子切片），请求期**不物化**——没有一整片连续字节可读。结算期的思考强度探针是
+// 这份分段正文在 /v1/messages 链路上唯一的结算期消费方（WS 帧正文不走这条链路；缓存 TTL 解析只在
+// 正文含 cache_control 时才读）。因此探针读到的值若与上游实收不一致，只有两种可能：分段拼错了，
+// 或物化入口压根没被调用（`plan.Body` 在分段计划上恒为 nil，探针会静默读到空值）。两条都不是单测
+// 能发现的：单测看不到「拨号期 reader 逐段吐出的字节」与「结算期物化出的字节」是否一致，只有走
+// 完整条链才比得出来。
+//
+// 构造：客户端 anthropic + 供应商 claude（原生直通，不转换）+ 该供应商配了一条
+// `claude-sonnet-4-5 → glm-4.6` 的重定向规则——三者同时成立才会走分段改写。
+// 该夹具供应商的 anthropic_adaptive_thinking 是 SQL NULL（经 row_to_json 读回字面量 `null`），
+// 覆写的零配置早退成立，故计划确实保持分段——这一点由 forward 包的同形单测
+// `TestBuildPlanModelRewriteStaysSegmentedForZeroConfigOverrides` 钉住（本包看不到 plan 的内部字段）。
+func TestIntegrationEffortProbeOnNativePassthroughWithModelRedirect(t *testing.T) {
+	var received map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &received)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"id":"msg_1","type":"message","model":"glm-4.6",`+
+			`"usage":{"input_tokens":1,"output_tokens":1},"content":[]}`)
+	}))
+	defer upstream.Close()
+
+	pools := integrationStore(t)
+	provisioned := provision(t, pools, upstream.URL, "claude")
+	const redirectTarget = "glm-4.6"
+	setProviderModelRedirects(t, pools, provisioned.providerID,
+		fmt.Sprintf(`[{"matchType":"exact","source":%q,"target":%q}]`, "claude-sonnet-4-5", redirectTarget))
+	handler := newIntegrationHandler(t, provisioned)
+
+	requestBody := `{"model":"claude-sonnet-4-5","max_tokens":16,"output_config":{"effort":"medium"},` +
+		`"messages":[{"role":"user","content":"你好"}]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(requestBody))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("x-api-key", provisioned.apiKey)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("状态码应为 200，收到 %d（%s）", recorder.Code, recorder.Body.String())
+	}
+
+	// ① 拨号期事实：上游实收的 model 是重定向目标，说明改写确实施加了（且出站是分段 reader 逐段给出的）。
+	if got := received["model"]; got != redirectTarget {
+		t.Fatalf("上游实收 model 应为重定向目标 %q，实际 %v（正文：%v）", redirectTarget, got, received)
+	}
+	nativeEffort, _ := received["output_config"].(map[string]any)
+	upstreamEffort, _ := nativeEffort["effort"].(string)
+	if upstreamEffort == "" {
+		t.Fatalf("原生直通时上游正文应原样保留 output_config.effort，实收：%v", received)
+	}
+
+	// ② 结算期事实：探针从 MaterializedBody() 拼出的正文里读到的值，必须与①的上游实收值相同。
+	// 两者相等即证明拨号期逐段读出的字节与结算期物化出的字节同源——改写没有在两处各算一遍。
+	row := waitForFinalizedRow(t, provisioned)
+	probe := findEntry(t, specialSettingsOf(t, row), "thinking_effort_forwarded")
+	if got := probe["forwardedEffort"]; got != upstreamEffort {
+		t.Errorf("分段正文在两个时点必须同源：结算期物化出的 forwardedEffort=%v 拨号期上游实收=%q",
+			got, upstreamEffort)
+	}
+	if got := probe["requestedEffort"]; got != "medium" {
+		t.Errorf("探针要同时留客户端请求值：实际 %v", got)
+	}
+	if got := probe["dropped"]; got != false {
+		t.Errorf("重定向只换模型名，effort 仍在正文里，dropped 应为 false：%v", got)
+	}
+	if got := probe["converted"]; got != false {
+		t.Errorf("原生直通（含重定向）不发生协议转换，应记 converted=false：%v", got)
+	}
+}
+
 // enableProtocolConversion 打开测试供应商的协议转换开关。
 func enableProtocolConversion(t *testing.T, provisioned provisioning) {
 	t.Helper()

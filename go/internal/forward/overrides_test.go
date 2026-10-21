@@ -353,6 +353,31 @@ func TestAnthropicClamping(t *testing.T) {
 	}
 }
 
+// TestHasConfiguredPreferenceTreatsJSONNullAdaptiveAsUnset 钉住 jsonb NULL 的读取形态：
+// SQL NULL 经 row_to_json 读回是字面量 `null`（len=4），不是 nil。按「非空串」判会把它当成
+// 已配置，从而关掉 Apply 的零配置早退，让每条 claude 请求都白做一次 ParseJSON + Clone。
+func TestHasConfiguredPreferenceTreatsJSONNullAdaptiveAsUnset(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  json.RawMessage
+		want bool
+	}{
+		{"SQL NULL 读回的字面 null", json.RawMessage(`null`), false},
+		{"空原文", json.RawMessage(nil), false},
+		{"空串", json.RawMessage(``), false},
+		{"配置了 adaptive", json.RawMessage(`{"modelMatchMode":"all"}`), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := claudeOverrideProvider()
+			provider.AnthropicAdaptiveThinking = tc.raw
+			if got := hasConfiguredPreference(provider, convert.ProtocolAnthropicMessages); got != tc.want {
+				t.Fatalf("hasConfiguredPreference = %v，期望 %v（raw=%q）", got, tc.want, string(tc.raw))
+			}
+		})
+	}
+}
+
 func TestAnthropicAdaptiveThinking(t *testing.T) {
 	t.Run("all 模式恒命中", func(t *testing.T) {
 		provider := claudeOverrideProvider()

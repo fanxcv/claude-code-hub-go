@@ -347,7 +347,7 @@ func (s *storeSettler) NonStream(
 		// routing_trace：把本次真实跑过的路径与实测事件落库（Node 侧由 discovery/竞速子系统写）。
 		// 事实源全部来自 forward 层的测量；无真实留痕时返回 nil，列保持原值。
 		settlement.RoutingTrace = s.routingTrace(result.Attempts, result.EndedAt, result.StatusCode, settlement.TTFTMS, settlement.FirstByteMS)
-		// 终态追加的审计：转换后思考强度探针（取转换器产物 plan.Body 里的实际值）+ 协议转换记录。
+		// 终态追加的审计：转换后思考强度探针（取转换器产物 plan.MaterializedBody 里的实际值）+ 协议转换记录。
 		// 两段写入靠存储层的 jsonb 追加语义与建行时的客户端侧审计共存
 		// （见 store.DetailsPatch.SpecialSettingsAppend）。
 		settlement.SpecialSettingsAppend = specialSettingsAppendEntries(s.state, result.Plan)

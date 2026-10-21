@@ -23,6 +23,14 @@ func (p *Plan) AppliedCacheTTL() string {
 	if p == nil {
 		return ""
 	}
+	if p.parts != nil {
+		// 先按段判有没有缓存块（跨段边界也算命中）；有才落地成连续字节交给解析器——
+		// 没有缓存块的正文因此完全不物化。解析器只认连续字节，这一份拷贝省不掉。
+		if !p.parts.contains([]byte(`"cache_control"`)) {
+			return ""
+		}
+		return appliedCacheTTL(p.MaterializedBody())
+	}
 	return appliedCacheTTL(p.Body)
 }
 
