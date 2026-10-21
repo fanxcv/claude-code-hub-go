@@ -146,6 +146,12 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 		{"NODE_ENV 非法", map[string]string{"NODE_ENV": "staging"}, "NODE_ENV"},
 		{"在途字节上限过小", map[string]string{"CCH_GO_MAX_INFLIGHT_BYTES": "1024"}, "CCH_GO_MAX_INFLIGHT_BYTES"},
 		{"在途字节上限非整数", map[string]string{"CCH_GO_MAX_INFLIGHT_BYTES": "1.5MiB"}, "CCH_GO_MAX_INFLIGHT_BYTES"},
+		// 系数 0 必须响亮地拒：env 层只收 >=1（「退化为旧口径」是 API 层的 1，不是 env 层的 0），
+		// 否则「设了但静默不生效」比不设更难排查。
+		{"放大系数为 0", map[string]string{"CCH_GO_INFLIGHT_BYTES_MULTIPLIER": "0"}, "CCH_GO_INFLIGHT_BYTES_MULTIPLIER"},
+		{"放大系数为负", map[string]string{"CCH_GO_INFLIGHT_BYTES_MULTIPLIER": "-2"}, "CCH_GO_INFLIGHT_BYTES_MULTIPLIER"},
+		{"放大系数非整数", map[string]string{"CCH_GO_INFLIGHT_BYTES_MULTIPLIER": "2.5"}, "CCH_GO_INFLIGHT_BYTES_MULTIPLIER"},
+		{"放大系数过大", map[string]string{"CCH_GO_INFLIGHT_BYTES_MULTIPLIER": "65"}, "CCH_GO_INFLIGHT_BYTES_MULTIPLIER"},
 		{"流数上限越界", map[string]string{"CCH_GO_MAX_STREAMS": "9000"}, "CCH_GO_MAX_STREAMS"},
 		{"同协议倍率为 0", map[string]string{"CCH_SAME_PROTOCOL_WEIGHT_K": "0"}, "CCH_SAME_PROTOCOL_WEIGHT_K"},
 		{"同协议倍率过大", map[string]string{"CCH_SAME_PROTOCOL_WEIGHT_K": "101"}, "CCH_SAME_PROTOCOL_WEIGHT_K"},
@@ -176,6 +182,31 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 				t.Fatalf("错误信息必须包含变量名 %s，收到: %v", testCase.wantVar, err)
 			}
 		})
+	}
+}
+
+// TestMaxInflightDefaultAndMultiplier 钉住默认口径：48 MiB 正文预算 × 系数 6 = 288 MiB 记账上限。
+func TestMaxInflightDefaultAndMultiplier(t *testing.T) {
+	cfg, err := Load(envMap(nil))
+	if err != nil {
+		t.Fatalf("默认值必须可装载: %v", err)
+	}
+	if cfg.MaxInflightBytes != 48*1024*1024 {
+		t.Fatalf("CCH_GO_MAX_INFLIGHT_BYTES 默认应为 48 MiB，收到 %d", cfg.MaxInflightBytes)
+	}
+	if cfg.InflightBytesMultiplier != 6 {
+		t.Fatalf("CCH_GO_INFLIGHT_BYTES_MULTIPLIER 默认应为 6，收到 %d", cfg.InflightBytesMultiplier)
+	}
+
+	explicit, err := Load(envMap(map[string]string{"CCH_GO_INFLIGHT_BYTES_MULTIPLIER": "2"}))
+	if err != nil {
+		t.Fatalf("显式系数应可装载: %v", err)
+	}
+	if explicit.InflightBytesMultiplier != 2 {
+		t.Fatalf("显式系数应取 2，收到 %d", explicit.InflightBytesMultiplier)
+	}
+	if got := explicit.Redacted()["inflightMultiplier"]; got != 2 {
+		t.Fatalf("启动日志摘要应带系数，收到 %v", got)
 	}
 }
 

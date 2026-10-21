@@ -17,8 +17,10 @@
 package ingress
 
 import (
+	"math"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // 出厂默认值，与 Node 侧 request-body-codec.ts 一一对应（便于行为对账）。
@@ -34,8 +36,16 @@ const (
 	// DefaultMaxInflightBodyBytes 是进程级在途请求体（含解压后明文）字节上限。
 	// 这是 Go 侧新增的总量闸门（CCH_GO_MAX_INFLIGHT_BYTES），与 GOMEMLIMIT 协同工作。
 	// 只是**未注入时的兜底**：生产唯一真源是 config.Config.MaxInflightBytes（由 dataplane
-	// 装配处注入），默认值 64 MiB 与那一侧一致。
-	DefaultMaxInflightBodyBytes int64 = 64 * 1024 * 1024
+	// 装配处注入），默认值 48 MiB 与那一侧一致。
+	//
+	// 48 MiB 是「512 MiB 机上的记账预算」：× 放大系数 6 = 288 MiB 成本上限，留出非堆与 GC 余量；
+	// 旧的 64 MiB 按正文字节记账会让 9 条并发大请求把堆推到 380 MB 以上。
+	DefaultMaxInflightBodyBytes int64 = 48 * 1024 * 1024
+	// DefaultInflightBytesMultiplier 是准入记账的放大系数默认值。
+	//
+	// 记账口径是「正文 × 系数」而不是正文本身：同一份正文在堆上同时以多种形态驻留
+	// （解析树、改写副本、编码缓冲），实测堆峰值是正文的 3.0~6.2 倍，取 6 作上界估计。
+	DefaultInflightBytesMultiplier = 6
 )
 
 // 环境变量名。解压三项与 Node 同名同默认，便于逐项对账；总量闸门是 Go 侧新增旋钮。
@@ -45,6 +55,7 @@ const (
 	EnvMaxConcurrentDecompressions  = "MAX_CONCURRENT_REQUEST_DECOMPRESSIONS"
 	EnvMaxInflightDecompressionByte = "MAX_INFLIGHT_REQUEST_DECOMPRESSION_BYTES"
 	EnvMaxInflightBodyBytes         = "CCH_GO_MAX_INFLIGHT_BYTES"
+	EnvInflightBytesMultiplier      = "CCH_GO_INFLIGHT_BYTES_MULTIPLIER"
 )
 
 // Options 是请求体读取与解压的限额配置。
@@ -92,6 +103,37 @@ func (o Options) normalized() Options {
 		o.MaxLayers = DefaultMaxLayers
 	}
 	return o
+}
+
+// InflightBytesMultiplier 返回生效的放大系数（CCH_GO_INFLIGHT_BYTES_MULTIPLIER），
+// 缺失或非正整数时取出厂默认。
+//
+// config 层对同一变量做 fail fast 校验（0/负/小数装载即失败）；这里的回退只服务于未接线的
+// 调用方，与 parseBytesEnv 读 CCH_GO_MAX_INFLIGHT_BYTES 同策。
+func InflightBytesMultiplier() int {
+	raw := strings.TrimSpace(os.Getenv(EnvInflightBytesMultiplier))
+	if raw == "" {
+		return DefaultInflightBytesMultiplier
+	}
+	multiplier, err := strconv.Atoi(raw)
+	if err != nil || multiplier < 1 {
+		return DefaultInflightBytesMultiplier
+	}
+	return multiplier
+}
+
+// InflightCostBytes 把正文字节换算成准入记账成本——**唯一的**换算入口。
+//
+// multiplier <= 1 时恒等，即退化为「按正文字节记账」的旧口径。溢出饱和到 MaxInt64：成本只与
+// 预算比较，饱和仍表达「远超预算」；回绕成负数会让闸门恒放行，是这里唯一不可接受的取值。
+func InflightCostBytes(bodyBytes, multiplier int64) int64 {
+	if bodyBytes <= 0 || multiplier <= 1 {
+		return bodyBytes
+	}
+	if bodyBytes > math.MaxInt64/multiplier {
+		return math.MaxInt64
+	}
+	return bodyBytes * multiplier
 }
 
 // parseBytesEnv 解析正整数字节数；非法或缺失时返回 fallback。

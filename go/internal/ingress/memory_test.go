@@ -27,7 +27,7 @@ func TestMemoryGuardAllowBoundaries(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			guard := NewMemoryGuard(fixedPressure(tc.inUse, 1000, true), 0.9)
+			guard := NewMemoryGuard(fixedPressure(tc.inUse, 1000, true), 0.9, 0)
 			err := guard.Allow(tc.request)
 			if tc.wantErr && err == nil {
 				t.Fatalf("期望拒绝，实际放行")
@@ -47,20 +47,33 @@ func TestMemoryGuardAllowBoundaries(t *testing.T) {
 	}
 }
 
-// TestMemoryGuardWithoutLimitAllows 覆盖「上限不可知即放行」：不知道就不假装知道，
-// 由 GOMEMLIMIT 自身兜底。
-func TestMemoryGuardWithoutLimitAllows(t *testing.T) {
-	guard := NewMemoryGuard(fixedPressure(1<<40, 0, false), 0.9)
-	if err := guard.Allow(1 << 30); err != nil {
-		t.Fatalf("上限未知时应放行: %v", err)
+// TestAllowWithoutMemLimitUsesStaticCap 钉住「GOMEMLIMIT 未设不再无条件放行」：上限不可知时
+// 判定退化为静态上限（在途预算 × 系数），超过即拒。改坏 memory.go 的 !known 分支（直接
+// return nil）必红。
+func TestAllowWithoutMemLimitUsesStaticCap(t *testing.T) {
+	const staticCap = 288 << 20
+	guard := NewMemoryGuard(fixedPressure(1<<40, 0, false), 0.9, staticCap)
+	if err := guard.Allow(staticCap); err != nil {
+		t.Fatalf("恰好等于静态上限应放行: %v", err)
+	}
+	err := guard.Allow(staticCap + 1)
+	if err == nil {
+		t.Fatal("超过静态上限必须拒：上限不可知不等于无条件放行")
+	}
+	if !errors.Is(err, ErrInsufficientMemory) || StatusOf(err) != StatusUnavailable {
+		t.Fatalf("错误 = %v，期望 ErrInsufficientMemory / 503", err)
+	}
+	// 堆在用字节再大也不影响静态判定：两者尺度不同，拿它顶上限会变成一律拒绝。
+	if err := NewMemoryGuard(fixedPressure(1<<40, 0, false), 0.9, staticCap).Allow(1); err != nil {
+		t.Fatalf("静态判定不应与堆在用字节相减: %v", err)
 	}
 	if _, ok := guard.Headroom(); ok {
-		t.Fatal("上限未知时 Headroom 应返回 ok=false")
+		t.Fatal("上限未知时 Headroom 仍应返回 ok=false")
 	}
 }
 
 func TestMemoryGuardHeadroom(t *testing.T) {
-	guard := NewMemoryGuard(fixedPressure(200, 1000, true), 0.9)
+	guard := NewMemoryGuard(fixedPressure(200, 1000, true), 0.9, 0)
 	free, ok := guard.Headroom()
 	if !ok {
 		t.Fatal("上限已知时 ok 应为 true")
@@ -69,7 +82,7 @@ func TestMemoryGuardHeadroom(t *testing.T) {
 		t.Fatalf("余量 = %d，期望 700", free)
 	}
 
-	exhausted := NewMemoryGuard(fixedPressure(1000, 1000, true), 0.9)
+	exhausted := NewMemoryGuard(fixedPressure(1000, 1000, true), 0.9, 0)
 	free, ok = exhausted.Headroom()
 	if !ok || free != 0 {
 		t.Fatalf("超限时余量 = %d ok=%v，期望 0 与 true", free, ok)
@@ -79,7 +92,7 @@ func TestMemoryGuardHeadroom(t *testing.T) {
 // TestMemoryGuardDefaultRatio 覆盖非法比例回退到 0.9。
 func TestMemoryGuardDefaultRatio(t *testing.T) {
 	for _, ratio := range []float64{0, -1, 1.5, math.NaN()} {
-		guard := NewMemoryGuard(fixedPressure(0, 1000, true), ratio)
+		guard := NewMemoryGuard(fixedPressure(0, 1000, true), ratio, 0)
 		free, _ := guard.Headroom()
 		if free != 900 {
 			t.Fatalf("比例 %v 未回退到 0.9：余量 = %d", ratio, free)
@@ -102,8 +115,11 @@ func TestDefaultMemoryPressureReadsRuntime(t *testing.T) {
 func TestAdmissionAcquireBody(t *testing.T) {
 	admission := NewAdmission(AdmissionOptions{
 		MaxInflightBodyBytes: 1000,
-		MemoryRatio:          0.9,
-		Pressure:             fixedPressure(100, 1<<30, true),
+		// 系数固定 1：本用例钉的是占位记账与归还，按旧口径让「申请 600 + 400 恰好用满 1000」
+		// 可读；系数与乘算另有 TestInflightMultiplier* 专钉。
+		Multiplier:  1,
+		MemoryRatio: 0.9,
+		Pressure:    fixedPressure(100, 1<<30, true),
 	})
 
 	first, err := admission.AcquireBody(600)

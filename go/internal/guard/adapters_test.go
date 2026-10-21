@@ -364,7 +364,9 @@ func TestBodyAccessorAdmissionRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构造上下文失败: %v", err)
 	}
-	admission := ingress.NewAdmission(ingress.AdmissionOptions{MaxInflightBodyBytes: 4})
+	// Multiplier: 1 把「预算不足 → ErrBodyBudgetExhausted / 503」与记账系数解耦：本钉子钉的是
+	// 拒绝路径与错误分类，不是默认系数；不固定它，日后调系数时这里的成败会跟着变。
+	admission := ingress.NewAdmission(ingress.AdmissionOptions{MaxInflightBodyBytes: 4, Multiplier: 1})
 	_, err = NewBodyAccessor(ctx, BodyAccessOptions{Admission: admission})
 	if !errors.Is(err, ingress.ErrBodyBudgetExhausted) {
 		t.Fatalf("超预算应返回 ErrBodyBudgetExhausted，得到 %v", err)
@@ -377,7 +379,11 @@ func TestBodyAccessorAdmissionRejected(t *testing.T) {
 // TestBodyAccessorAdmissionReleased 校验准入占位在读取完成后归还，否则第二次读取会自锁。
 func TestBodyAccessorAdmissionReleased(t *testing.T) {
 	payload := []byte(`{"model":"claude-sonnet-4-5"}`)
-	admission := ingress.NewAdmission(ingress.AdmissionOptions{MaxInflightBodyBytes: int64(len(payload))})
+	// 预算必须按记账口径给：闸门看到的成本是「正文 × 系数」（默认为 6），与正文等额的预算
+	// 在系数 >1 时必然被拒。本钉子钉的是「占位会归还」，不是按字节精确记账，故按系数放大。
+	admission := ingress.NewAdmission(ingress.AdmissionOptions{
+		MaxInflightBodyBytes: int64(len(payload)) * ingress.DefaultInflightBytesMultiplier,
+	})
 	for range 2 {
 		header := http.Header{}
 		header.Set("Content-Length", strconv.Itoa(len(payload)))

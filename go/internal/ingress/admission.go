@@ -13,11 +13,20 @@ type AdmissionOptions struct {
 	MaxInflightDecompressionBytes int64
 	// MemoryRatio 是允许动用的 GOMEMLIMIT 比例；<=0 时取 0.9。
 	MemoryRatio float64
+	// Multiplier 是准入记账的放大系数：闸门按「正文字节 × 系数」记账。
+	//
+	// 0 表示**未注入**（取 CCH_GO_INFLIGHT_BYTES_MULTIPLIER 或出厂 6）——生产装配靠这一语义
+	// 拿到配置值，故 0 不是恒等；1（或更小）才是恒等，即退化为按正文字节记账的旧口径。
+	// env 层只接受 >=1：0/负/小数在 config 装载时就 fail fast，不会悄悄退化成旧口径。
+	Multiplier int64
 	// Pressure 覆盖内存读数来源（测试注入）；nil 时用 DefaultMemoryPressure。
 	Pressure MemoryPressure
 }
 
 // AdmissionStats 是准入层的可观测读数，供 /readyz 与日志使用。
+//
+// Body 的字节读数是**记账成本**（正文 × 系数）而 MaxBytes 是配置的正文预算：两者不能直接算
+// 占用率，要看 ActiveBytes/PeakBytes 与「预算 × 系数」比。
 type AdmissionStats struct {
 	Body          Stats
 	Decompression Stats
@@ -34,6 +43,10 @@ type Admission struct {
 	Body          *Limiter
 	Decompression *Limiter
 	Memory        *MemoryGuard
+
+	// multiplier 是记账放大系数，构造后不可变且不导出：外部只能经 AdmissionOptions 注入，
+	// 免得有人绕过 config 的区间校验直接改系数。
+	multiplier int64
 }
 
 // NewAdmission 构造准入层。未显式给出的上限按环境变量与出厂默认补齐。
@@ -41,6 +54,13 @@ func NewAdmission(opts AdmissionOptions) *Admission {
 	maxBody := opts.MaxInflightBodyBytes
 	if maxBody <= 0 {
 		maxBody = parseBytesEnv(EnvMaxInflightBodyBytes, DefaultMaxInflightBodyBytes)
+	}
+	multiplier := opts.Multiplier
+	if multiplier == 0 {
+		multiplier = int64(InflightBytesMultiplier())
+	}
+	if multiplier < 1 {
+		multiplier = 1
 	}
 	concurrent := opts.MaxConcurrentDecompressions
 	if concurrent <= 0 {
@@ -56,7 +76,9 @@ func NewAdmission(opts AdmissionOptions) *Admission {
 	return &Admission{
 		Body:          NewLimiter(0, maxBody), // 请求体不按条数限流：总量由字节预算表达
 		Decompression: NewLimiter(concurrent, inflight),
-		Memory:        NewMemoryGuard(opts.Pressure, opts.MemoryRatio),
+		// 静态上限与字节预算同尺度：整份预算的记账成本（预算 × 系数，默认 48 MiB × 6）。
+		Memory:     NewMemoryGuard(opts.Pressure, opts.MemoryRatio, InflightCostBytes(maxBody, multiplier)),
+		multiplier: multiplier,
 	}
 }
 
@@ -65,16 +87,30 @@ func DefaultAdmission() *Admission { return NewAdmission(AdmissionOptions{}) }
 
 // AcquireBody 为「即将读入内存的请求体」申请预算，字节数应为**解压后**的明文长度。
 //
-// 判定顺序：先内存（GOMEMLIMIT 协同），再全局在途字节。前者回答「进程还有没有余量」，
-// 后者回答「本进程允许同时在途多少」。任一不足即立即拒绝：
-// ErrInsufficientMemory 或 ErrBodyBudgetExhausted（两者都映射 503）。
+// 真正参与判定的是记账成本「正文字节 × 系数」（见 InflightCostBytes）：解析树、改写副本与
+// 编码缓冲会同时驻留，正文本身不是堆成本的度量。系数只进这一个预算，正文与出站字节一概不变。
+//
+// 判定顺序：先字节预算（不通过即 ErrBodyBudgetExhausted，最具体的容量错误），再内存余量
+// （与 GOMEMLIMIT 协同，不通过时立即归还占位）。两者共用同一份成本，而内存层的静态上限就是
+// 「整份字节预算 × 系数」，恒不宽于字节预算——反过来先判内存会把「字节预算不足」一律报成
+// ErrInsufficientMemory，把更具体的错误盖掉。
+//
+// 两者都映射 503：ErrInsufficientMemory 或 ErrBodyBudgetExhausted。
 func (a *Admission) AcquireBody(decodedBytes int64) (*Lease, error) {
-	if err := a.Memory.Allow(decodedBytes); err != nil {
-		return nil, err
-	}
-	lease, err := a.Body.TryAcquire(decodedBytes)
+	cost := InflightCostBytes(decodedBytes, a.multiplier)
+	lease, err := a.Body.TryAcquire(cost)
 	if err != nil {
-		return nil, wrap(ErrBodyBudgetExhausted, "在途请求体预算不足（申请 %d 字节）", decodedBytes)
+		return nil, wrap(
+			ErrBodyBudgetExhausted,
+			"在途请求体预算不足（申请 %d 字节 = 正文 %d × 系数 %d）",
+			cost,
+			decodedBytes,
+			a.multiplier,
+		)
+	}
+	if err := a.Memory.Allow(cost); err != nil {
+		lease.Release()
+		return nil, err
 	}
 	return lease, nil
 }

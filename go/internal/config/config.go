@@ -229,8 +229,15 @@ type Config struct {
 	// MaxInflightBytes 是所有在途请求正文的字节上限，超限即拒绝而非排队。
 	//
 	// 本字段是唯一真源：`cmd/cchd` 把它填进 dataplane 的正文准入层（见
-	// dataplane.StoreOptions.MaxInflightBytes），进程内只此一份预算。
+	// dataplane.StoreOptions.MaxInflightBytes），进程内只此一份预算。闸门按「正文 × 放大系数」
+	// 记账（见 InflightBytesMultiplier），故这份字节预算对应的实际堆成本是它的 系数 倍。
 	MaxInflightBytes int64
+	// InflightBytesMultiplier 是准入记账的放大系数（CCH_GO_INFLIGHT_BYTES_MULTIPLIER）：
+	// 闸门按「正文字节 × 系数」记账，1 即退化为按正文字节记账的旧口径。
+	//
+	// Go 专有旋钮：不属 env.schema.ts 契约，故不进 envSpecs / go/env-parity.txt，
+	// 避免被对账脚本判为「Go 多配」。
+	InflightBytesMultiplier int
 	// MaxStreams 是同时存在的流式响应数上限。
 	//
 	// Go 侧无消费方（CCH_GO_MAX_STREAMS 只装载、无任何代码读取本字段）：同 ENABLE_PROVIDER_CACHE
@@ -307,8 +314,16 @@ func LoadLookup(lookup LookupEnvFunc) (Config, error) {
 	}
 
 	maxInflightBytes, err := parseInt64Range(
-		lookupValue(lookup, "CCH_GO_MAX_INFLIGHT_BYTES"), "CCH_GO_MAX_INFLIGHT_BYTES", 64*1024*1024,
+		lookupValue(lookup, "CCH_GO_MAX_INFLIGHT_BYTES"), "CCH_GO_MAX_INFLIGHT_BYTES", 48*1024*1024,
 		1*1024*1024, 4*1024*1024*1024)
+	if err != nil {
+		return Config{}, err
+	}
+
+	// 记账放大系数：实测堆成本是正文的 3.0~6.2 倍，默认 6（上界）。上界 64 是防呆：
+	// 再大的系数形式上等价于「拒绝一切大正文」，那属于改预算而不是改记账口径。
+	inflightBytesMultiplier, err := parseIntRange(
+		lookupValue(lookup, "CCH_GO_INFLIGHT_BYTES_MULTIPLIER"), "CCH_GO_INFLIGHT_BYTES_MULTIPLIER", 6, 1, 64)
 	if err != nil {
 		return Config{}, err
 	}
@@ -421,12 +436,13 @@ func LoadLookup(lookup LookupEnvFunc) (Config, error) {
 	}
 
 	return Config{
-		Env:              env,
-		NodeEnv:          NodeEnv(env.NodeEnv),
-		PublicPort:       publicPort,
-		EgressPages:      egressPages,
-		MaxInflightBytes: maxInflightBytes,
-		MaxStreams:       maxStreams,
+		Env:                     env,
+		NodeEnv:                 NodeEnv(env.NodeEnv),
+		PublicPort:              publicPort,
+		EgressPages:             egressPages,
+		MaxInflightBytes:        maxInflightBytes,
+		InflightBytesMultiplier: inflightBytesMultiplier,
+		MaxStreams:              maxStreams,
 
 		SameProtocolWeightK: sameProtocolWeightK,
 
@@ -528,6 +544,7 @@ func (c Config) Redacted() map[string]any {
 		"publicPort":          c.PublicPort,
 		"egressPages":         string(c.EgressPages),
 		"maxInflightBytes":    c.MaxInflightBytes,
+		"inflightMultiplier":  c.InflightBytesMultiplier,
 		"maxStreams":          c.MaxStreams,
 		"sameProtocolWeightK": c.SameProtocolWeightK,
 		"dsnConfigured":       c.DSN != "",
