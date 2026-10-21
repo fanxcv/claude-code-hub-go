@@ -1037,7 +1037,14 @@ func encodeChatRequest(request *Request, ctx ConvertCtx) EncodeResult {
 		out.Set("prompt_cache_key", NewString(request.PromptCacheKey))
 	}
 	if request.ToolChoice != nil {
-		out.Set("tool_choice", chatEncodeToolChoice(request.ToolChoice, ctx))
+		if len(request.Tools) == 0 {
+			// 上游对「无 tools 却带 tool_choice」的请求报错（控制项指向不存在的工具集）。
+			// 而 tool_choice 在无工具时可表达的语义只有「不要调工具」，本就是无工具时的默认行为，
+			// 故不写出，只记一条损失（与 relaykit 的 toolChoiceWithoutToolsDiagnostics 同口径）。
+			loss.Dropped(LossToolChoice, direction, "tool_choice.without_tools")
+		} else {
+			out.Set("tool_choice", chatEncodeToolChoice(request.ToolChoice, ctx))
+		}
 	}
 	if request.ParallelToolCalls != nil {
 		out.Set("parallel_tool_calls", NewBool(*request.ParallelToolCalls))

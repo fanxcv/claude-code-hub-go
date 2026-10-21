@@ -427,6 +427,13 @@ const (
 	// schema 的参数；单列才能与「未知工具成员」区分。`strict:false`（Codex 默认写法）与本字段缺省
 	// 等价，一律不记损——记了就是每请求 N 条噪声。
 	LossToolStrict = "tool.strict"
+
+	// LossToolChoice 是「`tool_choice` 因请求没有 tools 而不写出」的类别。
+	//
+	// 为何要单列：无工具时的 `tool_choice` 指向不存在的工具集，上游会直接报错；编码器必须抑制它，
+	// 而抑制就是丢一个客户端显式声明——不记就成了静默改写。它也不属 `tool.strict` 等任一既有类：
+	// 前者说的是 schema 约束，这里说的是工具选择控制项本身。
+	LossToolChoice = "tool.choice"
 )
 
 // 以下七个是 catch-all `unknown_field` 的细分类别（按 detail 的来源归类）。

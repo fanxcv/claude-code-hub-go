@@ -206,3 +206,41 @@ func TestChatTrailingToolResultImageKeepsReasoningBackfill(t *testing.T) {
 		t.Fatalf("reasoning_content = %q，期望空串（不得伪造思考文本）", text)
 	}
 }
+
+// TestChatToolChoiceOmittedWithoutTools 钉住「无 tools 却带 tool_choice」的处置：chat 线上游会
+// 因该字段指向不存在的工具集直接报 400，故不写出，只记一条 LossToolChoice（detail: without_tools）；
+// 有 tools 时照旧写出，不得被这次抑制连累。
+func TestChatToolChoiceOmittedWithoutTools(t *testing.T) {
+	payload := `{"model":"m","max_tokens":64,"messages":[{"role":"user","content":"hi"}],` +
+		`"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}`
+	body, loss := encodeAnthropicToChat(t, payload)
+
+	if _, present := body.Get("tool_choice"); present {
+		t.Fatalf("tools 为空时不得写 tool_choice：%s", body.MarshalCompact())
+	}
+	assertLossEntry(t, loss, LossToolChoice, string(LossDropped), "without_tools")
+	count := 0
+	for _, entry := range loss.Entries {
+		if entry.Capability == LossToolChoice {
+			count++
+			if entry.Detail != "tool_choice.without_tools" {
+				t.Fatalf("LossToolChoice 的 detail 应为 tool_choice.without_tools，实际 %q", entry.Detail)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("无工具抑制应记且仅记一条 LossToolChoice，实际 %d 条：%+v", count, loss.Entries)
+	}
+
+	withTools := `{"model":"m","max_tokens":64,"messages":[{"role":"user","content":"hi"}],` +
+		`"tool_choice":{"type":"auto"},"tools":[{"name":"get_weather","input_schema":{"type":"object"}}]}`
+	body, loss = encodeAnthropicToChat(t, withTools)
+	if _, present := body.Get("tool_choice"); !present {
+		t.Fatalf("有 tools 时 tool_choice 必须照旧写出：%s", body.MarshalCompact())
+	}
+	for _, entry := range loss.Entries {
+		if entry.Capability == LossToolChoice {
+			t.Fatalf("有 tools 时不得记 LossToolChoice：%+v", entry)
+		}
+	}
+}
