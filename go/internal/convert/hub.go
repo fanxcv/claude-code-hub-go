@@ -32,13 +32,20 @@ type Block struct {
 
 	// text / thinking
 	Text string
+	// Citations 是 text 块携带的引用（anthropic `citations` / OpenAI 两线 `annotations`），
+	// **原样保留源线形状**，编码侧按目标线转换。
+	//
+	// 为何不解析内部结构：三线各有自己的成员集（anthropic 的 cited_text / document_index，
+	// OpenAI 的 url_citation），在枢纽里拆成字段等于逼每个解码器认识另一线的细节。
+	//
+	// 为何是按需分配的指针：Block 必须守在 192 字节这一档 size class（见下方的 bool 摆位）——
+	// 多 8 字节就跨到 208，**每个块、每个请求**都多付 16 B，而引用只出现在极少数文本块上。
+	Citations *Value
 	// thinking
 	Signature string
-	Redacted  bool
-	// image / document
-	MediaType string
-	Data      string
-	URL       string
+	// Redacted 与 FromDataURL 紧邻摆放，合用同一个 8 字节对齐槽；分开摆各吃一槽、白费 14 B，
+	// Citations 指针就会把 Block 顶出 192 档（192 → 200 → 实际占位 208）。
+	Redacted bool
 	// FromDataURL 报告「客户端的这幅图是用 data URL 表达的、解码时归一成了 base64」。
 	//
 	// 为何只留事实、不在解码处记损：同一张逻辑图的最终去向只有编码侧知道——目标线可能
@@ -47,6 +54,10 @@ type Block struct {
 	// 送达则 rewritten，被丢则只记 dropped（见 chatImageBlockToPart / responsesImagePart /
 	// encodeAnthropicBlock）。
 	FromDataURL bool
+	// image / document
+	MediaType string
+	Data      string
+	URL       string
 	// tool_call
 	ID   string
 	Name string
@@ -60,6 +71,68 @@ type Block struct {
 
 func textBlock(text string) Block { return Block{Kind: BlockText, Text: text} }
 
+// citationValue 取分片级引用数组；key 是源线自己的字段名（anthropic `citations`、OpenAI 两线
+// `annotations`）。为空时返回 nil——不产出空数组。
+func citationValue(part *Value, key string) *Value {
+	if value := fieldOrNil(part, key); value != nil && value.IsArray() && value.Len() > 0 {
+		return value
+	}
+	return nil
+}
+
+// citationArray 把枢纽里的引用数组按目标线重排。
+//
+// 三线只有 URL 来源一种形状被普遍接受：anthropic 认 `citations`（成员名 cited_text /
+// document_index），OpenAI 两线认 `annotations` 且**必须**带 `type:"url_citation"`——少了这个
+// 判别字段，OpenAI 上游会把它当未知对象。故本函数只做两件事：补/去 `type` 判别字段，其余成员
+// 原样带过（缺的就不写，不补空值）。返回 nil 表示没有可写出的引用，调用方据此不写字段。
+func citationArray(source *Value, target WireProtocol) *Value {
+	if source == nil || !source.IsArray() || source.Len() == 0 {
+		return nil
+	}
+	items := make([]*Value, 0, source.Len())
+	for _, item := range source.Items() {
+		if !isRecord(item) {
+			continue
+		}
+		if target == ProtocolAnthropicMessages {
+			items = append(items, citationToAnthropic(item))
+			continue
+		}
+		items = append(items, citationToAnnotation(item))
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return NewArray(items...)
+}
+
+// citationToAnnotation 渲染 OpenAI 两线的注释对象：判别字段固定为 url_citation。
+func citationToAnnotation(item *Value) *Value {
+	out := NewObject().Set("type", NewString("url_citation"))
+	for _, member := range item.Members() {
+		if member.Key == "type" || !isMeaningful(member.Value) {
+			continue
+		}
+		out.Set(member.Key, member.Value)
+	}
+	return out
+}
+
+// citationToAnthropic 渲染 anthropic 的引用对象。
+//
+// `type` 在本线上是可选的判别字段（原生 cited_text 与 url_citation 同数组共存），故有则带走。
+func citationToAnthropic(item *Value) *Value {
+	out := NewObject()
+	for _, member := range item.Members() {
+		if !isMeaningful(member.Value) {
+			continue
+		}
+		out.Set(member.Key, member.Value)
+	}
+	return out
+}
+
 func opaqueBlock(wire WireProtocol, value *Value) Block {
 	return Block{Kind: BlockOpaque, Wire: wire, Value: value}
 }
@@ -72,6 +145,19 @@ func containsToolCall(blocks []Block) bool {
 		}
 	}
 	return false
+}
+
+// lastTextBlock 返回最后一个文本块的下标；无文本块返回 -1。
+//
+// 用于「消息级字段落到哪个分片」：chat 的 annotations 挂在 message 上，而枢纽把引用存在 text
+// 块上（与 responses 的 output_text.annotations 同层），故收口到最后一个文本块。
+func lastTextBlock(blocks []Block) int {
+	for index := len(blocks) - 1; index >= 0; index-- {
+		if blocks[index].Kind == BlockText {
+			return index
+		}
+	}
+	return -1
 }
 
 // ItemKind 是枢纽 item 类型。

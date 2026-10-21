@@ -516,6 +516,14 @@ func (e *chatStreamEncoder) Push(chunk Chunk) [][]byte {
 		if chunk.Usage != nil && !chunk.Usage.IsEmpty() {
 			e.usage = mergeUsage(e.usage, chunk.Usage)
 		}
+		if chunk.Citations != nil {
+			// 注解在 chat 线是 message 级字段（`delta.annotations`），没有块归属位；逐帧发出。
+			out = append(out, e.frame(NewObject().Set("annotations", NewArray(chunk.Citations))))
+			if chunk.StopReason == nil {
+				// 引用帧不是终止帧：顺手发 finish_reason 会把流提前结束。
+				return out
+			}
+		}
 		out = append(out, e.finishFrame(chunk.StopReason))
 
 	case ChunkEnd:

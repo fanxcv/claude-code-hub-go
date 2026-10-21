@@ -142,6 +142,13 @@ func (d *anthropicStreamDecoder) handleFrame(frame SSEFrame) []Chunk {
 		case "signature_delta":
 			// 枢纽块无签名增量通道，只能忽略并计数（不伪造）
 			return nil
+		case "citations_delta":
+			// 引用不是正文，也不属于块的文本：单独成块交付，由编码器按目标线重排。
+			citation := delta.ObjectField("citation")
+			if citation == nil || !citation.IsObject() {
+				return nil
+			}
+			return []Chunk{{Kind: ChunkDelta, Citations: citation}}
 		default:
 			return nil
 		}
@@ -428,6 +435,21 @@ func (e *anthropicStreamEncoder) Push(chunk Chunk) [][]byte {
 			e.usage = mergeUsage(e.usage, chunk.Usage)
 		}
 		out = append(out, e.ensureStart()...)
+		if chunk.Citations != nil {
+			// 引用属于它所在的文本块：块已关就无处安放，不凭空开块。
+			if e.openBlock != nil {
+				out = append(out, e.emit("content_block_delta", NewObject().
+					Set("type", NewString("content_block_delta")).
+					Set("index", NewNumberInt(int64(e.openBlock.wire))).
+					Set("delta", NewObject().
+						Set("type", NewString("citations_delta")).
+						Set("citation", chunk.Citations))))
+			}
+			if chunk.StopReason == nil {
+				// 引用帧不是终止帧：不关块、不发 message_delta。
+				return out
+			}
+		}
 		out = append(out, e.closeOpenBlock(true)...)
 		out = append(out, e.ensureDelta()...)
 		return out

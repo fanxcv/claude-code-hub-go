@@ -10,7 +10,7 @@ const chatWire = ProtocolOpenAIChat
 // chatCarriedMessageKeys 是枢纽已承载的 message 级字段。
 var chatCarriedMessageKeys = knownKeys{
 	"role": true, "content": true, "tool_calls": true, "tool_call_id": true,
-	"reasoning_content": true, "reasoning": true,
+	"reasoning_content": true, "reasoning": true, "annotations": true,
 }
 
 // chatKnownRequestKeys 是枢纽已承载（或归入 passthrough）的顶层字段。
@@ -52,6 +52,15 @@ func decodeChatMessageBlocks(
 		blocks = append(blocks, Block{Kind: BlockThinking, Text: reasoning})
 	}
 	blocks = append(blocks, chatContentToBlocks(fieldOrNil(message, "content"), loss, direction)...)
+	// message 级 annotations 挂在整条消息上（官方 url_citation 口径），分片级无承载位：
+	// 落到最后一个文本块，与 responses 的 output_text.annotations 落位一致。
+	if annotations := citationValue(message, "annotations"); annotations != nil {
+		if index := lastTextBlock(blocks); index >= 0 {
+			blocks[index].Citations = annotations
+		} else {
+			loss.Dropped(LossUnknownField, direction, "message.annotations")
+		}
+	}
 
 	toolCalls := fieldOrNil(message, "tool_calls")
 	switch {
@@ -612,6 +621,8 @@ func chatRenderMessages(role string, blocks []Block, options *chatRenderOptions)
 	parts := []*Value{}
 	toolCalls := []*Value{}
 	reasoning := []string{}
+	// citations 累积到 message 级 annotations（本线无分片级承载位），按块序合并。
+	citations := []*Value{}
 	blockIndex := 0
 
 	flush := func() {
@@ -620,9 +631,10 @@ func chatRenderMessages(role string, blocks []Block, options *chatRenderOptions)
 		// 空串与纯空白都算「无可见正文」：严格上游把 content:"" 也判为缺失。
 		hasVisibleText := strings.TrimSpace(joined) != ""
 		pendingParts, pendingToolCalls, pendingReasoning := parts, toolCalls, reasoning
+		pendingCitations := citations
 		// 先复位累积、再决定是否产出：下面的早期 return 会绕过尾部复位，若先把内容取出
 		// 再 return，同一批块会在下一次 flush 里被重复产出一条消息。
-		texts, parts, toolCalls, reasoning = nil, nil, nil, nil
+		texts, parts, toolCalls, reasoning, citations = nil, nil, nil, nil, nil
 
 		if !hasText && len(pendingParts) == 0 && len(pendingToolCalls) == 0 && len(pendingReasoning) == 0 {
 			return
@@ -667,6 +679,9 @@ func chatRenderMessages(role string, blocks []Block, options *chatRenderOptions)
 		if len(pendingToolCalls) > 0 {
 			message.Set("tool_calls", NewArray(pendingToolCalls...))
 		}
+		if len(pendingCitations) > 0 {
+			message.Set("annotations", NewArray(pendingCitations...))
+		}
 		out = append(out, message)
 	}
 
@@ -679,6 +694,9 @@ func chatRenderMessages(role string, blocks []Block, options *chatRenderOptions)
 				options.loss.Dropped(LossCacheControl, options.direction, "text")
 			}
 			texts = append(texts, block.Text)
+			if rendered := citationArray(block.Citations, ProtocolOpenAIChat); rendered != nil {
+				citations = append(citations, rendered.Items()...)
+			}
 		case BlockImage:
 			if part := chatImageBlockToPart(block, options.loss, options.direction); part != nil {
 				parts = append(parts, part)
