@@ -474,11 +474,21 @@ func encodeAnthropicBlock(block Block, seed string, options *anthropicRenderOpti
 		options.loss.Dropped(LossImage, options.direction, "no_data_or_url")
 		return nil, false
 	case BlockDocument:
+		if !anthropicAcceptsForeignDocument(block) {
+			// 外线文档的媒体类型本线不认：记损而不送（400 会计入供应商熔断）。
+			options.loss.Dropped(LossMedia, options.direction, "document.media_type:"+mediaTypeDetail(block.MediaType))
+			return nil, false
+		}
 		if mediaOut, ok := encodeAnthropicMedia(block, "document"); ok {
 			reportResponsesInputFileFilenameLoss(block, options.loss, options.direction)
 			return mediaOut, true
 		}
 		options.loss.Dropped(LossDocument, options.direction, responsesDocumentDropDetail(block))
+		return nil, false
+	case BlockAudio, BlockVideo:
+		// 本线的 content block 只有 text / image / document / tool_use / thinking 五类，无音视频
+		// 承载位：宁可记损也不送一个上游不认的 type（detail 带来源线，见 mediaUnreachableDetail）。
+		options.loss.Dropped(LossMedia, options.direction, mediaUnreachableDetail(block))
 		return nil, false
 	case BlockToolCall:
 		name := block.Name

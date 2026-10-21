@@ -80,6 +80,10 @@ func decodeResponsesPart(part *Value, loss *LossCollector, direction string) []B
 		return decodeResponsesImagePart(part, loss, direction)
 	case "input_file":
 		return decodeResponsesFilePart(part)
+	case "input_audio":
+		return decodeResponsesAudioPart(part, loss, direction)
+	case "input_video", "video_url":
+		return decodeResponsesVideoPart(part, loss, direction)
 	case "refusal":
 		loss.Dropped(LossUnknownField, direction, "refusal")
 		return nil
@@ -147,6 +151,37 @@ func reportResponsesInputFileFilenameLoss(block Block, loss *LossCollector, dire
 	if filename, present := stringField(responsesInputFilePart(block), "filename"); present && filename != "" {
 		loss.Dropped(LossDocumentFilename, direction, "input_file.filename")
 	}
+}
+
+// decodeResponsesAudioPart 解 `{type:"input_audio", data, format}`（本线为平铺写法）。
+func decodeResponsesAudioPart(part *Value, loss *LossCollector, direction string) []Block {
+	if _, ok := stringField(part, "file_id"); ok {
+		loss.Dropped(LossMedia, direction, "audio.file_id")
+		return nil
+	}
+	data, _ := stringField(part, "data")
+	format, _ := stringField(part, "format")
+	if data == "" || format == "" {
+		loss.Dropped(LossMedia, direction, "audio.malformed")
+		return nil
+	}
+	for _, extra := range meaningfulExtras(part, "type", "data", "format", "file_id") {
+		loss.Dropped(LossMedia, direction, "audio."+extra)
+	}
+	return []Block{mediaBlock(Block{Kind: BlockAudio, MediaType: audioMediaType(format), Data: data}, responsesWire, part)}
+}
+
+// decodeResponsesVideoPart 解 input_video / video_url 分片（`video_url` 为字符串或 `{url}` 对象）。
+func decodeResponsesVideoPart(part *Value, loss *LossCollector, direction string) []Block {
+	url := videoURLOf(fieldOrNil(part, "video_url"), loss, direction)
+	if url == "" {
+		loss.Dropped(LossMedia, direction, "video.malformed")
+		return nil
+	}
+	for _, extra := range meaningfulExtras(part, "type", "video_url") {
+		loss.Dropped(LossMedia, direction, "video."+extra)
+	}
+	return []Block{mediaBlock(Block{Kind: BlockVideo, URL: url}, responsesWire, part)}
 }
 
 func decodeResponsesImagePart(part *Value, loss *LossCollector, direction string) []Block {
@@ -752,16 +787,51 @@ func responsesImagePart(block Block, options *responsesRenderOptions) *Value {
 	return part
 }
 
-// responsesDocumentPart 把 document 块写回本线的 input_file 分片。
-//
-// 同线优先原字节：解码时保留的源分片原样回写（重建必丢 filename 并重排键序，同线往返就不再
-// 逐字节一致）。源分片来自其它线（或没有）时，本线无承受位：整块丢并记损，绝不透传原分片。
-func responsesDocumentPart(block Block, options *responsesRenderOptions) *Value {
-	if block.Wire == responsesWire && block.Value != nil {
-		return block.Value
+// responsesAudioPart 渲染 `{type:"input_audio", data, format}`（本线为平铺写法）。
+func responsesAudioPart(block Block, options *responsesRenderOptions) *Value {
+	if part := sameLineMediaPart(block, responsesWire); part != nil {
+		return part
 	}
-	options.loss.Dropped(LossDocument, options.direction, "responses_has_no_document")
-	return nil
+	format, data, ok := mediaAudioFields(block, options.loss, options.direction)
+	if !ok {
+		return nil
+	}
+	return NewObject().
+		Set("type", NewString("input_audio")).
+		Set("data", NewString(data)).
+		Set("format", NewString(format))
+}
+
+// responsesVideoPart 渲染 `{type:"input_video", video_url:{url}}`。
+func responsesVideoPart(block Block, options *responsesRenderOptions) *Value {
+	if part := sameLineMediaPart(block, responsesWire); part != nil {
+		return part
+	}
+	url, ok := mediaVideoURL(block, options.loss, options.direction)
+	if !ok {
+		return nil
+	}
+	return NewObject().
+		Set("type", NewString("input_video")).
+		Set("video_url", NewObject().Set("url", NewString(url)))
+}
+
+// responsesDocumentPart 渲染 `{type:"input_file", filename, file_data}`。
+func responsesDocumentPart(block Block, options *responsesRenderOptions) *Value {
+	if part := sameLineMediaPart(block, responsesWire); part != nil {
+		return part
+	}
+	if block.CacheHint != nil {
+		options.loss.Dropped(LossCacheControl, options.direction, "document")
+	}
+	mediaType, data, ok := mediaDocumentFields(block, options.loss, options.direction)
+	if !ok {
+		return nil
+	}
+	return NewObject().
+		Set("type", NewString("input_file")).
+		Set("filename", NewString(documentFilename(mediaType))).
+		Set("file_data", NewString(chatToDataURL(mediaType, data)))
 }
 
 // responsesReasoningItem 渲染 reasoning 项：可读思考进 summary，密文进 encrypted_content。
@@ -928,6 +998,14 @@ func responsesEncodeInput(items []Item, idMap map[string]string, loss *LossColle
 					out = append(out, responsesFunctionCallItem(block, seed, options))
 				case BlockDocument:
 					if part := responsesDocumentPart(block, options); part != nil {
+						parts = append(parts, part)
+					}
+				case BlockAudio:
+					if part := responsesAudioPart(block, options); part != nil {
+						parts = append(parts, part)
+					}
+				case BlockVideo:
+					if part := responsesVideoPart(block, options); part != nil {
 						parts = append(parts, part)
 					}
 				case BlockOpaque:
@@ -1211,6 +1289,9 @@ func encodeResponsesOutput(response *Response, loss *LossCollector, idMap map[st
 			loss.Dropped(LossImage, options.direction, "output_image")
 		case BlockDocument:
 			loss.Dropped(LossDocument, options.direction, "responses_has_no_document")
+		case BlockAudio, BlockVideo:
+			// 本线的 output 只有消息 / 工具调用 / 推理项，音频与视频没有输出侧承载位。
+			loss.Dropped(LossMedia, options.direction, string(block.Kind)+".output")
 		case BlockOpaque:
 			if block.Wire != responsesWire {
 				// 外线 opaque：专用类别归因（MCP / web_search / 其余非 function 工具）。

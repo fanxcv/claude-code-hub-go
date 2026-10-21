@@ -179,20 +179,25 @@ func TestInputFileFilenameLossIsInfo(t *testing.T) {
 }
 
 // TestInputFileDocumentIsNotOpaquePassthrough 钉住「带源分片的 document 不是 opaque 块」：
-// 两个跨线目标都必须是「能承载则映射、不能承载则按 capability 记损」，不得把 input_file 原文
-// 悄悄透传出去（那会把无法承载的文件变成上游看不懂的分片）。
+// 两个跨线目标都必须是「能承载则映射、不能承载则按 capability 记损」，不得把 input_file 原样
+// 透传出去（那会把无法承载的文件变成上游看不懂的分片）。
+//
+// 判据按目标线分开：anthropic 无 input_file 形态，故四种源分片键名一个都不许出现；chat 的
+// `file` 分片是**承载位**（#13 引入），file_data 键名合法，但 responses 专有的 `input_file`
+// 与 `file_url` / `file_id`（chat 无此形态）仍不许出现。
 func TestInputFileDocumentIsNotOpaquePassthrough(t *testing.T) {
 	for _, target := range []WireProtocol{ProtocolAnthropicMessages, ProtocolOpenAIChat} {
+		forbidden := []string{`"input_file"`, `"file_url"`, `"file_id"`}
+		if target == ProtocolAnthropicMessages {
+			forbidden = append(forbidden, `"file_data"`)
+		}
 		for _, part := range []string{testInputFileData, testInputFileURL, testInputFileID} {
-			body, loss := convertResponsesInputFile(t, part, target)
+			body, _ := convertResponsesInputFile(t, part, target)
 			marshaled := string(body.MarshalCompact())
-			for _, forbidden := range []string{`"input_file"`, `"file_data"`, `"file_url"`, `"file_id"`} {
-				if strings.Contains(marshaled, forbidden) {
-					t.Fatalf("%s 目标不得透传源分片（命中 %s）：%s", target, forbidden, marshaled)
+			for _, banned := range forbidden {
+				if strings.Contains(marshaled, banned) {
+					t.Fatalf("%s 目标不得出现 %s：%s", target, banned, marshaled)
 				}
-			}
-			if target == ProtocolOpenAIChat {
-				assertLossEntry(t, loss, LossDocument, string(LossDropped), "chat_has_no_document")
 			}
 		}
 	}

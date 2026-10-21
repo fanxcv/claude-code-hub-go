@@ -15,6 +15,8 @@ const (
 	BlockText     BlockKind = "text"
 	BlockImage    BlockKind = "image"
 	BlockDocument BlockKind = "document"
+	BlockAudio    BlockKind = "audio"
+	BlockVideo    BlockKind = "video"
 	BlockToolCall BlockKind = "tool_call"
 	BlockThinking BlockKind = "thinking"
 	BlockOpaque   BlockKind = "opaque"
@@ -54,7 +56,7 @@ type Block struct {
 	// 送达则 rewritten，被丢则只记 dropped（见 chatImageBlockToPart / responsesImagePart /
 	// encodeAnthropicBlock）。
 	FromDataURL bool
-	// image / document
+	// image / document / audio（MediaType 由音频 format 折成）/ video（只有 URL）
 	MediaType string
 	Data      string
 	URL       string
@@ -64,9 +66,10 @@ type Block struct {
 	Args string
 	// cacheHint（text / image / document / tool_call 可携带）
 	CacheHint *CacheHint
-	// opaque 块的本线原始载荷。BlockDocument 由本线 input_file 分片解码而来时也带源分片，
-	// 仅供本线编码原样回写（见 decodeResponsesFilePart / responsesDocumentPart）：
-	// 跨线编码不把它当 opaque 透传，只读 MediaType/Data/URL 与源分片做归因。
+	// 本线原始载荷：opaque 块本就带它；媒体块（audio / video / document）与 responses 的
+	// input_file 分片解码后也记一份源分片，供本线编码原样回写（见 media.go / decodeResponsesFilePart）。
+	//
+	// 跨线编码不得把它当 opaque 透传：只读 MediaType/Data/URL 做映射，无承载位时记损归因。
 	Wire  WireProtocol
 	Value *Value
 }
@@ -545,6 +548,15 @@ const (
 	// 一点没变），判据与 metadata 同类，故落 info 档；并进 document 就会与「整份文件被丢」共享
 	// 一格，把真损失一起降成信息档。
 	LossDocumentFilename = "document.filename"
+
+	// LossMedia 是音视频（以及跨线后无处落地的媒体形态）的专用归因类别。
+	//
+	// 为何单独设类：这两类分片此前落 `default` 装箱成 opaque，跨线时被目标线整块丢掉，
+	// 而该路径把它记成 `tool.native`（anthropic / chat 侧）或 `unknown_field.structure`
+	// （responses 侧）——同一事实两种口径，台账上看不出丢的是音频还是视频。detail 形如
+	// `audio.unreachable:openai-chat`（目标线无承载位，后半是来源线）或 `document.file_id`
+	// （形态无载体）。
+	LossMedia = "media"
 )
 
 // 以下七个是 catch-all `unknown_field` 的细分类别（按 detail 的来源归类）。
