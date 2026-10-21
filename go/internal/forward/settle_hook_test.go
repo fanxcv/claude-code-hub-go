@@ -142,3 +142,56 @@ func TestForwardSettleHookErrorIsLoggedNotFatal(t *testing.T) {
 		t.Fatalf("应调用一次，得到 %d 次", len(recorder.calls))
 	}
 }
+
+// TestForwardSettleHookSuccessAfterFailoverCarriesNoFailure 钉住「故障转移后成功不再记失败」。
+//
+// 生产事故（message_request.id=1340293）：首供应商 400 两次、故障转移到第二家 200，行却是
+// status_code=200 + error_message='Provider returned 400: 400 Bad Request'，且
+// usage_ledger.is_success=false——结算 defer 把上一次尝试的 lastFailure 原样传给 NonStream，
+// 后者据它写 ErrorMessage，而 DB 触发器以 error_message 为空判定 is_success。
+//
+// 反证：把成功分支的 `lastFailure = nil` 删掉，本用例转红（failure 带着 400 的文案）。
+func TestForwardSettleHookSuccessAfterFailoverCarriesNoFailure(t *testing.T) {
+	failing := fakeServer(t, http.StatusInternalServerError, `{"error":{"message":"boom"}}`)
+	succeeding := fakeServer(t, http.StatusOK, `{"id":"msg_1","content":[{"type":"text","text":"pong"}]}`)
+
+	second := newTestCandidate(2, "供应商乙", succeeding.URL, 1)
+	recorder := &settleRecorder{}
+	deps := Deps{
+		Dial:   newTestDial(t),
+		Facts:  newTestFacts(),
+		Limits: Limits{RetryDelay: time.Millisecond},
+		Settle: recorder.hook,
+		Select: func(_ context.Context, excludeIDs []int64) (*Candidate, error) {
+			if len(excludeIDs) != 1 || excludeIDs[0] != 1 {
+				t.Fatalf("排除列表 = %v", excludeIDs)
+			}
+			return second, nil
+		},
+	}
+
+	result, err := Forward(context.Background(), newSettleContext(t), newTestCandidate(1, "供应商甲", failing.URL, 1), deps)
+	if err != nil {
+		t.Fatalf("故障转移后应成功: %v", err)
+	}
+	if len(recorder.calls) != 1 {
+		t.Fatalf("成功路径应恰好结算一次，得到 %d 次", len(recorder.calls))
+	}
+	// 本缺陷的直接判据：成功终态的结算不得携带任何失败归因。
+	if failure := recorder.calls[0].failure; failure != nil {
+		t.Fatalf("成功终态带上了失败归因（会被写成 error_message 并判 is_success=false）: %+v", failure)
+	}
+	if result.StatusCode != http.StatusOK {
+		t.Fatalf("最终状态码 = %d", result.StatusCode)
+	}
+	if attempts := len(result.Attempts); attempts != 2 {
+		t.Fatalf("应留痕两次尝试，得到 %d 次", attempts)
+	}
+	// 留痕不得被清空抹掉：首次尝试的失败仍要能在 provider_chain 里看到。
+	if first := result.Attempts[0]; first.Category != CategoryProviderError || first.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("首条失败留痕被抹: %+v", first)
+	}
+	if second := result.Attempts[1]; second.Reason != ReasonRequestSuccess || second.StatusCode != http.StatusOK {
+		t.Fatalf("成功留痕 = %+v", second)
+	}
+}

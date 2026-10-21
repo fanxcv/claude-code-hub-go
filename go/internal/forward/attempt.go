@@ -603,6 +603,9 @@ func forwardLoop(
 				result.EndedAt = deps.now()
 				// 路径特有的产物与结算纪律（非流式即时结算，流式推迟到流的终态）。
 				onSuccess(result, response)
+				// 成功即最终结局：上一次尝试的失败不得进入终态结算。否则 200 的行会带着失败文案
+				// （NonStream 由 failure 写 error_message），DB 触发器据此判 is_success=false。
+				lastFailure = nil
 				return result, nil
 			}
 
@@ -722,7 +725,8 @@ func forwardLoop(
 	if lastFailure == nil {
 		// 没有任何一次尝试真正开始（候选都在计划阶段就被拒），故「尝试开始前即失败」这一档
 		// 必须让调用方自己结算——判据统一在 exitWithError，此处只说为什么这一档恒为空尝试：
-		// 尝试只会在成功或失败时入账，而成功当场返回，故 lastFailure == nil ⟺ Attempts 为空。
+		// 尝试只会在成功或失败时入账；成功当场返回**并清空 lastFailure**，失败耗尽时它必非 nil，
+		// 故走到此处且 lastFailure == nil ⟺ 没有任何一次尝试真正开始。
 		//
 		// 全池候选都因状态型字段不可服务与「供应商都失败」必须分开：前者要客户端改道，
 		// 后者只需重试。

@@ -81,11 +81,18 @@ func newStatefulFailClosedHandler(t *testing.T, upstreamURL string) (*Handler, *
 // newStatefulHandlerFor 与上面同一套装配，只是候选来源可换（用于故障转移报错那条路径）。
 func newStatefulHandlerFor(t *testing.T, candidates CandidateSource) (*Handler, *fakeSettler) {
 	t.Helper()
+	settler := &fakeSettler{}
+	return newStatefulHandlerWithSettler(t, candidates, settler), settler
+}
+
+// newStatefulHandlerWithSettler 同上，但结算器可换：需要断言「结算缝收到的字段」时用它
+// （见 failover_settlement_test.go）。
+func newStatefulHandlerWithSettler(t *testing.T, candidates CandidateSource, settler Settler) *Handler {
+	t.Helper()
 	dialClient, err := dial.New(dial.Options{})
 	if err != nil {
 		t.Fatalf("拨号器构造失败: %v", err)
 	}
-	settler := &fakeSettler{}
 	handler, err := New(Options{
 		Logger: logx.New(nil),
 		Base: guard.Deps{
@@ -107,7 +114,7 @@ func newStatefulHandlerFor(t *testing.T, candidates CandidateSource) (*Handler, 
 	if err != nil {
 		t.Fatalf("数据面构造失败: %v", err)
 	}
-	return handler, settler
+	return handler
 }
 
 // TestStatefulFailClosedReturns400AndSettles 是 F1 的端到端判据。
