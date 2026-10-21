@@ -20,6 +20,7 @@ export const LOSS_SEVERITY_BY_CAPABILITY: Readonly<
   Partial<Record<string, ConversionLossSeverity>>
 > = {
   cache_control: "degrade",
+  "document.filename": "info",
   prompt_cache_key: "info",
   "reasoning.replay": "degrade",
   "reasoning.summary": "info",

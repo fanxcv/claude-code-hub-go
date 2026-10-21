@@ -64,7 +64,9 @@ type Block struct {
 	Args string
 	// cacheHint（text / image / document / tool_call 可携带）
 	CacheHint *CacheHint
-	// opaque
+	// opaque 块的本线原始载荷。BlockDocument 由本线 input_file 分片解码而来时也带源分片，
+	// 仅供本线编码原样回写（见 decodeResponsesFilePart / responsesDocumentPart）：
+	// 跨线编码不把它当 opaque 透传，只读 MediaType/Data/URL 与源分片做归因。
 	Wire  WireProtocol
 	Value *Value
 }
@@ -536,6 +538,13 @@ const (
 	// 而抑制就是丢一个客户端显式声明——不记就成了静默改写。它也不属 `tool.strict` 等任一既有类：
 	// 前者说的是 schema 约束，这里说的是工具选择控制项本身。
 	LossToolChoice = "tool.choice"
+
+	// LossDocumentFilename 是「input_file 的 filename 在目标线上没有承载位」的类别。
+	//
+	// 为何单列而不并进 document：每份文件都有名字，而丢了名字对本次作答毫无影响（上游看到的正文
+	// 一点没变），判据与 metadata 同类，故落 info 档；并进 document 就会与「整份文件被丢」共享
+	// 一格，把真损失一起降成信息档。
+	LossDocumentFilename = "document.filename"
 )
 
 // 以下七个是 catch-all `unknown_field` 的细分类别（按 detail 的来源归类）。
@@ -637,6 +646,7 @@ var lossSeverityByCapability = map[string]LossSeverity{
 	LossPromptCacheKey:       SeverityInfo,
 	LossReasoningSummary:     SeverityInfo,
 	LossUnknownFieldIdentity: SeverityInfo,
+	LossDocumentFilename:     SeverityInfo,
 	LossThinkingSignature:    SeverityDegrade,
 	LossThinkingDerived:      SeverityDegrade,
 	LossReasoningReplay:      SeverityDegrade,

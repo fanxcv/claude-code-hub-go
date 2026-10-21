@@ -475,9 +475,10 @@ func encodeAnthropicBlock(block Block, seed string, options *anthropicRenderOpti
 		return nil, false
 	case BlockDocument:
 		if mediaOut, ok := encodeAnthropicMedia(block, "document"); ok {
+			reportResponsesInputFileFilenameLoss(block, options.loss, options.direction)
 			return mediaOut, true
 		}
-		options.loss.Dropped(LossDocument, options.direction, "no_data_or_url")
+		options.loss.Dropped(LossDocument, options.direction, responsesDocumentDropDetail(block))
 		return nil, false
 	case BlockToolCall:
 		name := block.Name

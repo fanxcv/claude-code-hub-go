@@ -129,6 +129,9 @@ func TestLossSeverityOf(t *testing.T) {
 		// 身份/观测类元数据 → 信息档：metadata / user / service_tier 都不影响上游生成的内容。
 		// 归 rewrite 的后果有实证：每条带 metadata 的请求都挂「内容改写」徽章，真损失被淹没。
 		{"身份类元数据", LossUnknownFieldIdentity, LossDropped, SeverityInfo},
+		// 文件名在目标线没有承载位（anthropic document 无 name 成员）→ 信息档：
+		// 丢的是客户端侧标签，上游看到的正文一点不变。
+		{"文件名无承载位", LossDocumentFilename, LossDropped, SeverityInfo},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

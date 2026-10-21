@@ -78,11 +78,74 @@ func decodeResponsesPart(part *Value, loss *LossCollector, direction string) []B
 		return []Block{textBlock(text)}
 	case "input_image":
 		return decodeResponsesImagePart(part, loss, direction)
+	case "input_file":
+		return decodeResponsesFilePart(part)
 	case "refusal":
 		loss.Dropped(LossUnknownField, direction, "refusal")
 		return nil
 	default:
 		return []Block{opaqueBlock(responsesWire, part)}
+	}
+}
+
+// decodeResponsesFilePart 解 input_file 分片（file_data / file_url / file_id 三形态）。
+//
+// 前两形态有跨线等价物（anthropic document 的 base64 / url source），故落 BlockDocument；
+// file_id 只有上游文件库的句柄（内容本就不在请求里），落一个没有 data/url 的 document，
+// 由编码侧按 document 记损（归因见 responsesDocumentDropDetail）。
+//
+// 源分片一并挂在 Value/Wire 上：filename 跨线没有承载位（anthropic document 无文件名成员），
+// 按枢纽字段重建必然丢它并重排键序，同线往返就不再逐字节一致。故本线编码优先回写原分片
+// （见 responsesDocumentPart）。
+func decodeResponsesFilePart(part *Value) []Block {
+	block := Block{Kind: BlockDocument, Wire: responsesWire, Value: part}
+	if data, ok := stringField(part, "file_data"); ok && data != "" {
+		// responses 规定 file_data 是 base64 data URL；裸 base64 或别的写法转给上游就是失真，
+		// 故解析不出只留源分片：同线仍原样回写，跨线按 input_file.file_data 记损。
+		if parsed, parsedOK := parseChatDataURL(data); parsedOK {
+			block.MediaType = parsed.MediaType
+			block.Data = parsed.Data
+		}
+		return []Block{block}
+	}
+	if url, ok := stringField(part, "file_url"); ok && url != "" {
+		block.URL = url
+	}
+	return []Block{block}
+}
+
+// responsesInputFilePart 取「由本线 input_file 分片承载的 document 块」的源分片；其余返回 nil。
+//
+// 跨线编码只用它做**归因**（filename 无承载位、file_id 不可达），渲染只看 Data/URL：
+// 带源分片的 document 块绝不是「原样透传」的 opaque 块。
+func responsesInputFilePart(block Block) *Value {
+	if block.Kind != BlockDocument || block.Wire != responsesWire || contentPartType(block.Value) != "input_file" {
+		return nil
+	}
+	return block.Value
+}
+
+// responsesDocumentDropDetail 给出 document 块无可送内容时的归因明细。
+// input_file 的两种「没有内容」分开记：file_id 是上游句柄（跨线取不回内容）、file_data 是
+// 解析不出的 data URL；其余（缺 data 也缺 url）仍是通用明细。
+func responsesDocumentDropDetail(block Block) string {
+	part := responsesInputFilePart(block)
+	if _, present := stringField(part, "file_id"); present {
+		return "input_file.file_id.unreachable"
+	}
+	if _, present := stringField(part, "file_data"); present {
+		return "input_file.file_data"
+	}
+	return "no_data_or_url"
+}
+
+// reportResponsesInputFileFilenameLoss 记 input_file 的 filename 跨线丢失。
+//
+// 只在目标线真有承载位、文件真被送出时调用：整份文件被丢时另记 document/dropped，两处都记
+// 就是一份文件两条台账（同 Block.FromDataURL 的判据）。
+func reportResponsesInputFileFilenameLoss(block Block, loss *LossCollector, direction string) {
+	if filename, present := stringField(responsesInputFilePart(block), "filename"); present && filename != "" {
+		loss.Dropped(LossDocumentFilename, direction, "input_file.filename")
 	}
 }
 
@@ -689,6 +752,18 @@ func responsesImagePart(block Block, options *responsesRenderOptions) *Value {
 	return part
 }
 
+// responsesDocumentPart 把 document 块写回本线的 input_file 分片。
+//
+// 同线优先原字节：解码时保留的源分片原样回写（重建必丢 filename 并重排键序，同线往返就不再
+// 逐字节一致）。源分片来自其它线（或没有）时，本线无承受位：整块丢并记损，绝不透传原分片。
+func responsesDocumentPart(block Block, options *responsesRenderOptions) *Value {
+	if block.Wire == responsesWire && block.Value != nil {
+		return block.Value
+	}
+	options.loss.Dropped(LossDocument, options.direction, "responses_has_no_document")
+	return nil
+}
+
 // responsesReasoningItem 渲染 reasoning 项：可读思考进 summary，密文进 encrypted_content。
 //
 // 加密思考块（anthropic 的 redacted_thinking.data / responses 的 encrypted_content）的
@@ -852,7 +927,9 @@ func responsesEncodeInput(items []Item, idMap map[string]string, loss *LossColle
 					flush()
 					out = append(out, responsesFunctionCallItem(block, seed, options))
 				case BlockDocument:
-					loss.Dropped(LossDocument, options.direction, "responses_has_no_document")
+					if part := responsesDocumentPart(block, options); part != nil {
+						parts = append(parts, part)
+					}
 				case BlockOpaque:
 					if block.Wire != responsesWire {
 						loss.Dropped(LossUnknownField, options.direction, "opaque:"+string(block.Wire))
