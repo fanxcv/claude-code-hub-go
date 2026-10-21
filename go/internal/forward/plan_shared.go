@@ -228,8 +228,10 @@ func encodeConvertedBody(
 			"%w: 目标协议 %s 无编码器", ErrUnsupportedProviderType, conversion.TargetProtocol,
 		)}
 	}
+	// 出站正文直接追加进 []byte：经 MarshalCompact 中转会多造一份全量 string，
+	// 再为 []byte(...) 拷一次——同一份正文瞬时三份（见 convert.AppendCompact 的注释）。
 	return conversionProduct{
-		body:    []byte(encoded.Body.MarshalCompact()),
+		body:    encoded.Body.AppendCompact(nil),
 		loss:    mergeLoss(decoded.loss, encoded.Loss),
 		restore: decoded.restore,
 	}

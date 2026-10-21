@@ -281,6 +281,9 @@ func (v *Value) Clone() *Value {
 
 // MarshalCompact 按 JS JSON.stringify 的语义序列化：紧凑、无多余空格、键序保留、
 // 非 ASCII 原样输出、控制字符用 \u00XX。
+//
+// 需要字节而非字符串的调用方（出站正文即此类）应直接用 AppendCompact，
+// 否则正文要在 string 与 []byte 之间各拷一次。
 func (v *Value) MarshalCompact() string {
 	return string(v.AppendCompact(make([]byte, 0, 256)))
 }
