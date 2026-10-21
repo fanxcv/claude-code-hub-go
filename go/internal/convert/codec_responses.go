@@ -432,6 +432,22 @@ func decodeResponsesTools(raw *Value, loss *LossCollector) ([]Tool, []*Value) {
 // 作答。展平**不加前缀**：客户端本就按裸名派发调用（实测其 custom_tool_call 项的 name 即裸名），
 // 加前缀反而会让回传的 function_call 名字对不上客户端的工具表。
 func appendResponsesToolEntries(entries []*Value, tools *[]Tool, preserved *[]*Value, loss *LossCollector) {
+	appendResponsesToolEntriesSeen(entries, tools, preserved, loss, nil)
+}
+
+// appendResponsesToolEntriesSeen 是 appendResponsesToolEntries 的递归体：seen 携带本趟遍历
+// 已收下的工具名，使同名冲突判定与展平在同一趟里完成。
+//
+// 为何要 seen：逐工具扫一遍 `*tools` 是 O(n²)——200 个工具时实测多花 40.6 µs（+37.7%，全落在
+// 首帧之前），而工具表本就可能有几百条。seen 只在本趟遍历内存在：入口传 nil，由递归返回值带下去；
+// 工具数 ≤1 时根本不需要它（没有可冲突的对象），故不分配。
+func appendResponsesToolEntriesSeen(
+	entries []*Value,
+	tools *[]Tool,
+	preserved *[]*Value,
+	loss *LossCollector,
+	seen map[string]struct{},
+) map[string]struct{} {
 	for _, entry := range entries {
 		if !isRecord(entry) {
 			loss.Dropped(LossUnknownField, "request", "tools[]")
@@ -444,13 +460,34 @@ func appendResponsesToolEntries(entries []*Value, tools *[]Tool, preserved *[]*V
 				*preserved = append(*preserved, entry)
 				continue
 			}
-			appendResponsesToolEntries(inner.Items(), tools, preserved, loss)
+			// 展平即丢归组信息：枢纽与另外两条线都没有 namespace 概念，上游只能看到拍平后的
+			// 裸名列表。记损让「哪些工具来自哪个组」在报告里可回溯；detail 带组名以便聚合。
+			namespace, _ := stringField(entry, "name")
+			loss.Dropped(LossUnknownFieldTool, "request", "tool.namespace."+namespace)
+			seen = appendResponsesToolEntriesSeen(inner.Items(), tools, preserved, loss, seen)
 			continue
 		}
 		name, hasName := stringField(entry, "name")
 		if entryType != "function" || !hasName || name == "" {
 			*preserved = append(*preserved, entry)
 			continue
+		}
+		// 展平后同名的两个工具会让上游只看到一个（名字是工具表的键），后到者无处安放：
+		// 保留先到者并留痕，口径与 relaykit 的 namespaced_tool_dropped 一致（丢 + 可归因）。
+		// 首次需要时才建，且把本层的剩余工具数一并算进容量：工具数 ≤1 时没有可冲突的对象，
+		// 不建 map（避免无意义分配）；一次给足容量则免去逐条增长的重分配。
+		if seen == nil && len(*tools) > 0 {
+			seen = make(map[string]struct{}, len(*tools)+len(entries))
+			for _, existing := range *tools {
+				seen[existing.Name] = struct{}{}
+			}
+		}
+		if seen != nil {
+			if _, collided := seen[name]; collided {
+				loss.Dropped(LossUnknownFieldTool, "request", "tool.name_collision."+name)
+				continue
+			}
+			seen[name] = struct{}{}
 		}
 		tool := Tool{Name: name, Parameters: NewObject()}
 		if description, ok := stringField(entry, "description"); ok {
@@ -478,6 +515,7 @@ func appendResponsesToolEntries(entries []*Value, tools *[]Tool, preserved *[]*V
 		}
 		*tools = append(*tools, tool)
 	}
+	return seen
 }
 
 func decodeResponsesToolChoice(raw *Value, loss *LossCollector) *ToolChoice {
