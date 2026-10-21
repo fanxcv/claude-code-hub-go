@@ -111,6 +111,12 @@ type Request struct {
 	// AffinityBody 是已解析的请求正文，仅用于前缀亲和指纹；nil 表示本次不参与亲和。
 	// 指纹是按需解析的事实，不是常驻状态：调用方应在亲和开关关闭时直接传 nil。
 	AffinityBody map[string]any
+	// AffinityFingerprint 是调用方预先算好的指纹链（见 Selector.FingerprintOf）。
+	//
+	// 为何要这个槽位：正文树在选路之后即可释放（省一份与正文同量级的常驻），而指纹按旧口径
+	// 是每次 Select 都从整棵树重算。先算一次放在这里，选路、空闲重选与 F3b 供数共用同一条
+	// 链，树释放之后仍能选路。nil 表示调用方没算：回落为按 AffinityBody 现算（旧行为）。
+	AffinityFingerprint *FingerprintChain
 	// AffinityLookup 是调用方已完成的亲和查找（Node 的 session.affinity.lookup）：
 	// 非 nil 时选路直接复用，不再访问 Redis。
 	AffinityLookup *AffinityLookup

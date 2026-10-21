@@ -33,17 +33,26 @@ type BodyAccessOptions struct {
 // NewBodyAccessor 的调用方兜底；两者都按同名环境变量构造，故兜底值不偏离配置真源。
 var defaultAdmission = ingress.DefaultAdmission()
 
+// ErrBodyTreeReleased 表示正文树已被释放（见 ReleaseTree），此后没有可用的解析结果。
+//
+// 为什么必须是错误而不是「重建一棵空树」：树是每请求约一份正文字节的常驻，释放它的收益全靠
+// 「没有人再要它」。若释放后还静默给出一棵新树，漏掉的消费点会照常工作、收益归零，而且既无
+// 错误也无日志——事后看不出来。故把这类调用钉成错误，由调用方显式处理。
+var ErrBodyTreeReleased = errors.New("guard: 正文树已释放")
+
 // BodyAccessor 是 BodyAccess 的真实实现：正文只解析一次，多处共用同一棵树。
 //
-// 四条不变量：
+// 五条不变量：
 //  1. 字节只读一次：ctx.TakeBody 拿到的流读完即弃。
 //  2. JSON 与 Store 返回**同一棵树**，任何一处就地修改对其它调用方可见——这正是守卫链
 //     「过滤规则改正文、转发器读改后正文」所需的语义。
 //  3. 未 Store 时 Bytes 返回**入站原字节**，逐字节相同——这是正确性基线。
 //  4. Store 之后只在原字节上定点重写被改动的顶层成员，其余字节逐字保留（见 body_patch.go）。
+//  5. ReleaseTree 之后树不可再用（JSON/Store 报错），但字节仍可读——释放的是树不是原文。
 type BodyAccessor struct {
 	mu       sync.Mutex
 	tree     map[string]any
+	released bool              // 树已释放：JSON/Store 一律报错，绝不静默重建
 	original []byte            // 入站原字节：未 Store 时即出站字节，Store 后作补丁底本
 	digester *bodyDigester     // 值指纹器（基线重算必须与解析期同一个 seed）
 	digests  map[string]uint64 // 解析时各顶层成员的值指纹（补丁的对照基线）
@@ -148,10 +157,28 @@ func (a *BodyAccessor) JSON() (map[string]any, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.released {
+		return nil, ErrBodyTreeReleased
+	}
 	if a.tree == nil {
 		a.tree = map[string]any{}
 	}
 	return a.tree, nil
+}
+
+// ReleaseTree 丢弃解析后的正文树，释放一份与正文同量级的常驻（实测 1.00× 正文字节）。
+//
+// 只释放树：入站原字节与已物化的补丁字节都保留，故 Bytes 仍可读——回放、定点重写与
+// 「按字节再读一次」都不受影响。释放后 JSON/Store 返回 ErrBodyTreeReleased，绝不静默重建
+// （理由见该错误的说明）。幂等：重复调用无副作用。
+func (a *BodyAccessor) ReleaseTree() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.tree = nil
+	a.released = true
 }
 
 // Store 写回修改后的正文。
@@ -167,6 +194,11 @@ func (a *BodyAccessor) Store(body map[string]any) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.released {
+		// 释放后再写回等于把树重新装回来：与 JSON 同一道闸，否则收益会被一条漏网的
+		// Store 静默吃掉，而调用方看不出任何异常。
+		return ErrBodyTreeReleased
+	}
 	a.tree = body
 	a.patched = nil
 	a.dirty = true
@@ -193,6 +225,10 @@ func (a *BodyAccessor) Bytes() ([]byte, error) {
 			a.original = []byte{}
 		}
 		return a.original, nil
+	}
+	if a.released {
+		// 树已释放且补丁字节还没物化：无从重写。绝不拿一棵 nil 树去拼一份空的正文。
+		return nil, ErrBodyTreeReleased
 	}
 	patched, err := a.patchLocked()
 	if err != nil {

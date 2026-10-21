@@ -73,8 +73,10 @@ type SelectionFacts struct {
 	KeyID int64
 	// ExcludeIDs 是故障转移排除列表。
 	ExcludeIDs []int64
-	// Body 是已解析的正文，用于亲和指纹与模型白名单判定。
-	Body map[string]any
+	// 这里刻意不装已解析的正文树：它占一份与正文同量级的常驻（实测 1.00× 正文字节），
+	// 而选路只需 Model 与格式。树一旦被本结构（进而被 fwd.Select 闭包）引用，就要活到
+	// 请求末尾，释放点也就失效了。亲和正文只在守卫链那一次选路里用，由守卫自己传入
+	// （route.Request.AffinityBody）。
 	// RawPassthrough 为真表示本次路由属原始透传端点（Node 的 raw_passthrough）。
 	//
 	// 它只影响候选的「允许重试/切换」取值：转换与改写由路径映射决定（见 routes.go）。
@@ -643,6 +645,13 @@ func (h *Handler) forward(
 		return next, nil
 	}
 	fwd.Facts = h.planFacts(pc, spec, body)
+	// 正文树到此不再需要：选路（亲和指纹已在守卫阶段预算）、计划字节（planFacts 刚取走
+	// 补丁后的那份）与观测事实各已取所需。现在放掉它，省下一份与正文同量级的常驻；原文
+	// 与已物化的补丁字节保留，后续 Bytes（回放、定点重写）不受影响。
+	//
+	// 必须晚于上面三个一次性消费点：思考强度（captureRequestedEffort）、codex 档位
+	// （captureRequestedServiceTier）与会话观测/工件（startTelemetry、captureRequestSnapshot）。
+	body.releaseTree()
 	// 供应商并发名额的登记缝（每请求一份：会话身份是每请求事实）。
 	// 未接线时为 nil，forward 整段跳过；**不按统计开关短路**——执法与开关无关，
 	// 而这里还不知道本次会落到哪家（见 provider_concurrencyForRequest 的注释）。
@@ -726,7 +735,6 @@ func (h *Handler) selectionFacts(state *RequestState, body *bodyAccess, deps gua
 	}
 	if body != nil {
 		if tree, err := body.json(); err == nil {
-			facts.Body = tree
 			facts.Model = bodyModel(tree)
 		}
 	}
@@ -992,4 +1000,15 @@ func (b *bodyAccess) bytes() ([]byte, error) {
 		return accessor.Bytes()
 	}
 	return nil, errors.New("dataplane: 正文访问器类型不符")
+}
+
+// releaseTree 在正文树不再需要后立即释放它（原文与补丁字节保留，见 guard.BodyAccessor.ReleaseTree）。
+//
+// 未触发正文通路（整条链没任何步骤要正文）时本就没有树，直接返回——不能为了释放去把访问器
+// 建起来，那反而会读一次正文。
+func (b *bodyAccess) releaseTree() {
+	if b == nil || b.access == nil {
+		return
+	}
+	b.access.ReleaseTree()
 }

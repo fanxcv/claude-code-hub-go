@@ -172,9 +172,10 @@ func (r *ProviderRouter) Select(ctx context.Context, req *pctx.Context) (pctx.Pr
 		return pctx.ProviderSelection{}, errors.New("guard: 选路器未接线")
 	}
 	body := requestBody(r.Body, req)
+	format := r.formatOf(req)
 	selectionRequest := route.Request{
 		Model:  bodyModel(body),
-		Format: r.formatOf(req),
+		Format: format,
 		Group:  r.groupOf(ctx, req),
 		KeyID:  r.keyIDOf(req),
 		// 会话身份：会话级低速冷却的过滤依据（同值已在亲和空闲闸门用）。
@@ -187,6 +188,9 @@ func (r *ProviderRouter) Select(ctx context.Context, req *pctx.Context) (pctx.Pr
 		SessionIdentity: r.sessionIdentity,
 		// Endpoint 维度的判定（端点族、端点策略）属入口与端点包；零值表示不按端点维度排除。
 		AffinityBody: body,
+		// 亲和指纹在这里算一次并随请求带走：这里是唯一同时握有正文树、客户端格式与选器
+		// 窗口的地方，而树在转发阶段即被释放（dataplane 的释放点），之后再也算不出来。
+		AffinityFingerprint: r.affinityFingerprint(body, format),
 		// 两个请求级门槛：Node 在 pickRandomProvider 里每请求解析一次 systemTimezone 后做
 		// 活动时段判定（Step 2a-2），并用本次请求的头部/正文做供应商级客户端名单判定（Step 1）。
 		ScheduleGate: r.scheduleGate(ctx),
@@ -254,6 +258,21 @@ func (r *ProviderRouter) Select(ctx context.Context, req *pctx.Context) (pctx.Pr
 		// 取消，样本失真），见 pctx.ProviderSelection.SlowProbe 与 dataplane.slowProbeTarget。
 		SlowProbe: result.SlowProbe != nil,
 	}, nil
+}
+
+// affinityFingerprint 在守卫阶段把亲和指纹算一次，供本次与后续选路复用。
+//
+// 亲和未装配（或正文为空）时返回 nil：route 侧会把 nil 当「没算」，回落为按正文现算，
+// 行为与未接入本函数时逐字一致。
+func (r *ProviderRouter) affinityFingerprint(body map[string]any, format convert.ClientFormat) *route.FingerprintChain {
+	if r == nil || r.selector == nil || body == nil {
+		return nil
+	}
+	chain, ok := r.selector.FingerprintOf(body, format)
+	if !ok {
+		return nil
+	}
+	return chain
 }
 
 // applyConversationIdle 判定本次亲和命中是否应因「本会话空闲超过阈值」而撤销。

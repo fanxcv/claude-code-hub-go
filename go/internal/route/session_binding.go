@@ -37,10 +37,10 @@ type SessionBindingSnapshot struct {
 //
 // 返回 nil 表示本次无法供数（未装配亲和 / 不可指纹化）——调用方照旧不写那五列。
 func (s *Selector) f3bCacheScoreFacts(req Request) *AffinityWriteback {
-	if s.opts.Affinity == nil || req.KeyID == 0 || req.AffinityBody == nil || req.Format == "" {
+	if s.opts.Affinity == nil || req.KeyID == 0 || req.Format == "" {
 		return nil
 	}
-	chain, ok := Fingerprint(req.AffinityBody, req.Format, s.opts.Affinity.window)
+	chain, ok := req.affinityChain(s.opts.Affinity.window)
 	if !ok {
 		return nil
 	}

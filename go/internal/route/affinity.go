@@ -121,6 +121,30 @@ func Fingerprint(body map[string]any, format convert.ClientFormat, window int) (
 	return buildChain(*extracted, AffinityWindow(window)), true
 }
 
+// FingerprintOf 用本选器配置的窗口为一份正文预先算好指纹链。
+//
+// 供调用方在守卫阶段算一次：指纹按旧口径是每次 Select 都在整棵正文树上重算，而树在
+// 选路之后即被释放（dataplane 的释放点）。先算一次放进 Request.AffinityFingerprint，
+// 选路、空闲重选与 F3b 供数共用同一条链，且与本体逐字节同一个值（同一窗口、同一算法）。
+// 亲和未装配时不算：窗口就配在亲和存储上，未装配时本就没有指纹口径可言。
+func (s *Selector) FingerprintOf(body map[string]any, format convert.ClientFormat) (*FingerprintChain, bool) {
+	if s == nil || s.opts.Affinity == nil {
+		return nil, false
+	}
+	return Fingerprint(body, format, s.opts.Affinity.window)
+}
+
+// affinityChain 取本次请求的指纹链：优先用调用方预算的，缺失时按正文现算。
+//
+// 两条路的输入口径完全一致（同一 format、同一窗口归一），故同一输入得同一指纹；
+// 前者只是把同一份计算提到了正文树释放之前。
+func (r Request) affinityChain(window int) (*FingerprintChain, bool) {
+	if r.AffinityFingerprint != nil {
+		return r.AffinityFingerprint, true
+	}
+	return Fingerprint(r.AffinityBody, r.Format, window)
+}
+
 type normalizedMessage struct {
 	bytes           string
 	hasCacheControl bool
@@ -1177,10 +1201,10 @@ func (s *Selector) nominateByAffinity(
 	filtered []Filtered,
 	excluded map[int64]bool,
 ) (AffinityNomination, *AffinityLookup, *AffinityWriteback, *AffinityIdentity, bool) {
-	if s.opts.Affinity == nil || req.KeyID == 0 || req.AffinityBody == nil || req.Format == "" {
+	if s.opts.Affinity == nil || req.KeyID == 0 || req.Format == "" {
 		return AffinityNomination{}, nil, nil, nil, false
 	}
-	chain, ok := Fingerprint(req.AffinityBody, req.Format, s.opts.Affinity.window)
+	chain, ok := req.affinityChain(s.opts.Affinity.window)
 	if !ok {
 		return AffinityNomination{}, nil, nil, nil, false
 	}
