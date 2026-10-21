@@ -11,6 +11,9 @@ var responsesKnownRequestKeys = knownKeys{
 	"model": true, "instructions": true, "input": true, "tools": true, "tool_choice": true,
 	"parallel_tool_calls": true, "max_output_tokens": true, "temperature": true, "top_p": true,
 	"stream": true, "reasoning": true,
+	// 抬进枢纽（Request.PromptCacheKey）并由 chat / responses 两线回写：列在这里才不会同时
+	// 留在 passthrough 里被当成「目标线不承载的外线字段」重复记损。
+	"prompt_cache_key": true,
 }
 
 var responsesKnownResponseKeys = knownKeys{
@@ -679,23 +682,45 @@ func responsesImagePart(block Block, options *responsesRenderOptions) *Value {
 	return part
 }
 
+// responsesReasoningItem 渲染 reasoning 项：可读思考进 summary，密文进 encrypted_content。
+//
+// 加密思考块（anthropic 的 redacted_thinking.data / responses 的 encrypted_content）的
+// Text 是密文，不是可读摘要——写进 summary[].text 就是把一段 base64 糊到客户端可见字段上。
+// 本线有 encrypted_content 承载位，故按该位承载；承载不了的才记损。
 func responsesReasoningItem(blocks []Block, options *responsesRenderOptions) *Value {
 	summary := []*Value{}
+	encrypted := ""
 	for _, block := range blocks {
-		if block.Kind != BlockThinking || block.Text == "" {
+		if block.Kind != BlockThinking {
+			continue
+		}
+		if block.Redacted {
+			// 密文落在哪个字段取决来源线：anthropic 走 Text，responses 走 Signature。
+			encrypted = firstString(block.Text, block.Signature)
+			continue
+		}
+		if block.Text == "" {
 			continue
 		}
 		summary = append(summary, NewObject().
 			Set("type", NewString("summary_text")).
 			Set("text", NewString(block.Text)))
 	}
-	if len(summary) == 0 {
+	if len(summary) == 0 && encrypted == "" {
 		return nil
 	}
-	if blocks[0].Signature != "" {
+	// 首块是加密块时其 Signature 就是上面搬走的密文，不算「签名丢了」。
+	if blocks[0].Signature != "" && !blocks[0].Redacted {
 		options.loss.Dropped(LossThinkingSignature, options.direction, "responses_has_no_signature")
 	}
-	return NewObject().Set("type", NewString("reasoning")).Set("summary", NewArray(summary...))
+	item := NewObject().Set("type", NewString("reasoning"))
+	if len(summary) > 0 {
+		item.Set("summary", NewArray(summary...))
+	}
+	if encrypted != "" {
+		item.Set("encrypted_content", NewString(encrypted))
+	}
+	return item
 }
 
 func responsesFunctionCallItem(block Block, seed string, options *responsesRenderOptions) *Value {

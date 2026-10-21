@@ -65,19 +65,24 @@ type foreignDroppableField struct {
 // 故 responses 侧记的是整键 `text.controls`（含 format 与 verbosity，两者在 anthropic/chat 上
 // 都没有等价物）。
 //
-// `prompt_cache_key` **不在本表**：它已进枢纽（Request.PromptCacheKey）——chat 与 responses
-// 两线的解码器都读它（decodeChatRequest / decodeResponsesRequest），两线的编码器都原样回写，
-// 只有 anthropic（无此概念）在编码器里记损。留在这里会把它重复记一遍。
+// `prompt_cache_key` 列在表里：responses 源线的解码器把它抬进枢纽（故不再落 passthrough），
+// chat / anthropic 源线则留在本线 passthrough 中、跨线时目标线读不到——正是本表要补的那一侧。
+// responses 源线到 anthropic 的那一条由编码器记（见 codec_anthropic.go），本表不会重复。
 var foreignDroppableFields = []foreignDroppableField{
 	{key: "response_format", class: LossResponseFormat},
 	{key: "text", class: LossTextControls},
 	{key: "store", class: LossStoreFlag, requireTruthy: true},
 
+	{key: "prompt_cache_key", class: LossPromptCacheKey},
+
 	// 以下十一个键是 Responses / Chat 线的请求级开关与采样参数：枢纽没有承载位，跨线时整键丢。
 	// 类别沿用 catch-all 家族的 `unknown_field.param`（seed / stop / parallel_tool_calls 等同属
 	// 这一类），而不新造常量：它们正是「源线有、枢纽无」的同一类事实，detail 取键名，故台账里
 	// 仍能按键定位。
-	{key: "metadata", class: LossUnknownFieldParam},
+	//
+	// metadata 例外：它是身份/观测类元数据，目标线不承载时**生成内容一点不变**，故归 info 档
+	// 而非 rewrite。判据见 hub.go 的 lossSeverityByCapability 注释（rewrite = 上游看到的东西变了）。
+	{key: "metadata", class: LossUnknownFieldIdentity},
 	{key: "client_metadata", class: LossUnknownFieldParam},
 	{key: "include", class: LossUnknownFieldParam},
 	{key: "truncation", class: LossUnknownFieldParam},
@@ -89,6 +94,10 @@ var foreignDroppableFields = []foreignDroppableField{
 	{key: "user", class: LossUnknownFieldParam},
 	{key: "service_tier", class: LossUnknownFieldParam},
 	{key: "safety_identifier", class: LossUnknownFieldParam},
+
+	// context_management 是 Responses 线的上下文编辑指令（如清空思考）：目标线无承载位也无
+	// 等价能力，丢的是线级结构而非可降级约束，故走结构子类（改写档）。
+	{key: "context_management", class: LossUnknownFieldStructure},
 }
 
 // reportForeignDroppableFields 把「留在外线 passthrough 里、目标线无法承载的高层字段」记入损失。

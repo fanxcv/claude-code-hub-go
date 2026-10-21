@@ -440,6 +440,12 @@ func mergeUsage(base *Usage, delta *Usage) *Usage {
 	if delta.CacheWriteTokens != nil {
 		out.CacheWriteTokens = delta.CacheWriteTokens
 	}
+	if delta.CacheCreation5mTokens != nil {
+		out.CacheCreation5mTokens = delta.CacheCreation5mTokens
+	}
+	if delta.CacheCreation1hTokens != nil {
+		out.CacheCreation1hTokens = delta.CacheCreation1hTokens
+	}
 	if delta.ReasoningTokens != nil {
 		out.ReasoningTokens = delta.ReasoningTokens
 	}
@@ -504,6 +510,8 @@ func cloneUsage(usage *Usage) *Usage {
 	out.OutputTokens = copyFloat(usage.OutputTokens)
 	out.CacheReadTokens = copyFloat(usage.CacheReadTokens)
 	out.CacheWriteTokens = copyFloat(usage.CacheWriteTokens)
+	out.CacheCreation5mTokens = copyFloat(usage.CacheCreation5mTokens)
+	out.CacheCreation1hTokens = copyFloat(usage.CacheCreation1hTokens)
 	out.ReasoningTokens = copyFloat(usage.ReasoningTokens)
 	return out
 }

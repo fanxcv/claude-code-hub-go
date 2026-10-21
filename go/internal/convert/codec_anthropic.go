@@ -10,8 +10,11 @@ const anthropicWire = ProtocolAnthropicMessages
 var anthropicKnownRequestKeys = knownKeys{
 	"model": true, "messages": true, "system": true, "tools": true, "tool_choice": true,
 	"max_tokens": true, "stream": true, "temperature": true, "top_p": true, "top_k": true,
-	"stop_sequences": true, "thinking": true, "output_config": true, "metadata": true,
+	"stop_sequences": true, "thinking": true, "output_config": true,
 }
+
+// metadata 不列入上表：枢纽 Request 没有对应字段，列在这里只会让它既不进 passthrough 也无
+// 消费者——跨线时静默消失。让它落 passthrough 后由 reportForeignDroppableFields 按身份类记损。
 
 var anthropicKnownResponseKeys = knownKeys{
 	"id": true, "type": true, "role": true, "model": true, "content": true,

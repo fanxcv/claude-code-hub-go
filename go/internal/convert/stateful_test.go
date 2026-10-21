@@ -387,8 +387,12 @@ func TestUnknownForeignFieldsRecordedAsLoss(t *testing.T) {
 
 	metadataEntries := lossesFor(t, ProtocolOpenAIResponses, ProtocolOpenAIChat,
 		responsesBody(`"metadata":{"user_id":"u1"}`))
-	if count := countOf(metadataEntries, LossUnknownFieldParam, "metadata"); count != 1 {
-		t.Fatalf("metadata 已在白名单里，应恰好一条，实际 %v", metadataEntries)
+	// metadata 归身份档（info）：目标线不承载时生成内容一点不变，与 content 类改写不同档。
+	if count := countOf(metadataEntries, LossUnknownFieldIdentity, "metadata"); count != 1 {
+		t.Fatalf("metadata 应恰好一条身份档损失，实际 %v", metadataEntries)
+	}
+	if count := countOf(metadataEntries, LossUnknownFieldParam, "metadata"); count != 0 {
+		t.Fatalf("metadata 不得再按 unknown_field.param 记一条，实际 %v", metadataEntries)
 	}
 
 	// 空值不承载约束：空对象 / null 一律不记（与 store:false 同因）。

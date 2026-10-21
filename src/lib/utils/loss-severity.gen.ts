@@ -28,6 +28,7 @@ export const LOSS_SEVERITY_BY_CAPABILITY: Readonly<
   "thinking.encrypted": "degrade",
   "thinking.signature": "degrade",
   "tool.strict": "degrade",
+  "unknown_field.identity": "info",
 };
 
 /** (能力, 动作) -> 档位；同一能力的其它动作退回上表，仍无命中则 rewrite。 */

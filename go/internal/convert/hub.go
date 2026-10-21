@@ -451,11 +451,16 @@ const (
 // 也无法按来源过滤，跟「任意未知字段丢了」完全不可区分。前缀统一为 `unknown_field.`，
 // 故“是否属于 catch-all 家族”可由前缀判定（服务端与界面两侧同一判据）。
 const (
-	LossUnknownFieldTool      = "unknown_field.tool"
-	LossUnknownFieldRefusal   = "unknown_field.refusal"
-	LossUnknownFieldContent   = "unknown_field.content"
-	LossUnknownFieldMessage   = "unknown_field.message"
-	LossUnknownFieldParam     = "unknown_field.param"
+	LossUnknownFieldTool    = "unknown_field.tool"
+	LossUnknownFieldRefusal = "unknown_field.refusal"
+	LossUnknownFieldContent = "unknown_field.content"
+	LossUnknownFieldMessage = "unknown_field.message"
+	LossUnknownFieldParam   = "unknown_field.param"
+	// LossUnknownFieldIdentity 是「身份/观测类元数据」子类：客户端把它当作请求标识或计费
+	// 标签（目前落地的只有 anthropic / responses 线的 `metadata`），目标线不承载它时上游看到
+	// 的生成内容**一点不变**。必须与 unknown_field.param 里那些真改行为的采样参数分档，
+	// 否则每条带 metadata 的请求都挂「内容改写」徽章，真损失被淹没。
+	LossUnknownFieldIdentity  = "unknown_field.identity"
 	LossUnknownFieldStructure = "unknown_field.structure"
 	// LossUnknownFieldOther 是未能归类的兜底子类：新增记损站点若引入新前缀，落这里而不是消失。
 	LossUnknownFieldOther = "unknown_field.other"
@@ -534,15 +539,16 @@ const (
 // 新增非 rewrite 档能力只改这张表，随后按 TestLossSeverityGeneratedTableIsUpToDate 的提示
 // 重新生成界面侧的表即可。
 var lossSeverityByCapability = map[string]LossSeverity{
-	LossStoreFlag:         SeverityInfo,
-	LossPromptCacheKey:    SeverityInfo,
-	LossReasoningSummary:  SeverityInfo,
-	LossThinkingSignature: SeverityDegrade,
-	LossThinkingDerived:   SeverityDegrade,
-	LossReasoningReplay:   SeverityDegrade,
-	LossCacheControl:      SeverityDegrade,
-	LossThinkingEncrypted: SeverityDegrade,
-	LossToolStrict:        SeverityDegrade,
+	LossStoreFlag:            SeverityInfo,
+	LossPromptCacheKey:       SeverityInfo,
+	LossReasoningSummary:     SeverityInfo,
+	LossUnknownFieldIdentity: SeverityInfo,
+	LossThinkingSignature:    SeverityDegrade,
+	LossThinkingDerived:      SeverityDegrade,
+	LossReasoningReplay:      SeverityDegrade,
+	LossCacheControl:         SeverityDegrade,
+	LossThinkingEncrypted:    SeverityDegrade,
+	LossToolStrict:           SeverityDegrade,
 }
 
 // lossSeverityByCapabilityAction 是「同一能力按动作分档」的例外表。
@@ -787,7 +793,9 @@ func StopReasonFromAnthropic(raw string, has bool) StopReason {
 	case "refusal":
 		return StopContentFilte
 	case "pause_turn":
-		return StopEndTurn
+		// 上游明确「本轮流被暂停、未走完」：归截断族而非正常收尾。当 end_turn 会让客户端把
+		// 半截结果当完整答复（chat 出 stop、responses 出 completed）。
+		return StopMaxTokens
 	default:
 		return StopUnknown
 	}
@@ -1021,6 +1029,18 @@ func usageToAnthropic(usage *Usage) *Value {
 	}
 	if usage.CacheWriteTokens != nil {
 		out.Set("cache_creation_input_tokens", NewNumber(jsNumber(*usage.CacheWriteTokens)))
+	}
+	// cache_creation 的 5m/1h 分档是 Anthropic 侧的计费口径：只在上游真的分列时才写，
+	// 未分列（nil）时留白，避免把「不知道」写成 0。
+	if usage.CacheCreation5mTokens != nil || usage.CacheCreation1hTokens != nil {
+		detail := NewObject()
+		if usage.CacheCreation5mTokens != nil {
+			detail.Set("ephemeral_5m_input_tokens", NewNumber(jsNumber(*usage.CacheCreation5mTokens)))
+		}
+		if usage.CacheCreation1hTokens != nil {
+			detail.Set("ephemeral_1h_input_tokens", NewNumber(jsNumber(*usage.CacheCreation1hTokens)))
+		}
+		out.Set("cache_creation", detail)
 	}
 	return out
 }
