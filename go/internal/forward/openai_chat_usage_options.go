@@ -71,7 +71,9 @@ func applyOpenAIChatStreamUsageOption(
 		options.Set("include_usage", convert.NewBool(true))
 	}
 
-	return []byte(decoded.MarshalCompact()), true
+	// 出站正文直接追加进 []byte：经 MarshalCompact 中转会多造一份全量 string，
+	// 再为 []byte(...) 拷一次——同一份正文瞬时三份（见 convert.AppendCompact 的注释）。
+	return decoded.AppendCompact(nil), true
 }
 
 // includeUsageIsTrue 报告 `stream_options` 已经是「对象且 include_usage 为 true」。

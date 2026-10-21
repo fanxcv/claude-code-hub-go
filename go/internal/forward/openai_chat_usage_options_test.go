@@ -2,6 +2,7 @@ package forward
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
@@ -316,5 +317,81 @@ func TestApplyOpenAIChatStreamUsageOptionNormalizesEscapeForm(t *testing.T) {
 	}
 	if got := decodeUsageBody(t, rewritten)["content"]; got != "<div>" {
 		t.Fatalf("转义归一后语义应不变: %v", got)
+	}
+}
+
+// TestChatUsageOptionsOutboundBytesAreByteIdentical 钉住这条改写规则的**出站字节**：
+// 上游按字节比对，多一个空格就是另一份正文。期望值一律手写在用例里，不由任何序列化
+// 函数推出——故它是独立判据，而不是「新实现等于旧实现」的自证。
+func TestChatUsageOptionsOutboundBytesAreByteIdentical(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "stream_options 缺失：追加到末尾，空白归一、键序与数字字面量保持",
+			body: `{ "model" : "gpt-5.5", "messages" : [ {"role":"user","content":"hello"} ], "max_tokens" : 1e21, "stream" : true }`,
+			want: `{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}],"max_tokens":1e21,"stream":true,"stream_options":{"include_usage":true}}`,
+		},
+		{
+			name: "stream_options 为 null：原位换成对象",
+			body: `{"stream":true,"stream_options":null,"temperature":0.7}`,
+			want: `{"stream":true,"stream_options":{"include_usage":true},"temperature":0.7}`,
+		},
+		{
+			name: "已有对象：其它键原位保留，include_usage 原位置真",
+			body: `{"stream":true,"stream_options":{"a":1,"include_usage":false,"b":[true,null]}}`,
+			want: `{"stream":true,"stream_options":{"a":1,"include_usage":true,"b":[true,null]}}`,
+		},
+		{
+			name: "转义形态：\u003c 归一为 <，非 ASCII 原样",
+			body: `{"stream":true,"messages":[{"role":"user","content":"\u003cb\u003e你好</p>"}]}`,
+			want: `{"stream":true,"messages":[{"role":"user","content":"<b>你好</p>"}],"stream_options":{"include_usage":true}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rewritten, changed := applyOpenAIChatStreamUsageOption([]byte(tc.body), convert.ProviderOpenAICompatible, includeUsageChatPath)
+			if !changed {
+				t.Fatalf("应报告已改写: %s", tc.body)
+			}
+			if string(rewritten) != tc.want {
+				t.Fatalf("出站字节与手写期望值不符\n实际 %s\n期望 %s", rewritten, tc.want)
+			}
+		})
+	}
+}
+
+// benchChatUsageBody 造一份约 5 MiB 的 chat 流式正文（长 base64 图占大宗），
+// 正是这条规则的触发形状：openai-compatible + /v1/chat/completions + stream 为真
+// 且 stream_options.include_usage 缺失。
+func benchChatUsageBody(tb testing.TB) []byte {
+	tb.Helper()
+	var builder strings.Builder
+	builder.WriteString(`{"model":"gpt-5.5","stream":true,"messages":[{"role":"user","content":[` +
+		`{"type":"text","text":"这张图里有什么？"},` +
+		`{"type":"image_url","image_url":{"url":"data:image/png;base64,`)
+	builder.WriteString(strings.Repeat("iVBORw0KGgoAAAANSUhEUg", (5<<20)/23))
+	builder.WriteString(`"}}]}]}`)
+	return []byte(builder.String())
+}
+
+// benchChatUsageSink 防止编译器把改写结果判为无用值而整段优化掉。
+var benchChatUsageSink []byte
+
+// BenchmarkChatUsageOptionsOutbound 量这条改写规则每请求的分配：出站正文经
+// []byte(MarshalCompact()) 中转时，同一份正文瞬时三份（缓冲 + string + []byte）。
+func BenchmarkChatUsageOptionsOutbound(b *testing.B) {
+	body := benchChatUsageBody(b)
+	b.SetBytes(int64(len(body)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for index := 0; index < b.N; index++ {
+		rewritten, changed := applyOpenAIChatStreamUsageOption(body, convert.ProviderOpenAICompatible, includeUsageChatPath)
+		if !changed {
+			b.Fatalf("语料未触发改写: %d 字节", len(body))
+		}
+		benchChatUsageSink = rewritten
 	}
 }
