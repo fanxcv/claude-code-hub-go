@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/fanxcv/claude-code-hub-go/go/internal/convert"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/guard"
 )
 
 // TestUnparseableBodyIsRejectedLocally 钉住「正文读不出来不得转发」：
@@ -82,6 +83,105 @@ func TestEmptyBodyStillForwards(t *testing.T) {
 	}
 	if capture.body != "" {
 		t.Fatalf("无正文请求的出站正文应为空，实为 %q", capture.body)
+	}
+}
+
+// TestBodyUnavailableResponseByFailureKind 钉住「诊断档 → 状态码 → 客户端文案」三方同源。
+//
+// 改前必红：容量拒绝（在途预算打满）与单条体积越界同记 too_large、同回一句「解不出正文」，
+// 运维看不出该降并发还是该让客户端拆请求；且体积越界回 503 会让客户端无休止重试一个
+// 永远不过的请求。
+func TestBodyUnavailableResponseByFailureKind(t *testing.T) {
+	plainBody := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}`)
+	oversizeBody := gzipPayload(t, strings.Repeat("a", 4096))
+
+	cases := []struct {
+		name      string
+		body      []byte
+		gzip      bool
+		configure func(*Handler)
+		status    int
+		kind      string
+		message   string
+	}{
+		{
+			// 预算 1 字节：任何非空正文的记账成本（正文 × 系数 6）都超预算。
+			name:      "budget_exhausted",
+			body:      plainBody,
+			configure: func(handler *Handler) { handler.options.BodyOptions = newBodyOptions(1) },
+			status:    http.StatusServiceUnavailable,
+			kind:      "body_budget_exhausted",
+			message:   "gateway busy: request body budget exhausted, retry after lowering concurrency",
+		},
+		{
+			// 单条解压输出上限 128 字节，解压后 4096 字节。
+			name:      "too_large",
+			body:      oversizeBody,
+			gzip:      true,
+			configure: func(handler *Handler) { handler.options.BodyOptions = guard.BodyAccessOptions{MaxBytes: 128} },
+			status:    http.StatusRequestEntityTooLarge,
+			kind:      "too_large",
+			message:   "request body too large",
+		},
+		{
+			// 头与正文不符：声明 gzip，正文是明文。
+			name:    "decode_failed",
+			body:    plainBody,
+			gzip:    true,
+			status:  http.StatusServiceUnavailable,
+			kind:    "decode_failed",
+			message: "invalid request body",
+		},
+		{
+			name:    "not_json_object",
+			body:    []byte(`[1,2,3]`),
+			status:  http.StatusServiceUnavailable,
+			kind:    "not_json_object",
+			message: "invalid request body",
+		},
+		{
+			name:    "empty_inbound",
+			status:  http.StatusBadRequest,
+			kind:    "empty_inbound",
+			message: "invalid request body: request body is empty",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream, capture := newCapturingUpstream(t, `{"id":"msg_1","type":"message"}`)
+			candidates := &typedCandidates{url: upstream.URL, providerType: convert.ProviderClaude}
+			var logs bytes.Buffer
+			handler, _ := newRestPathHandlerInto(t, candidates, &logs)
+			if tc.configure != nil {
+				tc.configure(handler)
+			}
+
+			request := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(tc.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("x-api-key", "fake-client-key")
+			// 真客户端会带这个头（线上服务端也会把它留在 r.Header 里），而准入预算按它预留：
+			// 不设它，压缩体大小未知，准入无从记账。
+			request.Header.Set("Content-Length", strconv.Itoa(len(tc.body)))
+			if tc.gzip {
+				request.Header.Set("Content-Encoding", "gzip")
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, request)
+
+			if recorder.Code != tc.status {
+				t.Fatalf("状态码 = %d，期望 %d（body=%s）", recorder.Code, tc.status, recorder.Body.String())
+			}
+			if !strings.Contains(recorder.Body.String(), tc.message) {
+				t.Fatalf("响应应包含 %q，实为 %s", tc.message, recorder.Body.String())
+			}
+			if capture.body != "" {
+				t.Fatalf("正文不可用时不得转发，上游却收到了 %d 字节", len(capture.body))
+			}
+			if got := lastBodyUnavailable(t, &logs)["failureKind"]; got != tc.kind {
+				t.Fatalf("failureKind = %v，期望 %s", got, tc.kind)
+			}
+		})
 	}
 }
 

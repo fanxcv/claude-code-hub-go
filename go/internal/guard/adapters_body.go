@@ -99,6 +99,7 @@ func reservationBytes(decodedHint, compressed int64) int64 {
 // 正文不可解析系失败一律返回把 ErrBodyUnavailable 包在里面的 *BodyFailure：调用方（各守卫步骤）
 // 据此走各自的 fail-open 语义，而不是把「没有正文」误当成「守卫失败」翻成 500；
 // 同时它带着失败子类与字节计数，供数据面写诊断日志（见 BodyFailureKind）。
+// 原始 cause 也在 Unwrap 链上（多 %w），故 errors.Is 能判到 ingress 的哨兵。
 // 例外是准入拒绝（容量不足）：Unwrap 链上不含 ErrBodyUnavailable，由 forward 映射为 503，不得 fail-open。
 func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccessor, error) {
 	if ctx == nil {
@@ -136,9 +137,9 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 	if err != nil {
 		// 容量不足不包 ErrBodyUnavailable（守卫会 fail-open，闸门即失效）：forward 依据
 		// ingress.IsCapacityError 判为本地过载 → 503。包进 BodyFailure 只为让日志能分到
-		// too_large，Unwrap 链上刻意不含 ErrBodyUnavailable。
+		// body_budget_exhausted，Unwrap 链上刻意不含 ErrBodyUnavailable。
 		return nil, &BodyFailure{
-			Kind: BodyFailureTooLarge,
+			Kind: classifyIngressFailure(err),
 			Err:  fmt.Errorf("guard: 正文准入被拒: %w", err),
 		}
 	}
@@ -197,14 +198,18 @@ const (
 	BodyFailureEmptyInbound BodyFailureKind = "empty_inbound"
 	// BodyFailureDeclaredButEmpty 表示声明了长度或分块，却读到零字节。
 	BodyFailureDeclaredButEmpty BodyFailureKind = "declared_but_empty"
-	// BodyFailureDecodeFailed 表示解压器构造失败或解压途中失败（CE 与正文不符、截断、损坏）。
+	// BodyFailureDecodeFailed 表示解压器构造失败、解压途中失败（CE 与正文不符、截断、损坏）
+	// 或 content-encoding 层数超限。
 	BodyFailureDecodeFailed BodyFailureKind = "decode_failed"
 	// BodyFailureNotJSONObject 表示读到了字节，但不是 JSON 对象。
 	BodyFailureNotJSONObject BodyFailureKind = "not_json_object"
 	// BodyFailureBodyTaken 表示正文已被取走或根本没有读取器。
 	BodyFailureBodyTaken BodyFailureKind = "body_taken"
-	// BodyFailureTooLarge 表示被体积或容量类限额拒绝（压缩体/解压体/层数/在途预算）。
+	// BodyFailureTooLarge 表示单条请求的压缩体或解压输出超过上限（客户端请求太大）。
 	BodyFailureTooLarge BodyFailureKind = "too_large"
+	// BodyFailureBodyBudgetExhausted 表示被进程级容量拒绝（在途正文预算、在途解压预算、内存余量）：
+	// 客户端请求本身合法，等并发降下来重试就能过。
+	BodyFailureBodyBudgetExhausted BodyFailureKind = "body_budget_exhausted"
 )
 
 // BodyFailure 是带诊断计数的「正文不可用」：Kind 供日志分档，ReadBytes/DecodedBytes 说明
@@ -222,24 +227,26 @@ func (e *BodyFailure) Error() string { return e.Err.Error() }
 
 func (e *BodyFailure) Unwrap() error { return e.Err }
 
-// newBodyFailure 把读体失败包成可诊断错误，并把 ErrBodyUnavailable 包在里面（守卫据此 fail-open）。
+// newBodyFailure 把读体失败包成可诊断错误，并把 ErrBodyUnavailable 包在里面（守卫据此 fail-open）；
+// cause 用 %w 而非 %v，使 ingress 哨兵留在 Unwrap 链上可被 errors.Is 判到。
 func newBodyFailure(kind BodyFailureKind, readBytes, decodedBytes int64, cause error) *BodyFailure {
 	return &BodyFailure{
 		Kind:         kind,
 		ReadBytes:    readBytes,
 		DecodedBytes: decodedBytes,
-		Err:          fmt.Errorf("%w: %v", ErrBodyUnavailable, cause),
+		Err:          fmt.Errorf("%w: %w", ErrBodyUnavailable, cause),
 	}
 }
 
-// classifyIngressFailure 把 ingress 的错误分到两个诊断档：限额拒绝是 too_large，其余
-// （解压器构造失败、解压中途损坏、读流失败）都是 decode_failed。
+// classifyIngressFailure 把 ingress 的错误分到三个诊断档：进程容量拒绝是 body_budget_exhausted
+// （服务端瞬时过载），单条体积越界是 too_large（客户端请求太大），其余（解压器构造失败、
+// 解压中途损坏、层数超限、读流失败）都是 decode_failed。
 func classifyIngressFailure(err error) BodyFailureKind {
 	switch {
+	case ingress.IsCapacityError(err):
+		return BodyFailureBodyBudgetExhausted
 	case errors.Is(err, ingress.ErrCompressedTooLarge),
-		errors.Is(err, ingress.ErrDecodedTooLarge),
-		errors.Is(err, ingress.ErrTooManyLayers),
-		ingress.IsCapacityError(err):
+		errors.Is(err, ingress.ErrDecodedTooLarge):
 		return BodyFailureTooLarge
 	default:
 		return BodyFailureDecodeFailed

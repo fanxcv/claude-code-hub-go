@@ -415,6 +415,9 @@ func TestBodyAccessorClassifiesFailure(t *testing.T) {
 		if !errors.Is(err, ErrBodyUnavailable) {
 			t.Fatalf("分档不得破坏 ErrBodyUnavailable 判定，得到 %v", err)
 		}
+		if !errors.Is(err, ingress.ErrCorruptBody) {
+			t.Fatalf("cause 应留在 Unwrap 链上（ingress 哨兵可判），得到 %v", err)
+		}
 		if failure.Kind != BodyFailureDecodeFailed {
 			t.Fatalf("分档 = %q，期望 %q", failure.Kind, BodyFailureDecodeFailed)
 		}

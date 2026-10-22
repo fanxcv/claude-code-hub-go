@@ -651,20 +651,9 @@ func (h *Handler) forward(
 		// 上游只会回一句与真实原因无关的 400（如 magpie 的 expected a JSON object），
 		// 而客户端与运维都看不出「网关把正文丢了」。
 		//
-		// 回 503 而非 400：这类失败是**网关没拿到正文**（解压/解析在我们这一侧失败），
-		// 不是客户端请求语义错误；且 4xx 不触发 agent 重试，5xx 会。取 503（与排空期
-		// `shutting_down` 同码）而不是 500：客户端对 503 按「稍后重试」退避，而正文坏掉
-		// 立即重试大概率还是坏，退避更合适。
-		status := http.StatusServiceUnavailable
-		// 细节只进日志（上面的 Warn），对客户端只给一句可读结论：内部路径与解压器原文
-		// 不该出现在响应体里，而它也不影响客户端判断（重试即可）。
-		message := "invalid request body: 网关未能解出请求正文"
-		if bodyFailureKind(err) == guard.BodyFailureEmptyInbound {
-			// 唯一的例外：入站本来就没有正文，那是客户端的请求不成立（重试也不会变），
-			// 回 400 invalid_request_error 并点名「没有正文」。
-			status = http.StatusBadRequest
-			message = "invalid request body: 请求没有正文"
-		}
+		// 细节（failureKind、字节计数、解压器原文）只进日志（上面的 Warn），客户端只拿
+		// bodyUnavailableResponse 给的一档（见那里的分档依据）。
+		status, message := bodyUnavailableResponse(err)
 		h.settleFailure(requestCtx, state, status, message)
 		h.writeGuardResponse(writer, state, guard.BuildError(status, message, ""))
 		return
@@ -914,6 +903,26 @@ func bodyFailureKind(err error) guard.BodyFailureKind {
 		return failure.Kind
 	}
 	return ""
+}
+
+// bodyUnavailableResponse 把正文不可用的诊断档翻成客户端可见的状态码与文案。
+//
+// 分档即处置：进程容量拒绝是服务端瞬时过载（等并发降下来重试就能过），单条体积越界是
+// 客户端请求太大（重试无用，413），入站本来就空是坏请求（400），其余（解压失败、非 JSON
+// 对象、声明了正文却读不到、正文已被取走）取 503：这类失败不是客户端的请求语义错，
+// 且 4xx 不触发 agent 重试，5xx 会。
+func bodyUnavailableResponse(err error) (int, string) {
+	switch bodyFailureKind(err) {
+	case guard.BodyFailureBodyBudgetExhausted:
+		return http.StatusServiceUnavailable,
+			"gateway busy: request body budget exhausted, retry after lowering concurrency"
+	case guard.BodyFailureTooLarge:
+		return http.StatusRequestEntityTooLarge, "request body too large"
+	case guard.BodyFailureEmptyInbound:
+		return http.StatusBadRequest, "invalid request body: request body is empty"
+	default:
+		return http.StatusServiceUnavailable, "invalid request body: 网关未能解出请求正文"
+	}
 }
 
 // streamSettler 把流式终态交给按请求绑定的结算器。
