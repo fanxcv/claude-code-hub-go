@@ -28,12 +28,15 @@
 | `MAX_COMPRESSED_REQUEST_BYTES` | 跟随解压上限 | 单请求压缩体上限（读体前的结构性天花板），越界 413 |
 | `MAX_CONCURRENT_REQUEST_DECOMPRESSIONS` | 4 | 同时在途的解压任务数，饱和即拒绝（不排队） |
 | `MAX_INFLIGHT_REQUEST_DECOMPRESSION_BYTES` | 128 MiB | 在途解压占用的压缩体字节总量 |
-| `CCH_GO_MAX_INFLIGHT_BYTES` | 96 MiB | 进程级在途请求体（含解压后明文）总量 |
+| `CCH_GO_MAX_INFLIGHT_BYTES` | 96 MiB | 进程级在途请求体的**成本**预算：`Σ(正文 × 系数) ≤ 预算` |
 
 前四项与 Node 同名同默认，便于逐项对账（解析语义一致：非法值回退默认，不接受 `10MiB` 后缀）。
 `CCH_GO_MAX_INFLIGHT_BYTES` 是 Go 侧新增的总量闸门，与 `GOMEMLIMIT` 叠加生效。
 其唯一真源是 `config.Config.MaxInflightBytes`（带区间校验与启动日志），由 `dataplane` 的
 装配处注入为进程级唯一一份 `Admission`；`DefaultAdmission` 只在未注入时兜底。
+它按**成本**记账：正文先经 `InflightCostBytes` 乘系数（`CCH_GO_INFLIGHT_BYTES_MULTIPLIER`，默认 6）
+再入闸，所以 96 MiB 预算的**等效在途正文上限只有 16 MiB**（96 / 6），不是 96 MiB 正文；
+两道闸门共用这份成本并取更严的一侧。
 层数上限是常量（1 层）：真实客户端（含 Codex）只发单层编码，多层只是一次解压放大的攻击面。
 
 ## 错误语义
@@ -54,9 +57,11 @@
 ## 内存判定的边界
 
 `MemoryGuard` 读两个数：`runtime/metrics` 的 `/memory/classes/heap/objects:bytes`（堆在用）与
-`debug.SetMemoryLimit(-1)`（GOMEMLIMIT 的官方读取方式，负值入参不改变设置）。比例默认 0.9。
-**未设 GOMEMLIMIT 时上限不可知，判定一律放行**——不知道就不假装知道，由 runtime 兜底；
-此时只有两个在途字节预算在保护进程。
+`debug.SetMemoryLimit(-1)`（GOMEMLIMIT 的官方读取方式，负值入参不改变设置）。比例默认 0.9，
+即阈值 `GOMEMLIMIT × 0.9`，比的是与字节预算**同一份成本**（正文 × 系数）。
+**未设 GOMEMLIMIT 时上限不可知，判定退化为静态上限**而不是一律放行：静态上限是
+`InflightCostBytes(预算, 系数)`（默认 96 MiB × 6 = 576 MiB，成本尺度），超过即拒 503。
+该静态上限恒宽于 96 MiB 的成本预算，所以两道闸门取更严的一侧时，默认配置下先触发的是字节预算。
 
 ## 实测（i7-12700，`-benchtime 1s`）
 
