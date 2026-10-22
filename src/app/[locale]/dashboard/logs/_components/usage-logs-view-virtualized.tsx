@@ -302,8 +302,9 @@ function UsageLogsViewContent({
   };
 
   // 快捷用户下拉即时生效：filters 本身不含 page，故换用户必然回到第一页。
+  // 换用户即换维度，上一个用户的 keyId 对新用户无意义（会筛出空列表），一并清掉。
   const handleQuickUserChange = (nextUserId: number | undefined) => {
-    handleFilterChange({ ...filters, userId: nextUserId });
+    handleFilterChange({ ...filters, userId: nextUserId, keyId: undefined });
   };
 
   useEffect(() => {

@@ -424,8 +424,8 @@ describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
     document.body.innerHTML = "";
   });
 
-  it("navigates on user change, keeping other filters and dropping page", async () => {
-    searchParamMocks.value = new URLSearchParams("model=claude-sonnet&statusCode=500&page=3");
+  it("navigates on user change, keeping other filters and dropping page and keyId", async () => {
+    searchParamMocks.value = new URLSearchParams("userId=1&keyId=3&providerId=4&page=3");
 
     const { container, unmount } = renderUsageLogsView();
     // 带筛选条件时面板默认展开，先收起才会露出快捷用户下拉
@@ -442,15 +442,15 @@ describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
 
     await selectQuickUser(container, "7");
 
-    expect(routerMocks.pushedHref).toBe(
-      "/zh-CN/dashboard/logs?userId=7&statusCode=500&model=claude-sonnet"
-    );
+    expect(routerMocks.pushedHref).toBe("/zh-CN/dashboard/logs?userId=7&providerId=4");
+    expect(routerMocks.pushedHref).not.toContain("keyId");
+    expect(routerMocks.pushedHref).not.toContain("page");
 
     unmount();
   });
 
-  it("clears userId when switching back to all users", async () => {
-    searchParamMocks.value = new URLSearchParams("userId=7&model=claude-sonnet");
+  it("clears userId and keyId when switching back to all users", async () => {
+    searchParamMocks.value = new URLSearchParams("userId=7&keyId=3&model=claude-sonnet");
 
     const { container, unmount } = renderUsageLogsView();
     clickFilterTrigger(container);
@@ -459,6 +459,7 @@ describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
     await selectQuickUser(container, "__all__");
 
     expect(routerMocks.pushedHref).toBe("/zh-CN/dashboard/logs?model=claude-sonnet");
+    expect(routerMocks.pushedHref).not.toContain("keyId");
 
     unmount();
   });
