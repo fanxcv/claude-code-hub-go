@@ -58,6 +58,20 @@ type BodyAccessor struct {
 	digests  map[string]uint64 // 解析时各顶层成员的值指纹（补丁的对照基线）
 	patched  []byte            // Store 之后的出站字节缓存
 	dirty    bool              // 是否已被 Store 改写
+
+	// readBytes / decodedBytes 是入站流实读的压缩体字节与解压后字节（诊断用，不参与任何判定）。
+	readBytes    int64
+	decodedBytes int64
+}
+
+// BodyCounts 报告正文读取的字节计数（诊断用）：实读压缩体与解压后字节。
+func (a *BodyAccessor) BodyCounts() (readBytes, decodedBytes int64) {
+	if a == nil {
+		return 0, 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.readBytes, a.decodedBytes
 }
 
 // reservationBytes 给出正文读取前的准入申请字节数。
@@ -82,12 +96,13 @@ func reservationBytes(decodedHint, compressed int64) int64 {
 
 // NewBodyAccessor 从上下文取出请求体并解析成 JSON 对象。
 //
-// 正文不可解析系失败一律返回把 ErrBodyUnavailable 包在里面的错误：调用方（各守卫步骤）据此走
-// 各自的 fail-open 语义，而不是把「没有正文」误当成「守卫失败」翻成 500。
-// 例外是准入拒绝（容量不足）：原样返回，由 forward 映射为 503，不得 fail-open。
+// 正文不可解析系失败一律返回把 ErrBodyUnavailable 包在里面的 *BodyFailure：调用方（各守卫步骤）
+// 据此走各自的 fail-open 语义，而不是把「没有正文」误当成「守卫失败」翻成 500；
+// 同时它带着失败子类与字节计数，供数据面写诊断日志（见 BodyFailureKind）。
+// 例外是准入拒绝（容量不足）：Unwrap 链上不含 ErrBodyUnavailable，由 forward 映射为 503，不得 fail-open。
 func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccessor, error) {
 	if ctx == nil {
-		return nil, fmt.Errorf("%w: 上下文为空", ErrBodyUnavailable)
+		return nil, newBodyFailure(BodyFailureBodyTaken, 0, 0, errors.New("上下文为空"))
 	}
 	ingressOptions := options.Ingress
 	if ingressOptions.MaxDecodedBytes == 0 && ingressOptions.MaxCompressedBytes == 0 &&
@@ -100,15 +115,17 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 
 	source, err := ctx.TakeBody()
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBodyUnavailable, err)
+		return nil, newBodyFailure(BodyFailureBodyTaken, 0, 0, err)
 	}
 	defer source.Close()
+	// 计数包在入站流外侧：解压器构造失败时 NewReader 不返回 Reader，只有这里的数还在。
+	counted := ingress.CountBytes(source)
 
 	headers := ctx.Headers().Clone()
 	contentEncoding := headers.Get("Content-Encoding")
 	compressed, decodedHint, err := ingress.PeekSize(headers, ingressOptions)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBodyUnavailable, err)
+		return nil, newBodyFailure(classifyIngressFailure(err), 0, 0, err)
 	}
 
 	admission := options.Admission
@@ -117,37 +134,116 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 	}
 	lease, err := admission.AcquireBody(reservationBytes(decodedHint, compressed))
 	if err != nil {
-		// 容量不足原样返回（不包 ErrBodyUnavailable）：forward 依据 ingress.IsCapacityError
-		// 判为本地过载 → 503，与「避免重试上游」的语义一致；包成 ErrBodyUnavailable 会被
-		// 守卫当成「正文缺失」fail-open，闸门即失效。
-		return nil, fmt.Errorf("guard: 正文准入被拒: %w", err)
+		// 容量不足不包 ErrBodyUnavailable（守卫会 fail-open，闸门即失效）：forward 依据
+		// ingress.IsCapacityError 判为本地过载 → 503。包进 BodyFailure 只为让日志能分到
+		// too_large，Unwrap 链上刻意不含 ErrBodyUnavailable。
+		return nil, &BodyFailure{
+			Kind: BodyFailureTooLarge,
+			Err:  fmt.Errorf("guard: 正文准入被拒: %w", err),
+		}
 	}
 	defer lease.Release()
 
-	reader, err := ingress.NewReader(source, contentEncoding, compressed, ingressOptions)
+	reader, err := ingress.NewReader(counted, contentEncoding, compressed, ingressOptions)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBodyUnavailable, err)
+		return nil, newBodyFailure(classifyIngressFailure(err), counted.BytesRead(), 0, err)
 	}
 	defer reader.Close()
 
 	payload, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrBodyUnavailable, err)
+		// ReadAll 在出错时仍返回已读出的前缀：那就是已交到我们手上的解压后字节。
+		return nil, newBodyFailure(
+			classifyIngressFailure(err), counted.BytesRead(), int64(len(payload)), err,
+		)
 	}
 	if len(payload) == 0 {
 		// 空体：解析成空对象而不是报错，与 Node 的 `{}` 语义一致（无正文的端点也会走到守卫）。
-		return &BodyAccessor{tree: map[string]any{}, original: payload}, nil
+		return &BodyAccessor{
+			tree: map[string]any{}, original: payload, readBytes: counted.BytesRead(),
+		}, nil
 	}
 
 	var tree map[string]any
 	if err := json.Unmarshal(payload, &tree); err != nil {
-		return nil, fmt.Errorf("%w: 正文不是 JSON 对象: %v", ErrBodyUnavailable, err)
+		return nil, newBodyFailure(
+			BodyFailureNotJSONObject, counted.BytesRead(), int64(len(payload)),
+			fmt.Errorf("正文不是 JSON 对象: %v", err),
+		)
 	}
 	if tree == nil {
 		tree = map[string]any{}
 	}
 	digester := newBodyDigester()
-	return &BodyAccessor{tree: tree, original: payload, digester: digester, digests: digester.digestBodyMembers(tree)}, nil
+	return &BodyAccessor{
+		tree:         tree,
+		original:     payload,
+		digester:     digester,
+		digests:      digester.digestBodyMembers(tree),
+		readBytes:    counted.BytesRead(),
+		decodedBytes: int64(len(payload)),
+	}, nil
+}
+
+// BodyFailureKind 是「正文不可用」的细分原因，取值即日志字段 failureKind。
+//
+// 存在的理由：d2a1158 之后「正文不可用」已经是本地拒绝，但生产上仍分不清是客户端本来就没发、
+// 还是我们解压/解析失败——两者的处置完全不同（前者拒 400 并回给客户端自查，后者是我们或
+// 传输层的错）。
+type BodyFailureKind string
+
+const (
+	// BodyFailureEmptyInbound 表示入站既无正文也无长度声明（客户端就没发）。
+	BodyFailureEmptyInbound BodyFailureKind = "empty_inbound"
+	// BodyFailureDeclaredButEmpty 表示声明了长度或分块，却读到零字节。
+	BodyFailureDeclaredButEmpty BodyFailureKind = "declared_but_empty"
+	// BodyFailureDecodeFailed 表示解压器构造失败或解压途中失败（CE 与正文不符、截断、损坏）。
+	BodyFailureDecodeFailed BodyFailureKind = "decode_failed"
+	// BodyFailureNotJSONObject 表示读到了字节，但不是 JSON 对象。
+	BodyFailureNotJSONObject BodyFailureKind = "not_json_object"
+	// BodyFailureBodyTaken 表示正文已被取走或根本没有读取器。
+	BodyFailureBodyTaken BodyFailureKind = "body_taken"
+	// BodyFailureTooLarge 表示被体积或容量类限额拒绝（压缩体/解压体/层数/在途预算）。
+	BodyFailureTooLarge BodyFailureKind = "too_large"
+)
+
+// BodyFailure 是带诊断计数的「正文不可用」：Kind 供日志分档，ReadBytes/DecodedBytes 说明
+// 字节到底走没走到我们手上。errors.Is(err, ErrBodyUnavailable) 的既有判定不变（容量类除外，
+// 见 NewBodyAccessor）。
+type BodyFailure struct {
+	Kind BodyFailureKind
+	// ReadBytes 是从入站流实读的压缩体字节；DecodedBytes 是解压后交到调用方的字节。
+	ReadBytes    int64
+	DecodedBytes int64
+	Err          error
+}
+
+func (e *BodyFailure) Error() string { return e.Err.Error() }
+
+func (e *BodyFailure) Unwrap() error { return e.Err }
+
+// newBodyFailure 把读体失败包成可诊断错误，并把 ErrBodyUnavailable 包在里面（守卫据此 fail-open）。
+func newBodyFailure(kind BodyFailureKind, readBytes, decodedBytes int64, cause error) *BodyFailure {
+	return &BodyFailure{
+		Kind:         kind,
+		ReadBytes:    readBytes,
+		DecodedBytes: decodedBytes,
+		Err:          fmt.Errorf("%w: %v", ErrBodyUnavailable, cause),
+	}
+}
+
+// classifyIngressFailure 把 ingress 的错误分到两个诊断档：限额拒绝是 too_large，其余
+// （解压器构造失败、解压中途损坏、读流失败）都是 decode_failed。
+func classifyIngressFailure(err error) BodyFailureKind {
+	switch {
+	case errors.Is(err, ingress.ErrCompressedTooLarge),
+		errors.Is(err, ingress.ErrDecodedTooLarge),
+		errors.Is(err, ingress.ErrTooManyLayers),
+		ingress.IsCapacityError(err):
+		return BodyFailureTooLarge
+	default:
+		return BodyFailureDecodeFailed
+	}
 }
 
 // JSON 返回解析后的正文对象（同一请求内多次调用返回同一棵树）。

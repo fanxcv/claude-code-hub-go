@@ -399,3 +399,77 @@ func TestBodyAccessorAdmissionReleased(t *testing.T) {
 		t.Fatalf("读完应在途字节归零，得到 %d", got)
 	}
 }
+
+// TestBodyAccessorClassifiesFailure 钉住「正文不可用」的分档与字节计数：生产上要一眼分清
+// 是客户端本来就没发、还是我们解压/解析失败，靠的就是这两组事实。
+func TestBodyAccessorClassifiesFailure(t *testing.T) {
+	plaintext := []byte(`{"model":"claude-sonnet-4-5"}`)
+
+	t.Run("解压失败：实读大于零、解出为零", func(t *testing.T) {
+		ctx := contextWithEncoding(t, "gzip", io.NopCloser(bytes.NewReader(plaintext)))
+		_, err := NewBodyAccessor(ctx, BodyAccessOptions{})
+		var failure *BodyFailure
+		if !errors.As(err, &failure) {
+			t.Fatalf("应返回 *BodyFailure，得到 %v", err)
+		}
+		if !errors.Is(err, ErrBodyUnavailable) {
+			t.Fatalf("分档不得破坏 ErrBodyUnavailable 判定，得到 %v", err)
+		}
+		if failure.Kind != BodyFailureDecodeFailed {
+			t.Fatalf("分档 = %q，期望 %q", failure.Kind, BodyFailureDecodeFailed)
+		}
+		if failure.ReadBytes == 0 {
+			t.Fatalf("客户端确实发了字节，ReadBytes 不应为 0")
+		}
+		if failure.DecodedBytes != 0 {
+			t.Fatalf("解压失败时 DecodedBytes 应为 0，得到 %d", failure.DecodedBytes)
+		}
+	})
+
+	t.Run("不是 JSON 对象", func(t *testing.T) {
+		ctx := contextWithEncoding(t, "", io.NopCloser(bytes.NewReader([]byte(`[1,2,3]`))))
+		_, err := NewBodyAccessor(ctx, BodyAccessOptions{})
+		var failure *BodyFailure
+		if !errors.As(err, &failure) || failure.Kind != BodyFailureNotJSONObject {
+			t.Fatalf("应分档为 not_json_object，得到 %v", err)
+		}
+		if failure.ReadBytes != int64(len(`[1,2,3]`)) || failure.DecodedBytes != int64(len(`[1,2,3]`)) {
+			t.Fatalf("明文正文的实读与解出字节都应等于正文长度，得到 %d/%d",
+				failure.ReadBytes, failure.DecodedBytes)
+		}
+	})
+
+	t.Run("正文已被取走", func(t *testing.T) {
+		ctx := contextWithEncoding(t, "", io.NopCloser(bytes.NewReader(plaintext)))
+		if _, err := ctx.TakeBody(); err != nil {
+			t.Fatalf("首次取正文失败: %v", err)
+		}
+		_, err := NewBodyAccessor(ctx, BodyAccessOptions{})
+		var failure *BodyFailure
+		if !errors.As(err, &failure) || failure.Kind != BodyFailureBodyTaken {
+			t.Fatalf("应分档为 body_taken，得到 %v", err)
+		}
+	})
+
+	t.Run("体积拒绝", func(t *testing.T) {
+		// 必须是解压路径：透传不经 limitReader，体积上限只对解压输出生效。
+		payload := bytes.Repeat([]byte("a"), 4096)
+		ctx := contextWithEncoding(t, "gzip", gzipBody(t, payload))
+		_, err := NewBodyAccessor(ctx, BodyAccessOptions{MaxBytes: 128})
+		var failure *BodyFailure
+		if !errors.As(err, &failure) || failure.Kind != BodyFailureTooLarge {
+			t.Fatalf("应分档为 too_large，得到 %v", err)
+		}
+	})
+
+	t.Run("空体带计数", func(t *testing.T) {
+		ctx := contextWithEncoding(t, "", io.NopCloser(bytes.NewReader(nil)))
+		accessor, err := NewBodyAccessor(ctx, BodyAccessOptions{})
+		if err != nil {
+			t.Fatalf("空正文不应失败: %v", err)
+		}
+		if readBytes, decodedBytes := accessor.BodyCounts(); readBytes != 0 || decodedBytes != 0 {
+			t.Fatalf("空体的计数应为 0/0，得到 %d/%d", readBytes, decodedBytes)
+		}
+	})
+}

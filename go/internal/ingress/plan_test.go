@@ -255,3 +255,28 @@ func TestStatusOfUnknownError(t *testing.T) {
 		t.Fatalf("哨兵错误文案不便于定位: %q", ErrCorruptBody.Error())
 	}
 }
+
+// TestDeclaredContentLength 钉住「声明值」的唯一口径：只认头、不认传输层事实，
+// 缺失/非法/负数一律 -1（未知），绝不把「没声明」读成「声明了零字节」。
+func TestDeclaredContentLength(t *testing.T) {
+	cases := []struct {
+		name   string
+		header http.Header
+		want   int64
+	}{
+		{"无头", http.Header{}, -1},
+		{"空值", http.Header{"Content-Length": []string{"  "}}, -1},
+		{"正常", http.Header{"Content-Length": []string{"4096"}}, 4096},
+		{"零", http.Header{"Content-Length": []string{"0"}}, 0},
+		{"非法", http.Header{"Content-Length": []string{"12x"}}, -1},
+		{"负数", http.Header{"Content-Length": []string{"-5"}}, -1},
+	}
+	for _, tc := range cases {
+		if got := DeclaredContentLength(tc.header); got != tc.want {
+			t.Fatalf("%s: DeclaredContentLength = %d，期望 %d", tc.name, got, tc.want)
+		}
+	}
+	if got := DeclaredContentLength(nil); got != -1 {
+		t.Fatalf("nil 头应为 -1，得到 %d", got)
+	}
+}

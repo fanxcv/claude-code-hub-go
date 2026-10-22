@@ -135,7 +135,11 @@ func buildDecoder(src io.Reader, order []string, opts Options, lease *Lease) (*R
 		return nil, wrap(ErrCorruptBody, "读取请求体失败: %v", err)
 	}
 	// 压缩体计数：按实际读取字节增量申请预算；超上限即拒绝。
-	counted := &countingReader{src: buffered, limit: opts.MaxCompressedBytes, lease: lease}
+	counted := &countingReader{
+		ByteCounter: CountBytes(buffered),
+		limit:       opts.MaxCompressedBytes,
+		lease:       lease,
+	}
 
 	current := io.Reader(counted)
 	for _, enc := range order {
@@ -237,16 +241,38 @@ func newDeflateReader(current io.Reader, sniffer *bufio.Reader) (io.ReadCloser, 
 	return zlib.NewReader(current)
 }
 
+// ByteCounter 统计从入站流实读的字节数：不改变字节、不复制正文、不做任何判定。
+//
+// 计数挂在流上而不是 Reader 上，是为了让失败路径也有数：解压器构造失败时 NewReader 不返回
+// Reader，计数若存在 Reader 里就随失败一起丢掉，而「客户端到底发了多少字节」正是区分
+// 「入站本来就空」与「我们解压失败」的第一手事实（见 guard.BodyFailure）。
+type ByteCounter struct {
+	src  io.Reader
+	read int64
+}
+
+// CountBytes 用计数器包装入站流。
+func CountBytes(src io.Reader) *ByteCounter { return &ByteCounter{src: src} }
+
+// Read 实现 io.Reader。
+func (c *ByteCounter) Read(p []byte) (int, error) {
+	n, err := c.src.Read(p)
+	c.read += int64(n)
+	return n, err
+}
+
+// BytesRead 返回累计实读字节数。
+func (c *ByteCounter) BytesRead() int64 { return c.read }
+
 // countingReader 统计压缩体字节数并同步申请在途预算。
 //
 // 它同时承担两道闸：单请求压缩体上限（413）与全局在途字节预算（503）。计数按**实际读取**而非
 // 声明值，因此分块请求也逃不掉；预算按增量申请，所以大请求不会一次性占满全局额度。
 type countingReader struct {
-	src   io.Reader
+	*ByteCounter
 	limit int64
 	lease *Lease
 
-	read int64
 	fail error
 }
 
@@ -254,10 +280,9 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	if c.fail != nil {
 		return 0, c.fail
 	}
-	n, err := c.src.Read(p)
+	n, err := c.ByteCounter.Read(p)
 	if n > 0 {
-		c.read += int64(n)
-		if c.limit > 0 && c.read > c.limit {
+		if c.limit > 0 && c.BytesRead() > c.limit {
 			c.fail = wrap(ErrCompressedTooLarge, "压缩请求体超过上限 %d 字节", c.limit)
 			return 0, c.fail
 		}

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/fanxcv/claude-code-hub-go/go/internal/egress"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/forward"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/guard"
+	"github.com/fanxcv/claude-code-hub-go/go/internal/ingress"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/logx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/pctx"
 	"github.com/fanxcv/claude-code-hub-go/go/internal/rectify"
@@ -659,6 +659,12 @@ func (h *Handler) forward(
 		// 细节只进日志（上面的 Warn），对客户端只给一句可读结论：内部路径与解压器原文
 		// 不该出现在响应体里，而它也不影响客户端判断（重试即可）。
 		message := "invalid request body: 网关未能解出请求正文"
+		if bodyFailureKind(err) == guard.BodyFailureEmptyInbound {
+			// 唯一的例外：入站本来就没有正文，那是客户端的请求不成立（重试也不会变），
+			// 回 400 invalid_request_error 并点名「没有正文」。
+			status = http.StatusBadRequest
+			message = "invalid request body: 请求没有正文"
+		}
 		h.settleFailure(requestCtx, state, status, message)
 		h.writeGuardResponse(writer, state, guard.BuildError(status, message, ""))
 		return
@@ -778,33 +784,20 @@ func declaresRequestBody(headers http.Header) bool {
 	if strings.TrimSpace(headers.Get("Transfer-Encoding")) != "" {
 		return true
 	}
-	length, err := strconv.ParseInt(strings.TrimSpace(headers.Get("Content-Length")), 10, 64)
-	return err == nil && length > 0
+	return ingress.DeclaredContentLength(headers) > 0
 }
 
 // planFacts 构造转发计划所需的会话级事实。
 //
 // 正文读不出来时报错而不是给出空正文：调用方据此本地拒绝（见 forward）。客户端本来就
-// 没带正文（如 GET 类端点）时不算错误，出站正文为空与入站一致。
+// 没带正文（如 GET 类端点）时不算错误，出站正文为空与入站一致——除非端点本身要求正文
+// （spec.RequiresBody），那时空 POST 就是坏请求，同样本地拒掉。
 func (h *Handler) planFacts(pc *pctx.Context, spec routeSpec, body *bodyAccess) (forward.PlanFacts, error) {
 	headers := pc.Headers().Clone()
 	payload, err := body.bytes()
-	if err == nil && len(payload) == 0 && declaresRequestBody(headers) {
-		// 声明了正文却解出零字节：同样是「正文丢了」，不能拿空请求去问上游。
-		err = errors.New("正文声明了长度，解出来却是空")
-	}
-	if err != nil {
-		// 无正文且未声明的请求（GET 类）不走这里：出站正文为空与入站一致。
-		h.logger.Warn("dataplane.request_body_unavailable", map[string]any{
-			"endpoint":         pc.Path(),
-			"contentEncoding":  headers.Get("Content-Encoding"),
-			"contentLength":    headers.Get("Content-Length"),
-			"transferEncoding": headers.Get("Transfer-Encoding"),
-			"contentType":      headers.Get("Content-Type"),
-			"userAgent":        headers.Get("User-Agent"),
-			"error":            err.Error(),
-		})
-		return forward.PlanFacts{}, fmt.Errorf("invalid request body: %v", err)
+	if failure := bodyFailure(pc, spec, headers, body, payload, err); failure != nil {
+		h.logBodyUnavailable(pc, headers, failure)
+		return forward.PlanFacts{}, failure
 	}
 	model := ""
 	if tree, jsonErr := body.json(); jsonErr == nil {
@@ -843,6 +836,84 @@ func (h *Handler) settleFailure(ctx context.Context, state *RequestState, status
 	}, failure); err != nil {
 		h.logger.Warn("dataplane.settle_failed", map[string]any{"error": err.Error()})
 	}
+}
+
+// bodyFailure 把「正文不可用」归成可诊断的一档；正文可用时返回 nil。
+//
+// 三档不由 guard 决定，因为它们要的是入站头与端点语义：入站本来就空（empty_inbound）、
+// 声明了正文却读到零字节（declared_but_empty）、以及端点要求正文但客户端没发。
+func bodyFailure(
+	pc *pctx.Context,
+	spec routeSpec,
+	headers http.Header,
+	body *bodyAccess,
+	payload []byte,
+	err error,
+) *guard.BodyFailure {
+	if err != nil {
+		var failure *guard.BodyFailure
+		if errors.As(err, &failure) {
+			return failure
+		}
+		// 未分类的读体错误（如访问器类型不符）：按「没有读取器」记，至少不丢诊断。
+		return &guard.BodyFailure{Kind: guard.BodyFailureBodyTaken, Err: err}
+	}
+	if len(payload) > 0 {
+		return nil
+	}
+	readBytes, decodedBytes := body.counts()
+	switch {
+	case declaresRequestBody(headers):
+		// 声明了正文却解出零字节：同样是「正文丢了」，不能拿空请求去问上游。
+		return &guard.BodyFailure{
+			Kind:         guard.BodyFailureDeclaredButEmpty,
+			ReadBytes:    readBytes,
+			DecodedBytes: decodedBytes,
+			Err:          errors.New("正文声明了长度，解出来却是空"),
+		}
+	case spec.RequiresBody && pc.Method() == http.MethodPost:
+		// 端点本身要求正文（如三条主对话线）：空 POST 送上去只会换来一句与真实原因
+		// 无关的上游 400（生产上即 magpie 的 expected a JSON object），在本地拒更诚实。
+		return &guard.BodyFailure{
+			Kind:         guard.BodyFailureEmptyInbound,
+			ReadBytes:    readBytes,
+			DecodedBytes: decodedBytes,
+			Err:          errors.New("入站没有正文"),
+		}
+	default:
+		// 无正文且未声明的请求（GET 类、族透传里合法的无体 POST）照常放行。
+		return nil
+	}
+}
+
+// logBodyUnavailable 写「正文为什么没到上游」的诊断日志。
+//
+// failureKind 是分档的判据，字节计数说明字节到底走没走到我们手上：readBytes>0 而
+// decodedBytes=0 就是「客户端发了、我们没解出来」的铁证，两个都为 0 则是入站本来就空。
+// 这些细节只进日志，对客户端只给一句可读结论（见 forward）。
+func (h *Handler) logBodyUnavailable(pc *pctx.Context, headers http.Header, failure *guard.BodyFailure) {
+	h.logger.Warn("dataplane.request_body_unavailable", map[string]any{
+		"endpoint":           pc.Path(),
+		"failureKind":        string(failure.Kind),
+		"encoding":           headers.Get("Content-Encoding"),
+		"declaredCompressed": ingress.DeclaredContentLength(headers),
+		"readBytes":          failure.ReadBytes,
+		"decodedBytes":       failure.DecodedBytes,
+		"contentLength":      headers.Get("Content-Length"),
+		"transferEncoding":   headers.Get("Transfer-Encoding"),
+		"contentType":        headers.Get("Content-Type"),
+		"userAgent":          headers.Get("User-Agent"),
+		"error":              failure.Error(),
+	})
+}
+
+// bodyFailureKind 取正文失败的诊断档；不是这类错误时返回空串。
+func bodyFailureKind(err error) guard.BodyFailureKind {
+	var failure *guard.BodyFailure
+	if errors.As(err, &failure) {
+		return failure.Kind
+	}
+	return ""
 }
 
 // streamSettler 把流式终态交给按请求绑定的结算器。
@@ -1047,6 +1118,14 @@ func (b *bodyAccess) bytes() ([]byte, error) {
 		return accessor.Bytes()
 	}
 	return nil, errors.New("dataplane: 正文访问器类型不符")
+}
+
+// counts 返回正文读取的字节计数（诊断用）；未触发正文通路时为 0。
+func (b *bodyAccess) counts() (readBytes, decodedBytes int64) {
+	if b == nil || b.access == nil {
+		return 0, 0
+	}
+	return b.access.BodyCounts()
 }
 
 // releaseTree 在正文树不再需要后立即释放它（原文与补丁字节保留，见 guard.BodyAccessor.ReleaseTree）。

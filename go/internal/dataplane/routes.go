@@ -50,14 +50,12 @@ type routeSpec struct {
 	Format convert.ClientFormat
 	// Family 是客户端侧协议族，写回 pctx（归属判定与限流键的口径）。
 	Family egress.Family
-	// ForceGate 为真时即使上游未声明 SSE 也走门控。
-	//
+	// ForceGate 为真时即使上游未声明 SSE 也走门控。	//
 	// 当前三条路由都留 false：客户端要流时由转发计划的 ClientStream 判定（forward 的
 	// shouldGate 已覆盖），而入口无法区分「客户端要非流」与「客户端要流但上游没声明 SSE」，
 	// 一刀切开只会让非流式响应被 SSE 解析器判成门禁失败。
 	ForceGate bool
-	// RawPassthrough 为真表示本条属**原始透传**端点（Node 的 raw_passthrough 端点策略）。
-	//
+	// RawPassthrough 为真表示本条属**原始透传**端点（Node 的 raw_passthrough 端点策略）。	//
 	// 它同时决定两件事，且两件都必须与 Node 同源：
 	//   - 不重试、不切换供应商（Node：allowRetry/allowProviderSwitch 皆 false）；
 	//   - 守卫链取 raw 预设（Node：guardPreset=raw_passthrough）。
@@ -68,6 +66,12 @@ type routeSpec struct {
 	// ModelList 非 nil 表示该路径由**聚合式模型列表处理器**作答（不转发、不开行）。
 	// nil 表示本路径走守卫链 + 转发。
 	ModelList *modelListSpec
+	// RequiresBody 为真表示该端点没有正文就不成立：入站既无 content-length>0 也无
+	// transfer-encoding 的 POST 在本地 400，不把空请求送给上游（见 planFacts）。
+	//
+	// 只对「正文即请求本体」的端点成立：三条主对话路由与族表里 ModelRequired 的生成类。
+	// 族透传里的 cancel 类 POST（如 `/v1/batches/{id}/cancel`）本身就合法地无体，故留假。
+	RequiresBody bool
 }
 
 // routeTable 是 Go 当前承载的路由全集。
@@ -85,20 +89,24 @@ var routeTable = []routeSpec{
 		Policy: guard.ChatPolicy(),
 		Format: convert.FormatClaude,
 		Family: egress.FamilyAnthropicMessages,
+		// 正文即请求本体：空 POST 只能是客户端把正文弄丢了。
+		RequiresBody: true,
 	},
 	{
-		Method: http.MethodPost,
-		Path:   "/v1/chat/completions",
-		Policy: guard.ChatPolicy(),
-		Format: convert.FormatOpenAI,
-		Family: egress.FamilyOpenAIChat,
+		Method:       http.MethodPost,
+		Path:         "/v1/chat/completions",
+		Policy:       guard.ChatPolicy(),
+		Format:       convert.FormatOpenAI,
+		Family:       egress.FamilyOpenAIChat,
+		RequiresBody: true,
 	},
 	{
-		Method: http.MethodPost,
-		Path:   "/v1/responses",
-		Policy: guard.ChatPolicy(),
-		Format: convert.FormatResponse,
-		Family: egress.FamilyOpenAIResponses,
+		Method:       http.MethodPost,
+		Path:         "/v1/responses",
+		Policy:       guard.ChatPolicy(),
+		Format:       convert.FormatResponse,
+		Family:       egress.FamilyOpenAIResponses,
+		RequiresBody: true,
 		// ForceGate 刻意不设：它会让**非流式**请求也走门控，而门控按 SSE 解析 JSON 正文，
 		// 结果是把正常的非流式响应判成门禁失败（实测 502）。客户端是否要流由转发计划里的
 		// ClientStream 表达（forward 的 shouldGate 已含该判定），入口不越权替它决定。
@@ -168,6 +176,9 @@ func specForFamily(family EndpointFamily) routeSpec {
 		Policy: guard.ChatPolicy(),
 		Format: clientFormatForSurface(family.Surface),
 		Family: egressFamilyForSurface(family.Surface),
+		// 生成类族（ModelRequired）没有正文就不成立：空 POST 在本地 400。
+		// 族表里的 cancel 类 POST 不置该位——它们本就合法地不带正文。
+		RequiresBody: family.ModelRequired,
 	}
 	if family.RawPassthrough {
 		// RAW_PASSTHROUGH_ENDPOINT_POLICY 的 allowRawCrossProviderFallback 为 true，

@@ -231,3 +231,39 @@ func TestMainRoutesKeepTheirSpecs(t *testing.T) {
 		}
 	}
 }
+
+// TestRequiresBodyScopesToBodyIsRequest 钉住空 POST 闸的作用范围：正文即请求本体的端点
+// （三条主对话线 + 族表里的生成类）为真；cancel 类 POST 本来就合法地不带正文，必须留假，
+// 否则批任务取消会被 400 打回。
+func TestRequiresBodyScopesToBodyIsRequest(t *testing.T) {
+	required := []string{
+		"/v1/messages",
+		"/v1/chat/completions",
+		"/v1/responses",
+		"/v1/embeddings",
+		"/v1beta/models/gemini-2.0-flash:generateContent",
+	}
+	for _, path := range required {
+		spec, ok := matchRoute(http.MethodPost, path)
+		if !ok {
+			t.Fatalf("%s 未命中路由", path)
+		}
+		if !spec.RequiresBody {
+			t.Fatalf("%s 的正文即请求本体，RequiresBody 应为真", path)
+		}
+	}
+	optional := []string{
+		"/v1/batches/batch_1/cancel",
+		"/v1/messages/count_tokens",
+		"/v1/responses/compact",
+	}
+	for _, path := range optional {
+		spec, ok := matchRoute(http.MethodPost, path)
+		if !ok {
+			t.Fatalf("%s 未命中路由", path)
+		}
+		if spec.RequiresBody {
+			t.Fatalf("%s 合法地可以不带正文，RequiresBody 不得为真", path)
+		}
+	}
+}

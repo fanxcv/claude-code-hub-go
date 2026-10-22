@@ -67,6 +67,12 @@ func (c *typedCandidates) lastFacts() (SelectionFacts, bool) {
 // newRestPathHandler 建一个能跑完整管线（守卫链 → 候选 → 转发 → 结算）的数据面处理器。
 func newRestPathHandler(t *testing.T, candidates CandidateSource) (*Handler, *fakeSettler) {
 	t.Helper()
+	return newRestPathHandlerInto(t, candidates, nil)
+}
+
+// newRestPathHandlerInto 同上，但日志写进 logs（nil 即写 stderr，与不传同义）。
+func newRestPathHandlerInto(t *testing.T, candidates CandidateSource, logs io.Writer) (*Handler, *fakeSettler) {
+	t.Helper()
 	dialClient, err := dial.New(dial.Options{})
 	if err != nil {
 		t.Fatalf("拨号器构造失败: %v", err)
@@ -77,7 +83,7 @@ func newRestPathHandler(t *testing.T, candidates CandidateSource) (*Handler, *fa
 	}
 	settler := &fakeSettler{}
 	handler, err := New(Options{
-		Logger: logx.New(nil),
+		Logger: logx.New(logs),
 		Base: guard.Deps{
 			Auth:           auth,
 			Users:          auth,

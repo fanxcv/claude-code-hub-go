@@ -111,6 +111,25 @@ func PlanRequestBody(compressedSize int64, contentEncoding string, opts Options)
 	return Plan{Action: ActionDecode, DecodeOrder: order}, nil
 }
 
+// DeclaredContentLength 返回入站 content-length 的声明值；头里没有、非法或为负时返回 -1（未知）。
+//
+// 只认头不认传输层事实：分块请求没有 content-length，返回 -1 而不是 0，否则「体积未知」会被
+// 读成「声明了零字节」。
+func DeclaredContentLength(header http.Header) int64 {
+	if header == nil {
+		return -1
+	}
+	raw := strings.TrimSpace(header.Get("Content-Length"))
+	if raw == "" {
+		return -1
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return -1
+	}
+	return n
+}
+
 // PeekSize 在**不读请求体**的前提下，仅按 content-length 与 content-encoding 头给出结构与体积判定。
 //
 // 返回：
@@ -121,14 +140,7 @@ func PlanRequestBody(compressedSize int64, contentEncoding string, opts Options)
 // 命中拒绝条件时返回 ErrTooManyLayers（400）或 ErrCompressedTooLarge（413）；不支持的编码
 // 不报错（透传语义）。判定与 PlanRequestBody 完全一致，只是入参来自头部。
 func PeekSize(header http.Header, opts Options) (compressed int64, decodedHint int64, err error) {
-	compressed = -1
-	if header != nil {
-		if raw := strings.TrimSpace(header.Get("Content-Length")); raw != "" {
-			if n, parseErr := strconv.ParseInt(raw, 10, 64); parseErr == nil && n >= 0 {
-				compressed = n
-			}
-		}
-	}
+	compressed = DeclaredContentLength(header)
 
 	contentEncoding := ""
 	if header != nil {

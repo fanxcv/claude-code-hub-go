@@ -315,3 +315,42 @@ func TestStreamingDoesNotBufferWholeBody(t *testing.T) {
 		t.Fatalf("本轮累计分配 %d 字节，接近正文体积 %d：实现疑似整体缓冲而非流式", allocated, size)
 	}
 }
+
+// TestByteCounterCountsEvenWhenDecodeFails 钉住计数器的存在理由：解压器构造失败时
+// NewReader 不返回 Reader，计数只能来自包在入站流外侧的计数器——「客户端到底发了多少字节」
+// 正是区分「入站本来就空」与「我们解压失败」的依据。
+func TestByteCounterCountsEvenWhenDecodeFails(t *testing.T) {
+	plaintext := []byte(`{"model":"claude-sonnet-4-5"}`)
+	counted := CountBytes(bytes.NewReader(plaintext))
+	// 头与正文不符：声明 gzip，正文是明文，构造期即失败。
+	if _, err := NewReader(counted, "gzip", int64(len(plaintext)), Options{}); err == nil {
+		t.Fatalf("明文冒充 gzip 应在构造期失败")
+	}
+	if got := counted.BytesRead(); got == 0 {
+		t.Fatalf("构造失败时仍须记下实读字节，得到 %d", got)
+	}
+
+	empty := CountBytes(bytes.NewReader(nil))
+	if _, err := NewReader(empty, "gzip", -1, Options{}); err != nil {
+		t.Fatalf("空体应透传而不是报错: %v", err)
+	}
+	if got := empty.BytesRead(); got != 0 {
+		t.Fatalf("空体的实读字节应为 0，得到 %d", got)
+	}
+}
+
+// TestByteCounterDoesNotChangeBytes 是计数器的正确性基线：包一层后字节逐字不变。
+func TestByteCounterDoesNotChangeBytes(t *testing.T) {
+	payload := []byte("cch-counter-fixture")
+	counted := CountBytes(bytes.NewReader(payload))
+	got, err := io.ReadAll(counted)
+	if err != nil {
+		t.Fatalf("读取失败: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("计数器改变了字节: %q", got)
+	}
+	if counted.BytesRead() != int64(len(payload)) {
+		t.Fatalf("实读字节 = %d，期望 %d", counted.BytesRead(), len(payload))
+	}
+}
