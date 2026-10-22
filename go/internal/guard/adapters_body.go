@@ -42,13 +42,14 @@ var ErrBodyTreeReleased = errors.New("guard: 正文树已释放")
 
 // BodyAccessor 是 BodyAccess 的真实实现：正文只解析一次，多处共用同一棵树。
 //
-// 五条不变量：
+// 六条不变量：
 //  1. 字节只读一次：ctx.TakeBody 拿到的流读完即弃。
 //  2. JSON 与 Store 返回**同一棵树**，任何一处就地修改对其它调用方可见——这正是守卫链
 //     「过滤规则改正文、转发器读改后正文」所需的语义。
 //  3. 未 Store 时 Bytes 返回**入站原字节**，逐字节相同——这是正确性基线。
 //  4. Store 之后只在原字节上定点重写被改动的顶层成员，其余字节逐字保留（见 body_patch.go）。
 //  5. ReleaseTree 之后树不可再用（JSON/Store 报错），但字节仍可读——释放的是树不是原文。
+//  6. 准入占位活到 Release：本结构持有原文与树多久，在途记账就占多久（见 Release）。
 type BodyAccessor struct {
 	mu       sync.Mutex
 	tree     map[string]any
@@ -58,6 +59,7 @@ type BodyAccessor struct {
 	digests  map[string]uint64 // 解析时各顶层成员的值指纹（补丁的对照基线）
 	patched  []byte            // Store 之后的出站字节缓存
 	dirty    bool              // 是否已被 Store 改写
+	lease    *ingress.Lease    // 准入占位：Release 时归还（构造失败不交给本结构）
 
 	// readBytes / decodedBytes 是入站流实读的压缩体字节与解压后字节（诊断用，不参与任何判定）。
 	readBytes    int64
@@ -77,9 +79,8 @@ func (a *BodyAccessor) BodyCounts() (readBytes, decodedBytes int64) {
 // reservationBytes 给出正文读取前的准入申请字节数。
 //
 // 优先用解压后下界（无编码时即精确值），其次用 content-length（压缩体的下界）。两者都未知
-// （分块且带编码的罕见情况）时申请 0：既不能用单请求解压上限顶额（它默认 100 MiB，大于进程
-// 预算默认 96 MiB，会把每条请求都顶死），也不宜按压缩比臆测。这类请求仍受单请求解压上限
-// 与在途解压限流器约束。
+// （分块且带编码的罕见情况）时申请 0：既不能用单请求解压上限顶额（它默认 100 MiB，一次就吃掉
+// 进程预算 160 MiB 的大半），也不宜按压缩比臆测。这类请求仍受单请求解压上限与在途解压限流器约束。
 //
 // 返回值是正文字节；记账成本（正文 × 放大系数）由准入层统一换算（ingress.InflightCostBytes），
 // 本函数不得自行乘系数。
@@ -143,7 +144,14 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 			Err:  fmt.Errorf("guard: 正文准入被拒: %w", err),
 		}
 	}
-	defer lease.Release()
+	// 构造失败仍需立即归还；成功则把占位交给访问器，由它活到 Release（请求终态）。
+	// 构造器有多条失败路径各自 return，故用标记而不是把归还写进每个分支。
+	owned := false
+	defer func() {
+		if !owned {
+			lease.Release()
+		}
+	}()
 
 	reader, err := ingress.NewReader(counted, contentEncoding, compressed, ingressOptions)
 	if err != nil {
@@ -160,8 +168,9 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 	}
 	if len(payload) == 0 {
 		// 空体：解析成空对象而不是报错，与 Node 的 `{}` 语义一致（无正文的端点也会走到守卫）。
+		owned = true
 		return &BodyAccessor{
-			tree: map[string]any{}, original: payload, readBytes: counted.BytesRead(),
+			tree: map[string]any{}, original: payload, readBytes: counted.BytesRead(), lease: lease,
 		}, nil
 	}
 
@@ -176,6 +185,7 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 		tree = map[string]any{}
 	}
 	digester := newBodyDigester()
+	owned = true
 	return &BodyAccessor{
 		tree:         tree,
 		original:     payload,
@@ -183,6 +193,7 @@ func NewBodyAccessor(ctx *pctx.Context, options BodyAccessOptions) (*BodyAccesso
 		digests:      digester.digestBodyMembers(tree),
 		readBytes:    counted.BytesRead(),
 		decodedBytes: int64(len(payload)),
+		lease:        lease,
 	}, nil
 }
 
@@ -250,6 +261,28 @@ func classifyIngressFailure(err error) BodyFailureKind {
 		return BodyFailureTooLarge
 	default:
 		return BodyFailureDecodeFailed
+	}
+}
+
+// Release 把准入占位（在途正文预算）归还给进程级闸门，由请求终态调用一次。
+//
+// 为什么不在构造器返回时归还：返回的访问器仍持有原文与解析树，直到请求终态（转发与回放
+// 都还要读 Bytes）。构造器一归还会让「在途」恒接近 0，闸门数到的是读体那一瞬而不是驻留期，
+// 任何按百分比定的阈值都失去意义。故归还点是「正文与树都不再会被读」之后。
+//
+// 与 ReleaseTree 分工：本方法只还**额度**，不丢数据（原文与树都仍在，释放后照旧可读）；
+// 树另有更早的释放点（ReleaseTree），那时回放与转发还要读原文，故不能跟着归还额度。
+// 幂等：重复调用无副作用，且不会重复扣减（占位在第一次调用时就置空）。
+func (a *BodyAccessor) Release() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	lease := a.lease
+	a.lease = nil
+	a.mu.Unlock()
+	if lease != nil {
+		lease.Release()
 	}
 }
 

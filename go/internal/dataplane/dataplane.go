@@ -436,6 +436,11 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 
 	// 正文访问器按需构造：第一次有人要正文时读体（于是解压发生在鉴权之后——鉴权是链的首步）。
 	body := newBodyAccess(requestCtx, pc, h.options.BodyOptions)
+	// 正文的准入占位覆盖「原文与树都还可能在读」的整段驻留期，故在请求终态（本函数返回）归还：
+	// 守卫抢答、转发失败、客户端断开、流式结束四条路都要归还，用 defer 而不是逐路写一遍。
+	// 树在 forward 内另有更早的释放点（body.releaseTree），但那时转发与回放还要读原文，
+	// 所以额度不能跟着树一起还。
+	defer body.release()
 
 	deps := h.options.Base
 	deps.Body = body.factory
@@ -1146,4 +1151,14 @@ func (b *bodyAccess) releaseTree() {
 		return
 	}
 	b.access.ReleaseTree()
+}
+
+// release 在请求终态归还正文的准入占位（见 guard.BodyAccessor.Release）。
+//
+// 与 releaseTree 同一道前置：未触发正文通路时没有占位，不能为了释放去读一次正文。
+func (b *bodyAccess) release() {
+	if b == nil || b.access == nil {
+		return
+	}
+	b.access.Release()
 }

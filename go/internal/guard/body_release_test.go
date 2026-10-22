@@ -215,6 +215,8 @@ func BenchmarkBodyReleaseTreeHeap(b *testing.B) {
 		if err != nil {
 			b.Fatalf("构造正文访问器失败: %v", err)
 		}
+		// 循环内必须归还准入占位：默认预算只容得下有限份正文，漏掉会从若干轮后开始被拒。
+		accessor.Release()
 		runtime.GC()
 		runtime.GC()
 		var before runtime.MemStats

@@ -185,17 +185,17 @@ func TestLoadRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-// TestMaxInflightDefaultAndMultiplier 钉住默认口径：96 MiB 正文预算 × 系数 6 = 576 MiB 记账上限。
+// TestMaxInflightDefaultAndMultiplier 钉住默认口径：160 MiB 正文预算 × 系数 3 = 480 MiB 记账上限。
 func TestMaxInflightDefaultAndMultiplier(t *testing.T) {
 	cfg, err := Load(envMap(nil))
 	if err != nil {
 		t.Fatalf("默认值必须可装载: %v", err)
 	}
-	if cfg.MaxInflightBytes != 96*1024*1024 {
-		t.Fatalf("CCH_GO_MAX_INFLIGHT_BYTES 默认应为 96 MiB，收到 %d", cfg.MaxInflightBytes)
+	if cfg.MaxInflightBytes != 160*1024*1024 {
+		t.Fatalf("CCH_GO_MAX_INFLIGHT_BYTES 默认应为 160 MiB，收到 %d", cfg.MaxInflightBytes)
 	}
-	if cfg.InflightBytesMultiplier != 6 {
-		t.Fatalf("CCH_GO_INFLIGHT_BYTES_MULTIPLIER 默认应为 6，收到 %d", cfg.InflightBytesMultiplier)
+	if cfg.InflightBytesMultiplier != 3 {
+		t.Fatalf("CCH_GO_INFLIGHT_BYTES_MULTIPLIER 默认应为 3，收到 %d", cfg.InflightBytesMultiplier)
 	}
 
 	explicit, err := Load(envMap(map[string]string{"CCH_GO_INFLIGHT_BYTES_MULTIPLIER": "2"}))

@@ -82,26 +82,26 @@ func TestInflightMultiplierSaturatesOnOverflow(t *testing.T) {
 	}
 }
 
-// TestMaxInflightDefaultIs96MiB 钉住默认上限：96 MiB × 系数 6 = 576 MiB 记账上限。
-func TestMaxInflightDefaultIs96MiB(t *testing.T) {
-	if DefaultMaxInflightBodyBytes != 96*1024*1024 {
-		t.Fatalf("在途正文默认上限 = %d，期望 96 MiB", DefaultMaxInflightBodyBytes)
+// TestMaxInflightDefaultIs160MiB 钉住默认上限：160 MiB × 系数 3 = 480 MiB 记账上限。
+func TestMaxInflightDefaultIs160MiB(t *testing.T) {
+	if DefaultMaxInflightBodyBytes != 160*1024*1024 {
+		t.Fatalf("在途正文默认上限 = %d，期望 160 MiB", DefaultMaxInflightBodyBytes)
 	}
-	if DefaultInflightBytesMultiplier != 6 {
-		t.Fatalf("放大系数默认值 = %d，期望 6", DefaultInflightBytesMultiplier)
+	if DefaultInflightBytesMultiplier != 3 {
+		t.Fatalf("放大系数默认值 = %d，期望 3", DefaultInflightBytesMultiplier)
 	}
 
 	t.Setenv(EnvMaxInflightBodyBytes, "")
 	t.Setenv(EnvInflightBytesMultiplier, "")
 	admission := DefaultAdmission()
 	if got := admission.Stats().Body.MaxBytes; got != DefaultMaxInflightBodyBytes {
-		t.Fatalf("出厂准入上限 = %d，期望 96 MiB", got)
+		t.Fatalf("出厂准入上限 = %d，期望 160 MiB", got)
 	}
 	if got := admission.multiplier; got != DefaultInflightBytesMultiplier {
-		t.Fatalf("出厂系数 = %d，期望 6", got)
+		t.Fatalf("出厂系数 = %d，期望 3", got)
 	}
-	if got := admission.Memory.staticBytes; got != 576<<20 {
-		t.Fatalf("静态上限 = %d，期望 96 MiB × 6 = 576 MiB", got)
+	if got := admission.Memory.staticBytes; got != 480<<20 {
+		t.Fatalf("静态上限 = %d，期望 160 MiB × 3 = 480 MiB", got)
 	}
 }
 

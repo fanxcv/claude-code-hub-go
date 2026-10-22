@@ -68,6 +68,31 @@ func TestBodyTreeReleaseComesAfterConsumers(t *testing.T) {
 	}
 }
 
+// TestBodyLeaseReleaseWired 钉住请求终态真的归还正文准入占位。
+//
+// 摘掉那条 deferred 调用时 guard 侧用例照样全绿（它们只证明 Release 本身对），而生产变成
+// 「占位只进不出」：预算被逐条请求吃光，最终一律 503。与上面的树释放钉同一机理。
+func TestBodyLeaseReleaseWired(t *testing.T) {
+	source := readDataplaneSource(t)
+	serveBody := funcBody(t, source, "func (h *Handler) ServeHTTP(")
+	construct := strings.Index(serveBody, "body := newBodyAccess(")
+	release := strings.Index(serveBody, "defer body.release()")
+	if construct < 0 || release < 0 {
+		t.Fatal("ServeHTTP 缺少 defer body.release()：占位会只进不出，预算被请求逐条吃光")
+	}
+	if release < construct {
+		t.Fatal("defer body.release() 必须建在 bodyAccess 之后：通道未建立时没有占位可还")
+	}
+
+	models, err := os.ReadFile("models.go")
+	if err != nil {
+		t.Fatalf("读取 models.go 失败: %v", err)
+	}
+	if !strings.Contains(string(models), "defer body.release()") {
+		t.Fatal("模型列表路由也建了 bodyAccess，必须同样在函数退出时归还占位")
+	}
+}
+
 // TestSelectionFactsDoesNotRetainTree 钉住选路事实不持有正文树。
 //
 // fwd.Select 闭包捕获整个 facts，facts 里只要有树字段，树就活到请求末尾——释放点再晚

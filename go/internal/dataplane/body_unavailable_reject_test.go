@@ -105,7 +105,7 @@ func TestBodyUnavailableResponseByFailureKind(t *testing.T) {
 		message   string
 	}{
 		{
-			// 预算 1 字节：任何非空正文的记账成本（正文 × 系数 6）都超预算。
+			// 预算 1 字节：任何非空正文的记账成本（正文 × 系数 3）都超预算。
 			name:      "budget_exhausted",
 			body:      plainBody,
 			configure: func(handler *Handler) { handler.options.BodyOptions = newBodyOptions(1) },

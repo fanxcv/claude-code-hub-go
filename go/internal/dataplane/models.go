@@ -707,6 +707,8 @@ func (h *Handler) serveModelListRequest(writer http.ResponseWriter, request *htt
 		return
 	}
 	body := newBodyAccess(requestCtx, pc, h.options.BodyOptions)
+	// 与主链路同一道纪律：准入占位活到请求终态（本函数返回），不在建访问器时归还。
+	defer body.release()
 	deps := h.options.Base
 	deps.Body = body.factory
 	deps.RequestContext = func(*pctx.Context) context.Context { return requestCtx }

@@ -15,7 +15,7 @@ type AdmissionOptions struct {
 	MemoryRatio float64
 	// Multiplier 是准入记账的放大系数：闸门按「正文字节 × 系数」记账。
 	//
-	// 0 表示**未注入**（取 CCH_GO_INFLIGHT_BYTES_MULTIPLIER 或出厂 6）——生产装配靠这一语义
+	// 0 表示**未注入**（取 CCH_GO_INFLIGHT_BYTES_MULTIPLIER 或出厂 3）——生产装配靠这一语义
 	// 拿到配置值，故 0 不是恒等；1（或更小）才是恒等，即退化为按正文字节记账的旧口径。
 	// env 层只接受 >=1：0/负/小数在 config 装载时就 fail fast，不会悄悄退化成旧口径。
 	Multiplier int64
@@ -76,7 +76,7 @@ func NewAdmission(opts AdmissionOptions) *Admission {
 	return &Admission{
 		Body:          NewLimiter(0, maxBody), // 请求体不按条数限流：总量由字节预算表达
 		Decompression: NewLimiter(concurrent, inflight),
-		// 静态上限与字节预算同尺度：整份预算的记账成本（预算 × 系数，默认 96 MiB × 6）。
+		// 静态上限与字节预算同尺度：整份预算的记账成本（预算 × 系数，默认 160 MiB × 3）。
 		Memory:     NewMemoryGuard(opts.Pressure, opts.MemoryRatio, InflightCostBytes(maxBody, multiplier)),
 		multiplier: multiplier,
 	}

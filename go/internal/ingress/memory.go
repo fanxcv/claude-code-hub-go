@@ -12,7 +12,7 @@ import (
 // MemoryPressure 报告「堆在用字节 + 进程内存上限」。
 //
 // limitKnown=false 表示上限不可知（未设 GOMEMLIMIT）：此时判定退化为静态上限（见
-// MemoryGuard.staticBytes），而不是一律放行——否则 96 MiB 级预算下的大正文会毫无约束地并发。
+// MemoryGuard.staticBytes），而不是一律放行——否则 160 MiB 级预算下的大正文会毫无约束地并发。
 type MemoryPressure func() (inUseBytes uint64, limitBytes uint64, limitKnown bool)
 
 // heapObjectsMetric 是堆上存活对象字节数的采点。相对 runtime.ReadMemStats 无 STW 开销。
@@ -69,7 +69,7 @@ var (
 // ratio <= 0 或 > 1 时取 0.9。
 //
 // staticBytes 是 GOMEMLIMIT 不可知时的静态上限（记账成本尺度，由调用方按「在途预算 × 系数」
-// 传入）；<=0 时按「出厂预算 × 出厂系数」（96 MiB × 6）兜底，绝不退化成「上限不可知即放行」。
+// 传入）；<=0 时按「出厂预算 × 出厂系数」（160 MiB × 3）兜底，绝不退化成「上限不可知即放行」。
 func NewMemoryGuard(pressure MemoryPressure, ratio float64, staticBytes int64) *MemoryGuard {
 	if pressure == nil {
 		pressure = DefaultMemoryPressure

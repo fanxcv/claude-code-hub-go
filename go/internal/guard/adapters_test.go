@@ -376,11 +376,14 @@ func TestBodyAccessorAdmissionRejected(t *testing.T) {
 	}
 }
 
-// TestBodyAccessorAdmissionReleased 校验准入占位在读取完成后归还，否则第二次读取会自锁。
+// TestBodyAccessorAdmissionReleased 校验准入占位在访问器的 Release 之后归还，否则第二份正文会自锁。
+//
+// 契约（R13）：占位从「构造器返回即归还」改为「访问器 Release 时归还」——返回的访问器仍持有
+// 原文与解析树，那段时间才是在途记账的对象（见 guard.BodyAccessor.Release）。
 func TestBodyAccessorAdmissionReleased(t *testing.T) {
 	payload := []byte(`{"model":"claude-sonnet-4-5"}`)
-	// 预算必须按记账口径给：闸门看到的成本是「正文 × 系数」（默认为 6），与正文等额的预算
-	// 在系数 >1 时必然被拒。本钉子钉的是「占位会归还」，不是按字节精确记账，故按系数放大。
+	// 预算必须按记账口径给：闸门看到的成本是「正文 × 系数」，与正文等额的预算在系数 >1 时
+	// 必然被拒。本钉子钉的是「占位会归还」，不是按字节精确记账，故按系数放大。
 	admission := ingress.NewAdmission(ingress.AdmissionOptions{
 		MaxInflightBodyBytes: int64(len(payload)) * ingress.DefaultInflightBytesMultiplier,
 	})
@@ -391,12 +394,14 @@ func TestBodyAccessorAdmissionReleased(t *testing.T) {
 		if err != nil {
 			t.Fatalf("构造上下文失败: %v", err)
 		}
-		if _, err := NewBodyAccessor(ctx, BodyAccessOptions{Admission: admission}); err != nil {
+		accessor, err := NewBodyAccessor(ctx, BodyAccessOptions{Admission: admission})
+		if err != nil {
 			t.Fatalf("占位未归还或误拒: %v", err)
 		}
+		accessor.Release()
 	}
 	if got := admission.Stats().Body.ActiveBytes; got != 0 {
-		t.Fatalf("读完应在途字节归零，得到 %d", got)
+		t.Fatalf("Release 后应在途字节归零，得到 %d", got)
 	}
 }
 

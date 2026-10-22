@@ -35,9 +35,9 @@ func TestMaxInflightBytesDrivesAdmissionBudget(t *testing.T) {
 // 走 guard.NewBodyAccessor（生产读体路径）而不是只看 Stats：Stats 一致但读体时用别的
 // 准入实例，正是这条链接线前的真实缺陷形态。
 func TestMaxInflightBytesRejectsOverBudgetBody(t *testing.T) {
-	// 预算 64 字节，正文 29 字节、系数 6，故记账成本 174 字节：
-	//   ① 174 > 64——确实是这份配置在拒；
-	//   ② 174 < 预算对应的静态上限 384（= 64 × 系数 6）——GOMEMLIMIT 未设时内存层按这份
+	// 预算 64 字节，正文 29 字节、系数 3，故记账成本 87 字节：
+	//   ① 87 > 64——确实是这份配置在拒；
+	//   ② 87 < 预算对应的静态上限 192（= 64 × 系数 3）——GOMEMLIMIT 未设时内存层按这份
 	//      静态上限兜底，同样不会把这次申请判成内存不足。
 	const budget = 64
 	options := newBodyOptions(budget)

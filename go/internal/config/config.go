@@ -314,16 +314,16 @@ func LoadLookup(lookup LookupEnvFunc) (Config, error) {
 	}
 
 	maxInflightBytes, err := parseInt64Range(
-		lookupValue(lookup, "CCH_GO_MAX_INFLIGHT_BYTES"), "CCH_GO_MAX_INFLIGHT_BYTES", 96*1024*1024,
+		lookupValue(lookup, "CCH_GO_MAX_INFLIGHT_BYTES"), "CCH_GO_MAX_INFLIGHT_BYTES", 160*1024*1024,
 		1*1024*1024, 4*1024*1024*1024)
 	if err != nil {
 		return Config{}, err
 	}
 
-	// 记账放大系数：实测堆成本是正文的 3.0~6.2 倍，默认 6（上界）。上界 64 是防呆：
+	// 记账放大系数：正文访问器这一层的实测堆成本是正文的 2.03~3.24 倍，默认 3（上界）。上界 64 是防呆：
 	// 再大的系数形式上等价于「拒绝一切大正文」，那属于改预算而不是改记账口径。
 	inflightBytesMultiplier, err := parseIntRange(
-		lookupValue(lookup, "CCH_GO_INFLIGHT_BYTES_MULTIPLIER"), "CCH_GO_INFLIGHT_BYTES_MULTIPLIER", 6, 1, 64)
+		lookupValue(lookup, "CCH_GO_INFLIGHT_BYTES_MULTIPLIER"), "CCH_GO_INFLIGHT_BYTES_MULTIPLIER", 3, 1, 64)
 	if err != nil {
 		return Config{}, err
 	}

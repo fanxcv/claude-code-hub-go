@@ -36,23 +36,26 @@ const (
 	// DefaultMaxInflightBodyBytes 是进程级在途请求体的**成本**预算
 	// （CCH_GO_MAX_INFLIGHT_BYTES），与 GOMEMLIMIT 协同工作。
 	// 只是**未注入时的兜底**：生产唯一真源是 config.Config.MaxInflightBytes（由 dataplane
-	// 装配处注入），默认值 96 MiB 与那一侧一致。
+	// 装配处注入），默认值 160 MiB 与那一侧一致。
 	//
 	// 记账口径是按成本计的 Σ(正文 × 系数) ≤ 预算，而不是「预算 × 系数 = 成本上限」：正文先经
-	// InflightCostBytes 乘系数再入闸，故「预算 96 MiB、系数 6」的**等效在途正文上限只有
-	// 16 MiB**（96 / 6）。两道闸门共用同一份成本、取更严的一侧：内存余量闸门比的是
-	// GOMEMLIMIT × 0.9；InflightCostBytes(96 MiB, 6) = 576 MiB 只是 GOMEMLIMIT 未设时的静态
-	// 兜底上限，不是给正文的字节额度。当前默认（96 MiB / 6）下先触发的是字节预算——
-	// GOMEMLIMIT 350 MiB 时内存侧放行 315 MiB，远宽于 96 MiB 的成本预算。
+	// InflightCostBytes 乘系数再入闸，故「预算 160 MiB、系数 3」的**等效在途正文上限约
+	// 53.3 MiB**（160 / 3）。两道闸门共用同一份成本、取更严的一侧：内存余量闸门比的是
+	// GOMEMLIMIT × 0.9（350 MiB 时放行 315 MiB）；InflightCostBytes(160 MiB, 3) = 480 MiB
+	// 只是 GOMEMLIMIT 未设时的静态兜底上限，不是给正文的字节额度。当前默认（160 MiB / 3）下
+	// 先触发的是内存闸门——成本预算 480 MiB 宽于内存侧的 315 MiB。
 	// 旧的 64 MiB 按正文字节记账会让 9 条并发大请求把堆推到 380 MB 以上（9 × 7 MiB × 6）。
-	DefaultMaxInflightBodyBytes int64 = 96 * 1024 * 1024
+	DefaultMaxInflightBodyBytes int64 = 160 * 1024 * 1024
 	// DefaultInflightBytesMultiplier 是准入记账的放大系数默认值。
 	//
 	// 记账口径是「正文 × 系数」而不是正文本身：同一份正文在堆上同时以多种形态驻留
-	// （解析树、改写副本、编码缓冲），实测堆峰值是正文的 3.0~6.2 倍，取 6 作上界估计。
-	// 系数只放大记账成本，不改变正文与出站字节；它同时决定等效正文上限——成本预算 96 MiB
-	// 除以 6 只剩 16 MiB 正文，故调大系数等于收紧在途正文。
-	DefaultInflightBytesMultiplier = 6
+	// （解析树、改写副本、编码缓冲）。实测「正文访问器」这一层（正文 1/3/8/13 MiB × 两种
+	// 形状，GC 后读 HeapAlloc 增量）稳态驻留 2.03~2.24 倍，再加 Store 物化的改写副本到
+	// 3.03~3.24 倍，故取 3 覆盖两者。旧值 6 量的是含出站编码缓冲的整条管线堆峰值，用在
+	// 访问器准入上等于高估 2~3 倍，把等效正文额度白白压掉。
+	// 系数只放大记账成本，不改变正文与出站字节；它同时决定等效正文上限——成本预算 160 MiB
+	// 除以 3 约 53.3 MiB 正文，故调大系数等于收紧在途正文。
+	DefaultInflightBytesMultiplier = 3
 )
 
 // 环境变量名。解压三项与 Node 同名同默认，便于逐项对账；总量闸门是 Go 侧新增旋钮。
