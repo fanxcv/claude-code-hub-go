@@ -77,10 +77,73 @@ vi.mock("@/components/ui/badge", () => ({
   Badge: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
 }));
 
+const collapsibleMocks = vi.hoisted(() => ({
+  toggleOpen: undefined as (() => void) | undefined,
+}));
+
 vi.mock("@/components/ui/collapsible", () => ({
-  Collapsible: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  // 展开状态在组件自己的 state 里；mock 只负责把「点触发器 → onOpenChange(翻转)」接回去，
+  // 否则测不到「展开后快捷下拉消失」（open 仍由服务侧的 state 提供）。
+  Collapsible: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => {
+    collapsibleMocks.toggleOpen = () => onOpenChange?.(!open);
+    return <div>{children}</div>;
+  },
   CollapsibleContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  CollapsibleTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  CollapsibleTrigger: ({ children }: { children: React.ReactNode }) => (
+    <div onClickCapture={() => collapsibleMocks.toggleOpen?.()}>{children}</div>
+  ),
+}));
+
+// Radix Select 在 happy-dom 里要打 pointer 事件才能展开选项，仓内惯式是换成原生 select 驱动
+// onValueChange（见 filters/status-filters.test.tsx）；工具栏里的刷新控件也吃这个 mock。
+vi.mock("@/components/ui/select", () => ({
+  Select: ({
+    value,
+    onValueChange,
+    children,
+  }: {
+    value?: string;
+    onValueChange: (value: string) => void;
+    children: React.ReactNode;
+  }) => (
+    <select value={value} onChange={(event) => onValueChange(event.target.value)}>
+      {children}
+    </select>
+  ),
+  SelectContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  SelectItem: ({ children, value }: { children: React.ReactNode; value: string }) => (
+    <option value={value}>{children}</option>
+  ),
+  SelectTrigger: () => null,
+  SelectValue: () => null,
+}));
+
+const usersActionMocks = vi.hoisted(() => ({
+  searchUsersForFilter: vi.fn(
+    async (): Promise<{
+      ok: boolean;
+      data?: Array<{ id: number; name: string }>;
+      error?: string;
+    }> => ({
+      ok: true,
+      data: [
+        { id: 7, name: "alice" },
+        { id: 9, name: "bob" },
+      ],
+    })
+  ),
+}));
+
+vi.mock("@/lib/api-client/v1/actions/users", () => ({
+  searchUsersForFilter: usersActionMocks.searchUsersForFilter,
 }));
 
 vi.mock("@/components/ui/switch", () => ({
@@ -159,7 +222,7 @@ vi.mock("./usage-logs-filters", () => ({
 
 import { UsageLogsViewVirtualized } from "./usage-logs-view-virtualized";
 
-function renderUsageLogsView() {
+function renderUsageLogsView({ isAdmin = true }: { isAdmin?: boolean } = {}) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -167,7 +230,7 @@ function renderUsageLogsView() {
   act(() => {
     root.render(
       <UsageLogsViewVirtualized
-        isAdmin={true}
+        isAdmin={isAdmin}
         userId={1}
         providers={[]}
         initialKeys={[]}
@@ -192,6 +255,47 @@ function clickButton(container: HTMLElement, text: string) {
   );
   if (!button) {
     throw new Error(`Button not found: ${text}`);
+  }
+  act(() => {
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+/** 快捷用户下拉是全页唯一带「全部用户」哨兵值的 select（刷新控件那两个只有模式/间隔）。 */ function findQuickUserSelect(
+  container: HTMLElement
+): HTMLSelectElement | null {
+  return (
+    Array.from(container.querySelectorAll("select")).find((element) =>
+      Array.from(element.options).some((option) => option.value === "__all__")
+    ) ?? null
+  );
+}
+
+async function selectQuickUser(container: HTMLElement, value: string) {
+  const select = findQuickUserSelect(container);
+  if (!select) {
+    throw new Error("Quick user select not found");
+  }
+  await act(async () => {
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+/** 用户列表在 effect 里异步加载，用一次宏任务把 setUsers 湿完再断言选项。 */
+async function flushUserLoad() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** 「筛选条件」按钮在有生效筛选时会多一个计数徽标，故按前缀认。 */
+function clickFilterTrigger(container: HTMLElement) {
+  const button = Array.from(container.querySelectorAll("button")).find((item) =>
+    item.textContent?.trim().startsWith("title.filterCriteria")
+  );
+  if (!button) {
+    throw new Error("Filter trigger button not found");
   }
   act(() => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -306,6 +410,93 @@ describe("UsageLogsViewVirtualized height chain", () => {
       expect(element?.className).toContain("grow");
       expect(element?.className).toContain("shrink-0");
     }
+
+    unmount();
+  });
+});
+
+describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
+  beforeEach(() => {
+    routerMocks.pushedHref = "";
+    routerMocks.push.mockClear();
+    searchParamMocks.value = new URLSearchParams();
+    collapsibleMocks.toggleOpen = undefined;
+    document.body.innerHTML = "";
+  });
+
+  it("navigates on user change, keeping other filters and dropping page", async () => {
+    searchParamMocks.value = new URLSearchParams("model=claude-sonnet&statusCode=500&page=3");
+
+    const { container, unmount } = renderUsageLogsView();
+    // 带筛选条件时面板默认展开，先收起才会露出快捷用户下拉
+    clickFilterTrigger(container);
+    await flushUserLoad();
+
+    const quickSelect = findQuickUserSelect(container);
+    expect(quickSelect).not.toBeNull();
+    expect(Array.from(quickSelect?.options ?? []).map((option) => option.textContent)).toEqual([
+      "logs.filters.allUsers",
+      "alice",
+      "bob",
+    ]);
+
+    await selectQuickUser(container, "7");
+
+    expect(routerMocks.pushedHref).toBe(
+      "/zh-CN/dashboard/logs?userId=7&statusCode=500&model=claude-sonnet"
+    );
+
+    unmount();
+  });
+
+  it("clears userId when switching back to all users", async () => {
+    searchParamMocks.value = new URLSearchParams("userId=7&model=claude-sonnet");
+
+    const { container, unmount } = renderUsageLogsView();
+    clickFilterTrigger(container);
+    await flushUserLoad();
+
+    await selectQuickUser(container, "__all__");
+
+    expect(routerMocks.pushedHref).toBe("/zh-CN/dashboard/logs?model=claude-sonnet");
+
+    unmount();
+  });
+
+  it("hides the quick user filter once the filter panel is expanded", () => {
+    const { container, unmount } = renderUsageLogsView();
+
+    expect(findQuickUserSelect(container)).not.toBeNull();
+
+    clickFilterTrigger(container);
+
+    expect(findQuickUserSelect(container)).toBeNull();
+
+    unmount();
+  });
+
+  it("renders nothing for non-admin users", () => {
+    const { container, unmount } = renderUsageLogsView({ isAdmin: false });
+
+    expect(findQuickUserSelect(container)).toBeNull();
+
+    unmount();
+  });
+
+  it("keeps the all-users option when the user list fails to load", async () => {
+    usersActionMocks.searchUsersForFilter.mockResolvedValueOnce({
+      ok: false,
+      error: "users unavailable",
+    });
+
+    const { container, unmount } = renderUsageLogsView();
+    await flushUserLoad();
+
+    const quickSelect = findQuickUserSelect(container);
+    expect(quickSelect).not.toBeNull();
+    expect(Array.from(quickSelect?.options ?? []).map((option) => option.value)).toEqual([
+      "__all__",
+    ]);
 
     unmount();
   });

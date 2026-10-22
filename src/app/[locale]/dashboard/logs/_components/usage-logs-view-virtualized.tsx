@@ -36,6 +36,7 @@ import {
 import type { UsageLogsStreamStatus } from "../_utils/usage-logs-stream";
 import { ColumnVisibilityDropdown } from "./column-visibility-dropdown";
 import { LogsRefreshControl } from "./logs-refresh-control";
+import { QuickUserFilter } from "./quick-user-filter";
 import { UsageLogsFilters } from "./usage-logs-filters";
 import { UsageLogsStatsPanel } from "./usage-logs-stats-panel";
 import { VirtualizedLogsTable, type VirtualizedLogsTableFilters } from "./virtualized-logs-table";
@@ -300,6 +301,11 @@ function UsageLogsViewContent({
     router.push(`/dashboard/logs?${query.toString()}`);
   };
 
+  // 快捷用户下拉即时生效：filters 本身不含 page，故换用户必然回到第一页。
+  const handleQuickUserChange = (nextUserId: number | undefined) => {
+    handleFilterChange({ ...filters, userId: nextUserId });
+  };
+
   useEffect(() => {
     return () => {
       if (refreshTimeoutRef.current) {
@@ -348,30 +354,36 @@ function UsageLogsViewContent({
         {/* Toolbar + Filter */}
         <Collapsible open={isFilterOpen} onOpenChange={setIsFilterOpen}>
           <div className="flex items-center justify-between gap-3">
-            {/* Left: Filter trigger */}
-            <CollapsibleTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-card px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-border cursor-pointer select-none transition-colors"
-              >
-                <Filter className="h-3.5 w-3.5" />
-                <span>{t("title.filterCriteria")}</span>
-                {activeFilterCount > 0 && (
-                  <Badge
-                    variant="secondary"
-                    className="bg-primary/10 text-primary text-[10px] h-4.5 min-w-[18px] px-1 rounded-full"
-                  >
-                    {activeFilterCount}
-                  </Badge>
-                )}
-                <ChevronDown
-                  className={cn(
-                    "h-3.5 w-3.5 text-muted-foreground/50 transition-transform duration-200",
-                    isFilterOpen && "rotate-180"
+            {/* Left: Filter trigger + collapsed-state quick user filter */}
+            <div className="flex items-center gap-2">
+              <CollapsibleTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-card px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground hover:border-border cursor-pointer select-none transition-colors"
+                >
+                  <Filter className="h-3.5 w-3.5" />
+                  <span>{t("title.filterCriteria")}</span>
+                  {activeFilterCount > 0 && (
+                    <Badge
+                      variant="secondary"
+                      className="bg-primary/10 text-primary text-[10px] h-4.5 min-w-[18px] px-1 rounded-full"
+                    >
+                      {activeFilterCount}
+                    </Badge>
                   )}
-                />
-              </button>
-            </CollapsibleTrigger>
+                  <ChevronDown
+                    className={cn(
+                      "h-3.5 w-3.5 text-muted-foreground/50 transition-transform duration-200",
+                      isFilterOpen && "rotate-180"
+                    )}
+                  />
+                </button>
+              </CollapsibleTrigger>
+
+              {isAdmin && !isFilterOpen && (
+                <QuickUserFilter userId={filters.userId} onUserChange={handleQuickUserChange} />
+              )}
+            </div>
 
             {/* Right: Table controls */}
             <div className="flex items-center gap-1">
