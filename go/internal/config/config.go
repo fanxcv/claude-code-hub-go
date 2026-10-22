@@ -314,7 +314,7 @@ func LoadLookup(lookup LookupEnvFunc) (Config, error) {
 	}
 
 	maxInflightBytes, err := parseInt64Range(
-		lookupValue(lookup, "CCH_GO_MAX_INFLIGHT_BYTES"), "CCH_GO_MAX_INFLIGHT_BYTES", 48*1024*1024,
+		lookupValue(lookup, "CCH_GO_MAX_INFLIGHT_BYTES"), "CCH_GO_MAX_INFLIGHT_BYTES", 96*1024*1024,
 		1*1024*1024, 4*1024*1024*1024)
 	if err != nil {
 		return Config{}, err

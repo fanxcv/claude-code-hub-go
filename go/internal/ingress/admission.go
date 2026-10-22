@@ -76,7 +76,7 @@ func NewAdmission(opts AdmissionOptions) *Admission {
 	return &Admission{
 		Body:          NewLimiter(0, maxBody), // 请求体不按条数限流：总量由字节预算表达
 		Decompression: NewLimiter(concurrent, inflight),
-		// 静态上限与字节预算同尺度：整份预算的记账成本（预算 × 系数，默认 48 MiB × 6）。
+		// 静态上限与字节预算同尺度：整份预算的记账成本（预算 × 系数，默认 96 MiB × 6）。
 		Memory:     NewMemoryGuard(opts.Pressure, opts.MemoryRatio, InflightCostBytes(maxBody, multiplier)),
 		multiplier: multiplier,
 	}

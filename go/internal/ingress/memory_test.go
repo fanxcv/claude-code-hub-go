@@ -51,7 +51,7 @@ func TestMemoryGuardAllowBoundaries(t *testing.T) {
 // 判定退化为静态上限（在途预算 × 系数），超过即拒。改坏 memory.go 的 !known 分支（直接
 // return nil）必红。
 func TestAllowWithoutMemLimitUsesStaticCap(t *testing.T) {
-	const staticCap = 288 << 20
+	const staticCap = 576 << 20
 	guard := NewMemoryGuard(fixedPressure(1<<40, 0, false), 0.9, staticCap)
 	if err := guard.Allow(staticCap); err != nil {
 		t.Fatalf("恰好等于静态上限应放行: %v", err)

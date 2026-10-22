@@ -36,11 +36,12 @@ const (
 	// DefaultMaxInflightBodyBytes 是进程级在途请求体（含解压后明文）字节上限。
 	// 这是 Go 侧新增的总量闸门（CCH_GO_MAX_INFLIGHT_BYTES），与 GOMEMLIMIT 协同工作。
 	// 只是**未注入时的兜底**：生产唯一真源是 config.Config.MaxInflightBytes（由 dataplane
-	// 装配处注入），默认值 48 MiB 与那一侧一致。
+	// 装配处注入），默认值 96 MiB 与那一侧一致。
 	//
-	// 48 MiB 是「512 MiB 机上的记账预算」：× 放大系数 6 = 288 MiB 成本上限，留出非堆与 GC 余量；
+	// 记账口径是「预算 × 放大系数 = 成本上限」：96 MiB × 6 = 576 MiB 成本上限。成本上限可高于
+	// 容器内存上限，此时由内存余量闸门（GOMEMLIMIT × 0.9）先拦，不会因此 OOM。
 	// 旧的 64 MiB 按正文字节记账会让 9 条并发大请求把堆推到 380 MB 以上。
-	DefaultMaxInflightBodyBytes int64 = 48 * 1024 * 1024
+	DefaultMaxInflightBodyBytes int64 = 96 * 1024 * 1024
 	// DefaultInflightBytesMultiplier 是准入记账的放大系数默认值。
 	//
 	// 记账口径是「正文 × 系数」而不是正文本身：同一份正文在堆上同时以多种形态驻留
