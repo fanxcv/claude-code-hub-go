@@ -54,6 +54,7 @@ export function IdentityFilters({
   const debouncedUserSearchTerm = useDebounce(userSearchTerm, 300);
   const [availableUsers, setAvailableUsers] = useState<Array<{ id: number; name: string }>>([]);
   const userSearchRequestIdRef = useRef(0);
+  const keysRequestIdRef = useRef(0);
   const lastLoadedUserSearchTermRef = useRef<string | undefined>(undefined);
   const isMountedRef = useRef(true);
 
@@ -130,45 +131,44 @@ export function IdentityFilters({
     }
   }, [initialKeys]);
 
-  // Load initial keys if userId is set
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally run only on mount
+  // 密钥跟随所选用户：折叠态快捷下拉改 userId 时本组件不重挂（面板 forceMount），
+  // 故重拉与清空都必须挂在这里，而不能只挂在面板内的 handleUserChange 上。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 换语言不必重拉密钥；把 t 放进依赖会让「每次渲染新建 t」的测试替身反复重拉。
   useEffect(() => {
-    const loadInitialKeys = async () => {
-      if (isAdmin && filters.userId && initialKeys.length === 0) {
-        try {
-          const keysResult = await getKeys(filters.userId);
-          if (keysResult.ok && keysResult.data) {
-            setKeys(keysResult.data);
-            onKeysChange?.(keysResult.data);
-          }
-        } catch (error) {
-          console.error("Failed to load initial keys:", error);
-        }
-      }
-    };
-    loadInitialKeys();
-  }, []);
+    if (!isAdmin) return;
 
-  const handleUserChange = async (userId: string) => {
-    const newUserId = userId ? parseInt(userId, 10) : undefined;
-    const newFilters = { ...filters, userId: newUserId, keyId: undefined };
-    onFiltersChange(newFilters);
+    const requestId = ++keysRequestIdRef.current;
+    const targetUserId = filters.userId;
 
-    if (newUserId) {
+    if (targetUserId === undefined) {
+      setKeys([]);
+      onKeysChange?.([]);
+      return;
+    }
+
+    const loadKeysForUser = async () => {
       try {
-        const keysResult = await getKeys(newUserId);
+        const keysResult = await getKeys(targetUserId);
+        // 旧用户的慢返回不得覆盖新用户的结果。
+        if (!isMountedRef.current || requestId !== keysRequestIdRef.current) return;
         if (keysResult.ok && keysResult.data) {
           setKeys(keysResult.data);
           onKeysChange?.(keysResult.data);
         }
       } catch (error) {
-        console.error("Failed to load keys:", error);
+        if (!isMountedRef.current || requestId !== keysRequestIdRef.current) return;
+        console.error("Failed to load keys for user:", error);
         toast.error(t("logs.error.loadKeysFailed"));
       }
-    } else {
-      setKeys([]);
-      onKeysChange?.([]);
-    }
+    };
+
+    void loadKeysForUser();
+  }, [isAdmin, filters.userId, onKeysChange]);
+
+  // 面板内换用户只改筛选（URL 语义与清 keyId 不变）；密钥重拉由上面的 effect 跟着 userId 做。
+  const handleUserChange = (userId: string) => {
+    const newUserId = userId ? parseInt(userId, 10) : undefined;
+    onFiltersChange({ ...filters, userId: newUserId, keyId: undefined });
   };
 
   const handleKeyChange = (value: string) => {
@@ -223,7 +223,7 @@ export function IdentityFilters({
                     <CommandItem
                       value={t("logs.filters.allUsers")}
                       onSelect={() => {
-                        void handleUserChange("");
+                        handleUserChange("");
                         setUserPopoverOpen(false);
                       }}
                       className="cursor-pointer"
@@ -236,7 +236,7 @@ export function IdentityFilters({
                         key={user.id}
                         value={user.name}
                         onSelect={() => {
-                          void handleUserChange(user.id.toString());
+                          handleUserChange(user.id.toString());
                           setUserPopoverOpen(false);
                         }}
                         className="cursor-pointer"

@@ -126,6 +126,105 @@ vi.mock("@/components/ui/select", () => ({
   SelectValue: () => null,
 }));
 
+// Radix Popover 要打 pointer 事件才开，cmdk 的输入/项在 happy-dom 里也不便驱动；
+// 仓内惯式是换成受控的轻量替身（见 dashboard-logs-sessionid-suggestions-ui.test.tsx）。
+vi.mock("@/components/ui/popover", async () => {
+  const React = await import("react");
+
+  type PopoverCtx = { open: boolean; onOpenChange?: (open: boolean) => void };
+  const PopoverContext = React.createContext<PopoverCtx>({ open: false });
+
+  function Popover({
+    open,
+    onOpenChange,
+    children,
+  }: {
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+    children?: React.ReactNode;
+  }) {
+    return (
+      <PopoverContext.Provider value={{ open: Boolean(open), onOpenChange }}>
+        {children}
+      </PopoverContext.Provider>
+    );
+  }
+
+  function PopoverTrigger({
+    asChild,
+    children,
+  }: {
+    asChild?: boolean;
+    children?: React.ReactNode;
+  }) {
+    const { open, onOpenChange } = React.useContext(PopoverContext);
+    const child = React.Children.only(children) as unknown as {
+      props: { onClick?: (e: unknown) => void };
+    };
+
+    const handleClick = (e: unknown) => {
+      child.props.onClick?.(e);
+      onOpenChange?.(!open);
+    };
+
+    if (asChild) {
+      return React.cloneElement(child as never, { onClick: handleClick });
+    }
+
+    return (
+      <button type="button" onClick={handleClick}>
+        {children}
+      </button>
+    );
+  }
+
+  function PopoverContent({ children }: { children?: React.ReactNode }) {
+    const { open } = React.useContext(PopoverContext);
+    if (!open) return null;
+    return <div>{children}</div>;
+  }
+
+  function PopoverAnchor({ children }: { children?: React.ReactNode }) {
+    return <>{children}</>;
+  }
+
+  return { Popover, PopoverTrigger, PopoverContent, PopoverAnchor };
+});
+
+vi.mock("@/components/ui/command", () => ({
+  Command: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  CommandInput: ({
+    placeholder,
+    value,
+    onValueChange,
+  }: {
+    placeholder?: string;
+    value?: string;
+    onValueChange?: (value: string) => void;
+  }) => (
+    <input
+      placeholder={placeholder}
+      value={value ?? ""}
+      onChange={(event) => onValueChange?.(event.target.value)}
+    />
+  ),
+  CommandList: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  CommandEmpty: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  CommandGroup: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  CommandItem: ({
+    children,
+    onSelect,
+  }: {
+    children?: React.ReactNode;
+    value?: string;
+    onSelect?: () => void;
+  }) => (
+    <div cmdk-item="" onClick={onSelect}>
+      {children}
+    </div>
+  ),
+}));
+
 const usersActionMocks = vi.hoisted(() => ({
   searchUsersForFilter: vi.fn(
     async (): Promise<{
@@ -261,28 +360,49 @@ function clickButton(container: HTMLElement, text: string) {
   });
 }
 
-/** 快捷用户下拉是全页唯一带「全部用户」哨兵值的 select（刷新控件那两个只有模式/间隔）。 */ function findQuickUserSelect(
-  container: HTMLElement
-): HTMLSelectElement | null {
-  return (
-    Array.from(container.querySelectorAll("select")).find((element) =>
-      Array.from(element.options).some((option) => option.value === "__all__")
-    ) ?? null
-  );
+/** 折叠态快捷用户下拉的触发钮：全页唯一带 quickUser 文案的 combobox。 */
+function findQuickUserTrigger(container: HTMLElement): HTMLButtonElement | null {
+  return container.querySelector('button[aria-label="logs.filters.quickUser"]');
 }
 
-async function selectQuickUser(container: HTMLElement, value: string) {
-  const select = findQuickUserSelect(container);
-  if (!select) {
-    throw new Error("Quick user select not found");
-  }
+async function actClick(el: Element | null) {
+  if (!el) throw new Error("element not found");
   await act(async () => {
-    select.value = value;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
 }
 
-/** 用户列表在 effect 里异步加载，用一次宏任务把 setUsers 湿完再断言选项。 */
+async function openQuickUser(container: HTMLElement) {
+  await actClick(findQuickUserTrigger(container));
+}
+
+async function searchQuickUser(container: HTMLElement, term: string) {
+  const input = container.querySelector(
+    'input[placeholder="logs.filters.searchUser"]'
+  ) as HTMLInputElement | null;
+  if (!input) throw new Error("Quick user search input not found");
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+  if (!setter) throw new Error("missing native input value setter");
+
+  await act(async () => {
+    setter.call(input, term);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  // 远端搜索走 300ms 防抖，等它落定。
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 350));
+  });
+}
+
+async function clickQuickUserItem(container: HTMLElement, text: string) {
+  const item = Array.from(container.querySelectorAll("[cmdk-item]")).find(
+    (element) => (element.textContent || "").trim() === text
+  );
+  if (!item) throw new Error(`Quick user item not found: ${text}`);
+  await actClick(item);
+}
+
+/** 用户列表在 effect 里异步加载，用一次宏任务把 setUsers 湿完再断言列表。 */
 async function flushUserLoad() {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -421,6 +541,7 @@ describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
     routerMocks.push.mockClear();
     searchParamMocks.value = new URLSearchParams();
     collapsibleMocks.toggleOpen = undefined;
+    usersActionMocks.searchUsersForFilter.mockClear();
     document.body.innerHTML = "";
   });
 
@@ -432,19 +553,59 @@ describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
     clickFilterTrigger(container);
     await flushUserLoad();
 
-    const quickSelect = findQuickUserSelect(container);
-    expect(quickSelect).not.toBeNull();
-    expect(Array.from(quickSelect?.options ?? []).map((option) => option.textContent)).toEqual([
-      "logs.filters.allUsers",
-      "alice",
-      "bob",
-    ]);
+    expect(findQuickUserTrigger(container)).not.toBeNull();
+    await openQuickUser(container);
 
-    await selectQuickUser(container, "7");
+    expect(
+      Array.from(container.querySelectorAll("[cmdk-item]")).map((item) =>
+        (item.textContent || "").trim()
+      )
+    ).toEqual(["logs.filters.allUsers", "alice", "bob"]);
+
+    await clickQuickUserItem(container, "alice");
 
     expect(routerMocks.pushedHref).toBe("/zh-CN/dashboard/logs?userId=7&providerId=4");
     expect(routerMocks.pushedHref).not.toContain("keyId");
     expect(routerMocks.pushedHref).not.toContain("page");
+
+    unmount();
+  });
+
+  it("searches users remotely by keyword and navigates to the picked result", async () => {
+    searchParamMocks.value = new URLSearchParams("keyId=3&providerId=4&page=2");
+
+    const { container, unmount } = renderUsageLogsView();
+    clickFilterTrigger(container);
+    await flushUserLoad();
+    await openQuickUser(container);
+    usersActionMocks.searchUsersForFilter.mockResolvedValueOnce({
+      ok: true,
+      data: [{ id: 42, name: "carol" }],
+    });
+    await searchQuickUser(container, "carol");
+
+    expect(usersActionMocks.searchUsersForFilter).toHaveBeenLastCalledWith("carol");
+
+    await clickQuickUserItem(container, "carol");
+
+    expect(routerMocks.pushedHref).toBe("/zh-CN/dashboard/logs?userId=42&providerId=4");
+    expect(routerMocks.pushedHref).not.toContain("keyId");
+    expect(routerMocks.pushedHref).not.toContain("page");
+
+    unmount();
+  });
+
+  it("shows the no-match empty state when the keyword matches nobody", async () => {
+    const { container, unmount } = renderUsageLogsView();
+    await flushUserLoad();
+    await openQuickUser(container);
+    usersActionMocks.searchUsersForFilter.mockResolvedValueOnce({ ok: true, data: [] });
+    await searchQuickUser(container, "nobody");
+
+    expect(container.textContent).toContain("logs.filters.noUserFound");
+    // 空结果不阻塞工具栏：触发钮仍在，且仍可切回全部用户。
+    expect(findQuickUserTrigger(container)).not.toBeNull();
+    expect(container.textContent).toContain("logs.filters.allUsers");
 
     unmount();
   });
@@ -455,8 +616,9 @@ describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
     const { container, unmount } = renderUsageLogsView();
     clickFilterTrigger(container);
     await flushUserLoad();
+    await openQuickUser(container);
 
-    await selectQuickUser(container, "__all__");
+    await clickQuickUserItem(container, "logs.filters.allUsers");
 
     expect(routerMocks.pushedHref).toBe("/zh-CN/dashboard/logs?model=claude-sonnet");
     expect(routerMocks.pushedHref).not.toContain("keyId");
@@ -467,11 +629,11 @@ describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
   it("hides the quick user filter once the filter panel is expanded", () => {
     const { container, unmount } = renderUsageLogsView();
 
-    expect(findQuickUserSelect(container)).not.toBeNull();
+    expect(findQuickUserTrigger(container)).not.toBeNull();
 
     clickFilterTrigger(container);
 
-    expect(findQuickUserSelect(container)).toBeNull();
+    expect(findQuickUserTrigger(container)).toBeNull();
 
     unmount();
   });
@@ -479,7 +641,7 @@ describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
   it("renders nothing for non-admin users", () => {
     const { container, unmount } = renderUsageLogsView({ isAdmin: false });
 
-    expect(findQuickUserSelect(container)).toBeNull();
+    expect(findQuickUserTrigger(container)).toBeNull();
 
     unmount();
   });
@@ -493,11 +655,16 @@ describe("UsageLogsViewVirtualized collapsed-state quick user filter", () => {
     const { container, unmount } = renderUsageLogsView();
     await flushUserLoad();
 
-    const quickSelect = findQuickUserSelect(container);
-    expect(quickSelect).not.toBeNull();
-    expect(Array.from(quickSelect?.options ?? []).map((option) => option.value)).toEqual([
-      "__all__",
-    ]);
+    expect(findQuickUserTrigger(container)).not.toBeNull();
+
+    await openQuickUser(container);
+
+    expect(container.textContent).toContain("logs.error.loadFailed");
+    expect(
+      Array.from(container.querySelectorAll("[cmdk-item]")).map((item) =>
+        (item.textContent || "").trim()
+      )
+    ).toEqual(["logs.filters.allUsers"]);
 
     unmount();
   });
