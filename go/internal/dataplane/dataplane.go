@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -644,7 +645,24 @@ func (h *Handler) forward(
 		state.ProviderMultiplier = costMultiplierOf(nextCapture)
 		return next, nil
 	}
-	fwd.Facts = h.planFacts(pc, spec, body)
+	fwd.Facts, err = h.planFacts(pc, spec, body)
+	if err != nil {
+		// 正文取不到就**不得转发**：往下走会以 Content-Length: 0 把空请求送到上游，
+		// 上游只会回一句与真实原因无关的 400（如 magpie 的 expected a JSON object），
+		// 而客户端与运维都看不出「网关把正文丢了」。
+		//
+		// 回 503 而非 400：这类失败是**网关没拿到正文**（解压/解析在我们这一侧失败），
+		// 不是客户端请求语义错误；且 4xx 不触发 agent 重试，5xx 会。取 503（与排空期
+		// `shutting_down` 同码）而不是 500：客户端对 503 按「稍后重试」退避，而正文坏掉
+		// 立即重试大概率还是坏，退避更合适。
+		status := http.StatusServiceUnavailable
+		// 细节只进日志（上面的 Warn），对客户端只给一句可读结论：内部路径与解压器原文
+		// 不该出现在响应体里，而它也不影响客户端判断（重试即可）。
+		message := "invalid request body: 网关未能解出请求正文"
+		h.settleFailure(requestCtx, state, status, message)
+		h.writeGuardResponse(writer, state, guard.BuildError(status, message, ""))
+		return
+	}
 	// 正文树到此不再需要：选路（亲和指纹已在守卫阶段预算）、计划字节（planFacts 刚取走
 	// 补丁后的那份）与观测事实各已取所需。现在放掉它，省下一份与正文同量级的常驻；原文
 	// 与已物化的补丁字节保留，后续 Bytes（回放、定点重写）不受影响。
@@ -755,12 +773,41 @@ func (h *Handler) selectionFacts(state *RequestState, body *bodyAccess, deps gua
 	return facts
 }
 
+// declaresRequestBody 报告客户端是否声明了正文（长度大于零或分块）。
+func declaresRequestBody(headers http.Header) bool {
+	if strings.TrimSpace(headers.Get("Transfer-Encoding")) != "" {
+		return true
+	}
+	length, err := strconv.ParseInt(strings.TrimSpace(headers.Get("Content-Length")), 10, 64)
+	return err == nil && length > 0
+}
+
 // planFacts 构造转发计划所需的会话级事实。
-func (h *Handler) planFacts(pc *pctx.Context, spec routeSpec, body *bodyAccess) forward.PlanFacts {
+//
+// 正文读不出来时报错而不是给出空正文：调用方据此本地拒绝（见 forward）。客户端本来就
+// 没带正文（如 GET 类端点）时不算错误，出站正文为空与入站一致。
+func (h *Handler) planFacts(pc *pctx.Context, spec routeSpec, body *bodyAccess) (forward.PlanFacts, error) {
 	headers := pc.Headers().Clone()
-	payload, _ := body.bytes()
+	payload, err := body.bytes()
+	if err == nil && len(payload) == 0 && declaresRequestBody(headers) {
+		// 声明了正文却解出零字节：同样是「正文丢了」，不能拿空请求去问上游。
+		err = errors.New("正文声明了长度，解出来却是空")
+	}
+	if err != nil {
+		// 无正文且未声明的请求（GET 类）不走这里：出站正文为空与入站一致。
+		h.logger.Warn("dataplane.request_body_unavailable", map[string]any{
+			"endpoint":         pc.Path(),
+			"contentEncoding":  headers.Get("Content-Encoding"),
+			"contentLength":    headers.Get("Content-Length"),
+			"transferEncoding": headers.Get("Transfer-Encoding"),
+			"contentType":      headers.Get("Content-Type"),
+			"userAgent":        headers.Get("User-Agent"),
+			"error":            err.Error(),
+		})
+		return forward.PlanFacts{}, fmt.Errorf("invalid request body: %v", err)
+	}
 	model := ""
-	if tree, err := body.json(); err == nil {
+	if tree, jsonErr := body.json(); jsonErr == nil {
 		model = bodyModel(tree)
 	}
 	return forward.PlanFacts{
@@ -780,7 +827,7 @@ func (h *Handler) planFacts(pc *pctx.Context, spec routeSpec, body *bodyAccess) 
 		// 供应商级参数覆写：每请求一份——gemini 的覆写要看客户端路径，而审计条目与缓存 TTL
 		// 都是本次请求的产物（见 forward.ProviderOverrideApplier）。
 		Overrides: forward.NewProviderOverrideApplier(pc.Path()),
-	}
+	}, nil
 }
 
 // settleFailure 在没有转发的失败路径上补一次终态入账（有转发时由 forward 负责，绝不重复）。

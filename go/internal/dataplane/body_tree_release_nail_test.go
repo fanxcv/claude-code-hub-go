@@ -57,7 +57,7 @@ func TestBodyTreeReleaseComesAfterConsumers(t *testing.T) {
 	if release < 0 {
 		t.Fatal("forward 没有调用 body.releaseTree()：正文树会活到请求末尾，1N 常驻白花")
 	}
-	for _, later := range []string{"fwd.Select = func(", "fwd.Facts = h.planFacts("} {
+	for _, later := range []string{"fwd.Select = func(", "h.planFacts("} {
 		index := strings.Index(forwardBody, later)
 		if index < 0 {
 			t.Fatalf("forward 里找不到 %q：接线改名时请同步本钉子", later)
