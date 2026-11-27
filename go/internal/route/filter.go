@@ -195,14 +195,11 @@ func (s *Selector) applyFilters(
 	healthFiltered := make([]Filtered, 0, len(enabled))
 	softRejected := make([]Provider, 0, len(enabled))
 	quarantineRejected := make([]Provider, 0, len(enabled))
-	hardRejected := false
 	reject := func(p Provider, record Filtered) {
 		healthFiltered = append(healthFiltered, record)
 		if softSignalRejection(record.Reason) {
 			softRejected = append(softRejected, p)
-			return
 		}
-		hardRejected = true
 	}
 	for _, p := range enabled {
 		if blocked, record := s.healthRejection(ctx, p); blocked {
@@ -228,14 +225,16 @@ func (s *Selector) applyFilters(
 		}
 		healthy = append(healthy, p)
 	}
-	// 软信号 fail-open：排除后一个候选都不剩、且排除原因**全部**属软信号时，重新纳入这些候选。
+	// 软信号 fail-open：排除后一个候选都不剩时，重新纳入**软信号**候选。
 	//
-	// 只对软信号：硬信号（熔断、故障冷却、限额）代表上游已知故障或需改配置才恢复，把它们放行
-	// 只会让失败请求继续打过去。任一硬信号在场即整组不放行（含「一家冷却 + 一家熔断」的混合）。
+	// 硬信号（熔断、故障冷却、限额）仍不放行：它们代表上游已知故障或需改配置才恢复。
+	// 但软信号候选在场时一律兜底，**不看是否另有硬信号被剔**：慢渠道总比无可用渠道好
+	// （2026-11-27 用户裁决；此前「任一硬信号在场即整组不放行」会让「一家熔断 + 一家隔离」
+	// 的混合场景直接 503，而两家一起败的概率远低于单家慢）。
 	//
 	// 为何要 `len(softRejected) > 0`：enabled 为空时本循环一次都没跑，「全部属软信号」是空真，
 	// 不加这道门会把「压根没有候选」误判成「可回退」。
-	if len(healthy) == 0 && len(softRejected) > 0 && !hardRejected {
+	if len(healthy) == 0 && len(softRejected) > 0 {
 		healthy = softRejected
 		for index := range healthFiltered {
 			if !softSignalRejection(healthFiltered[index].Reason) {

@@ -298,12 +298,13 @@ func TestHardSignalRejectionUnchangedForSoleCandidate(t *testing.T) {
 	}
 }
 
-// TestMixedSoftAndHardSignalsDoNotFailOpen 钉住 ④：一家冷却 + 一家熔断 ⇒ **不回退**。
+// TestMixedSoftAndHardSignalsFailOpenToSlowCandidate 钉住 ④：一家冷却（软）+ 一家熔断（硬）⇒
+// **回退到软信号那家**。
 //
-// 为何如此定：只要场上有任一硬信号，就说明「无候选」不只是本会话的回避造成的。把软信号那家
-// 放行会让请求打向一家本可逃开的慢渠道，而硬信号那家仍不可用——回退并不能恢复可用性，
-// 只会把「明确的失败」换成「可能更慢的失败」。
-func TestMixedSoftAndHardSignalsDoNotFailOpen(t *testing.T) {
+// 为何如此定（2026-11-27 用户裁决）：慢渠道总比无可用渠道好。硬信号那家仍不放行，回退只纳
+// 软信号候选；此前「任一硬信号在场即整组不放行」会让这两家一起败的场景直接 503，而混合场
+// 景的出现频率远高于两家同时真故障。
+func TestMixedSoftAndHardSignalsFailOpenToSlowCandidate(t *testing.T) {
 	redisClient := newFailOpenRedis()
 	redisClient.coolDown("s1", 7, 1)
 	redisClient.openCircuit(2)
@@ -313,16 +314,20 @@ func TestMixedSoftAndHardSignalsDoNotFailOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("选路失败: %v", err)
 	}
-	if result.Provider != nil {
-		t.Fatalf("选中 = %v，期望 nil（软硬混合时不回退）", result.Provider)
+	if result.Provider == nil || result.Provider.ID != 1 {
+		t.Fatalf("选中 = %v，期望 provider 1（软信号候选兜底）", result.Provider)
 	}
+	found := false
 	for _, record := range result.Context.FilteredProviders {
-		if record.Reason == ReasonNoAlternativeFailOpen {
-			t.Errorf("软硬混合时不应出现回退留痕：%+v", record)
+		if record.Reason == ReasonNoAlternativeFailOpen && record.ID == 1 {
+			found = true
 		}
 	}
-	if got := reasonOf(t, result.Context, 1); got != ReasonSlowRateCooldown {
-		t.Errorf("软信号那家的理由 = %q，期望保持 %q（未回退即不改写）", got, ReasonSlowRateCooldown)
+	if !found {
+		t.Errorf("软信号那家应回退并留痕，实际留痕：%+v", result.Context.FilteredProviders)
+	}
+	if got := reasonOf(t, result.Context, 2); got != ReasonCircuitOpen {
+		t.Errorf("硬信号那家的理由 = %q，期望保持 %q（硬信号不放行）", got, ReasonCircuitOpen)
 	}
 }
 
